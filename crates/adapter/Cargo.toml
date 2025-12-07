@@ -1,0 +1,13 @@
+[package]
+name = "adapter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+domain.workspace = true
+storage.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+matrix-sdk.workspace = true
+chrono.workspace = true

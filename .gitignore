@@ -1,0 +1,15 @@
+/target
+
+
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+# Cumments
+.env
+/data/*
+!/data/.gitkeep
+index.html

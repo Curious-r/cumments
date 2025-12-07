@@ -1,0 +1,19 @@
+services:
+  cumments:
+    build: .
+    image: cumments:latest
+    container_name: cumments_server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist database to the host machine's ./data directory
+      - ./data:/app/data
+    environment:
+      # Required Matrix configuration (replace with actual values)
+      - CUMMENTS_MATRIX_HOMESERVER=https://matrix.org
+      - CUMMENTS_MATRIX_USER=@your_bot_name:matrix.org
+      - CUMMENTS_MATRIX_TOKEN=syt_xxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+      # Optional: Override log level
+      # - RUST_LOG=debug

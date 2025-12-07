@@ -1,0 +1,32 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+domain.workspace = true
+storage.workspace = true
+adapter.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+dotenvy.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+matrix-sdk.workspace = true
+# Test Client
+reqwest.workspace = true
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+# Test Client
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
