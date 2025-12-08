@@ -1,4 +1,4 @@
-use domain::{Comment, MatrixCommand};
+use domain::{protocol, AppCommand, Comment, SiteId};
 use matrix_sdk::{
     config::SyncSettings,
     matrix_auth::{MatrixSession, MatrixSessionTokens},
@@ -6,17 +6,18 @@ use matrix_sdk::{
         api::client::room::create_room::v3::Request as CreateRoomRequest,
         api::client::room::create_room::v3::RoomPreset,
         events::{
-            room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+            room::message::{OriginalSyncRoomMessageEvent, Relation},
             room::redaction::OriginalSyncRoomRedactionEvent,
             space::child::SpaceChildEventContent,
+            AnyMessageLikeEventContent,
         },
         room::RoomType,
         serde::Raw,
-        OwnedRoomId, OwnedUserId, RoomAliasId, ServerName,
+        EventId, OwnedRoomId, OwnedUserId, RoomAliasId, ServerName,
     },
     Client, Room, SessionMeta,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use storage::Db;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info};
@@ -34,7 +35,7 @@ struct SpaceCache {
 pub async fn start(
     config: MatrixConfig,
     db: Db,
-    mut rx: mpsc::Receiver<MatrixCommand>,
+    mut rx: mpsc::Receiver<AppCommand>,
 ) -> anyhow::Result<()> {
     let server_name = config.user_id.server_name().to_owned();
 
@@ -70,18 +71,23 @@ pub async fn start(
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
-                MatrixCommand::SendComment {
+                AppCommand::SendComment {
                     site_id,
                     post_slug,
                     content,
+                    nickname,
+                    reply_to,
                 } => {
+                    let event_json = protocol::build_outbound_event(&nickname, &content);
+
                     if let Err(e) = handle_multitenant_send(
                         &sender_client,
                         &server_name_for_task,
                         &space_cache,
                         &site_id,
                         &post_slug,
-                        &content,
+                        event_json,
+                        reply_to,
                     )
                     .await
                     {
@@ -92,10 +98,9 @@ pub async fn start(
         }
     });
 
-    // --- Sync Task (Messages) ---
+    // --- Event Handlers ---
     let db_sync = db.clone();
     let bot_id_sync = my_bot_id.clone();
-
     client.add_event_handler(
         move |event: OriginalSyncRoomMessageEvent, room: Room, client: Client| {
             let db = db_sync.clone();
@@ -108,7 +113,6 @@ pub async fn start(
         },
     );
 
-    // --- Sync Task (Redactions) ---
     let db_redact = db.clone();
     client.add_event_handler(move |event: OriginalSyncRoomRedactionEvent, _: Client| {
         let db = db_redact.clone();
@@ -120,15 +124,36 @@ pub async fn start(
         }
     });
 
-    let token = db.get_sync_token().await?;
-    let mut settings = SyncSettings::default();
-    if let Some(t) = token {
-        settings = settings.token(t);
+    // --- Manual Sync Loop ---
+    info!("Starting Matrix Sync Loop...");
+    let mut sync_token = db.get_sync_token().await?;
+    if let Some(ref t) = sync_token {
+        info!("Resuming sync from token: {}", t);
     }
 
-    info!("Starting Matrix Sync...");
-    client.sync(settings).await?;
-    Ok(())
+    loop {
+        let mut settings = SyncSettings::default().timeout(Duration::from_secs(30));
+        if let Some(ref token) = sync_token {
+            settings = settings.token(token);
+        }
+
+        match client.sync_once(settings).await {
+            Ok(response) => {
+                let next_batch = response.next_batch;
+                if Some(&next_batch) != sync_token.as_ref() {
+                    if let Err(e) = db.save_sync_token(&next_batch).await {
+                        error!("CRITICAL: Failed to save sync token: {:?}", e);
+                    } else {
+                        sync_token = Some(next_batch);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Matrix sync failed: {:?}. Retrying in 5s...", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
 }
 
 async fn handle_sync_event(
@@ -138,19 +163,13 @@ async fn handle_sync_event(
     db: Db,
     bot_id: String,
 ) -> anyhow::Result<()> {
-    tracing::debug!("Handling sync event: {}", event.event_id);
-
-    let content_text = match event.content.msgtype {
-        MessageType::Text(t) => t.body,
-        _ => return Ok(()),
-    };
+    let content_json = serde_json::to_value(&event.content)?;
 
     let room_alias_str = if let Some(c) = room.canonical_alias() {
         c.to_string()
     } else if let Some(alt) = room.alt_aliases().first() {
         alt.to_string()
     } else {
-        tracing::warn!("Room {} has no aliases, skipping message.", room.room_id());
         return Ok(());
     };
 
@@ -160,24 +179,25 @@ async fn handle_sync_event(
         .unwrap_or("")
         .trim_start_matches('#');
 
-    let (site_id, post_slug) = if let Some((s, p)) = localpart.split_once('_') {
-        (s.to_string(), p.to_string())
-    } else {
-        return Ok(());
+    let (site_id, post_slug) = match protocol::parse_room_alias(localpart) {
+        Some(res) => res,
+        None => return Ok(()),
     };
 
     let sender_id = event.sender.to_string();
-    let (author_name, is_guest, content) = if sender_id == bot_id {
-        if let Some((nick, text)) = parse_guest_content(&content_text) {
-            (nick, true, text)
-        } else {
-            ("Bot".to_string(), false, content_text)
-        }
-    } else {
-        (sender_id.clone(), false, content_text)
-    };
 
-    let is_redacted = false;
+    let (author_name, is_guest, content) =
+        protocol::extract_comment_data(&content_json, &sender_id, &bot_id);
+
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let reply_to = if let Some(Relation::Reply { in_reply_to }) = event.content.relates_to {
+        Some(in_reply_to.event_id.to_string())
+    } else {
+        None
+    };
 
     let ts_millis: i64 = event.origin_server_ts.get().into();
     let created_at = chrono::DateTime::from_timestamp_millis(ts_millis)
@@ -191,41 +211,29 @@ async fn handle_sync_event(
         author_id: sender_id,
         author_name,
         is_guest,
-        is_redacted,
+        is_redacted: false,
         content,
         created_at,
-        reply_to: None,
+        reply_to,
     };
 
     db.upsert_comment(&comment).await?;
-    tracing::info!("Comment synced: {} -> {}", comment.id, comment.content);
+    info!("Comment synced: {} -> {}", comment.id, comment.content);
     Ok(())
-}
-
-fn parse_guest_content(body: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = body.splitn(2, " (Guest): ").collect();
-    if parts.len() == 2 {
-        let nick = parts[0]
-            .trim_start_matches("**")
-            .trim_end_matches("**")
-            .to_string();
-        Some((nick, parts[1].to_string()))
-    } else {
-        None
-    }
 }
 
 async fn handle_multitenant_send(
     client: &Client,
     server_name: &ServerName,
     cache: &SpaceCache,
-    site_id: &str,
+    site_id: &SiteId,
     slug: &str,
-    content: &str,
+    event_json: serde_json::Value,
+    reply_to: Option<String>,
 ) -> anyhow::Result<()> {
     let space_id = ensure_site_space(client, server_name, cache, site_id).await?;
 
-    let full_alias = format!("#{}_{}:{}", site_id, slug, server_name);
+    let full_alias = format!("#{}_{}:{}", site_id.as_str(), slug, server_name);
     let room_alias = RoomAliasId::parse(&full_alias)?;
 
     let room = match client.resolve_room_alias(&room_alias).await {
@@ -233,7 +241,7 @@ async fn handle_multitenant_send(
             .get_room(&resp.room_id)
             .unwrap_or(client.join_room_by_id(&resp.room_id).await?),
         Err(_) => {
-            let alias_local = format!("{}_{}", site_id, slug);
+            let alias_local = format!("{}_{}", site_id.as_str(), slug);
             let mut req = CreateRoomRequest::new();
             req.room_alias_name = Some(alias_local);
             req.name = Some(format!("Comments for {}", slug));
@@ -252,8 +260,29 @@ async fn handle_multitenant_send(
         }
     };
 
-    room.send(RoomMessageEventContent::text_markdown(content))
-        .await?;
+    let mut final_json = event_json;
+
+    if let Some(parent_id_str) = reply_to {
+        if let Ok(_) = EventId::parse(&parent_id_str) {
+            if let Some(obj) = final_json.as_object_mut() {
+                obj.insert(
+                    "m.relates_to".to_string(),
+                    serde_json::json!({
+                        "m.in_reply_to": {
+                            "event_id": parent_id_str
+                        }
+                    }),
+                );
+            }
+        } else {
+            error!("Invalid reply_to ID: {}", parent_id_str);
+        }
+    }
+
+    let raw_content: Raw<AnyMessageLikeEventContent> = serde_json::from_value(final_json)?;
+
+    room.send_raw("m.room.message", raw_content).await?;
+
     Ok(())
 }
 
@@ -261,15 +290,17 @@ async fn ensure_site_space(
     client: &Client,
     server_name: &ServerName,
     cache: &SpaceCache,
-    site_id: &str,
+    site_id: &SiteId,
 ) -> anyhow::Result<OwnedRoomId> {
+    let site_id_str = site_id.as_str();
+
     {
-        if let Some(id) = cache.inner.read().await.get(site_id) {
+        if let Some(id) = cache.inner.read().await.get(site_id_str) {
             return Ok(id.clone());
         }
     }
 
-    let alias_local = format!("cumments_{}", site_id);
+    let alias_local = format!("cumments_{}", site_id_str);
     let full_alias = format!("#{}:{}", alias_local, server_name);
     let alias = RoomAliasId::parse(&full_alias)?;
 
@@ -282,7 +313,7 @@ async fn ensure_site_space(
 
             let mut req = CreateRoomRequest::new();
             req.room_alias_name = Some(alias_local);
-            req.name = Some(site_id.to_string());
+            req.name = Some(site_id_str.to_string());
             req.creation_content = Some(Raw::new(&cc)?);
             req.preset = Some(RoomPreset::PublicChat);
 
@@ -296,7 +327,7 @@ async fn ensure_site_space(
             .inner
             .write()
             .await
-            .insert(site_id.to_string(), room_id.clone());
+            .insert(site_id_str.to_string(), room_id.clone());
     }
     Ok(room_id)
 }

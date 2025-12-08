@@ -19,6 +19,7 @@ sha2.workspace = true
 hex.workspace = true
 rand.workspace = true
 matrix-sdk.workspace = true
+serde.workspace = true
 # Test Client
 reqwest.workspace = true
 

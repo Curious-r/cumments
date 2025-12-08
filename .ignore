@@ -13,5 +13,5 @@ devenv.local.nix
 # Cumments
 .env
 /data/*
-!/data/.gitkeep
+!/data/.keep
 index.html

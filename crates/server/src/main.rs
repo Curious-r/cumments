@@ -1,22 +1,33 @@
 mod pow;
+use anyhow::Context;
 use axum::{
     extract::{Path, State},
     http::Method,
     routing::{get, post},
     Json, Router,
 };
-use domain::{MatrixCommand, PostCommentCmd};
 use dotenvy::dotenv;
-use pow::PowGuard;
-use storage::Db;
+use matrix_sdk::ruma::{EventId, UserId};
+use serde::Deserialize;
+use std::fmt::Display;
+use std::str::FromStr;
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
-use anyhow::Context;
-use matrix_sdk::ruma::UserId;
-use std::fmt::Display;
-use std::str::FromStr;
+use domain::{AppCommand, SiteId};
+use pow::PowGuard;
+use storage::Db;
+
+// --- Data Transfer Object ---
+#[derive(Deserialize)]
+pub struct CreateCommentRequest {
+    pub post_slug: String,
+    pub content: String,
+    pub nickname: String,
+    pub challenge_response: String,
+    pub reply_to: Option<String>,
+}
 
 const APP_PREFIX: &str = "CUMMENTS_";
 
@@ -76,7 +87,7 @@ impl AppConfig {
 
         let username_str: String = require_env("MATRIX_USER")?;
         let user_id = UserId::parse(&username_str)
-            .with_context(|| format!("Invalid Matrix User ID: {}", username_str))?;
+            .with_context(|| format!("Invalid Matrix User ID format: {}", username_str))?;
 
         let matrix = adapter::MatrixConfig {
             homeserver_url: require_env("MATRIX_HOMESERVER")?,
@@ -99,26 +110,8 @@ impl AppConfig {
 #[derive(Clone)]
 struct AppState {
     db: Db,
-    sender: mpsc::Sender<MatrixCommand>,
+    sender: mpsc::Sender<AppCommand>,
     pow: PowGuard,
-}
-
-fn validate_site_id(site_id: &str) -> Result<(), &'static str> {
-    if site_id.contains('_') {
-        return Err(
-            "Site ID cannot contain underscores ('_'). Please use hyphens ('-') or dots ('.') instead.",
-        );
-    }
-    if !site_id
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
-    {
-        return Err("Site ID contains invalid characters. Only lowercase alphanumeric, '.', and '-' are allowed.");
-    }
-    if site_id.len() > 64 {
-        return Err("Site ID is too long (max 64 chars).");
-    }
-    Ok(())
 }
 
 #[tokio::main]
@@ -162,11 +155,12 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .with_context(|| format!("Failed to bind to {}", addr))?;
+        .with_context(|| format!("Failed to bind to address: {}", addr))?;
     axum::serve(listener, app).await?;
     Ok(())
 }
 
+// --- Handlers ---
 async fn get_challenge(State(state): State<AppState>) -> Json<serde_json::Value> {
     let secret = state.pow.generate_challenge();
     Json(serde_json::json!({ "secret": secret, "difficulty": 4 }))
@@ -174,15 +168,18 @@ async fn get_challenge(State(state): State<AppState>) -> Json<serde_json::Value>
 
 async fn list_comments(
     State(state): State<AppState>,
-    Path((site_id, slug)): Path<(String, String)>,
+    Path((site_id_str, slug)): Path<(String, String)>,
 ) -> Result<Json<Vec<domain::Comment>>, (axum::http::StatusCode, String)> {
-    if let Err(e) = validate_site_id(&site_id) {
-        return Err((axum::http::StatusCode::BAD_REQUEST, e.to_string()));
+    if SiteId::new(&site_id_str).is_err() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid Site ID format".to_string(),
+        ));
     }
 
     let comments = state
         .db
-        .list_comments(&site_id, &slug)
+        .list_comments(&site_id_str, &slug)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -191,11 +188,18 @@ async fn list_comments(
 
 async fn post_comment(
     State(state): State<AppState>,
-    Path(site_id): Path<String>,
-    Json(payload): Json<PostCommentCmd>,
+    Path(site_id_str): Path<String>,
+    Json(payload): Json<CreateCommentRequest>,
 ) -> Result<Json<&'static str>, (axum::http::StatusCode, String)> {
-    if let Err(e) = validate_site_id(&site_id) {
-        return Err((axum::http::StatusCode::BAD_REQUEST, e.to_string()));
+    let site_id = SiteId::new(site_id_str).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+
+    if let Some(ref reply_id) = payload.reply_to {
+        if EventId::parse(reply_id).is_err() {
+            return Err((
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("Invalid reply_to ID format: {}", reply_id),
+            ));
+        }
     }
 
     let parts: Vec<&str> = payload.challenge_response.split('|').collect();
@@ -206,12 +210,12 @@ async fn post_comment(
         ));
     }
 
-    let content_formatted = format!("**{}** (Guest): {}", payload.nickname, payload.content);
-
-    let cmd = MatrixCommand::SendComment {
+    let cmd = AppCommand::SendComment {
         site_id,
         post_slug: payload.post_slug,
-        content: content_formatted,
+        content: payload.content,
+        nickname: payload.nickname,
+        reply_to: payload.reply_to,
     };
 
     if state.sender.send(cmd).await.is_err() {
@@ -234,17 +238,10 @@ mod tests {
         assert_eq!(val, 42);
 
         std::env::set_var("TEST_BAD", "abc");
-        let val: u16 = get_env("TEST_BAD", 100); // Should warn and return default
+        let val: u16 = get_env("TEST_BAD", 100);
         assert_eq!(val, 100);
 
         std::env::remove_var("CUMMENTS_TEST_INT");
         std::env::remove_var("TEST_BAD");
-    }
-
-    #[test]
-    fn test_validate_site_id() {
-        assert!(validate_site_id("example.com").is_ok());
-        assert!(validate_site_id("my_blog").is_err()); // Underscore
-        assert!(validate_site_id("MyBlog").is_err()); // Uppercase
     }
 }

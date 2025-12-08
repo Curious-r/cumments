@@ -1,11 +1,22 @@
-use domain::PostCommentCmd;
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 
+use domain::Comment;
+
 const BASE_URL: &str = "http://127.0.0.1:3000";
 const SITE_ID: &str = "demo.example";
 const SLUG: &str = "hello_cumments";
+
+#[derive(Serialize)]
+struct CreateCommentRequest {
+    post_slug: String,
+    content: String,
+    nickname: String,
+    challenge_response: String,
+    reply_to: Option<String>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -31,11 +42,13 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n[3/4] Submitting comment...");
     let proof = format!("{}|{}", secret, nonce);
-    let payload = PostCommentCmd {
+
+    let payload = CreateCommentRequest {
         post_slug: SLUG.to_string(),
         content: "This is a message from Cumments Test Client!".to_string(),
         nickname: "Ferris".to_string(),
         challenge_response: proof,
+        reply_to: None,
     };
 
     let post_url = format!("{}/api/{}/comments", BASE_URL, SITE_ID);
@@ -52,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     let list_url = format!("{}/api/{}/comments/{}", BASE_URL, SITE_ID, SLUG);
-    let comments: Vec<domain::Comment> = client.get(&list_url).send().await?.json().await?;
+    let comments: Vec<Comment> = client.get(&list_url).send().await?.json().await?;
 
     println!("   -> Retrieved {} comment(s):", comments.len());
     for c in comments {

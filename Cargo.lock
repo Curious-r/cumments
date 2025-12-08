@@ -4,12 +4,13 @@ version = 4
 
 [[package]]
 name = "adapter"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
  "domain",
  "matrix-sdk",
+ "serde_json",
  "storage",
  "tokio",
  "tracing",
@@ -535,11 +536,11 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "serde",
- "sqlx",
+ "serde_json",
 ]
 
 [[package]]
@@ -2309,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "adapter",
  "anyhow",
@@ -2320,6 +2321,7 @@ dependencies = [
  "matrix-sdk",
  "rand",
  "reqwest",
+ "serde",
  "serde_json",
  "sha2",
  "storage",
@@ -2652,9 +2654,10 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "domain",
  "sqlx",
  "tracing",
