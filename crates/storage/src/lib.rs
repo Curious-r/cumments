@@ -17,6 +17,7 @@ struct SqlComment {
     content: String,
     created_at: NaiveDateTime,
     reply_to: Option<String>,
+    updated_at: Option<NaiveDateTime>,
 }
 
 // --- Mapper ---
@@ -33,6 +34,7 @@ impl From<SqlComment> for Comment {
             content: sql.content,
             created_at: sql.created_at,
             reply_to: sql.reply_to,
+            updated_at: sql.updated_at,
         }
     }
 }
@@ -79,12 +81,14 @@ impl Db {
             r#"
             INSERT INTO comments (
                 id, site_id, post_slug, author_id, author_name,
-                is_guest, is_redacted, content, created_at, reply_to
+                is_guest, is_redacted, content, created_at, reply_to,
+                updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
-                is_redacted = excluded.is_redacted
+                is_redacted = excluded.is_redacted,
+                updated_at = excluded.updated_at
             "#,
         )
         .bind(&c.id)
@@ -97,6 +101,7 @@ impl Db {
         .bind(&c.content)
         .bind(c.created_at)
         .bind(&c.reply_to)
+        .bind(c.updated_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -125,7 +130,8 @@ impl Db {
             r#"
             SELECT
                 id, site_id, post_slug, author_id, author_name,
-                is_guest, is_redacted, content, created_at, reply_to
+                is_guest, is_redacted, content, created_at, reply_to,
+                updated_at
             FROM comments
             WHERE site_id = ? AND post_slug = ?
             ORDER BY created_at ASC

@@ -172,13 +172,11 @@ async fn handle_sync_event(
     } else {
         return Ok(());
     };
-
     let localpart = room_alias_str
         .split(':')
         .next()
         .unwrap_or("")
         .trim_start_matches('#');
-
     let (site_id, post_slug) = match protocol::parse_room_alias(localpart) {
         Some(res) => res,
         None => return Ok(()),
@@ -186,8 +184,25 @@ async fn handle_sync_event(
 
     let sender_id = event.sender.to_string();
 
+    let current_ts_millis: i64 = event.origin_server_ts.get().into();
+    let current_time = chrono::DateTime::from_timestamp_millis(current_ts_millis)
+        .unwrap_or_default()
+        .naive_utc();
+
+    let (target_id, final_content_json, updated_at) = if let Some(Relation::Replacement(ref re)) =
+        event.content.relates_to
+    {
+        let original_id = re.event_id.to_string();
+
+        let new_content_val = serde_json::to_value(&re.new_content).unwrap_or(content_json.clone());
+
+        (original_id, new_content_val, Some(current_time))
+    } else {
+        (event.event_id.to_string(), content_json, None)
+    };
+
     let (author_name, is_guest, content) =
-        protocol::extract_comment_data(&content_json, &sender_id, &bot_id);
+        protocol::extract_comment_data(&final_content_json, &sender_id, &bot_id);
 
     if content.trim().is_empty() {
         return Ok(());
@@ -199,13 +214,8 @@ async fn handle_sync_event(
         None
     };
 
-    let ts_millis: i64 = event.origin_server_ts.get().into();
-    let created_at = chrono::DateTime::from_timestamp_millis(ts_millis)
-        .unwrap_or_default()
-        .naive_utc();
-
     let comment = Comment {
-        id: event.event_id.to_string(),
+        id: target_id,
         site_id,
         post_slug,
         author_id: sender_id,
@@ -213,7 +223,8 @@ async fn handle_sync_event(
         is_guest,
         is_redacted: false,
         content,
-        created_at,
+        created_at: current_time,
+        updated_at,
         reply_to,
     };
 
@@ -280,9 +291,7 @@ async fn handle_multitenant_send(
     }
 
     let raw_content: Raw<AnyMessageLikeEventContent> = serde_json::from_value(final_json)?;
-
     room.send_raw("m.room.message", raw_content).await?;
-
     Ok(())
 }
 
