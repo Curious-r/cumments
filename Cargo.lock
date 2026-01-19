@@ -4,12 +4,13 @@ version = 4
 
 [[package]]
 name = "adapter"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
  "domain",
  "matrix-sdk",
+ "serde_json",
  "storage",
  "tokio",
  "tracing",
@@ -535,11 +536,11 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "serde",
- "sqlx",
+ "serde_json",
 ]
 
 [[package]]
@@ -691,6 +692,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "futures"
+version = "0.3.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65bc07b1a8bc7c85c5f2e110c476c7389b4554ba72af57d8445ea63a576b0876"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
 ]
 
 [[package]]
@@ -2309,21 +2325,24 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "adapter",
  "anyhow",
  "axum",
  "domain",
  "dotenvy",
+ "futures",
  "hex",
  "matrix-sdk",
  "rand",
  "reqwest",
+ "serde",
  "serde_json",
  "sha2",
  "storage",
  "tokio",
+ "tokio-stream",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -2652,9 +2671,10 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "domain",
  "sqlx",
  "tracing",

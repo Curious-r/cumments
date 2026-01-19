@@ -11,7 +11,9 @@ FROM chef AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
-    build-essential \
+    pkg-config \
+    libssl-dev \
+    libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=planner /app/recipe.json recipe.json
@@ -32,6 +34,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libsqlite3-0 \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled binary
