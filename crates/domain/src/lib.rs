@@ -136,3 +136,18 @@ pub mod protocol {
         (sender_id.to_string(), false, body.to_string())
     }
 }
+
+// --- Events ---
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IngestEvent {
+    CommentSaved {
+        site_id: SiteId,
+        post_slug: String,
+        comment: Comment,
+    },
+    CommentDeleted {
+        site_id: SiteId,
+        post_slug: String,
+        comment_id: String,
+    },
+}

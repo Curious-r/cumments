@@ -107,21 +107,32 @@ impl Db {
         Ok(())
     }
 
-    pub async fn delete_comment(&self, id: &str) -> anyhow::Result<()> {
-        sqlx::query(
+    pub async fn delete_comment(&self, id: &str) -> anyhow::Result<Option<(SiteId, String)>> {
+        struct DeletedMeta {
+            site_id: String,
+            post_slug: String,
+        }
+
+        let row = sqlx::query_as!(
+            DeletedMeta,
             r#"
-            UPDATE comments
-            SET
-                content = '',
-                author_name = '[Deleted]',
-                is_redacted = TRUE
-            WHERE id = ?
-            "#,
+                UPDATE comments
+                SET
+                    content = '',
+                    author_name = '[Deleted]',
+                    is_redacted = TRUE
+                WHERE id = ?
+                RETURNING site_id, post_slug
+                "#,
+            id
         )
-        .bind(id)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(())
+
+        match row {
+            Some(r) => Ok(Some((SiteId::new_unchecked(r.site_id), r.post_slug))),
+            None => Ok(None),
+        }
     }
 
     pub async fn list_comments(&self, site_id: &str, slug: &str) -> anyhow::Result<Vec<Comment>> {

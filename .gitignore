@@ -12,4 +12,4 @@ devenv.local.nix
 .env
 /data/*
 !/data/.keep
-index.html
+*.html
