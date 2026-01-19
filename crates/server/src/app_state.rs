@@ -6,7 +6,6 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
 use crate::pow::PowGuard;
-
 use storage::Db;
 
 const APP_PREFIX: &str = "CUMMENTS_";
@@ -43,11 +42,13 @@ impl AppConfig {
         let user_id = UserId::parse(&username_str)
             .with_context(|| format!("Invalid Matrix User ID format: {}", username_str))?;
 
-        let matrix = adapter::MatrixConfig {
+        let bot_config = adapter::BotConfig {
             homeserver_url: require_env("MATRIX_HOMESERVER")?,
             user_id,
             access_token: require_env("MATRIX_TOKEN")?,
         };
+
+        let matrix = adapter::MatrixConfig::Bot(bot_config);
 
         let host: String = get_env("HOST", "0.0.0.0".to_string());
         let port: u16 = get_env("PORT", 3000);

@@ -16,7 +16,7 @@ use storage::Db;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
-use crate::matrix_utils::{
+use crate::common::matrix_utils::{
     create_and_link_room, ensure_site_space, resolve_room_alias_chain, SpaceCache,
 };
 
@@ -59,7 +59,7 @@ pub async fn handle_sync_event(
     let alias_str = match resolve_room_alias_chain(&room, &client).await {
         Some(a) => a,
         None => {
-            tracing::debug!("Ignored event in room {} (No alias)", room.room_id());
+            warn!("Ignored event in room {} (No alias found)", room.room_id());
             return Ok(());
         }
     };
@@ -113,7 +113,12 @@ pub async fn handle_sync_event(
         reply_to,
     };
 
-    db.upsert_comment(&comment).await?;
+    let room_id = room.room_id().as_str();
+    db.ensure_room(room_id, site_id.as_str(), &post_slug)
+        .await?;
+
+    db.upsert_comment(room_id, &comment).await?;
+
     info!("Comment synced: {} -> {}", comment.id, comment.content);
 
     let _ = tx.send(IngestEvent::CommentSaved {
@@ -128,6 +133,7 @@ pub async fn handle_sync_event(
 pub async fn handle_multitenant_send(
     client: &Client,
     server_name: &ServerName,
+    db: &Db,
     cache: &SpaceCache,
     site_id: &SiteId,
     slug: &str,
@@ -157,6 +163,11 @@ pub async fn handle_multitenant_send(
         },
         Err(_) => create_and_link_room(client, server_name, &space_id, site_id, slug).await?,
     };
+
+    // [关键变更] 确保房间已注册 (Write Path)
+    // 无论是刚创建的还是查找出来的，都确保 DB 里有记录
+    db.ensure_room(room.room_id().as_str(), site_id.as_str(), slug)
+        .await?;
 
     let mut final_json = event_json;
     if let Some(parent_id_str) = reply_to {
