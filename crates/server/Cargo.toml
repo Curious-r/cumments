@@ -20,17 +20,12 @@ hex.workspace = true
 rand.workspace = true
 matrix-sdk.workspace = true
 serde.workspace = true
-# Test Client
-reqwest.workspace = true
 
-# SSE 引用
 tokio-stream.workspace = true
 futures.workspace = true
+
+config.workspace = true
 
 [[bin]]
 name = "server"
 path = "src/main.rs"
-
-[[bin]]
-name = "client"
-path = "src/bin/client.rs"

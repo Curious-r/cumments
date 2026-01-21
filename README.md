@@ -1,262 +1,252 @@
----
-
 # Cumments
 
-![Rust](https://img.shields.io/badge/Language-Rust-orange)
-![License](https://img.shields.io/badge/License-MIT-blue)
-![Matrix](https://img.shields.io/badge/Protocol-Matrix-black)
-![Version](https://img.shields.io/badge/Version-0.8.4-green)
-
-[English](#english) | [中文](#chinese)
-
----
+[ English ](#english) | [ 中文 ](#chinese)
 
 <a name="english"></a>
 
-## English
+## 1. Introduction
 
-**Cumments** is a lightweight, high-performance comment system backend designed for static blogs (Hugo, Hexo, etc.). It leverages the **Matrix** protocol for administration and data synchronization, while using **SQLite** for fast local query serving.
+**Cumments** is a backend for a decentralized comment system based on the **Matrix Protocol**. It utilizes Matrix rooms as the persistent data source and a local SQLite database as a read cache for high-performance querying.
 
-Built with **Rust** (Axum + Tokio + SQLx), it aims to be robust, resource-efficient, and easy to deploy.
+It is designed for static blogs, offering real-time updates via Server-Sent Events (SSE) and anti-spam protection via Proof of Work (PoW).
 
-### Features
+### Key Features
 
-*   **Matrix Powered**: Uses a Matrix Bot to send and sync comments. You can moderate comments simply by using a Matrix client (like Element) to Redact (delete) messages.
-*   **Proof of Work (PoW)**: Built-in SHA256-based PoW mechanism to prevent spam without annoying CAPTCHAs.
-*   **High Performance**: Powered by Rust and SQLite. Zero GC pauses, minimal memory footprint.
-*   **Automated Maintenance**: Auto-creates database files and applies migrations on startup.
-*   **Docker Ready**: Provides multi-stage built Docker images (Debian Slim) for easy deployment.
-*   **Type-Safe Configuration**: Strict validation for environment variables and IDs (Fail-fast design).
+*   **Matrix as Storage**: Data is stored in Matrix rooms. The local database can be fully reconstructed from the Matrix history at any time.
+*   **Dual Operation Modes**:
+    *   **Bot Mode**: Acts as a standard Matrix client. Simple setup using a single bot account.
+    *   **AppService Mode**: Acts as a Matrix Application Service. Supports **Ghost Users** (virtual users) to preserve commenter identity (avatar/nickname) natively.
+*   **Real-time Sync**: Supports pushing new comments, edits, and deletions to the frontend via SSE.
+*   **Anti-Spam**: Built-in PoW verification to prevent automated spam.
 
-### Getting Started (Docker)
+---
 
-The easiest way to run Cumments is using Docker Compose.
+## 2. Configuration
 
-1.  **Prerequisites**:
-    *   A Matrix account (e.g., on `matrix.org`) for the bot.
-    *   Get the **Access Token** of the bot.
+Configuration is managed via environment variables (supporting `.env` files).
+The naming convention follows `CUMMENTS_SECTION__KEY` (note the double underscore `__` for hierarchy).
 
-2.  **Configuration**:
-    Create a `compose.yaml` file (or use the one provided):
+### Common Settings
 
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `CUMMENTS_SERVER__HOST` | API binding address | `0.0.0.0` |
+| `CUMMENTS_SERVER__PORT` | API binding port | `3000` |
+| `CUMMENTS_SERVER__CORS_ORIGINS`| Allowed CORS origins (comma separated) | `*` |
+| `CUMMENTS_DATABASE__URL`| SQLite connection string | `sqlite://data/cumments.db` |
+| `CUMMENTS_MATRIX__MODE` | Operation mode (`bot` or `appservice`) | `bot` |
+| `CUMMENTS_SECURITY__GLOBAL_SALT` | Salt for hashing user identities | `change_me_please` |
+
+### Mode A: Bot (Default)
+
+Suitable for users using public homeservers (e.g., matrix.org). All comments are sent by the bot account.
+
+```bash
+CUMMENTS_MATRIX__MODE=bot
+CUMMENTS_MATRIX__HOMESERVER_URL=https://matrix.org
+# The full Matrix ID of the bot
+CUMMENTS_MATRIX__USER=@your_bot:matrix.org
+# Access Token obtained from Matrix client
+CUMMENTS_MATRIX__TOKEN=syt_...
+```
+
+### Mode B: AppService
+
+Suitable for self-hosted homeservers (Synapse/Dendrite). Requires `registration.yaml` configuration on the homeserver side.
+
+1.  **Generate `registration.yaml`** (Example):
     ```yaml
+    id: cumments_bridge
+    url: "http://localhost:3001"  # Must match CUMMENTS_MATRIX__LISTEN_PORT
+    as_token: "YOUR_AS_TOKEN"     # Random string
+    hs_token: "YOUR_HS_TOKEN"     # Random string
+    sender_localpart: "cumments_bot"
+    namespaces:
+      users:
+        - exclusive: true
+          regex: "@cumments_.*"
+      aliases:
+        - exclusive: true
+          regex: "#cumments_.*"
+      rooms: []
+    ```
+2.  **Environment Variables**:
+    ```bash
+    CUMMENTS_MATRIX__MODE=appservice
+    CUMMENTS_MATRIX__HOMESERVER_URL=http://localhost:8008
+    # Your Matrix server domain
+    CUMMENTS_MATRIX__SERVER_NAME=example.com
+    # Tokens must match registration.yaml
+    CUMMENTS_MATRIX__AS_TOKEN=YOUR_AS_TOKEN
+    CUMMENTS_MATRIX__HS_TOKEN=YOUR_HS_TOKEN
+    # Port to listen for transactions from Homeserver
+    CUMMENTS_MATRIX__LISTEN_PORT=3001
+    # Localpart of the main bot (defined in registration.yaml)
+    CUMMENTS_MATRIX__BOT_LOCALPART=cumments_bot
+    ```
+
+---
+
+## 3. Deployment (Docker)
+
+Use Docker Compose for quick deployment.
+
+1.  Create `docker-compose.yml`:
+    ```yaml
+    version: '3.8'
     services:
       cumments:
-        build: .              # Build from source
-        image: cumments:latest
+        image: your-repo/cumments:latest
         restart: unless-stopped
         ports:
           - "3000:3000"
+          # - "3001:3001" # Uncomment if using AppService mode
         volumes:
-          - ./data:/app/data  # Persist SQLite DB
-        environment:
-          # Matrix Configuration (Required)
-          - CUMMENTS_MATRIX_HOMESERVER=https://matrix.org
-          - CUMMENTS_MATRIX_USER=@your_bot:matrix.org
-          - CUMMENTS_MATRIX_TOKEN=syt_your_access_token_here
-          
-          # Optional: Host/Port (Default: 0.0.0.0:3000)
-          # - PORT=3000
-          
-          # Reduce noise from Matrix SDK
-          - RUST_LOG=server=info,adapter=info,storage=info,matrix_sdk=error,matrix_sdk_base=error
+          - ./data:/app/data
+        env_file:
+          - .env
     ```
-
-3.  **Run**:
-    ```bash
-    docker compose up -d
-    ```
-
-### Configuration
-
-Cumments prioritizes namespaced variables (`CUMMENTS_` prefix) but supports standard environment variables as fallbacks for compatibility with PaaS platforms (like Heroku/Railway).
-
-| Variable (Priority) | Fallback Variable | Description | Default |
-| :--- | :--- | :--- | :--- |
-| `CUMMENTS_MATRIX_HOMESERVER` | `MATRIX_HOMESERVER` | Matrix Homeserver URL | **Required** |
-| `CUMMENTS_MATRIX_USER` | `MATRIX_USER` | Full Bot User ID (`@user:server`) | **Required** |
-| `CUMMENTS_MATRIX_TOKEN` | `MATRIX_TOKEN` | Bot Access Token | **Required** |
-| `CUMMENTS_DATABASE_URL` | `DATABASE_URL` | SQLite Connection String | `sqlite://data/cumments.db` |
-| `CUMMENTS_HOST` | **`HOST`** | Listening Address | `0.0.0.0` |
-| `CUMMENTS_PORT` | **`PORT`** | Listening Port | `3000` |
-| `RUST_LOG` | - | Log Level Control | See Example |
-
-### API Usage
-
-#### 1. Get PoW Challenge
-`GET /api/challenge`
-```json
-{
-  "secret": "a1b2c3d4...",
-  "difficulty": 4
-}
-```
-
-#### 2. Submit Comment
-`POST /api/:site_id/comments`
-
-*   **Note**: `site_id` must NOT contain underscores (`_`). Use dots (`.`) or hyphens (`-`).
-*   **Payload**:
-    ```json
-    {
-      "post_slug": "my-first-post",
-      "nickname": "Alice",
-      "content": "Hello World!",
-      "challenge_response": "secret|nonce"
-    }
-    ```
-
-#### 3. List Comments
-`GET /api/:site_id/comments/:post_slug`
-
-### Development
-
-This project is organized as a Cargo Workspace:
-*   `crates/server`: The HTTP server (Axum).
-*   `crates/adapter`: Matrix SDK integration logic.
-*   `crates/storage`: Database operations (SQLx).
-*   `crates/domain`: Shared types and entities.
-
-**Run locally:**
-```bash
-# Ensure .env exists
-cargo run --bin server
-```
-
-**Run Test Client:**
-```bash
-cargo run --bin client
-```
-
-**Run Tests:**
-```bash
-cargo test
-```
+2.  Create `.env` based on the configuration section above.
+3.  Run `docker-compose up -d`.
 
 ---
+
+## 4. API Reference
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/:site_id/comments/:slug` | Retrieve comments list |
+| `GET` | `/api/:site_id/comments/:slug/sse` | Real-time event stream (SSE) |
+| `POST` | `/api/:site_id/comments` | Post a comment |
+| `GET` | `/api/challenge` | Get PoW challenge |
+
+**SSE Events:** `new_comment`, `update_comment`, `delete_comment`.
+
+---
+
+<br><br><br>
 
 <a name="chinese"></a>
 
-## 中文
+## 1. 简介
 
-**Cumments** 是一个专为静态博客（如 Hugo, Hexo）设计的轻量级、高性能评论系统后端。它利用 **Matrix** 协议进行后台管理和数据同步，同时使用 **SQLite** 提供快速的本地查询服务。
+**Cumments** 是一个基于 **Matrix 协议** 的评论系统后端。它使用 Matrix 房间作为数据持久化层，并使用本地 SQLite 数据库作为读取缓存以提供高性能查询。
 
-项目使用 **Rust** (Axum + Tokio + SQLx) 构建，旨在提供稳健、低资源占用且易于部署的解决方案。
+该项目专为静态博客设计，支持通过 SSE 实现实时更新，并内置 PoW 防垃圾机制。
 
-### 核心特性
+### 核心功能
 
-*   **Matrix 驱动**: 使用 Matrix 机器人发送和同步评论。你只需使用任意 Matrix 客户端（如 Element）撤回消息，即可实现评论的删除管理。
-*   **工作量证明 (PoW)**: 内置基于 SHA256 的 PoW 机制，有效防止垃圾评论，无需恼人的图形验证码。
-*   **高性能**: Rust 与 SQLite 加持，无 GC 停顿，极低的内存占用。
-*   **自动化运维**: 启动时自动检测并创建数据库文件、自动执行数据库迁移。
-*   **Docker 就绪**: 提供基于 Debian Slim 的多阶段构建镜像，部署简单。
-*   **类型安全配置**: 严格的环境变量校验和 ID 解析（Fail-fast 设计）。
-
-### 快速开始 (Docker)
-
-使用 Docker Compose 是运行 Cumments 最简单的方式。
-
-1.  **准备工作**:
-    *   注册一个 Matrix 账号（例如在 `matrix.org`）作为机器人。
-    *   获取该账号的 **Access Token**。
-
-2.  **配置**:
-    创建一个 `compose.yaml` 文件：
-
-    ```yaml
-    services:
-      cumments:
-        build: .              # 从源码构建
-        image: cumments:latest
-        restart: unless-stopped
-        ports:
-          - "3000:3000"
-        volumes:
-          - ./data:/app/data  # 持久化数据库文件
-        environment:
-          # Matrix 配置 (必填)
-          - CUMMENTS_MATRIX_HOMESERVER=https://matrix.org
-          - CUMMENTS_MATRIX_USER=@your_bot:matrix.org
-          - CUMMENTS_MATRIX_TOKEN=syt_your_access_token_here
-          
-          # 可选：主机/端口 (默认: 0.0.0.0:3000)
-          # - PORT=3000
-          
-          # 屏蔽 Matrix SDK 的噪音日志
-          - RUST_LOG=server=info,adapter=info,storage=info,matrix_sdk=error,matrix_sdk_base=error
-    ```
-
-3.  **运行**:
-    ```bash
-    docker compose up -d
-    ```
-
-### 配置说明
-
-Cumments 采用 **命名空间策略**（`CUMMENTS_` 前缀）来避免环境变量冲突，同时也支持通用变量名（如 `HOST`, `PORT`）作为回退，以兼容云平台标准。
-
-| 变量名 (优先) | 回退变量 (通用) | 说明 | 默认值 |
-| :--- | :--- | :--- | :--- |
-| `CUMMENTS_MATRIX_HOMESERVER` | `MATRIX_HOMESERVER` | Matrix 服务器地址 | **必填** |
-| `CUMMENTS_MATRIX_USER` | `MATRIX_USER` | 机器人完整 ID | **必填** |
-| `CUMMENTS_MATRIX_TOKEN` | `MATRIX_TOKEN` | 机器人 Access Token | **必填** |
-| `CUMMENTS_DATABASE_URL` | `DATABASE_URL` | SQLite 连接字符串 | `sqlite://data/cumments.db` |
-| `CUMMENTS_HOST` | **`HOST`** | 监听地址 | `0.0.0.0` |
-| `CUMMENTS_PORT` | **`PORT`** | 监听端口 | `3000` |
-| `RUST_LOG` | - | 日志级别 | 见示例 |
-
-### API 使用指南
-
-#### 1. 获取 PoW 挑战
-`GET /api/challenge`
-```json
-{
-  "secret": "a1b2c3d4...",
-  "difficulty": 4
-}
-```
-
-#### 2. 提交评论
-`POST /api/:site_id/comments`
-
-*   **注意**: `site_id` 通常为域名，**严禁包含下划线 (`_`)**，请使用点 (`.`) 或连字符 (`-`)。
-*   **请求体**:
-    ```json
-    {
-      "post_slug": "my-first-post",
-      "nickname": "Alice",
-      "content": "Hello World!",
-      "challenge_response": "secret|nonce"
-    }
-    ```
-
-#### 3. 获取评论列表
-`GET /api/:site_id/comments/:post_slug`
-
-### 开发与构建
-
-本项目采用 Cargo Workspace 结构组织：
-*   `crates/server`: HTTP 服务端入口 (Axum)。
-*   `crates/adapter`: Matrix SDK 集成与业务逻辑。
-*   `crates/storage`: 数据库操作与迁移 (SQLx)。
-*   `crates/domain`: 共享的类型定义与实体。
-
-**本地运行:**
-```bash
-# 确保根目录有 .env 文件
-cargo run --bin server
-```
-
-**运行测试客户端:**
-```bash
-cargo run --bin client
-```
-
-**运行单元测试:**
-```bash
-cargo test
-```
+*   **Matrix 存储**: 数据存储于 Matrix 房间中，支持从 Matrix 历史记录完全重建本地数据库。
+*   **双运行模式**:
+    *   **Bot 模式**: 作为标准 Matrix 客户端运行，配置简单。
+    *   **AppService 模式**: 作为 Matrix 应用服务运行，支持 **虚拟用户 (Ghost Users)**，提供原生的评论者头像和昵称显示。
+*   **实时性**: 支持基于 SSE (Server-Sent Events) 的评论推送、编辑同步和删除同步。
+*   **防垃圾**: 内置工作量证明 (PoW) 验证。
 
 ---
 
-*Built with ❤️ in Rust.*
+## 2. 配置说明
+
+所有配置均通过环境变量管理。层级结构使用双下划线 (`__`) 分隔，前缀与变量名之间使用单下划线 (`_`)。
+
+### 通用设置
+
+| 变量名 | 说明 | 默认值 |
+| :--- | :--- | :--- |
+| `CUMMENTS_SERVER__HOST` | API 监听地址 | `0.0.0.0` |
+| `CUMMENTS_SERVER__PORT` | API 监听端口 | `3000` |
+| `CUMMENTS_SERVER__CORS_ORIGINS`| 允许的跨域来源 (逗号分隔) | `*` |
+| `CUMMENTS_DATABASE__URL`| SQLite 连接字符串 | `sqlite://data/cumments.db` |
+| `CUMMENTS_MATRIX__MODE` | 运行模式 (`bot` 或 `appservice`) | `bot` |
+| `CUMMENTS_SECURITY__GLOBAL_SALT` | 用于哈希用户身份的盐值 | `change_me_please` |
+
+### 模式 A: Bot (默认)
+
+适用于使用公开 Homeserver (如 matrix.org) 的场景。
+
+```bash
+CUMMENTS_MATRIX__MODE=bot
+CUMMENTS_MATRIX__HOMESERVER_URL=https://matrix.org
+# Bot 的完整 Matrix ID
+CUMMENTS_MATRIX__USER=@your_bot:matrix.org
+# 从 Matrix 客户端获取的 Access Token
+CUMMENTS_MATRIX__TOKEN=syt_...
+```
+
+### 模式 B: AppService
+
+适用于自建 Homeserver (Synapse/Dendrite) 的场景。需要在服务端配置 `registration.yaml`。
+
+1.  **生成 `registration.yaml`** (示例):
+    ```yaml
+    id: cumments_bridge
+    url: "http://localhost:3001"  # 必须与 CUMMENTS_MATRIX__LISTEN_PORT 一致
+    as_token: "YOUR_AS_TOKEN"     # 随机字符串
+    hs_token: "YOUR_HS_TOKEN"     # 随机字符串
+    sender_localpart: "cumments_bot"
+    namespaces:
+      users:
+        - exclusive: true
+          regex: "@cumments_.*"
+      aliases:
+        - exclusive: true
+          regex: "#cumments_.*"
+      rooms: []
+    ```
+2.  **环境变量**:
+    ```bash
+    CUMMENTS_MATRIX__MODE=appservice
+    CUMMENTS_MATRIX__HOMESERVER_URL=http://localhost:8008
+    # 你的 Matrix 服务器域名
+    CUMMENTS_MATRIX__SERVER_NAME=example.com
+    # Token 必须与 registration.yaml 中一致
+    CUMMENTS_MATRIX__AS_TOKEN=YOUR_AS_TOKEN
+    CUMMENTS_MATRIX__HS_TOKEN=YOUR_HS_TOKEN
+    # 接收 Homeserver 推送的监听端口 (注意：与 API 端口不同)
+    CUMMENTS_MATRIX__LISTEN_PORT=3001
+    # 主 Bot 的 localpart (定义在 registration.yaml)
+    CUMMENTS_MATRIX__BOT_LOCALPART=cumments_bot
+    ```
+
+---
+
+## 3. 部署 (Docker)
+
+推荐使用 Docker Compose 进行部署。
+
+1.  创建 `docker-compose.yml`:
+    ```yaml
+    version: '3.8'
+    services:
+      cumments:
+        image: your-repo/cumments:latest
+        restart: unless-stopped
+        ports:
+          - "3000:3000"
+          # - "3001:3001" # 如果使用 AppService 模式需开启此端口
+        volumes:
+          - ./data:/app/data
+        env_file:
+          - .env
+    ```
+2.  参照配置说明创建 `.env` 文件。
+3.  运行 `docker-compose up -d`。
+
+---
+
+## 4. API 接口
+
+| 方法 | 路径 | 说明 |
+| :--- | :--- | :--- |
+| `GET` | `/api/:site_id/comments/:slug` | 获取评论列表 |
+| `GET` | `/api/:site_id/comments/:slug/sse` | 实时事件流 (SSE) |
+| `POST` | `/api/:site_id/comments` | 发布评论 |
+| `GET` | `/api/challenge` | 获取 PoW 挑战 |
+
+**SSE 事件类型:** `new_comment` (新增), `update_comment` (编辑), `delete_comment` (删除)。
+
+---
+
+## License
+
+[MIT License](LICENSE)
