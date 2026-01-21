@@ -86,7 +86,8 @@ pub async fn handle_sync_event(
         resolve_event_details(&event, content_json);
 
     let sender_id = event.sender.to_string();
-    let (author_name, is_guest, content) =
+
+    let (author_name, is_guest, content, author_fingerprint) =
         protocol::extract_comment_data(&final_content_json, &sender_id, &bot_id);
 
     if content.trim().is_empty() {
@@ -107,6 +108,7 @@ pub async fn handle_sync_event(
         author_name,
         is_guest,
         is_redacted: false,
+        author_fingerprint,
         content,
         created_at: current_time,
         updated_at,
@@ -114,11 +116,8 @@ pub async fn handle_sync_event(
     };
 
     let room_id = room.room_id().as_str();
-    db.ensure_room(room_id, site_id.as_str(), &post_slug)
+    db.upsert_comment(room_id, site_id.as_str(), &post_slug, &comment)
         .await?;
-
-    db.upsert_comment(room_id, &comment).await?;
-
     info!("Comment synced: {} -> {}", comment.id, comment.content);
 
     let _ = tx.send(IngestEvent::CommentSaved {
@@ -164,8 +163,6 @@ pub async fn handle_multitenant_send(
         Err(_) => create_and_link_room(client, server_name, &space_id, site_id, slug).await?,
     };
 
-    // [关键变更] 确保房间已注册 (Write Path)
-    // 无论是刚创建的还是查找出来的，都确保 DB 里有记录
     db.ensure_room(room.room_id().as_str(), site_id.as_str(), slug)
         .await?;
 

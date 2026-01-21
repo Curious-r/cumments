@@ -19,7 +19,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
 use super::handlers::{handle_multitenant_send, handle_sync_event};
-use crate::common::matrix_utils::SpaceCache;
+use crate::common::matrix_utils::{compute_user_fingerprint, SpaceCache};
 use crate::traits::MatrixDriver;
 
 #[derive(Clone)]
@@ -27,6 +27,7 @@ pub struct BotConfig {
     pub homeserver_url: String,
     pub user_id: OwnedUserId,
     pub access_token: String,
+    pub global_salt: String,
 }
 
 pub struct BotDriver {
@@ -72,10 +73,11 @@ impl MatrixDriver for BotDriver {
         let my_bot_id = client.user_id().unwrap().to_string();
         let space_cache = SpaceCache::new();
 
-        // --- Write Task ---
         let sender_client = client.clone();
         let server_name_task = self.config.user_id.server_name().to_owned();
         let db_write = db.clone();
+
+        let salt = self.config.global_salt.clone();
 
         tokio::spawn(async move {
             while let Some(cmd) = rx_cmd.recv().await {
@@ -86,8 +88,14 @@ impl MatrixDriver for BotDriver {
                         content,
                         nickname,
                         reply_to,
+                        email,
+                        guest_token,
                     } => {
-                        let event_json = protocol::build_outbound_event(&nickname, &content);
+                        let fingerprint =
+                            compute_user_fingerprint(email.as_deref(), &guest_token, &salt);
+
+                        let event_json =
+                            protocol::build_outbound_event(&nickname, &content, Some(fingerprint));
 
                         if let Err(e) = handle_multitenant_send(
                             &sender_client,
@@ -108,7 +116,6 @@ impl MatrixDriver for BotDriver {
             }
         });
 
-        // --- Event Handlers ---
         let db_sync = db.clone();
         let bot_id_sync = my_bot_id.clone();
         let tx_sync = tx_ingest.clone();
@@ -153,7 +160,6 @@ impl MatrixDriver for BotDriver {
             }
         });
 
-        // --- Sync Loop ---
         info!("Starting Matrix Sync Loop...");
         let mut sync_token = db.get_sync_token().await?;
         if let Some(ref t) = sync_token {

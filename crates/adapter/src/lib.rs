@@ -3,13 +3,12 @@ mod drivers;
 mod traits;
 
 pub use common::matrix_utils::SpaceCache;
-use drivers::appservice::AppServiceDriver;
 pub use drivers::bot::BotConfig;
 pub use traits::MatrixDriver;
 
-use drivers::bot::BotDriver;
-
 use domain::{AppCommand, IngestEvent};
+use drivers::appservice::AppServiceDriver;
+use drivers::bot::BotDriver;
 use storage::Db;
 use tokio::sync::{broadcast, mpsc};
 use tracing::info;
@@ -22,6 +21,7 @@ pub struct AppServiceConfig {
     pub hs_token: String,
     pub bot_localpart: String,
     pub listen_port: u16,
+    pub global_salt: String,
 }
 
 #[derive(Clone)]

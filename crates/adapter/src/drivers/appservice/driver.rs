@@ -6,14 +6,21 @@ use axum::{
     routing::put,
     Json, Router,
 };
-use domain::{protocol, AppCommand, Comment, IngestEvent};
-use matrix_sdk::ruma::{
-    events::{
-        room::message::{OriginalRoomMessageEvent, Relation, RoomMessageEvent},
-        room::redaction::{OriginalRoomRedactionEvent, RoomRedactionEvent},
-        AnyMessageLikeEvent, AnyTimelineEvent,
+use domain::{protocol, AppCommand, Comment, IngestEvent, SiteId};
+use matrix_sdk::{
+    matrix_auth::{MatrixSession, MatrixSessionTokens},
+    ruma::{
+        api::client::room::create_room::v3::Request as CreateRoomRequest,
+        api::client::room::create_room::v3::RoomPreset,
+        events::{
+            room::message::{OriginalRoomMessageEvent, Relation, RoomMessageEvent},
+            room::redaction::{OriginalRoomRedactionEvent, RoomRedactionEvent},
+            AnyMessageLikeEvent, AnyTimelineEvent,
+        },
+        serde::Raw,
+        EventId, OwnedRoomId, RoomAliasId, ServerName, UserId,
     },
-    serde::Raw,
+    Client, SessionMeta,
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -21,6 +28,7 @@ use storage::Db;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 
+use crate::common::matrix_utils::{compute_user_fingerprint, SpaceCache};
 use crate::traits::MatrixDriver;
 use crate::AppServiceConfig;
 
@@ -54,6 +62,31 @@ impl MatrixDriver for AppServiceDriver {
             self.config.listen_port
         );
 
+        let main_client = Client::builder()
+            .homeserver_url(&self.config.homeserver_url)
+            .build()
+            .await?;
+
+        let main_user_id = UserId::parse(format!(
+            "@{}:{}",
+            self.config.bot_localpart, self.config.server_name
+        ))?;
+
+        let session = MatrixSession {
+            meta: SessionMeta {
+                user_id: main_user_id.clone(),
+                device_id: "CUMMENTS_AS_BOT".into(),
+            },
+            tokens: MatrixSessionTokens {
+                access_token: self.config.as_token.clone(),
+                refresh_token: None,
+            },
+        };
+        main_client.matrix_auth().restore_session(session).await?;
+        info!("AS Main Bot logged in as {}", main_user_id);
+
+        let space_cache = SpaceCache::new();
+
         let state = AsContext {
             db: db.clone(),
             tx_ingest: tx_ingest.clone(),
@@ -77,8 +110,32 @@ impl MatrixDriver for AppServiceDriver {
 
         while let Some(cmd) = rx_cmd.recv().await {
             match cmd {
-                AppCommand::SendComment { .. } => {
-                    warn!("AS Mode SendComment not implemented yet!");
+                AppCommand::SendComment {
+                    site_id,
+                    post_slug,
+                    content,
+                    nickname,
+                    reply_to,
+                    email,
+                    guest_token,
+                } => {
+                    if let Err(e) = handle_as_send(
+                        &main_client,
+                        &self.config,
+                        &db,
+                        &space_cache,
+                        &site_id,
+                        &post_slug,
+                        &nickname,
+                        email.as_deref(),
+                        &guest_token,
+                        &content,
+                        reply_to,
+                    )
+                    .await
+                    {
+                        error!("AS Send failed: {:?}", e);
+                    }
                 }
             }
         }
@@ -87,7 +144,127 @@ impl MatrixDriver for AppServiceDriver {
     }
 }
 
-// --- HTTP Handlers ---
+async fn handle_as_send(
+    main_client: &Client,
+    config: &AppServiceConfig,
+    db: &Db,
+    cache: &SpaceCache,
+    site_id: &SiteId,
+    slug: &str,
+    nickname: &str,
+    email: Option<&str>,
+    guest_token: &str,
+    content: &str,
+    reply_to: Option<String>,
+) -> Result<()> {
+    let room_id = ensure_room_for_as(main_client, config, cache, site_id, slug).await?;
+    db.ensure_room(room_id.as_str(), site_id.as_str(), slug)
+        .await?;
+
+    let fingerprint = compute_user_fingerprint(email, guest_token, &config.global_salt);
+
+    let ghost_localpart = format!("{}_{}", config.bot_localpart, fingerprint);
+    let ghost_user_id = UserId::parse(format!("@{}:{}", ghost_localpart, config.server_name))?;
+
+    let ghost_client = get_ghost_client(config, &ghost_user_id).await?;
+
+    if ghost_client.get_room(&room_id).is_none() {
+        ghost_client.join_room_by_id(&room_id).await?;
+    }
+
+    let _ = ghost_client
+        .account()
+        .set_display_name(Some(nickname))
+        .await;
+
+    let event_json = protocol::build_outbound_event(nickname, content, Some(fingerprint));
+    let mut final_json = event_json;
+
+    if let Some(parent_id_str) = reply_to {
+        if let Ok(_) = EventId::parse(&parent_id_str) {
+            if let Some(obj) = final_json.as_object_mut() {
+                obj.insert(
+                    "m.relates_to".to_string(),
+                    serde_json::json!({ "m.in_reply_to": { "event_id": parent_id_str } }),
+                );
+            }
+        }
+    }
+
+    if let Some(room) = ghost_client.get_room(&room_id) {
+        use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+        let raw_content: Raw<AnyMessageLikeEventContent> = serde_json::from_value(final_json)?;
+        room.send_raw("m.room.message", raw_content).await?;
+        info!("Sent AS message as {} ({})", ghost_user_id, nickname);
+    } else {
+        warn!("Ghost client joined room but get_room failed immediately.");
+    }
+
+    Ok(())
+}
+
+async fn get_ghost_client(config: &AppServiceConfig, user_id: &UserId) -> Result<Client> {
+    let client = Client::builder()
+        .homeserver_url(&config.homeserver_url)
+        .build()
+        .await?;
+
+    let session = MatrixSession {
+        meta: SessionMeta {
+            user_id: user_id.to_owned(),
+            device_id: "AS_GHOST".into(),
+        },
+        tokens: MatrixSessionTokens {
+            access_token: config.as_token.clone(),
+            refresh_token: None,
+        },
+    };
+
+    client.matrix_auth().restore_session(session).await?;
+    Ok(client)
+}
+
+async fn ensure_room_for_as(
+    client: &Client,
+    config: &AppServiceConfig,
+    cache: &SpaceCache,
+    site_id: &SiteId,
+    slug: &str,
+) -> Result<OwnedRoomId> {
+    let full_alias = format!("#{}_{}:{}", site_id.as_str(), slug, config.server_name);
+    let room_alias = RoomAliasId::parse(&full_alias)?;
+
+    if let Ok(resp) = client.resolve_room_alias(&room_alias).await {
+        return Ok(resp.room_id);
+    }
+
+    let space_id = crate::common::matrix_utils::ensure_site_space(
+        client,
+        &ServerName::parse(&config.server_name)?,
+        cache,
+        site_id,
+    )
+    .await?;
+
+    let alias_local = format!("{}_{}", site_id.as_str(), slug);
+    let mut req = CreateRoomRequest::new();
+    req.room_alias_name = Some(alias_local);
+    req.name = Some(format!("Comments for {}", slug));
+    req.preset = Some(RoomPreset::PublicChat);
+
+    info!("AS creating new room: {}", full_alias);
+    let room = client.create_room(req).await?;
+    let room_id = room.room_id().to_owned();
+
+    if let Some(space_room) = client.get_room(&space_id) {
+        use matrix_sdk::ruma::events::space::child::SpaceChildEventContent;
+        let server_name = ServerName::parse(&config.server_name)?;
+        let child = SpaceChildEventContent::new(vec![server_name.to_owned()]);
+        let _ = space_room.send_state_event_for_key(&room_id, child).await;
+    }
+
+    Ok(room_id)
+}
 
 #[derive(Deserialize)]
 struct TransactionQuery {
@@ -106,7 +283,6 @@ async fn handle_transaction(
     Json(body): Json<TransactionBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     if query.access_token != ctx.config.hs_token {
-        warn!("Unauthorized AS transaction attempt: invalid token");
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -143,10 +319,10 @@ async fn handle_as_message(event: OriginalRoomMessageEvent, ctx: &AsContext) -> 
     let room_id_str = event.room_id.to_string();
     let sender_id = event.sender.to_string();
 
-    let bot_localpart = &ctx.config.bot_localpart;
-    if sender_id.starts_with(&format!("@{}:", bot_localpart))
-        || sender_id.contains(&format!(":{}_", bot_localpart))
-    {
+    let bot_exact = format!("@{}:{}", ctx.config.bot_localpart, ctx.config.server_name);
+    let bot_prefix = format!("@{}_", ctx.config.bot_localpart);
+
+    if sender_id == bot_exact || sender_id.starts_with(&bot_prefix) {
         return Ok(());
     }
 
@@ -175,11 +351,8 @@ async fn handle_as_message(event: OriginalRoomMessageEvent, ctx: &AsContext) -> 
         (event.event_id.to_string(), content_json, None)
     };
 
-    let (author_name, is_guest, content) = protocol::extract_comment_data(
-        &final_content_json,
-        &sender_id,
-        &format!("@{}:{}", bot_localpart, ctx.config.server_name),
-    );
+    let (author_name, is_guest, content, author_fingerprint) =
+        protocol::extract_comment_data(&final_content_json, &sender_id, &bot_exact);
 
     if content.trim().is_empty() {
         return Ok(());
@@ -199,13 +372,16 @@ async fn handle_as_message(event: OriginalRoomMessageEvent, ctx: &AsContext) -> 
         author_name,
         is_guest,
         is_redacted: false,
+        author_fingerprint,
         content,
         created_at: current_time,
         updated_at,
         reply_to,
     };
 
-    ctx.db.upsert_comment(&room_id_str, &comment).await?;
+    ctx.db
+        .upsert_comment(&room_id_str, site_id.as_str(), &post_slug, &comment)
+        .await?;
     info!("AS Comment received: {} -> {}", comment.id, comment.content);
 
     let _ = ctx.tx_ingest.send(IngestEvent::CommentSaved {

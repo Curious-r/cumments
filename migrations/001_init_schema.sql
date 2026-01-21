@@ -4,21 +4,21 @@ CREATE TABLE meta (
 );
 
 CREATE TABLE rooms (
-    room_id TEXT PRIMARY KEY, -- Matrix Room ID (!abc:server)
-    site_id TEXT NOT NULL,    -- 业务 Site ID
-    post_slug TEXT NOT NULL,  -- 业务 Slug
+    room_id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    post_slug TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
     UNIQUE(site_id, post_slug)
 );
 
 CREATE TABLE comments (
-    id TEXT PRIMARY KEY,      -- Matrix Event ID ($abc:server)
-    room_id TEXT NOT NULL,    -- 外键
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL,
 
     author_id TEXT NOT NULL,
     author_name TEXT NOT NULL,
     is_guest BOOLEAN NOT NULL DEFAULT FALSE,
+    author_fingerprint TEXT,
 
     content TEXT NOT NULL,
     is_redacted BOOLEAN NOT NULL DEFAULT FALSE,
