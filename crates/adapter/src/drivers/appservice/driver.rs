@@ -161,7 +161,7 @@ async fn handle_as_send(
     db.ensure_room(room_id.as_str(), site_id.as_str(), slug)
         .await?;
 
-    let fingerprint = compute_user_fingerprint(email, guest_token, &config.global_salt);
+    let fingerprint = compute_user_fingerprint(email, guest_token, &config.identity_salt);
 
     let ghost_localpart = format!("{}_{}", config.bot_localpart, fingerprint);
     let ghost_user_id = UserId::parse(format!("@{}:{}", ghost_localpart, config.server_name))?;
@@ -283,6 +283,7 @@ async fn handle_transaction(
     Json(body): Json<TransactionBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     if query.access_token != ctx.config.hs_token {
+        warn!("Unauthorized AS transaction attempt: invalid token");
         return Err(StatusCode::FORBIDDEN);
     }
 

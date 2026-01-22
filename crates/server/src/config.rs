@@ -23,7 +23,7 @@ pub struct DatabaseSettings {
 
 #[derive(Deserialize, Clone)]
 pub struct SecuritySettings {
-    pub global_salt: String,
+    pub identity_salt: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -56,14 +56,14 @@ impl Settings {
             .set_default("database.url", "sqlite://data/cumments.db")?
             .set_default("matrix.mode", "bot")?
             .set_default("matrix.homeserver_url", "https://matrix.org")?
-            .set_default("security.global_salt", "change_me_please")?
+            .set_default("security.identity_salt", "change_me_please")?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::File::with_name(&format!("config.{}", run_mode)).required(false))
             .add_source(
                 config::Environment::with_prefix("CUMMENTS")
+                    .try_parsing(true)
                     .separator("__")
                     .prefix_separator("_")
-                    .try_parsing(true) // 尝试解析数字/布尔值
                     .convert_case(config::Case::Lower),
             )
             .build()?;

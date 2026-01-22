@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
                 homeserver_url,
                 user_id,
                 access_token: token,
-                global_salt: settings.security.global_salt.clone(),
+                identity_salt: settings.security.identity_salt.clone(),
             })
         }
         config::MatrixSettings::AppService {
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
             hs_token,
             bot_localpart,
             listen_port,
-            global_salt: settings.security.global_salt.clone(),
+            identity_salt: settings.security.identity_salt.clone(),
         }),
     };
 

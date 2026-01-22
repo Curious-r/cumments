@@ -2,13 +2,18 @@ use crate::Db;
 use domain::SiteId;
 
 impl Db {
-    pub async fn ensure_room(&self, room_id: &str, site_id: &str, slug: &str) -> anyhow::Result<()> {
+    pub async fn ensure_room(
+        &self,
+        room_id: &str,
+        site_id: &str,
+        slug: &str,
+    ) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             INSERT INTO rooms (room_id, site_id, post_slug)
             VALUES (?, ?, ?)
             ON CONFLICT(room_id) DO NOTHING
-            "#
+            "#,
         )
         .bind(room_id)
         .bind(site_id)

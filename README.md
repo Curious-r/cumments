@@ -16,6 +16,7 @@ It is designed for static blogs, offering real-time updates via Server-Sent Even
 *   **Dual Operation Modes**:
     *   **Bot Mode**: Acts as a standard Matrix client. Simple setup using a single bot account.
     *   **AppService Mode**: Acts as a Matrix Application Service. Supports **Ghost Users** (virtual users) to preserve commenter identity (avatar/nickname) natively.
+*   **Identity Persistence**: Uses salted hashes of emails/tokens to maintain consistent user identities across sessions (even for guests).
 *   **Real-time Sync**: Supports pushing new comments, edits, and deletions to the frontend via SSE.
 *   **Anti-Spam**: Built-in PoW verification to prevent automated spam.
 
@@ -35,7 +36,7 @@ The naming convention follows `CUMMENTS_SECTION__KEY` (note the double underscor
 | `CUMMENTS_SERVER__CORS_ORIGINS`| Allowed CORS origins (comma separated) | `*` |
 | `CUMMENTS_DATABASE__URL`| SQLite connection string | `sqlite://data/cumments.db` |
 | `CUMMENTS_MATRIX__MODE` | Operation mode (`bot` or `appservice`) | `bot` |
-| `CUMMENTS_SECURITY__GLOBAL_SALT` | Salt for hashing user identities | `change_me_please` |
+| `CUMMENTS_SECURITY__IDENTITY_SALT` | **Critical**: Salt for hashing user identities. Change this! | `change_me_please` |
 
 ### Mode A: Bot (Default)
 
@@ -120,7 +121,18 @@ Use Docker Compose for quick deployment.
 | `POST` | `/api/:site_id/comments` | Post a comment |
 | `GET` | `/api/challenge` | Get PoW challenge |
 
-**SSE Events:** `new_comment`, `update_comment`, `delete_comment`.
+### POST Comment Payload
+```json
+{
+  "post_slug": "hello-world",
+  "nickname": "Alice",
+  "content": "Nice post!",
+  "email": "alice@example.com", // Optional: Used for consistent identity/avatar
+  "guest_token": "uuid-v4",      // Required: Client-generated random ID
+  "challenge_response": "secret|nonce",
+  "reply_to": null
+}
+```
 
 ---
 
@@ -140,6 +152,7 @@ Use Docker Compose for quick deployment.
 *   **双运行模式**:
     *   **Bot 模式**: 作为标准 Matrix 客户端运行，配置简单。
     *   **AppService 模式**: 作为 Matrix 应用服务运行，支持 **虚拟用户 (Ghost Users)**，提供原生的评论者头像和昵称显示。
+*   **身份持久化**: 使用邮箱或 Token 的加盐哈希来保持用户身份的一致性（即使是访客模式）。
 *   **实时性**: 支持基于 SSE (Server-Sent Events) 的评论推送、编辑同步和删除同步。
 *   **防垃圾**: 内置工作量证明 (PoW) 验证。
 
@@ -158,7 +171,7 @@ Use Docker Compose for quick deployment.
 | `CUMMENTS_SERVER__CORS_ORIGINS`| 允许的跨域来源 (逗号分隔) | `*` |
 | `CUMMENTS_DATABASE__URL`| SQLite 连接字符串 | `sqlite://data/cumments.db` |
 | `CUMMENTS_MATRIX__MODE` | 运行模式 (`bot` 或 `appservice`) | `bot` |
-| `CUMMENTS_SECURITY__GLOBAL_SALT` | 用于哈希用户身份的盐值 | `change_me_please` |
+| `CUMMENTS_SECURITY__IDENTITY_SALT` | **重要**: 用于哈希用户身份的盐值。正式环境请务必修改！ | `change_me_please` |
 
 ### 模式 A: Bot (默认)
 
@@ -243,7 +256,18 @@ CUMMENTS_MATRIX__TOKEN=syt_...
 | `POST` | `/api/:site_id/comments` | 发布评论 |
 | `GET` | `/api/challenge` | 获取 PoW 挑战 |
 
-**SSE 事件类型:** `new_comment` (新增), `update_comment` (编辑), `delete_comment` (删除)。
+### POST 请求示例
+```json
+{
+  "post_slug": "hello-world",
+  "nickname": "Alice",
+  "content": "Nice post!",
+  "email": "alice@example.com", // 可选：用于生成稳定的身份 ID/头像
+  "guest_token": "uuid-v4",      // 必填：客户端生成的随机 ID (兜底身份)
+  "challenge_response": "secret|nonce",
+  "reply_to": null
+}
+```
 
 ---
 

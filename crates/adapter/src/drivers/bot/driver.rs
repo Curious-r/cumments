@@ -27,7 +27,8 @@ pub struct BotConfig {
     pub homeserver_url: String,
     pub user_id: OwnedUserId,
     pub access_token: String,
-    pub global_salt: String,
+
+    pub identity_salt: String,
 }
 
 pub struct BotDriver {
@@ -77,7 +78,7 @@ impl MatrixDriver for BotDriver {
         let server_name_task = self.config.user_id.server_name().to_owned();
         let db_write = db.clone();
 
-        let salt = self.config.global_salt.clone();
+        let salt = self.config.identity_salt.clone();
 
         tokio::spawn(async move {
             while let Some(cmd) = rx_cmd.recv().await {

@@ -21,7 +21,8 @@ pub struct AppServiceConfig {
     pub hs_token: String,
     pub bot_localpart: String,
     pub listen_port: u16,
-    pub global_salt: String,
+
+    pub identity_salt: String,
 }
 
 #[derive(Clone)]
