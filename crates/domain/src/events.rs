@@ -1,6 +1,5 @@
 use crate::models::{Comment, SiteId};
 use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IngestEvent {
     CommentSaved {

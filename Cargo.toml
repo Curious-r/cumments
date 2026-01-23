@@ -3,44 +3,50 @@ resolver = "2"
 members = [ "crates/domain", "crates/storage", "crates/adapter", "crates/server" ]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
+# --- 核心工具 ---
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 anyhow = "1.0"
-tokio = { version = "1.0", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
-
-# Database
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono"] }
+config = { version = "0.13", features = ["toml"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# Web
-axum = "0.7"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
-
-# Matrix SDK (Core)
-matrix-sdk = { version = "0.7", default-features = false, features = ["rustls-tls", "markdown"] }
-
-# Utils
+# --- 密码学与安全 ---
+rand = "0.8"
 sha2 = "0.10"
 hex = "0.4"
-rand = "0.8"
+base64 = "0.21"
+hmac = "0.12"
 
-# Stream & Async
+# --- 异步运行时 ---
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 async-trait = "0.1"
 
-# Internal Crates
+# --- 数据库 (SQLite) ---
+# 开启 migrate 功能以支持自动迁移
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
+
+# --- Web 服务 ---
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+reqwest = { version = "0.11", features = ["stream", "rustls-tls"] } # 用于媒体代理
+
+# --- Matrix 协议 ---
+# 仅启用必要的特性，保持轻量
+matrix-sdk = { version = "0.7", default-features = false, features = ["rustls-tls", "markdown", "sqlite"] }
+
+# --- 内部模块路径映射 ---
 domain = { path = "crates/domain" }
 storage = { path = "crates/storage" }
 adapter = { path = "crates/adapter" }
-
-config = { version = "0.15", features = ["convert-case"] }

@@ -1,6 +1,5 @@
 use crate::Db;
 use domain::SiteId;
-
 impl Db {
     pub async fn ensure_room(
         &self,
@@ -22,7 +21,6 @@ impl Db {
         .await?;
         Ok(())
     }
-
     pub async fn get_room_meta(&self, room_id: &str) -> anyhow::Result<Option<(SiteId, String)>> {
         let row = sqlx::query!(
             "SELECT site_id, post_slug FROM rooms WHERE room_id = ?",
@@ -30,7 +28,6 @@ impl Db {
         )
         .fetch_optional(&self.pool)
         .await?;
-
         Ok(row.map(|r| (SiteId::new_unchecked(r.site_id), r.post_slug)))
     }
 }

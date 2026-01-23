@@ -4,16 +4,18 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-domain.workspace = true
-storage.workspace = true
-anyhow.workspace = true
-tokio.workspace = true
-tracing.workspace = true
-matrix-sdk.workspace = true
-chrono.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-async-trait.workspace = true
-axum.workspace = true
-sha2.workspace = true
-hex.workspace = true
+domain = { workspace = true }
+storage = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+matrix-sdk = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+# axum 依赖可能在 AppService 模式用到，暂时保留
+axum = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+tokio-util = { workspace = true }

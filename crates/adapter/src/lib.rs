@@ -10,8 +10,17 @@ use domain::{AppCommand, IngestEvent};
 use drivers::appservice::AppServiceDriver;
 use drivers::bot::BotDriver;
 use storage::Db;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
+use matrix_sdk::ruma::OwnedUserId;
+
+// --- 信封模式核心定义 ---
+pub struct CommandEnvelope {
+    pub cmd: AppCommand,
+    // 结果回传通道：API 层等待这个 Result
+    pub resp: oneshot::Sender<anyhow::Result<()>>,
+}
 
 #[derive(Clone)]
 pub struct AppServiceConfig {
@@ -21,8 +30,8 @@ pub struct AppServiceConfig {
     pub hs_token: String,
     pub bot_localpart: String,
     pub listen_port: u16,
-
     pub identity_salt: String,
+    pub owner_id: Option<OwnedUserId>, // 新增：双皇共治
 }
 
 #[derive(Clone)]
@@ -31,11 +40,13 @@ pub enum MatrixConfig {
     AppService(AppServiceConfig),
 }
 
-pub async fn start(
+pub async fn start_with_cancel_token(
     config: MatrixConfig,
     db: Db,
-    rx: mpsc::Receiver<AppCommand>,
+    // 注意：这里接收的是信封
+    rx: mpsc::Receiver<CommandEnvelope>,
     tx_ingest: broadcast::Sender<IngestEvent>,
+    cancel_token: CancellationToken,
 ) -> anyhow::Result<()> {
     let driver: Box<dyn MatrixDriver> = match config {
         MatrixConfig::Bot(bot_conf) => {
@@ -48,5 +59,5 @@ pub async fn start(
         }
     };
 
-    driver.run(db, rx, tx_ingest).await
+    driver.run(db, rx, tx_ingest, cancel_token).await
 }

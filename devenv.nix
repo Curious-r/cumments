@@ -13,6 +13,7 @@
   # https://devenv.sh/packages/
   packages = with pkgs; [
     nixfmt
+    yaml-language-server
   ];
 
   # https://devenv.sh/languages/

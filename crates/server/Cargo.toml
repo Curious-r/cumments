@@ -4,28 +4,28 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-domain.workspace = true
-storage.workspace = true
-adapter.workspace = true
-axum.workspace = true
-tower-http.workspace = true
-tokio.workspace = true
-anyhow.workspace = true
-dotenvy.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-hex.workspace = true
-rand.workspace = true
-matrix-sdk.workspace = true
-serde.workspace = true
+domain = { workspace = true }
+storage = { workspace = true }
+adapter = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+config = { workspace = true }
+# PoW 相关
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+hmac = { workspace = true }
+base64 = { workspace = true }
+tokio-util = { workspace = true }
+# Matrix SDK 用于解析 User ID 格式
+matrix-sdk = { workspace = true }
 
-tokio-stream.workspace = true
-futures.workspace = true
-
-config.workspace = true
-
-[[bin]]
-name = "server"
-path = "src/main.rs"
+futures = { workspace = true }
+tokio-stream = { workspace = true }
