@@ -1,5 +1,7 @@
-/target
+.pijul
+.DS_Store
 
+/target
 
 # Devenv
 .devenv*
@@ -9,7 +11,6 @@ devenv.local.nix
 .direnv
 
 # Cumments
-.env
 /data/*
 !/data/.keep
-*.html
+/misc/config/config.toml

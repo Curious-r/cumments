@@ -5,17 +5,13 @@ use axum::{
 use domain::IngestEvent;
 use futures::stream::Stream;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
-
 use crate::state::AppState;
-
 pub async fn sse_handler(
     State(state): State<AppState>,
     Path((site_id_str, slug)): Path<(String, String)>,
 ) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
     let rx = state.tx_ingest.subscribe();
-
     tracing::info!("SSE Connected: site={} slug={}", site_id_str, slug);
-
     let stream = BroadcastStream::new(rx).filter_map(move |result| match result {
         Ok(event) => match event {
             IngestEvent::CommentSaved {
@@ -64,6 +60,5 @@ pub async fn sse_handler(
         },
         Err(_) => None,
     });
-
     Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
 }

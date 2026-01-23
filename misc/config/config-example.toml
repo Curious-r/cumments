@@ -1,0 +1,90 @@
+# ==========================================
+# Cumments Configuration Example
+# ==========================================
+
+[server]
+# Host address to bind to (0.0.0.0 means accessible from any network interface)
+host = "0.0.0.0"
+
+# Port number for the HTTP server
+port = 3000
+
+# Public Matrix server name used for generating deep links
+# For self-hosted Matrix server, use your domain (e.g., "example.com")
+# For matrix.org, use "matrix.org"
+public_server_name = "matrix.org"
+
+# CORS origins allowed to access the API
+# For production, specify exact domains instead of "*" for security
+cors_origins = "*"
+
+[database]
+# Database connection URL
+# For SQLite: "sqlite://path/to/database.db"
+# The file will be created automatically if it doesn't exist
+url = "sqlite://data/cumments.db"
+
+[security]
+# Identity salt for generating user fingerprints
+# CRITICAL: Changing this will invalidate all existing visitor fingerprints
+# Use a random secret string in production environments
+identity_salt = "${YOUR_IDENTITY_SALT_HERE}"
+
+# Administrator token for accessing /api/admin/* endpoints
+# Keep this secret and change it in production
+admin_token = "${YOUR_ADMIN_TOKEN_HERE}"
+
+# Proof-of-Work secret for issuing anti-spam challenges
+# Used to prevent automated spam comments
+pow_secret = "${YOUR_POW_SECRET_HERE}"
+
+# ==========================================
+# Matrix Integration Mode (Choose One)
+# ==========================================
+
+# ------------------------------------------
+# Mode A: Bot Mode (Recommended for testing)
+# Requires only a regular Matrix account
+# ------------------------------------------
+[matrix]
+mode = "bot"
+
+# Matrix homeserver URL (e.g., https://matrix.org or your custom server)
+homeserver_url = "https://matrix.org"
+
+# Full Matrix user ID for the bot (format: @username:server.tld)
+user = "@your_bot_username:your_server.tld"
+
+# Bot's access token (obtained from Element client -> Settings -> Help & About -> Access Token)
+token = "${YOUR_BOT_ACCESS_TOKEN_HERE}"
+
+# [Dual governance feature] Your personal Matrix account ID
+# When the bot creates comment rooms, it will invite you and grant Admin (100) privileges
+# This allows you to manage comments directly in the Element client (delete posts, ban users)
+owner_id = "@your_personal_account:your_server.tld"
+
+# Device ID (optional, recommended to use a fixed name for easy identification)
+device_id = "CUMMENTS_BOT"
+
+# ------------------------------------------
+# Mode B: AppService Mode (Advanced users)
+# Requires server-side permissions and registration.yaml
+# Uncomment the section below to use AppService mode
+# ------------------------------------------
+# [matrix]
+# mode = "appservice"
+# homeserver_url = "http://localhost:8008"
+# server_name = "your_server.tld"
+#
+# # The following tokens must match those in registration.yaml
+# as_token = "${YOUR_AS_TOKEN_HERE}"
+# hs_token = "${YOUR_HS_TOKEN_HERE}"
+#
+# # Bot's username prefix (localpart)
+# bot_localpart = "cumments_bot"
+#
+# # Port for AppService to receive Matrix pushes (avoid conflicts with server.port)
+# listen_port = 3001
+#
+# # Also supports dual governance
+# owner_id = "@admin:your_server.tld"

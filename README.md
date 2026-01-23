@@ -37,6 +37,7 @@ The naming convention follows `CUMMENTS_SECTION__KEY` (note the double underscor
 | `CUMMENTS_DATABASE__URL`| SQLite connection string | `sqlite://data/cumments.db` |
 | `CUMMENTS_MATRIX__MODE` | Operation mode (`bot` or `appservice`) | `bot` |
 | `CUMMENTS_SECURITY__IDENTITY_SALT` | **Critical**: Salt for hashing user identities. Change this! | `change_me_please` |
+| `CUMMENTS_SECURITY__ADMIN_TOKEN` | **Critical**: Admin token for administrative operations (e.g., deleting comments). Must be set! | *(required)* |
 
 ### Mode A: Bot (Default)
 
@@ -172,6 +173,7 @@ Use Docker Compose for quick deployment.
 | `CUMMENTS_DATABASE__URL`| SQLite 连接字符串 | `sqlite://data/cumments.db` |
 | `CUMMENTS_MATRIX__MODE` | 运行模式 (`bot` 或 `appservice`) | `bot` |
 | `CUMMENTS_SECURITY__IDENTITY_SALT` | **重要**: 用于哈希用户身份的盐值。正式环境请务必修改！ | `change_me_please` |
+| `CUMMENTS_SECURITY__ADMIN_TOKEN` | **重要**: 管理员令牌，用于管理操作（如删除评论）。必须设置！ | *(必填)* |
 
 ### 模式 A: Bot (默认)
 

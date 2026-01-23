@@ -12,7 +12,9 @@
 
   # https://devenv.sh/packages/
   packages = with pkgs; [
+    sqlx-cli
     nixfmt
+    yaml-language-server
   ];
 
   # https://devenv.sh/languages/

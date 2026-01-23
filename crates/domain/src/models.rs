@@ -44,13 +44,20 @@ pub struct Comment {
     pub id: String,
     pub site_id: SiteId,
     pub post_slug: String,
+
     pub author_id: String,
     pub author_name: String,
-    pub is_guest: bool,
-    pub is_redacted: bool,
     pub author_fingerprint: Option<String>,
+    pub avatar_url: Option<String>,
+    pub is_guest: bool,
+
     pub content: String,
-    pub created_at: NaiveDateTime,
+    pub is_redacted: bool,
+
     pub reply_to: Option<String>,
+
+    pub created_at: NaiveDateTime,
     pub updated_at: Option<NaiveDateTime>,
+
+    pub txn_id: Option<String>,
 }
