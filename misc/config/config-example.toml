@@ -38,6 +38,11 @@ admin_token = "${YOUR_ADMIN_TOKEN_HERE}"
 # Used to prevent automated spam comments
 pow_secret = "${YOUR_POW_SECRET_HERE}"
 
+# Proof-of-Work difficulty level (number of leading zeros required in hash)
+# Higher values mean more computational work required to post comments
+# Adjust based on your spam protection needs (typically 2-6)
+pow_difficulty = 4
+
 # ==========================================
 # Matrix Integration Mode (Choose One)
 # ==========================================
