@@ -13,6 +13,8 @@ pub struct AppState {
     pub pow: PowGuard,
     pub admin_token: String,
     pub server_name: String,
+    pub pow_difficulty: u32,
+    pub identity_salt: String,
 }
 
 impl FromRef<AppState> for Db {

@@ -131,6 +131,11 @@ impl MatrixDriver for AppServiceDriver {
                                 AppCommand::UserEditComment { site_id, post_slug, comment_id, content, user_fingerprint, .. } => {
                                     handlers::execute_user_edit(&ctx, site_id, post_slug, comment_id, content, user_fingerprint).await
                                 }
+                                AppCommand::EnsureRoom { site_id, post_slug } => {
+                                    handlers::execute_ensure_room(
+                                        &ctx, &cache, site_id, post_slug, owner_id_ref.as_ref()
+                                    ).await
+                                }
                             };
 
                             let _ = resp.send(result);

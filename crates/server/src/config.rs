@@ -29,6 +29,7 @@ pub struct SecuritySettings {
     pub identity_salt: String,
     pub admin_token: String,
     pub pow_secret: String,
+    pub pow_difficulty: u32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -69,6 +70,7 @@ impl Settings {
             .set_default("security.identity_salt", "change_me_please")?
             .set_default("security.admin_token", "admin_secret_123")?
             .set_default("security.pow_secret", "pow_secret_change_me")?
+            .set_default("security.pow_difficulty", 4)?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::File::with_name(&format!("config.{}", run_mode)).required(false));
 

@@ -1,7 +1,8 @@
 use super::utils::{ensure_room_for_as, get_ghost_client};
 use super::AsContext;
-use crate::common::matrix_utils::{compute_user_fingerprint, SpaceCache};
+use crate::common::matrix_utils::SpaceCache;
 use anyhow::Result;
+use domain::identity::compute_fingerprint;
 use domain::{protocol, Comment, IngestEvent, SiteId};
 use matrix_sdk::ruma::{
     events::{
@@ -43,7 +44,7 @@ pub async fn execute_send(
         .await?;
 
     let fingerprint =
-        compute_user_fingerprint(email.as_deref(), &guest_token, &ctx.config.identity_salt);
+        compute_fingerprint(email.as_deref(), &guest_token, &ctx.config.identity_salt);
 
     let ghost_localpart = format!("{}_{}", ctx.config.bot_localpart, fingerprint);
     let ghost_user_id = UserId::parse(format!("@{}:{}", ghost_localpart, ctx.config.server_name))?;
@@ -282,5 +283,30 @@ pub async fn handle_incoming_redaction(
             });
         }
     }
+    Ok(())
+}
+
+pub async fn execute_ensure_room(
+    ctx: &AsContext,
+    cache: &SpaceCache,
+    site_id: SiteId,
+    post_slug: String,
+    owner_id: Option<&OwnedUserId>,
+) -> Result<()> {
+    let room_id = ensure_room_for_as(
+        &ctx.main_client,
+        &ctx.config,
+        cache,
+        &site_id,
+        &post_slug,
+        owner_id,
+    )
+    .await?;
+
+    ctx.db
+        .ensure_room(room_id.as_str(), site_id.as_str(), &post_slug)
+        .await?;
+
+    info!("AS Room ensured for {}/{}", site_id, post_slug);
     Ok(())
 }

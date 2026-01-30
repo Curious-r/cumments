@@ -107,7 +107,9 @@ async fn main() -> anyhow::Result<()> {
         tx_ingest,
         pow: PowGuard::new(settings.security.pow_secret.clone()),
         admin_token: settings.security.admin_token.clone(),
-        server_name: settings.server.public_server_name.clone(), // 传递 Server Name
+        server_name: settings.server.public_server_name.clone(),
+        pow_difficulty: settings.security.pow_difficulty,
+        identity_salt: settings.security.identity_salt.clone(),
     };
 
     let app = build_router(state, &settings.server.cors_origins);

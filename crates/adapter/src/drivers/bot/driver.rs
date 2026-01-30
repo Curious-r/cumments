@@ -21,7 +21,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use super::handlers::{
-    execute_redact, execute_send, execute_user_delete, execute_user_edit, handle_sync_event,
+    execute_ensure_room, execute_redact, execute_send, execute_user_delete, execute_user_edit,
+    handle_sync_event,
 };
 use crate::common::matrix_utils::SpaceCache;
 use crate::config::BotConfig;
@@ -47,8 +48,6 @@ impl MatrixDriver for BotDriver {
         tx_ingest: broadcast::Sender<IngestEvent>,
         cancel_token: CancellationToken,
     ) -> Result<()> {
-        // [新增] 启动时解析 Config 中的 String -> UserId
-        // 这样如果配置格式错误，会在启动时立即报错 panic 或 error
         let user_id = UserId::parse(&self.config.user_id)?;
 
         let owner_id = if let Some(ref o) = self.config.owner_id {
@@ -64,7 +63,7 @@ impl MatrixDriver for BotDriver {
 
         let session = MatrixSession {
             meta: SessionMeta {
-                user_id: user_id.clone(), // 使用解析后的变量
+                user_id: user_id.clone(),
                 device_id: self.config.device_id.clone().into(),
             },
             tokens: MatrixSessionTokens {
@@ -86,7 +85,7 @@ impl MatrixDriver for BotDriver {
 
         let cmd_handle = {
             let client = client.clone();
-            let db = db_for_cmd; // Use clone
+            let db = db_for_cmd;
             let config = self.config.clone();
             let server_name = user_id.server_name().to_owned();
             let cache = space_cache;
@@ -109,7 +108,7 @@ impl MatrixDriver for BotDriver {
                                 } => {
                                     execute_send(
                                         &client, &server_name, &db, &cache,
-                                        &config.identity_salt, owner_id.as_ref(), // 使用解析后的 owner_id
+                                        &config.identity_salt, owner_id.as_ref(),
                                         site_id, post_slug, content, nickname, email, guest_token, reply_to, txn_id
                                     ).await
                                 }
@@ -128,6 +127,12 @@ impl MatrixDriver for BotDriver {
                                         &client, &server_name, &db, site_id, post_slug, comment_id, content, user_fingerprint
                                     ).await
                                 }
+                                AppCommand::EnsureRoom { site_id, post_slug } => {
+                                    execute_ensure_room(
+                                        &client, &server_name, &db, &cache, owner_id.as_ref(),
+                                        site_id, post_slug
+                                    ).await
+                                }
                             };
 
                             if let Err(e) = result {
@@ -143,7 +148,7 @@ impl MatrixDriver for BotDriver {
             })
         };
 
-        let db_sync = db_for_sync; // Use clone
+        let db_sync = db_for_sync;
         let bot_id_sync = my_bot_id.clone();
         let tx_sync = tx_ingest.clone();
 
@@ -181,14 +186,14 @@ impl MatrixDriver for BotDriver {
         });
 
         info!("Starting Matrix Sync Loop...");
-        let mut sync_token = db_for_main_sync.get_sync_token().await?; // Use clone
+        let mut sync_token = db_for_main_sync.get_sync_token().await?;
         if let Some(ref t) = sync_token {
             info!("Resuming sync from token: {}", t);
         }
 
         let sync_cancel_token = cancel_token.clone();
         let sync_client = client.clone();
-        let db_sync_save = db_for_main_sync.clone(); // Use clone
+        let db_sync_save = db_for_main_sync.clone();
 
         let sync_handle = tokio::spawn(async move {
             loop {

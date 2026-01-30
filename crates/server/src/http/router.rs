@@ -68,6 +68,7 @@ pub fn build_router(state: AppState, allowed_origins: &str) -> Router {
             "/api/admin/comments/:site_id/:slug/:comment_id",
             delete(admin::delete_comment),
         )
+        .route("/api/admin/rooms", post(admin::init_room))
         .layer(cors)
         .with_state(state)
 }

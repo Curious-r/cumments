@@ -1,8 +1,8 @@
 use crate::common::matrix_utils::{
-    compute_user_fingerprint, create_and_link_room, ensure_site_space, resolve_room_alias_chain,
-    SpaceCache,
+    create_and_link_room, ensure_site_space, resolve_room_alias_chain, SpaceCache,
 };
 use anyhow::Result;
+use domain::identity::compute_fingerprint;
 use domain::{protocol, Comment, IngestEvent, SiteId};
 use matrix_sdk::{
     ruma::{
@@ -189,7 +189,7 @@ pub async fn execute_send(
     reply_to: Option<String>,
     txn_id: Option<String>,
 ) -> Result<()> {
-    let fingerprint = compute_user_fingerprint(email.as_deref(), &guest_token, salt);
+    let fingerprint = compute_fingerprint(email.as_deref(), &guest_token, salt);
     let event_json = protocol::build_outbound_event(&nickname, &content, Some(fingerprint), txn_id);
 
     let space_id = ensure_site_space(client, server_name, cache, &site_id).await?;
@@ -315,5 +315,43 @@ pub async fn execute_user_edit(
     )));
 
     room.send(content).await?;
+    Ok(())
+}
+
+pub async fn execute_ensure_room(
+    client: &Client,
+    server_name: &ServerName,
+    db: &Db,
+    cache: &SpaceCache,
+    owner_id: Option<&OwnedUserId>,
+    site_id: SiteId,
+    post_slug: String,
+) -> Result<()> {
+    let space_id = ensure_site_space(client, server_name, cache, &site_id).await?;
+    let full_alias = format!("#{}_{}:{}", site_id.as_str(), post_slug, server_name);
+    let room_alias = RoomAliasId::parse(&full_alias)?;
+
+    let room = match client.resolve_room_alias(&room_alias).await {
+        Ok(resp) => match client.get_room(&resp.room_id) {
+            Some(r) => r,
+            None => client.join_room_by_id(&resp.room_id).await?,
+        },
+        Err(_) => {
+            create_and_link_room(
+                client,
+                server_name,
+                &space_id,
+                &site_id,
+                &post_slug,
+                owner_id,
+            )
+            .await?
+        }
+    };
+
+    db.ensure_room(room.room_id().as_str(), site_id.as_str(), &post_slug)
+        .await?;
+
+    tracing::info!("Room ensured for {}/{}", site_id, post_slug);
     Ok(())
 }

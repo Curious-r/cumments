@@ -150,16 +150,24 @@ pub async fn post_comment(
 }
 
 #[derive(Deserialize)]
-pub struct DeleteCommentRequest {
-    pub user_fingerprint: String,
+pub struct GuestActionRequest {
+    pub guest_token: String,
+    pub email: Option<String>,
+    pub content: Option<String>,
 }
 
 pub async fn delete_comment(
     State(state): State<AppState>,
     Path((site_id_str, slug, comment_id)): Path<(String, String, String)>,
-    Json(payload): Json<DeleteCommentRequest>,
+    Json(payload): Json<GuestActionRequest>,
 ) -> Result<Json<&'static str>, (axum::http::StatusCode, String)> {
     let site_id = SiteId::new(site_id_str).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+
+    let calculated_fingerprint = domain::identity::compute_fingerprint(
+        payload.email.as_deref(),
+        &payload.guest_token,
+        &state.identity_salt,
+    );
 
     let comment_opt = state
         .db
@@ -168,7 +176,7 @@ pub async fn delete_comment(
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if let Some(c) = comment_opt {
-        if c.author_fingerprint.as_ref() != Some(&payload.user_fingerprint) {
+        if c.author_fingerprint.as_ref() != Some(&calculated_fingerprint) {
             return Err((
                 axum::http::StatusCode::FORBIDDEN,
                 "Permission Denied: Fingerprint mismatch".to_string(),
@@ -191,36 +199,59 @@ pub async fn delete_comment(
         site_id,
         post_slug: slug,
         comment_id,
-        user_fingerprint: payload.user_fingerprint,
+        user_fingerprint: calculated_fingerprint,
     };
 
     send_cmd_and_wait(&state.sender, cmd).await?;
-
     Ok(Json("Deleted"))
-}
-
-#[derive(Deserialize)]
-pub struct EditCommentRequest {
-    pub content: String,
-    pub user_fingerprint: String,
 }
 
 pub async fn edit_comment(
     State(state): State<AppState>,
     Path((site_id_str, slug, comment_id)): Path<(String, String, String)>,
-    Json(payload): Json<EditCommentRequest>,
+    Json(payload): Json<GuestActionRequest>,
 ) -> Result<Json<&'static str>, (axum::http::StatusCode, String)> {
     let site_id = SiteId::new(site_id_str).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+
+    let new_content = payload.content.ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Missing content".to_string(),
+    ))?;
+
+    let calculated_fingerprint = domain::identity::compute_fingerprint(
+        payload.email.as_deref(),
+        &payload.guest_token,
+        &state.identity_salt,
+    );
+
+    let comment_opt = state
+        .db
+        .get_comment(&comment_id)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(c) = comment_opt {
+        if c.author_fingerprint.as_ref() != Some(&calculated_fingerprint) {
+            return Err((
+                axum::http::StatusCode::FORBIDDEN,
+                "Permission Denied".to_string(),
+            ));
+        }
+    } else {
+        return Err((
+            axum::http::StatusCode::NOT_FOUND,
+            "Comment not found".to_string(),
+        ));
+    }
 
     let cmd = AppCommand::UserEditComment {
         site_id,
         post_slug: slug,
         comment_id,
-        content: payload.content,
-        user_fingerprint: payload.user_fingerprint,
+        content: new_content,
+        user_fingerprint: calculated_fingerprint,
     };
 
     send_cmd_and_wait(&state.sender, cmd).await?;
-
     Ok(Json("Edited"))
 }

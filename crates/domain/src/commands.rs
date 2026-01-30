@@ -31,4 +31,8 @@ pub enum AppCommand {
         content: String,
         user_fingerprint: String,
     },
+    EnsureRoom {
+        site_id: SiteId,
+        post_slug: String,
+    },
 }
