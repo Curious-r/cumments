@@ -63,7 +63,7 @@ user = "@your_bot_username:your_server.tld"
 # Bot's access token (obtained from Element client -> Settings -> Help & About -> Access Token)
 token = "${YOUR_BOT_ACCESS_TOKEN_HERE}"
 
-# [Dual governance feature] Your personal Matrix account ID
+# [Dyarchy feature] Your personal Matrix account ID
 # When the bot creates comment rooms, it will invite you and grant Admin (100) privileges
 # This allows you to manage comments directly in the Element client (delete posts, ban users)
 owner_id = "@your_personal_account:your_server.tld"
@@ -91,5 +91,5 @@ device_id = "CUMMENTS_BOT"
 # # Port for AppService to receive Matrix pushes (avoid conflicts with server.port)
 # listen_port = 3001
 #
-# # Also supports dual governance
+# # Also supports dyarchy
 # owner_id = "@admin:your_server.tld"

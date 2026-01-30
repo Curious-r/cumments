@@ -1,278 +1,628 @@
+<!-- Language Switcher -->
+<div align="center">
+  <a href="#english-version">English Version</a> | 
+  <a href="#中文版本">中文版本</a>
+</div>
+
+---
+
+# English Version
+
+<a name="english-version"></a>
+
 # Cumments
 
-[ English ](#english) | [ 中文 ](#chinese)
+Cumments is a decentralized comment system backend based on the Matrix protocol. It utilizes Matrix as an immutable data source (Event Store) and SQLite as a local high-speed read view (Read Model), supporting dual-track interaction for visitors (based on fingerprint) and native Matrix users (based on client).
 
-<a name="english"></a>
+## Table of Contents
 
-## 1. Introduction
-
-**Cumments** is a backend for a decentralized comment system based on the **Matrix Protocol**. It utilizes Matrix rooms as the persistent data source and a local SQLite database as a read cache for high-performance querying.
-
-It is designed for static blogs, offering real-time updates via Server-Sent Events (SSE) and anti-spam protection via Proof of Work (PoW).
-
-### Key Features
-
-*   **Matrix as Storage**: Data is stored in Matrix rooms. The local database can be fully reconstructed from the Matrix history at any time.
-*   **Dual Operation Modes**:
-    *   **Bot Mode**: Acts as a standard Matrix client. Simple setup using a single bot account.
-    *   **AppService Mode**: Acts as a Matrix Application Service. Supports **Ghost Users** (virtual users) to preserve commenter identity (avatar/nickname) natively.
-*   **Identity Persistence**: Uses salted hashes of emails/tokens to maintain consistent user identities across sessions (even for guests).
-*   **Real-time Sync**: Supports pushing new comments, edits, and deletions to the frontend via SSE.
-*   **Anti-Spam**: Built-in PoW verification to prevent automated spam.
+1. [Environment Preparation](#1-environment-preparation)
+2. [Configuration Details](#2-configuration-details)
+    - [Common Configuration](#common-configuration)
+    - [Operation Modes: Bot vs AppService](#operation-modes-selection)
+3. [Compilation and Running](#3-compilation-and-running)
+4. [API Documentation](#4-api-documentation)
+    - [Proof of Work (PoW)](#proof-of-work-pow)
+    - [Comment Operations](#comment-operations)
+    - [Admin Interface](#admin-interface)
+    - [Real-time Push (SSE)](#real-time-push-sse)
+5. [Frontend Integration Guide](#5-frontend-integration-guide)
 
 ---
 
-## 2. Configuration
+## 1. Environment Preparation
 
-Configuration is managed via environment variables (supporting `.env` files).
-The naming convention follows `CUMMENTS_SECTION__KEY` (note the double underscore `__` for hierarchy).
+- **Operating System**: Linux / Windows / macOS
+- **Build Environment**: Rust (latest stable version)
+- **Database**: SQLite (the program automatically creates files, no service installation required)
+- **Matrix Account**:
+    - **Bot Account**: Need a dedicated Matrix account (Bot mode).
+    - **Owner Account**: Your personal Matrix account (for receiving admin privileges).
 
-### Common Settings
+---
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `CUMMENTS_SERVER__HOST` | API binding address | `0.0.0.0` |
-| `CUMMENTS_SERVER__PORT` | API binding port | `3000` |
-| `CUMMENTS_SERVER__CORS_ORIGINS`| Allowed CORS origins (comma separated) | `*` |
-| `CUMMENTS_DATABASE__URL`| SQLite connection string | `sqlite://data/cumments.db` |
-| `CUMMENTS_MATRIX__MODE` | Operation mode (`bot` or `appservice`) | `bot` |
-| `CUMMENTS_SECURITY__IDENTITY_SALT` | **Critical**: Salt for hashing user identities. Change this! | `change_me_please` |
-| `CUMMENTS_SECURITY__ADMIN_TOKEN` | **Critical**: Admin token for administrative operations (e.g., deleting comments). Must be set! | *(required)* |
+## 2. Configuration Details
 
-### Mode A: Bot (Default)
+The project supports layered configuration loading with priority from high to low: **Environment Variables** > **File specified by command line arguments** > **`config.toml` in the current directory** > **Default Values**.
 
-Suitable for users using public homeservers (e.g., matrix.org). All comments are sent by the bot account.
+Please create `config.toml` in the running directory.
 
-```bash
-CUMMENTS_MATRIX__MODE=bot
-CUMMENTS_MATRIX__HOMESERVER_URL=https://matrix.org
-# The full Matrix ID of the bot
-CUMMENTS_MATRIX__USER=@your_bot:matrix.org
-# Access Token obtained from Matrix client
-CUMMENTS_MATRIX__TOKEN=syt_...
+### Common Configuration
+
+```toml
+[server]
+# HTTP service listening address
+host = "0.0.0.0"
+port = 3000
+# Allowed cross-origin domains, recommend specifying specific domains in production environment, e.g. "https://myblog.com"
+cors_origins = "*"
+# [Critical] Public Matrix server name.
+# Used to generate Deep Link (e.g. https://matrix.to/#/#slug:matrix.org).
+# If you use matrix.org account, fill "matrix.org"; if self-hosted, fill your public domain.
+public_server_name = "matrix.org"
+
+[database]
+# SQLite database file path. Please ensure data directory exists.
+url = "sqlite://data/cumments.db"
+
+[security]
+# [Critical] Identity salt.
+# Used together with Email/Token to generate user fingerprint. Once changed, all historical visitors will not be able to delete their own comments.
+# In production environment, be sure to generate a long random string.
+identity_salt = "CHANGE_THIS_TO_RANDOM_STRING"
+
+# Admin Token. Used to call /api/admin/* interfaces.
+admin_token = "my_admin_secret"
+
+# PoW key. Used to issue challenges and prevent replay attacks.
+pow_secret = "pow_secret_key"
+
+# PoW difficulty. Number of leading zeros required in hash.
+# 4 is approximately 65 thousand hashes (<1s), preventing script spamming.
+pow_difficulty = 4
 ```
 
-### Mode B: AppService
+### Operation Modes Selection
 
-Suitable for self-hosted homeservers (Synapse/Dendrite). Requires `registration.yaml` configuration on the homeserver side.
+Cumments supports two modes, choose one.
 
-1.  **Generate `registration.yaml`** (Example):
-    ```yaml
-    id: cumments_bridge
-    url: "http://localhost:3001"  # Must match CUMMENTS_MATRIX__LISTEN_PORT
-    as_token: "YOUR_AS_TOKEN"     # Random string
-    hs_token: "YOUR_HS_TOKEN"     # Random string
-    sender_localpart: "cumments_bot"
-    namespaces:
-      users:
-        - exclusive: true
-          regex: "@cumments_.*"
-      aliases:
-        - exclusive: true
-          regex: "#cumments_.*"
-      rooms: []
-    ```
-2.  **Environment Variables**:
-    ```bash
-    CUMMENTS_MATRIX__MODE=appservice
-    CUMMENTS_MATRIX__HOMESERVER_URL=http://localhost:8008
-    # Your Matrix server domain
-    CUMMENTS_MATRIX__SERVER_NAME=example.com
-    # Tokens must match registration.yaml
-    CUMMENTS_MATRIX__AS_TOKEN=YOUR_AS_TOKEN
-    CUMMENTS_MATRIX__HS_TOKEN=YOUR_HS_TOKEN
-    # Port to listen for transactions from Homeserver
-    CUMMENTS_MATRIX__LISTEN_PORT=3001
-    # Localpart of the main bot (defined in registration.yaml)
-    CUMMENTS_MATRIX__BOT_LOCALPART=cumments_bot
-    ```
+#### Mode A: Bot Mode (Recommended for quick start)
+Suitable for most scenarios, no Matrix server-side permissions required. Bot runs as a regular user.
 
----
+```toml
+[matrix]
+mode = "bot"
+# Matrix Homeserver API address
+homeserver_url = "https://matrix.org"
 
-## 3. Deployment (Docker)
+# Bot's full ID
+user = "@cumments_bot:matrix.org"
 
-Use Docker Compose for quick deployment.
+# Bot's Access Token
+# How to obtain: Login to Element Web -> Settings -> Help & About -> Access Token
+token = "syt_AbCdEf..."
 
-1.  Create `docker-compose.yml`:
-    ```yaml
-    version: '3.8'
-    services:
-      cumments:
-        image: your-repo/cumments:latest
-        restart: unless-stopped
-        ports:
-          - "3000:3000"
-          # - "3001:3001" # Uncomment if using AppService mode
-        volumes:
-          - ./data:/app/data
-        env_file:
-          - .env
-    ```
-2.  Create `.env` based on the configuration section above.
-3.  Run `docker-compose up -d`.
+# [Dyarchy] Your personal main account ID
+# When Bot creates comment rooms, it will automatically invite this account and grant Admin (PL 100) privileges.
+owner_id = "@my_personal_account:matrix.org"
+```
+
+#### Mode B: AppService Mode (Advanced/Self-hosted)
+For users with Matrix server (Synapse/Dendrite) admin permissions. Supports virtual users (Ghost Users) with better experience.
+
+```toml
+[matrix]
+mode = "appservice"
+homeserver_url = "http://localhost:8008" # Synapse listening address
+server_name = "example.com"              # Your Matrix domain
+
+# Following tokens must match those in registration.yaml
+as_token = "..."
+hs_token = "..."
+
+bot_localpart = "cumments_bot"
+listen_port = 3001 # Port for receiving Matrix pushes
+owner_id = "@admin:example.com"
+```
 
 ---
 
-## 4. API Reference
+## 3. Compilation and Running
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/:site_id/comments/:slug` | Retrieve comments list |
-| `GET` | `/api/:site_id/comments/:slug/sse` | Real-time event stream (SSE) |
-| `POST` | `/api/:site_id/comments` | Post a comment |
-| `GET` | `/api/challenge` | Get PoW challenge |
+### Basic Running
+Ensure the `data` folder exists in the root directory (for storing database).
 
-### POST Comment Payload
+```bash
+# Create data directory
+mkdir -p data
+
+# Run (development mode)
+# RUST_LOG is used to control log level, sqlx=warn prevents SQL queries from flooding the screen
+RUST_LOG=info,sqlx=warn cargo run -p server
+```
+
+### Running with Specific Configuration File (Production Environment)
+```bash
+# Compile Release version
+cargo build --release -p server
+
+# Run
+./target/release/server --config /etc/cumments/prod.toml
+```
+
+### Environment Variable Override (Docker Deployment)
+Can use double underscore `__` to separate layers to override configuration:
+```bash
+export CUMMENTS_SERVER__PORT=8080
+export CUMMENTS_MATRIX__TOKEN="syt_new_token..."
+./server
+```
+
+---
+
+## 4. API Documentation
+
+All APIs communicate in JSON format.
+
+### Proof of Work (PoW)
+
+Before sending comments, you must first obtain the challenge and calculate the answer.
+
+**`GET /api/challenge`**
+
+**Response:**
 ```json
 {
-  "post_slug": "hello-world",
-  "nickname": "Alice",
-  "content": "Nice post!",
-  "email": "alice@example.com", // Optional: Used for consistent identity/avatar
-  "guest_token": "uuid-v4",      // Required: Client-generated random ID
-  "challenge_response": "secret|nonce",
-  "reply_to": null
+  "secret": "1706520000.a1b2c3d4...", // Signed timestamp
+  "difficulty": 4                     // Number of leading zeros to calculate
 }
 ```
 
----
+### Comment Operations
 
-<br><br><br>
+**`GET /api/:site_id/comments/:slug`**
+Get comment list. Supports pagination.
 
-<a name="chinese"></a>
+- **Parameters**:
+    - `page`: Page number (default 1)
+    - `per_page`: Items per page (default 20)
 
-## 1. 简介
-
-**Cumments** 是一个基于 **Matrix 协议** 的评论系统后端。它使用 Matrix 房间作为数据持久化层，并使用本地 SQLite 数据库作为读取缓存以提供高性能查询。
-
-该项目专为静态博客设计，支持通过 SSE 实现实时更新，并内置 PoW 防垃圾机制。
-
-### 核心功能
-
-*   **Matrix 存储**: 数据存储于 Matrix 房间中，支持从 Matrix 历史记录完全重建本地数据库。
-*   **双运行模式**:
-    *   **Bot 模式**: 作为标准 Matrix 客户端运行，配置简单。
-    *   **AppService 模式**: 作为 Matrix 应用服务运行，支持 **虚拟用户 (Ghost Users)**，提供原生的评论者头像和昵称显示。
-*   **身份持久化**: 使用邮箱或 Token 的加盐哈希来保持用户身份的一致性（即使是访客模式）。
-*   **实时性**: 支持基于 SSE (Server-Sent Events) 的评论推送、编辑同步和删除同步。
-*   **防垃圾**: 内置工作量证明 (PoW) 验证。
-
----
-
-## 2. 配置说明
-
-所有配置均通过环境变量管理。层级结构使用双下划线 (`__`) 分隔，前缀与变量名之间使用单下划线 (`_`)。
-
-### 通用设置
-
-| 变量名 | 说明 | 默认值 |
-| :--- | :--- | :--- |
-| `CUMMENTS_SERVER__HOST` | API 监听地址 | `0.0.0.0` |
-| `CUMMENTS_SERVER__PORT` | API 监听端口 | `3000` |
-| `CUMMENTS_SERVER__CORS_ORIGINS`| 允许的跨域来源 (逗号分隔) | `*` |
-| `CUMMENTS_DATABASE__URL`| SQLite 连接字符串 | `sqlite://data/cumments.db` |
-| `CUMMENTS_MATRIX__MODE` | 运行模式 (`bot` 或 `appservice`) | `bot` |
-| `CUMMENTS_SECURITY__IDENTITY_SALT` | **重要**: 用于哈希用户身份的盐值。正式环境请务必修改！ | `change_me_please` |
-| `CUMMENTS_SECURITY__ADMIN_TOKEN` | **重要**: 管理员令牌，用于管理操作（如删除评论）。必须设置！ | *(必填)* |
-
-### 模式 A: Bot (默认)
-
-适用于使用公开 Homeserver (如 matrix.org) 的场景。
-
-```bash
-CUMMENTS_MATRIX__MODE=bot
-CUMMENTS_MATRIX__HOMESERVER_URL=https://matrix.org
-# Bot 的完整 Matrix ID
-CUMMENTS_MATRIX__USER=@your_bot:matrix.org
-# 从 Matrix 客户端获取的 Access Token
-CUMMENTS_MATRIX__TOKEN=syt_...
-```
-
-### 模式 B: AppService
-
-适用于自建 Homeserver (Synapse/Dendrite) 的场景。需要在服务端配置 `registration.yaml`。
-
-1.  **生成 `registration.yaml`** (示例):
-    ```yaml
-    id: cumments_bridge
-    url: "http://localhost:3001"  # 必须与 CUMMENTS_MATRIX__LISTEN_PORT 一致
-    as_token: "YOUR_AS_TOKEN"     # 随机字符串
-    hs_token: "YOUR_HS_TOKEN"     # 随机字符串
-    sender_localpart: "cumments_bot"
-    namespaces:
-      users:
-        - exclusive: true
-          regex: "@cumments_.*"
-      aliases:
-        - exclusive: true
-          regex: "#cumments_.*"
-      rooms: []
-    ```
-2.  **环境变量**:
-    ```bash
-    CUMMENTS_MATRIX__MODE=appservice
-    CUMMENTS_MATRIX__HOMESERVER_URL=http://localhost:8008
-    # 你的 Matrix 服务器域名
-    CUMMENTS_MATRIX__SERVER_NAME=example.com
-    # Token 必须与 registration.yaml 中一致
-    CUMMENTS_MATRIX__AS_TOKEN=YOUR_AS_TOKEN
-    CUMMENTS_MATRIX__HS_TOKEN=YOUR_HS_TOKEN
-    # 接收 Homeserver 推送的监听端口 (注意：与 API 端口不同)
-    CUMMENTS_MATRIX__LISTEN_PORT=3001
-    # 主 Bot 的 localpart (定义在 registration.yaml)
-    CUMMENTS_MATRIX__BOT_LOCALPART=cumments_bot
-    ```
-
----
-
-## 3. 部署 (Docker)
-
-推荐使用 Docker Compose 进行部署。
-
-1.  创建 `docker-compose.yml`:
-    ```yaml
-    version: '3.8'
-    services:
-      cumments:
-        image: your-repo/cumments:latest
-        restart: unless-stopped
-        ports:
-          - "3000:3000"
-          # - "3001:3001" # 如果使用 AppService 模式需开启此端口
-        volumes:
-          - ./data:/app/data
-        env_file:
-          - .env
-    ```
-2.  参照配置说明创建 `.env` 文件。
-3.  运行 `docker-compose up -d`。
-
----
-
-## 4. API 接口
-
-| 方法 | 路径 | 说明 |
-| :--- | :--- | :--- |
-| `GET` | `/api/:site_id/comments/:slug` | 获取评论列表 |
-| `GET` | `/api/:site_id/comments/:slug/sse` | 实时事件流 (SSE) |
-| `POST` | `/api/:site_id/comments` | 发布评论 |
-| `GET` | `/api/challenge` | 获取 PoW 挑战 |
-
-### POST 请求示例
+**Response:**
 ```json
 {
-  "post_slug": "hello-world",
-  "nickname": "Alice",
-  "content": "Nice post!",
-  "email": "alice@example.com", // 可选：用于生成稳定的身份 ID/头像
-  "guest_token": "uuid-v4",      // 必填：客户端生成的随机 ID (兜底身份)
-  "challenge_response": "secret|nonce",
-  "reply_to": null
+  "data": [
+    {
+      "id": "$event_id...",
+      "content": "Comment content...",
+      "author_name": "Nickname",
+      "author_fingerprint": "a1b2...", // Visitor fingerprint
+      "avatar_url": "mxc://...",       // Native user avatar
+      "is_guest": true,
+      "txn_id": "client-uuid...",      // ID generated by frontend, for deduplication
+      "created_at": "2026-01-30T10:00:00"
+    }
+  ],
+  "meta": {
+    "total": 100,
+    "room_alias": "#site_slug:matrix.org",
+    "matrix_to_link": "https://matrix.to/#/#site_slug:matrix.org" // Deep Link
+  }
 }
 ```
 
+**`POST /api/:site_id/comments`**
+Post a comment.
+
+**Request Body:**
+```json
+{
+  "post_slug": "hello-world",
+  "content": "This is a comment",
+  "nickname": "Visitor A",
+  "email": "test@example.com", // Optional, for fixed fingerprint
+  "guest_token": "random_string_local_storage",
+  "challenge_response": "SECRET|NONCE", // Format: challenge key|calculated Nonce
+  "txn_id": "uuid-v4", // [Recommended] Unique ID generated by frontend, for optimistic UI updates
+  "reply_to": "$parent_event_id" // Optional
+}
+```
+
+**`DELETE /api/:site_id/comments/:slug/:comment_id`**
+Visitor deletes their own comment. Need to provide credentials for generating fingerprint.
+
+**Request Body:**
+```json
+{
+  "guest_token": "random_string...", // Must be consistent with posting time
+  "email": "test@example.com"        // Must be consistent with posting time (if any)
+}
+```
+
+**`PUT /api/:site_id/comments/:slug/:comment_id/edit`**
+Visitor edits their own comment.
+
+**Request Body:**
+```json
+{
+  "content": "Modified content",
+  "guest_token": "...",
+  "email": "..."
+}
+```
+
+### Admin Interface
+
+Need to carry `Authorization: Bearer <admin_token>` in Header.
+
+**`POST /api/admin/rooms`**
+Pre-create/pre-warm rooms. Recommended to call in article publishing CI process to avoid first comment delay.
+
+**Request Body:**
+```json
+{
+  "site_id": "my-blog",
+  "slug": "new-post"
+}
+```
+
+**`DELETE /api/admin/comments/:site_id/:slug/:comment_id`**
+Admin force delete comment.
+
+### Real-time Push (SSE)
+
+**`GET /api/:site_id/comments/:slug/sse`**
+
+Server-Sent Events. Frontend connects to this endpoint to receive real-time updates.
+
+**Event Types**:
+- `new_comment`: New comment arrived (JSON: Comment Object)
+- `update_comment`: Comment edited (JSON: Comment Object)
+- `delete_comment`: Comment withdrawn (JSON: `{ "id": "$..." }`)
+
 ---
 
-## License
+## 5. Frontend Integration Guide
 
-[MIT License](LICENSE)
+### 1. Fingerprint Generation Logic (Identity)
+Backend uses following logic to calculate fingerprint:
+- If Email provided: `Hash( "email:" + email + salt )`
+- If Email not provided: `Hash( "token:" + guest_token + salt )`
+
+**Frontend Implementation**:
+- Generate and store a random string as `guest_token` in `localStorage`.
+- If user enters Email, prioritize sending Email.
+- When deleting/editing, send the same Token/Email combination, backend will only execute after verification.
+
+### 2. PoW Calculation Logic
+1. Call `GET /api/challenge` to get `secret` and `difficulty`.
+2. Brute force enumerate `nonce` (0, 1, 2...).
+3. Calculate `SHA256(secret + nonce)`.
+4. If the **hexadecimal string** of hash value starts with `difficulty` number of `"0"`, then the answer is found.
+5. Submit `challenge_response = secret + "|" + nonce`.
+
+### 3. Optimistic UI
+1. Frontend generates UUID as `txn_id`.
+2. Send POST request, meanwhile display "Sending" on UI.
+3. Listen to SSE `new_comment` event.
+4. When receiving SSE event, check if `txn_id` in event matches local one.
+5. If matched, change status to "Sent Successfully".
+
+### 4. Dual-track Support
+- Parse `meta.matrix_to_link` returned by `GET` interface.
+- Display "Open in Matrix Client" button at bottom of page.
+- Let native Matrix users jump to client for commenting and management operations.
+
+---
+
+# 中文版本
+
+<a name="中文版本"></a>
+
+# Cumments
+
+Cumments 是一个基于 Matrix 协议的去中心化评论系统后端。它利用 Matrix 作为不可变的数据源（Event Store），使用 SQLite 作为本地高速读视图（Read Model），支持访客（基于指纹）和 Matrix 原生用户（基于客户端）的双轨制交互。
+
+## 目录
+
+1. [环境准备](#1-环境准备)
+2. [配置详解](#2-配置详解)
+    - [通用配置](#通用配置)
+    - [运行模式：Bot vs AppService](#运行模式选择)
+3. [编译与运行](#3-编译与运行)
+4. [API 文档](#4-api-文档)
+    - [工作量证明 (PoW)](#工作量证明-pow)
+    - [评论业务](#评论业务)
+    - [管理接口](#管理接口)
+    - [实时推送 (SSE)](#实时推送-sse)
+5. [前端集成指南](#5-前端集成指南)
+
+---
+
+## 1. 环境准备
+
+- **操作系统**: Linux / Windows / macOS
+- **编译环境**: Rust (最新 stable 版本)
+- **数据库**: SQLite (程序会自动创建文件，无需安装服务)
+- **Matrix 账号**:
+    - **Bot 账号**: 需要一个专用的 Matrix 账号（Bot 模式）。
+    - **Owner 账号**: 你个人的 Matrix 账号（用于接收管理员权限）。
+
+---
+
+## 2. 配置详解
+
+项目支持分层配置加载，优先级从高到低为：**环境变量** > **命令行参数指定的文件** > **当前目录下的 `config.toml`** > **默认值**。
+
+请在运行目录下创建 `config.toml`。
+
+### 通用配置
+
+```toml
+[server]
+# HTTP 服务监听地址
+host = "0.0.0.0"
+port = 3000
+# 允许跨域的域名，生产环境建议指定具体域名，如 "https://myblog.com"
+cors_origins = "*"
+# [关键] 公开的 Matrix 服务器名称。
+# 用于生成 Deep Link (如 https://matrix.to/#/#slug:matrix.org)。
+# 如果你使用 matrix.org 的账号，填 "matrix.org"；如果是自建，填你的公网域名。
+public_server_name = "matrix.org"
+
+[database]
+# SQLite 数据库文件路径。请确保 data 目录存在。
+url = "sqlite://data/cumments.db"
+
+[security]
+# [关键] 身份盐值。
+# 用于结合 Email/Token 生成用户指纹。一旦更改，所有历史访客将无法删除自己的评论。
+# 生产环境请务必生成一个长随机字符串。
+identity_salt = "CHANGE_THIS_TO_RANDOM_STRING"
+
+# 管理员 Token。用于调用 /api/admin/* 接口。
+admin_token = "my_admin_secret"
+
+# PoW 密钥。用于签发挑战，防止重放攻击。
+pow_secret = "pow_secret_key"
+
+# PoW 难度。要求哈希前缀 0 的个数。
+# 4 约为 6.5万次哈希 (耗时 <1s)，防范普通脚本刷屏。
+pow_difficulty = 4
+```
+
+### 运行模式选择
+
+Cumments 支持两种模式，二选一配置。
+
+#### 模式 A: Bot 模式 (推荐快速上手)
+适用于大多数场景，无需服务器端 Matrix 权限。Bot 作为一个普通用户运行。
+
+```toml
+[matrix]
+mode = "bot"
+# Matrix Homeserver 的 API 地址
+homeserver_url = "https://matrix.org"
+
+# Bot 的完整 ID
+user = "@cumments_bot:matrix.org"
+
+# Bot 的 Access Token
+# 获取方式：登录 Element Web -> 设置 -> 帮助与关于 -> 访问令牌
+token = "syt_AbCdEf..."
+
+# [双皇共治] 你的个人主账号 ID
+# Bot 创建评论房间时，会自动邀请此账号并赋予 Admin (PL 100) 权限。
+owner_id = "@my_personal_account:matrix.org"
+```
+
+#### 模式 B: AppService 模式 (高级/自托管)
+适用于拥有 Matrix 服务器（Synapse/Dendrite）管理权限的用户。支持虚拟用户（Ghost Users），体验更佳。
+
+```toml
+[matrix]
+mode = "appservice"
+homeserver_url = "http://localhost:8008" # Synapse 监听地址
+server_name = "example.com"              # 你的 Matrix 域名
+
+# 以下 Token 需与 registration.yaml 中一致
+as_token = "..."
+hs_token = "..."
+
+bot_localpart = "cumments_bot"
+listen_port = 3001 # 接收 Matrix 推送的端口
+owner_id = "@admin:example.com"
+```
+
+---
+
+## 3. 编译与运行
+
+### 基础运行
+确保根目录下存在 `data` 文件夹（用于存放数据库）。
+
+```bash
+# 创建数据目录
+mkdir -p data
+
+# 运行 (开发模式)
+# RUST_LOG 用于控制日志级别，sqlx=warn 防止 SQL 查询刷屏
+RUST_LOG=info,sqlx=warn cargo run -p server
+```
+
+### 指定配置文件运行 (生产环境)
+```bash
+# 编译 Release 版本
+cargo build --release -p server
+
+# 运行
+./target/release/server --config /etc/cumments/prod.toml
+```
+
+### 环境变量覆盖 (Docker 部署)
+可以使用双下划线 `__` 分隔层级来覆盖配置：
+```bash
+export CUMMENTS_SERVER__PORT=8080
+export CUMMENTS_MATRIX__TOKEN="syt_new_token..."
+./server
+```
+
+---
+
+## 4. API 文档
+
+所有 API 均以 JSON 格式通信。
+
+### 工作量证明 (PoW)
+
+在发送评论前，必须先获取挑战并计算答案。
+
+**`GET /api/challenge`**
+
+**响应:**
+```json
+{
+  "secret": "1706520000.a1b2c3d4...", // 签名的时间戳
+  "difficulty": 4                     // 需要计算的前缀 0 个数
+}
+```
+
+### 评论业务
+
+**`GET /api/:site_id/comments/:slug`**
+获取评论列表。支持分页。
+
+- **参数**:
+    - `page`: 页码 (默认 1)
+    - `per_page`: 每页数量 (默认 20)
+
+**响应:**
+```json
+{
+  "data": [
+    {
+      "id": "$event_id...",
+      "content": "评论内容...",
+      "author_name": "昵称",
+      "author_fingerprint": "a1b2...", // 访客指纹
+      "avatar_url": "mxc://...",       // 原生用户头像
+      "is_guest": true,
+      "txn_id": "client-uuid...",      // 前端生成的 ID，用于去重
+      "created_at": "2026-01-30T10:00:00"
+    }
+  ],
+  "meta": {
+    "total": 100,
+    "room_alias": "#site_slug:matrix.org",
+    "matrix_to_link": "https://matrix.to/#/#site_slug:matrix.org" // Deep Link
+  }
+}
+```
+
+**`POST /api/:site_id/comments`**
+发布评论。
+
+**请求体:**
+```json
+{
+  "post_slug": "hello-world",
+  "content": "这是一条评论",
+  "nickname": "访客A",
+  "email": "test@example.com", // 可选，用于固定指纹
+  "guest_token": "random_string_local_storage",
+  "challenge_response": "SECRET|NONCE", // 格式：挑战密钥|计算出的Nonce
+  "txn_id": "uuid-v4", // [推荐] 前端生成的唯一ID，用于乐观UI更新
+  "reply_to": "$parent_event_id" // 可选
+}
+```
+
+**`DELETE /api/:site_id/comments/:slug/:comment_id`**
+访客删除自己的评论。需提供生成指纹的凭证。
+
+**请求体:**
+```json
+{
+  "guest_token": "random_string...", // 必须与发评时一致
+  "email": "test@example.com"        // 必须与发评时一致 (如有)
+}
+```
+
+**`PUT /api/:site_id/comments/:slug/:comment_id/edit`**
+访客编辑自己的评论。
+
+**请求体:**
+```json
+{
+  "content": "修改后的内容",
+  "guest_token": "...",
+  "email": "..."
+}
+```
+
+### 管理接口
+
+需在 Header 中携带 `Authorization: Bearer <admin_token>`。
+
+**`POST /api/admin/rooms`**
+预创建/预热房间。建议在文章发布 CI 流程中调用，避免首评延迟。
+
+**请求体:**
+```json
+{
+  "site_id": "my-blog",
+  "slug": "new-post"
+}
+```
+
+**`DELETE /api/admin/comments/:site_id/:slug/:comment_id`**
+管理员强制删除评论。
+
+### 实时推送 (SSE)
+
+**`GET /api/:site_id/comments/:slug/sse`**
+
+服务器发送事件 (Server-Sent Events)。前端连接此端点以接收实时更新。
+
+**事件类型**:
+- `new_comment`: 新评论到达 (JSON: Comment Object)
+- `update_comment`: 评论被编辑 (JSON: Comment Object)
+- `delete_comment`: 评论被撤回 (JSON: `{ "id": "$..." }`)
+
+---
+
+## 5. 前端集成指南
+
+### 1. 指纹生成逻辑 (Identity)
+后端使用以下逻辑计算指纹：
+- 如果提供了 Email：`Hash( "email:" + email + salt )`
+- 如果未提供 Email：`Hash( "token:" + guest_token + salt )`
+
+**前端实现**：
+- 在 `localStorage` 中生成并存储一个随机字符串作为 `guest_token`。
+- 如果用户输入 Email，优先发送 Email。
+- 删除/编辑时，发送相同的 Token/Email 组合，后端验证通过后才会执行。
+
+### 2. PoW 计算逻辑
+1. 调用 `GET /api/challenge` 获得 `secret` 和 `difficulty`。
+2. 暴力枚举 `nonce` (0, 1, 2...)。
+3. 计算 `SHA256(secret + nonce)`。
+4. 如果哈希值的**十六进制字符串**以 `difficulty` 个 `"0"` 开头，则找到答案。
+5. 提交 `challenge_response = secret + "|" + nonce`。
+
+### 3. 乐观 UI (Optimistic UI)
+1. 前端生成 UUID 作为 `txn_id`。
+2. 发送 POST 请求，同时在 UI 上显示"发送中"。
+3. 监听 SSE `new_comment` 事件。
+4. 当收到 SSE 事件时，检查事件中的 `txn_id` 是否与本地匹配。
+5. 如果匹配，将状态更为"发送成功"。
+
+### 4. 双轨制支持
+- 解析 `GET` 接口返回的 `meta.matrix_to_link`。
+- 在页面底部显示"在 Matrix 客户端中打开"按钮。
+- 让原生 Matrix 用户跳转到客户端进行评论、管理操作。
+
+<!-- Back to Top Links -->
+<div align="center">
+  <a href="#">Back to Top / 返回顶部</a> | 
+  <a href="#english-version">English Version / 英文版本</a> | 
+  <a href="#中文版本">中文版本</a>
+</div>
