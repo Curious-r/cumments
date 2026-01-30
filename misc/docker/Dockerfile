@@ -1,60 +1,43 @@
-# === Stage 1: Planner ===
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
-WORKDIR /app
+FROM rust:1.80-alpine AS builder
 
-FROM chef AS planner
+# Install build dependencies
+RUN apk add --no-cache musl-dev openssl-dev pkgconfig sqlite-dev
+
+WORKDIR /usr/src/app
+
+# Copy project files
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY migrations ./migrations
+
+# Create a dummy main to allow cargo to download dependencies
+RUN mkdir -p crates/server/src && \
+    echo 'fn main() { println!("Dummy build"); }' > crates/server/src/main.rs
+
+# Download and compile dependencies
+RUN cargo build --release --bin server
+RUN rm -rf target/release/deps/cumments*
+
+# Copy actual source code
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
 
-# === Stage 2: Builder ===
-FROM chef AS builder
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    libsqlite3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
-
-COPY . .
-
+# Build the server binary
 RUN cargo build --release --bin server
 
-# === Stage 3: Runtime ===
-# Use minimal Debian Slim
-FROM debian:bookworm-slim AS runtime
-WORKDIR /app
+# Runtime stage
+FROM alpine:latest
 
 # Install runtime dependencies
-# ca-certificates: Required for HTTPS connections to Matrix server
-# libsqlite3-0: sqlx dynamically links system sqlite by default
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libsqlite3-0 \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk --no-cache add ca-certificates openssl sqlite-libs
 
-# Copy compiled binary
-COPY --from=builder /app/target/release/server /usr/local/bin/cumments-server
+WORKDIR /app
 
-# Create data directory mount point
+# Copy the binary from builder stage
+COPY --from=builder /usr/src/app/target/release/server ./server
+
+# Create data directory for SQLite database
 RUN mkdir -p /app/data
 
-# === Environment Variables ===
-# Log configuration
-ENV RUST_LOG="server=info,adapter=info,storage=info"
-
-# Database path (fixed path inside container)
-ENV CUMMENTS_DATABASE_URL="sqlite://data/cumments.db"
-
-# Network configuration (must listen on 0.0.0.0 inside container)
-ENV CUMMENTS_HOST="0.0.0.0"
-ENV CUMMENTS_PORT="3000"
-
 EXPOSE 3000
-VOLUME ["/app/data"]
 
-CMD ["cumments-server"]
+CMD ["./server"]

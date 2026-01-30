@@ -1,19 +1,33 @@
+version: "3.8"
+
 services:
   cumments:
-    build: .
-    image: cumments:latest
-    container_name: cumments_server
-    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: misc/docker/Dockerfile
     ports:
       - "3000:3000"
     volumes:
-      # Persist database to the host machine's ./data directory
-      - ./data:/app/data
+      - cumments_data:/app/data
+      # Mount configuration file (copy config-example.toml and customize)
+      # - ./config.toml:/app/config.toml:ro
     environment:
-      # Required Matrix configuration (replace with actual values)
-      - CUMMENTS_MATRIX_HOMESERVER=https://matrix.org
-      - CUMMENTS_MATRIX_USER=@your_bot_name:matrix.org
-      - CUMMENTS_MATRIX_TOKEN=syt_xxxxxxxxxxxxxxxxxxxxxxxxxxx
+      - RUST_LOG=info
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
-      # Optional: Override log level
-      # - RUST_LOG=debug
+volumes:
+  cumments_data:
