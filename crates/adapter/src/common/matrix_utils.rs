@@ -8,15 +8,15 @@ use matrix_sdk::{
         api::client::state::get_state_events_for_key::v3::Request as GetStateRequest,
         events::{
             room::canonical_alias::RoomCanonicalAliasEventContent,
-            space::child::SpaceChildEventContent, StateEventType, SyncStateEvent,
+            room::power_levels::RoomPowerLevelsEventContent, space::child::SpaceChildEventContent,
+            StateEventType, SyncStateEvent,
         },
         room::RoomType,
         serde::Raw,
-        OwnedRoomId, RoomAliasId, ServerName,
+        OwnedRoomId, OwnedUserId, RoomAliasId, ServerName,
     },
     Client, Room,
 };
-use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -32,7 +32,6 @@ impl SpaceCache {
         }
     }
 }
-
 pub async fn resolve_room_alias_chain(room: &Room, client: &Client) -> Option<String> {
     if let Some(c) = room.canonical_alias() {
         return Some(c.to_string());
@@ -40,7 +39,6 @@ pub async fn resolve_room_alias_chain(room: &Room, client: &Client) -> Option<St
     if let Some(alt) = room.alt_aliases().first() {
         return Some(alt.to_string());
     }
-
     if let Ok(Some(raw_state)) = room
         .get_state_event_static::<RoomCanonicalAliasEventContent>()
         .await
@@ -54,13 +52,11 @@ pub async fn resolve_room_alias_chain(room: &Room, client: &Client) -> Option<St
             return Some(a.to_string());
         }
     }
-
     let req = GetStateRequest::new(
         room.room_id().to_owned(),
         StateEventType::RoomCanonicalAlias,
         "".to_string(),
     );
-
     if let Ok(response) = client.send(req, None).await {
         if let Ok(content) = response
             .content
@@ -76,22 +72,38 @@ pub async fn resolve_room_alias_chain(room: &Room, client: &Client) -> Option<St
             }
         }
     }
-
     None
 }
-
 pub async fn create_and_link_room(
     client: &Client,
     server_name: &ServerName,
     space_id: &OwnedRoomId,
     site_id: &SiteId,
     slug: &str,
+    owner_id: Option<&OwnedUserId>,
 ) -> Result<Room> {
     let alias_local = format!("{}_{}", site_id.as_str(), slug);
+
     let mut req = CreateRoomRequest::new();
     req.room_alias_name = Some(alias_local);
     req.name = Some(format!("Comments for {}", slug));
     req.preset = Some(RoomPreset::PublicChat);
+
+    if let Some(owner) = owner_id {
+        req.invite = vec![owner.clone()];
+
+        let mut pl_content = RoomPowerLevelsEventContent::new();
+        pl_content.users.insert(owner.clone(), 100.into());
+        if let Some(bot_id) = client.user_id() {
+            pl_content.users.insert(bot_id.to_owned(), 100.into());
+        }
+
+        req.power_level_content_override = Some(Raw::new(&pl_content)?);
+        info!(
+            "Configuring room with Co-Administration for owner: {}",
+            owner
+        );
+    }
 
     info!("Creating new room for slug: {}", slug);
     let room = client.create_room(req).await?;
@@ -114,9 +126,9 @@ pub async fn create_and_link_room(
             info!("Linked new room {} to space", room.room_id());
         }
     }
+
     Ok(room)
 }
-
 pub async fn ensure_site_space(
     client: &Client,
     server_name: &ServerName,
@@ -129,11 +141,9 @@ pub async fn ensure_site_space(
             return Ok(id.clone());
         }
     }
-
     let alias_local = format!("cumments_{}", site_id_str);
     let full_alias = format!("#{}:{}", alias_local, server_name);
     let alias = RoomAliasId::parse(&full_alias)?;
-
     let room_id = match client.resolve_room_alias(&alias).await {
         Ok(resp) => resp.room_id.to_owned(),
         Err(_) => {
@@ -145,12 +155,10 @@ pub async fn ensure_site_space(
             req.name = Some(site_id_str.to_string());
             req.creation_content = Some(Raw::new(&cc)?);
             req.preset = Some(RoomPreset::PublicChat);
-
             let r = client.create_room(req).await?;
             r.room_id().to_owned()
         }
     };
-
     {
         cache
             .inner
@@ -159,19 +167,4 @@ pub async fn ensure_site_space(
             .insert(site_id_str.to_string(), room_id.clone());
     }
     Ok(room_id)
-}
-
-pub fn compute_user_fingerprint(email: Option<&str>, guest_token: &str, salt: &str) -> String {
-    let seed = if let Some(e) = email {
-        format!("email:{}", e.trim().to_lowercase())
-    } else {
-        format!("token:{}", guest_token)
-    };
-
-    let mut hasher = Sha256::new();
-    hasher.update(seed.as_bytes());
-    hasher.update(salt.as_bytes());
-    let result = hasher.finalize();
-
-    hex::encode(&result[..6])
 }

@@ -8,6 +8,7 @@ impl Db {
         site_id: &str,
         slug: &str,
         c: &Comment,
+        raw_event_json: Option<String>,
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -28,14 +29,17 @@ impl Db {
             INSERT INTO comments (
                 id, room_id, author_id, author_name,
                 is_guest, is_redacted,
-                author_fingerprint,
-                content, created_at, updated_at, reply_to
+                author_fingerprint, avatar_url,
+                content, created_at, updated_at, reply_to,
+                txn_id, raw_event
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
                 is_redacted = excluded.is_redacted,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                author_name = excluded.author_name,
+                avatar_url = excluded.avatar_url
             "#,
         )
         .bind(&c.id)
@@ -45,10 +49,13 @@ impl Db {
         .bind(c.is_guest)
         .bind(c.is_redacted)
         .bind(&c.author_fingerprint)
+        .bind(&c.avatar_url)
         .bind(&c.content)
         .bind(c.created_at)
         .bind(c.updated_at)
         .bind(&c.reply_to)
+        .bind(&c.txn_id)
+        .bind(raw_event_json)
         .execute(&mut *tx)
         .await?;
 
@@ -75,7 +82,7 @@ impl Db {
             sqlx::query(
                 r#"
                 UPDATE comments
-                SET content = '', author_name = '[Deleted]', is_redacted = TRUE
+                SET content = '', author_name = '[Deleted]', is_redacted = TRUE, avatar_url = NULL
                 WHERE id = ?
                 "#,
             )
@@ -90,7 +97,44 @@ impl Db {
         }
     }
 
-    pub async fn list_comments(&self, site_id: &str, slug: &str) -> anyhow::Result<Vec<Comment>> {
+    pub async fn get_comment(&self, comment_id: &str) -> anyhow::Result<Option<domain::Comment>> {
+        let row = sqlx::query_as!(
+            SqlComment,
+            r#"
+            SELECT
+                c.id as "id!",
+                c.author_id as "author_id!",
+                c.author_name as "author_name!",
+                c.is_guest,
+                c.is_redacted,
+                c.author_fingerprint,
+                c.avatar_url,
+                c.content as "content!",
+                c.created_at,
+                c.updated_at,
+                c.reply_to,
+                c.txn_id,
+                r.site_id as "site_id!",
+                r.post_slug as "post_slug!"
+            FROM comments c
+            JOIN rooms r ON c.room_id = r.room_id
+            WHERE c.id = ?
+            "#,
+            comment_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(Into::into))
+    }
+
+    pub async fn list_comments(
+        &self,
+        site_id: &str,
+        slug: &str,
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<(Vec<Comment>, i64)> {
         let rows = sqlx::query_as!(
             SqlComment,
             r#"
@@ -101,23 +145,42 @@ impl Db {
                 c.is_guest,
                 c.is_redacted,
                 c.author_fingerprint,
+                c.avatar_url,
                 c.content as "content!",
                 c.created_at,
                 c.updated_at,
                 c.reply_to,
+                c.txn_id,
                 r.site_id as "site_id!",
                 r.post_slug as "post_slug!"
             FROM comments c
             JOIN rooms r ON c.room_id = r.room_id
             WHERE r.site_id = ? AND r.post_slug = ?
             ORDER BY c.created_at ASC
+            LIMIT ? OFFSET ?
             "#,
             site_id,
-            slug
+            slug,
+            limit,
+            offset
         )
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(Comment::from).collect())
+        let count_row = sqlx::query!(
+            r#"
+            SELECT COUNT(*) as count
+            FROM comments c
+            JOIN rooms r ON c.room_id = r.room_id
+            WHERE r.site_id = ? AND r.post_slug = ?
+            "#,
+            site_id,
+            slug
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let comments = rows.into_iter().map(Into::into).collect();
+        Ok((comments, count_row.count.into()))
     }
 }

@@ -1,3 +1,4 @@
-mod comments;
-mod meta;
-mod rooms;
+pub mod comments;
+pub mod meta;
+pub mod profiles;
+pub mod rooms;
