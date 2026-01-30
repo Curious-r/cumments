@@ -2968,7 +2968,6 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
- "matrix-sdk",
  "rand",
  "serde",
  "serde_json",

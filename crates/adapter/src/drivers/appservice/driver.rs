@@ -1,7 +1,8 @@
 use super::{handlers, web, AsContext};
 use crate::common::matrix_utils::SpaceCache;
+use crate::config::AppServiceConfig;
 use crate::traits::MatrixDriver;
-use crate::{AppServiceConfig, CommandEnvelope};
+use crate::CommandEnvelope;
 use anyhow::Result;
 use async_trait::async_trait;
 use axum::{routing::put, Router};
@@ -40,6 +41,12 @@ impl MatrixDriver for AppServiceDriver {
             "Starting AppService Driver on port {}",
             self.config.listen_port
         );
+
+        let owner_id_ref = if let Some(ref o) = self.config.owner_id {
+            Some(UserId::parse(o)?)
+        } else {
+            None
+        };
 
         let main_client = Client::builder()
             .homeserver_url(&self.config.homeserver_url)
@@ -90,7 +97,6 @@ impl MatrixDriver for AppServiceDriver {
             let ctx = ctx.clone();
             let cache = space_cache;
             let cmd_cancel_token = cancel_token.clone();
-            let owner_id_ref = self.config.owner_id.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -107,7 +113,7 @@ impl MatrixDriver for AppServiceDriver {
                                     site_id, post_slug, content, nickname, email, guest_token, reply_to, txn_id
                                 } => {
                                     handlers::execute_send(
-                                        &ctx, &cache, site_id, post_slug, content, nickname, email, guest_token, reply_to, txn_id, owner_id_ref.as_ref()
+                                        &ctx, &cache, site_id, post_slug, content, nickname, email, guest_token, reply_to, txn_id, owner_id_ref.as_ref() // 传入解析后的 owner_id
                                     ).await
                                 }
                                 AppCommand::RedactComment { site_id, post_slug, comment_id, reason, .. } => {

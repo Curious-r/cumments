@@ -5,7 +5,6 @@ use axum::{
     Json,
 };
 use domain::{AppCommand, SiteId};
-use matrix_sdk::ruma::EventId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -126,16 +125,6 @@ pub async fn post_comment(
     Json(payload): Json<CreateCommentRequest>,
 ) -> Result<Json<&'static str>, (axum::http::StatusCode, String)> {
     let site_id = SiteId::new(site_id_str).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
-
-    if let Some(ref reply_id) = payload.reply_to {
-        if EventId::parse(reply_id).is_err() {
-            return Err((
-                axum::http::StatusCode::BAD_REQUEST,
-                format!("Invalid reply_to ID format: {}", reply_id),
-            ));
-        }
-    }
-
     let parts: Vec<&str> = payload.challenge_response.split('|').collect();
     if parts.len() != 2 || !state.pow.verify(parts[0], parts[1]) {
         return Err((

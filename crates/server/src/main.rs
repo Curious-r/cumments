@@ -6,7 +6,6 @@ mod state;
 use anyhow::Context;
 use clap::Parser;
 use dotenvy::dotenv;
-use matrix_sdk::ruma::UserId;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -54,25 +53,14 @@ async fn main() -> anyhow::Result<()> {
             token,
             device_id,
             owner_id,
-        } => {
-            let user_id = UserId::parse(&user)
-                .map_err(|e| anyhow::anyhow!("Invalid Matrix User ID: {}", e))?;
-
-            let owner_user_id = if let Some(o) = owner_id {
-                Some(UserId::parse(&o).map_err(|e| anyhow::anyhow!("Invalid Owner ID: {}", e))?)
-            } else {
-                None
-            };
-
-            adapter::MatrixConfig::Bot(adapter::BotConfig {
-                homeserver_url,
-                user_id,
-                access_token: token,
-                identity_salt: settings.security.identity_salt.clone(),
-                device_id: device_id.unwrap_or_else(|| "CUMMENTS_BOT_V4".to_string()),
-                owner_id: owner_user_id,
-            })
-        }
+        } => adapter::MatrixConfig::Bot(adapter::BotConfig {
+            homeserver_url,
+            user_id: user,
+            access_token: token,
+            identity_salt: settings.security.identity_salt.clone(),
+            device_id: device_id.unwrap_or_else(|| "CUMMENTS_BOT_V4".to_string()),
+            owner_id,
+        }),
         config::MatrixSettings::AppService {
             homeserver_url,
             server_name,
@@ -81,24 +69,16 @@ async fn main() -> anyhow::Result<()> {
             bot_localpart,
             listen_port,
             owner_id,
-        } => {
-            let owner_user_id = if let Some(o) = owner_id {
-                Some(UserId::parse(&o).map_err(|e| anyhow::anyhow!("Invalid Owner ID: {}", e))?)
-            } else {
-                None
-            };
-
-            adapter::MatrixConfig::AppService(adapter::AppServiceConfig {
-                homeserver_url,
-                server_name,
-                as_token,
-                hs_token,
-                bot_localpart,
-                listen_port,
-                identity_salt: settings.security.identity_salt.clone(),
-                owner_id: owner_user_id,
-            })
-        }
+        } => adapter::MatrixConfig::AppService(adapter::AppServiceConfig {
+            homeserver_url,
+            server_name,
+            as_token,
+            hs_token,
+            bot_localpart,
+            listen_port,
+            identity_salt: settings.security.identity_salt.clone(),
+            owner_id,
+        }),
     };
 
     let cancel_token = CancellationToken::new();

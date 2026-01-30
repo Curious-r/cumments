@@ -1,15 +1,15 @@
 mod common;
+mod config;
 mod drivers;
 mod traits;
 
 pub use common::matrix_utils::SpaceCache;
-pub use drivers::bot::BotConfig;
+pub use config::{AppServiceConfig, BotConfig, MatrixConfig};
 pub use traits::MatrixDriver;
 
 use domain::{AppCommand, IngestEvent};
 use drivers::appservice::AppServiceDriver;
 use drivers::bot::BotDriver;
-use matrix_sdk::ruma::OwnedUserId;
 use storage::Db;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -18,24 +18,6 @@ use tracing::info;
 pub struct CommandEnvelope {
     pub cmd: AppCommand,
     pub resp: oneshot::Sender<anyhow::Result<()>>,
-}
-
-#[derive(Clone)]
-pub struct AppServiceConfig {
-    pub homeserver_url: String,
-    pub server_name: String,
-    pub as_token: String,
-    pub hs_token: String,
-    pub bot_localpart: String,
-    pub listen_port: u16,
-    pub identity_salt: String,
-    pub owner_id: Option<OwnedUserId>,
-}
-
-#[derive(Clone)]
-pub enum MatrixConfig {
-    Bot(BotConfig),
-    AppService(AppServiceConfig),
 }
 
 pub async fn start_with_cancel_token(

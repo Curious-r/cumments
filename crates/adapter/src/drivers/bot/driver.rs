@@ -10,7 +10,7 @@ use matrix_sdk::{
             room::redaction::OriginalSyncRoomRedactionEvent,
         },
         serde::Raw,
-        OwnedUserId,
+        UserId,
     },
     Client, Room, SessionMeta,
 };
@@ -24,18 +24,9 @@ use super::handlers::{
     execute_redact, execute_send, execute_user_delete, execute_user_edit, handle_sync_event,
 };
 use crate::common::matrix_utils::SpaceCache;
+use crate::config::BotConfig;
 use crate::traits::MatrixDriver;
 use crate::CommandEnvelope;
-
-#[derive(Clone)]
-pub struct BotConfig {
-    pub homeserver_url: String,
-    pub user_id: OwnedUserId,
-    pub access_token: String,
-    pub identity_salt: String,
-    pub device_id: String,
-    pub owner_id: Option<OwnedUserId>,
-}
 
 pub struct BotDriver {
     config: BotConfig,
@@ -56,6 +47,16 @@ impl MatrixDriver for BotDriver {
         tx_ingest: broadcast::Sender<IngestEvent>,
         cancel_token: CancellationToken,
     ) -> Result<()> {
+        // [新增] 启动时解析 Config 中的 String -> UserId
+        // 这样如果配置格式错误，会在启动时立即报错 panic 或 error
+        let user_id = UserId::parse(&self.config.user_id)?;
+
+        let owner_id = if let Some(ref o) = self.config.owner_id {
+            Some(UserId::parse(o)?)
+        } else {
+            None
+        };
+
         let client = Client::builder()
             .homeserver_url(&self.config.homeserver_url)
             .build()
@@ -63,7 +64,7 @@ impl MatrixDriver for BotDriver {
 
         let session = MatrixSession {
             meta: SessionMeta {
-                user_id: self.config.user_id.clone(),
+                user_id: user_id.clone(), // 使用解析后的变量
                 device_id: self.config.device_id.clone().into(),
             },
             tokens: MatrixSessionTokens {
@@ -73,9 +74,9 @@ impl MatrixDriver for BotDriver {
         };
 
         client.matrix_auth().restore_session(session).await?;
-        info!("Matrix Client logged in as {}", self.config.user_id);
+        info!("Matrix Client logged in as {}", user_id);
 
-        let my_bot_id = self.config.user_id.to_string();
+        let my_bot_id = user_id.to_string();
         let space_cache = SpaceCache::new();
 
         let db_for_cmd = db.clone();
@@ -87,7 +88,7 @@ impl MatrixDriver for BotDriver {
             let client = client.clone();
             let db = db_for_cmd; // Use clone
             let config = self.config.clone();
-            let server_name = config.user_id.server_name().to_owned();
+            let server_name = user_id.server_name().to_owned();
             let cache = space_cache;
             let cmd_cancel_token = cancel_token.clone();
 
@@ -108,7 +109,7 @@ impl MatrixDriver for BotDriver {
                                 } => {
                                     execute_send(
                                         &client, &server_name, &db, &cache,
-                                        &config.identity_salt, config.owner_id.as_ref(),
+                                        &config.identity_salt, owner_id.as_ref(), // 使用解析后的 owner_id
                                         site_id, post_slug, content, nickname, email, guest_token, reply_to, txn_id
                                     ).await
                                 }

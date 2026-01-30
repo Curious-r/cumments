@@ -23,7 +23,6 @@ rand = { workspace = true }
 hmac = { workspace = true }
 base64 = { workspace = true }
 tokio-util = { workspace = true }
-matrix-sdk = { workspace = true }
 clap = { workspace = true }
 
 futures = { workspace = true }
