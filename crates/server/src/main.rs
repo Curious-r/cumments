@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use adapter::CommandEnvelope;
+use adapter::MatrixSvc;
 use config::Settings;
 use http::router::build_router;
 use pow::PowGuard;
@@ -43,7 +43,8 @@ async fn main() -> anyhow::Result<()> {
 
     let db = Db::new(&settings.database.url).await?;
 
-    let (tx_cmd, rx_cmd) = mpsc::channel::<CommandEnvelope>(100);
+    let (tx_cmd, rx_cmd) = mpsc::channel(100);
+    let matrix_svc = MatrixSvc::new(tx_cmd);
     let (tx_ingest, _rx_ingest) = broadcast::channel(100);
 
     let matrix_config = match settings.matrix {
@@ -103,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         db,
-        sender: tx_cmd,
+        matrix: matrix_svc,
         tx_ingest,
         pow: PowGuard::new(
             settings.security.pow_secret.clone(),

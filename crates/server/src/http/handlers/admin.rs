@@ -1,5 +1,4 @@
 use crate::state::AppState;
-use adapter::CommandEnvelope;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -7,7 +6,6 @@ use axum::{
 };
 use domain::{AppCommand, SiteId};
 use serde::Deserialize;
-use tokio::sync::oneshot;
 
 #[derive(Deserialize)]
 pub struct InitRoomRequest {
@@ -41,24 +39,13 @@ pub async fn delete_comment(
         reason: Some("Admin deleted via API".into()),
     };
 
-    let (tx, rx) = oneshot::channel();
-    let envelope = CommandEnvelope { cmd, resp: tx };
+    state
+        .matrix
+        .send(cmd)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    state.sender.send(envelope).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Worker closed".to_string(),
-        )
-    })?;
-
-    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-        Ok(Ok(Ok(_))) => Ok(Json("Deleted")),
-        Ok(Ok(Err(e))) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Matrix Error: {}", e),
-        )),
-        _ => Err((StatusCode::GATEWAY_TIMEOUT, "Timeout".into())),
-    }
+    Ok(Json("Deleted"))
 }
 
 pub async fn init_room(
@@ -81,22 +68,11 @@ pub async fn init_room(
         post_slug: payload.slug,
     };
 
-    let (tx, rx) = oneshot::channel();
-    let envelope = CommandEnvelope { cmd, resp: tx };
+    state
+        .matrix
+        .send(cmd)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    state.sender.send(envelope).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Worker closed".to_string(),
-        )
-    })?;
-
-    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
-        Ok(Ok(Ok(_))) => Ok(Json("Room Created/Ensured")),
-        Ok(Ok(Err(e))) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Matrix Error: {}", e),
-        )),
-        _ => Err((StatusCode::GATEWAY_TIMEOUT, "Timeout".into())),
-    }
+    Ok(Json("Room Created/Ensured"))
 }

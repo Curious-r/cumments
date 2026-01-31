@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS rooms (
     room_id TEXT PRIMARY KEY,
     site_id TEXT NOT NULL,
-    post_slug TEXT NOT NULL
+    post_slug TEXT NOT NULL,
+    backfill_token TEXT,
+    last_backfilled_at DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_rooms_site_slug ON rooms(site_id, post_slug);
 
@@ -20,24 +22,18 @@ CREATE TABLE IF NOT EXISTS profiles (
 CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL,
-
     author_id TEXT NOT NULL,
     author_name TEXT NOT NULL,
     author_fingerprint TEXT,
     avatar_url TEXT,
     is_guest BOOLEAN NOT NULL DEFAULT FALSE,
-
     content TEXT NOT NULL,
     is_redacted BOOLEAN NOT NULL DEFAULT FALSE,
-
     reply_to TEXT,
-
     created_at DATETIME NOT NULL,
     updated_at DATETIME,
-
     txn_id TEXT,
     raw_event TEXT,
-
     FOREIGN KEY(room_id) REFERENCES rooms(room_id)
 );
 

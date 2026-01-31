@@ -1,6 +1,7 @@
 use super::utils::{ensure_room_for_as, get_ghost_client};
 use super::AsContext;
 use crate::common::matrix_utils::SpaceCache;
+use crate::common::profile::ensure_profile_cached;
 use anyhow::Result;
 use domain::identity::compute_fingerprint;
 use domain::{protocol, Comment, IngestEvent, SiteId};
@@ -194,34 +195,10 @@ pub async fn handle_incoming_message(
 
     let mut avatar_url = None;
     if !is_guest {
-        let user_id_str = sender_id.clone();
-
-        let cached = ctx
-            .db
-            .get_cached_profile(&user_id_str)
-            .await
-            .unwrap_or(None);
-        if let Some(profile) = cached {
-            if let Some(n) = profile.display_name {
-                author_name = n;
-            }
-            avatar_url = profile.avatar_url;
-        } else {
-            if let Ok(profile_resp) = ctx.main_client.get_profile(&event.sender).await {
-                let display_name = profile_resp.displayname;
-                let avatar = profile_resp.avatar_url.map(|u| u.to_string());
-
-                let _ = ctx
-                    .db
-                    .upsert_profile(&user_id_str, display_name.as_deref(), avatar.as_deref())
-                    .await;
-
-                if let Some(n) = display_name {
-                    author_name = n;
-                }
-                avatar_url = avatar;
-            }
-        }
+        let (name, avatar) =
+            ensure_profile_cached(&ctx.db, &ctx.main_client, None, &sender_id).await;
+        author_name = name;
+        avatar_url = avatar;
     }
 
     let reply_to = if let Some(Relation::Reply { ref in_reply_to }) = event.content.relates_to {

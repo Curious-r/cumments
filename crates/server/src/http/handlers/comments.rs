@@ -1,12 +1,10 @@
 use crate::state::AppState;
-use adapter::CommandEnvelope;
 use axum::{
     extract::{Path, Query, State},
     Json,
 };
 use domain::{AppCommand, SiteId};
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 
 #[derive(Deserialize)]
 pub struct CreateCommentRequest {
@@ -42,38 +40,6 @@ pub struct PaginationMeta {
     pub matrix_to_link: String,
 }
 
-async fn send_cmd_and_wait(
-    sender: &tokio::sync::mpsc::Sender<CommandEnvelope>,
-    cmd: AppCommand,
-) -> Result<(), (axum::http::StatusCode, String)> {
-    let (tx, rx) = oneshot::channel();
-
-    let envelope = CommandEnvelope { cmd, resp: tx };
-
-    sender.send(envelope).await.map_err(|_| {
-        (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "Service Unavailable (Worker Channel Closed)".to_string(),
-        )
-    })?;
-
-    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-        Ok(Ok(Ok(_))) => Ok(()),
-        Ok(Ok(Err(e))) => Err((
-            axum::http::StatusCode::BAD_REQUEST,
-            format!("Operation failed: {}", e),
-        )),
-        Ok(Err(_)) => Err((
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "Worker dropped the response channel".to_string(),
-        )),
-        Err(_) => Err((
-            axum::http::StatusCode::GATEWAY_TIMEOUT,
-            "Operation timed out".to_string(),
-        )),
-    }
-}
-
 pub async fn list_comments(
     State(state): State<AppState>,
     Path((site_id_str, slug)): Path<(String, String)>,
@@ -96,6 +62,20 @@ pub async fn list_comments(
         .list_comments(&site_id_str, &slug, limit, offset)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let matrix = state.matrix.clone();
+    let site_id_cmd = SiteId::new_unchecked(site_id_str.clone());
+    let slug_cmd = slug.clone();
+
+    tokio::spawn(async move {
+        let cmd = AppCommand::Backfill {
+            site_id: site_id_cmd,
+            post_slug: slug_cmd,
+        };
+        if let Err(e) = matrix.send(cmd).await {
+            tracing::warn!("Failed to trigger backfill: {:?}", e);
+        }
+    });
 
     let total_pages = if total > 0 {
         (total + per_page - 1) / per_page
@@ -144,7 +124,11 @@ pub async fn post_comment(
         txn_id: payload.txn_id,
     };
 
-    send_cmd_and_wait(&state.sender, cmd).await?;
+    state
+        .matrix
+        .send(cmd)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json("Accepted"))
 }
@@ -202,7 +186,11 @@ pub async fn delete_comment(
         user_fingerprint: calculated_fingerprint,
     };
 
-    send_cmd_and_wait(&state.sender, cmd).await?;
+    state
+        .matrix
+        .send(cmd)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json("Deleted"))
 }
 
@@ -252,6 +240,10 @@ pub async fn edit_comment(
         user_fingerprint: calculated_fingerprint,
     };
 
-    send_cmd_and_wait(&state.sender, cmd).await?;
+    state
+        .matrix
+        .send(cmd)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json("Edited"))
 }

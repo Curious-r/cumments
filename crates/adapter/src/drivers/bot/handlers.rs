@@ -1,6 +1,7 @@
 use crate::common::matrix_utils::{
     create_and_link_room, ensure_site_space, resolve_room_alias_chain, SpaceCache,
 };
+use crate::common::profile::ensure_profile_cached;
 use anyhow::Result;
 use domain::identity::compute_fingerprint;
 use domain::{protocol, Comment, IngestEvent, SiteId};
@@ -8,8 +9,10 @@ use matrix_sdk::{
     ruma::{
         events::{
             relation::Replacement,
-            room::message::{OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent},
-            AnyMessageLikeEventContent,
+            room::message::{
+                OriginalSyncRoomMessageEvent, Relation, RoomMessageEvent, RoomMessageEventContent,
+            },
+            AnyMessageLikeEvent, AnyMessageLikeEventContent, AnyTimelineEvent,
         },
         serde::Raw,
         EventId, OwnedUserId, RoomAliasId, ServerName,
@@ -91,41 +94,9 @@ pub async fn handle_sync_event(
 
     let mut avatar_url = None;
     if !is_guest {
-        let user_id_str = sender_id.clone();
-        let cached = db.get_cached_profile(&user_id_str).await.unwrap_or(None);
-
-        if let Some(profile) = cached {
-            if let Some(name) = profile.display_name {
-                author_name = name;
-            }
-            avatar_url = profile.avatar_url;
-        } else {
-            if let Ok(Some(profile)) = room
-                .get_member(&event.sender)
-                .await
-                .map(|m| m.map(|x| x.clone()))
-            {
-                let display_name = profile.display_name().map(|s| s.to_string());
-                let avatar = profile.avatar_url().map(|s| s.to_string());
-                let _ = db
-                    .upsert_profile(&user_id_str, display_name.as_deref(), avatar.as_deref())
-                    .await;
-                if let Some(n) = display_name {
-                    author_name = n;
-                }
-                avatar_url = avatar;
-            } else if let Ok(profile_resp) = client.get_profile(&event.sender).await {
-                let display_name = profile_resp.displayname;
-                let avatar = profile_resp.avatar_url.map(|u| u.to_string());
-                let _ = db
-                    .upsert_profile(&user_id_str, display_name.as_deref(), avatar.as_deref())
-                    .await;
-                if let Some(n) = display_name {
-                    author_name = n;
-                }
-                avatar_url = avatar;
-            }
-        }
+        let (name, avatar) = ensure_profile_cached(&db, &client, Some(&room), &sender_id).await;
+        author_name = name;
+        avatar_url = avatar;
     }
 
     let reply_to = if let Some(Relation::Reply { ref in_reply_to }) = event.content.relates_to {
@@ -353,5 +324,106 @@ pub async fn execute_ensure_room(
         .await?;
 
     tracing::info!("Room ensured for {}/{}", site_id, post_slug);
+    Ok(())
+}
+
+pub async fn execute_backfill(
+    client: &Client,
+    server_name: &ServerName,
+    db: &Db,
+    site_id: SiteId,
+    post_slug: String,
+) -> Result<()> {
+    let alias_str = format!("#{}_{}:{}", site_id.as_str(), post_slug, server_name);
+    let alias = RoomAliasId::parse(&alias_str)?;
+
+    let room_id = client.resolve_room_alias(&alias).await?.room_id;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
+
+    let (token, last_time) = db.get_backfill_state(room.room_id().as_str()).await?;
+
+    if let Some(last) = last_time {
+        let now = chrono::Utc::now().naive_utc();
+        if (now - last) < chrono::Duration::minutes(10) {
+            return Ok(());
+        }
+    }
+
+    let mut options = matrix_sdk::room::MessagesOptions::backward();
+    options.limit = 20u16.into();
+
+    options.from = token.clone();
+
+    let messages = room.messages(options).await?;
+    let chunk_len = messages.chunk.len();
+
+    for event in messages.chunk {
+        if let Ok(AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::RoomMessage(msg))) =
+            event.event.deserialize()
+        {
+            if let RoomMessageEvent::Original(ev) = msg {
+                let raw_json = serde_json::to_string(&ev.content).ok();
+                let content_json = serde_json::to_value(&ev.content).unwrap_or_default();
+
+                let sender_id = ev.sender.to_string();
+                let me_id = client.user_id().map(|u| u.to_string()).unwrap_or_default();
+
+                let (author_name, is_guest, content, author_fingerprint, txn_id) =
+                    protocol::extract_comment_data(&content_json, &sender_id, &me_id);
+
+                if content.trim().is_empty() {
+                    continue;
+                }
+
+                let current_ts_millis: i64 = ev.origin_server_ts.get().into();
+                let current_time = chrono::DateTime::from_timestamp_millis(current_ts_millis)
+                    .map(|dt| dt.naive_utc())
+                    .unwrap_or_else(|| chrono::Utc::now().naive_utc());
+
+                let comment = Comment {
+                    id: ev.event_id.to_string(),
+                    site_id: site_id.clone(),
+                    post_slug: post_slug.clone(),
+                    author_id: sender_id.clone(),
+                    author_name,
+                    avatar_url: None,
+                    is_guest,
+                    is_redacted: false,
+                    author_fingerprint,
+                    content,
+                    created_at: current_time,
+                    updated_at: None,
+                    reply_to: None,
+                    txn_id,
+                };
+
+                db.upsert_comment(
+                    room.room_id().as_str(),
+                    site_id.as_str(),
+                    &post_slug,
+                    &comment,
+                    raw_json,
+                )
+                .await?;
+            }
+        }
+    }
+
+    if let Some(new_token) = messages.end {
+        let next_token = if Some(new_token.as_str()) != token.as_deref() {
+            Some(new_token.as_str())
+        } else {
+            token.as_deref()
+        };
+        db.update_backfill_state(room.room_id().as_str(), next_token)
+            .await?;
+
+        if chunk_len > 0 {
+            tracing::info!("Backfilled {} events for {}", chunk_len, post_slug);
+        }
+    }
+
     Ok(())
 }

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adapter"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -681,7 +681,7 @@ checksum = "0688c2a7f92e427f44895cd63841bff7b29f8d7a1648b9e7e07a4a365b2e1257"
 
 [[package]]
 name = "domain"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "hex",
@@ -2612,7 +2612,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "adapter",
  "anyhow",
@@ -2962,7 +2962,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",

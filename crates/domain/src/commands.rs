@@ -35,4 +35,8 @@ pub enum AppCommand {
         site_id: SiteId,
         post_slug: String,
     },
+    Backfill {
+        site_id: SiteId,
+        post_slug: String,
+    },
 }

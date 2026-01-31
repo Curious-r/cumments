@@ -1,14 +1,14 @@
 use crate::pow::PowGuard;
-use adapter::CommandEnvelope;
+use adapter::MatrixSvc;
 use axum::extract::FromRef;
 use domain::IngestEvent;
 use storage::Db;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
-    pub sender: mpsc::Sender<CommandEnvelope>,
+    pub matrix: MatrixSvc,
     pub tx_ingest: broadcast::Sender<IngestEvent>,
     pub pow: PowGuard,
     pub admin_token: String,

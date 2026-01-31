@@ -136,6 +136,10 @@ impl MatrixDriver for AppServiceDriver {
                                         &ctx, &cache, site_id, post_slug, owner_id_ref.as_ref()
                                     ).await
                                 }
+                                AppCommand::Backfill { .. } => {
+                                    tracing::warn!("Backfill not implemented for AS mode yet");
+                                    Ok(())
+                                }
                             };
 
                             let _ = resp.send(result);

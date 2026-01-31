@@ -21,8 +21,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use super::handlers::{
-    execute_ensure_room, execute_redact, execute_send, execute_user_delete, execute_user_edit,
-    handle_sync_event,
+    execute_backfill, execute_ensure_room, execute_redact, execute_send, execute_user_delete,
+    execute_user_edit, handle_sync_event,
 };
 use crate::common::matrix_utils::SpaceCache;
 use crate::config::BotConfig;
@@ -132,6 +132,14 @@ impl MatrixDriver for BotDriver {
                                         &client, &server_name, &db, &cache, owner_id.as_ref(),
                                         site_id, post_slug
                                     ).await
+                                }
+                                AppCommand::Backfill { site_id, post_slug } => {
+                                    if let Err(e) = execute_backfill(
+                                        &client, &server_name, &db, site_id, post_slug
+                                    ).await {
+                                        tracing::warn!("Backfill failed: {:?}", e);
+                                    }
+                                    Ok(())
                                 }
                             };
 
