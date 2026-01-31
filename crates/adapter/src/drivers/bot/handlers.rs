@@ -265,8 +265,9 @@ pub async fn execute_user_edit(
     user_fingerprint: String,
 ) -> Result<()> {
     let comment_opt = db.get_comment(&comment_id).await?;
-    match comment_opt {
-        Some(c) if c.author_fingerprint == Some(user_fingerprint) => {}
+
+    let comment = match comment_opt {
+        Some(c) if c.author_fingerprint == Some(user_fingerprint) => c,
         _ => return Err(anyhow::anyhow!("Permission denied or comment not found")),
     };
 
@@ -277,12 +278,19 @@ pub async fn execute_user_edit(
         .get_room(&room_id)
         .ok_or_else(|| anyhow::anyhow!("Bot not in room"))?;
 
-    let fallback_text = format!("* {}", new_content);
+    let formatted_body = if comment.is_guest {
+        protocol::format_guest_body(&comment.author_name, &new_content)
+    } else {
+        new_content.clone()
+    };
+
+    let fallback_text = format!("* {}", formatted_body);
+
     let mut content = RoomMessageEventContent::text_plain(fallback_text);
 
     content.relates_to = Some(Relation::Replacement(Replacement::new(
         EventId::parse(&comment_id)?,
-        RoomMessageEventContent::text_plain(new_content).into(),
+        RoomMessageEventContent::text_plain(formatted_body).into(),
     )));
 
     room.send(content).await?;

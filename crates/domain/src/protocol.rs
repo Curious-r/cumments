@@ -16,13 +16,17 @@ pub fn parse_room_alias(localpart: &str) -> Option<(SiteId, String)> {
     let site_id = SiteId::new(site_id_str).ok()?;
     Some((site_id, slug.to_string()))
 }
+pub fn format_guest_body(nickname: &str, content: &str) -> String {
+    format!("**{}** (Guest): {}", nickname, content)
+}
+
 pub fn build_outbound_event(
     nickname: &str,
     content: &str,
     fingerprint: Option<String>,
     txn_id: Option<String>,
 ) -> Value {
-    let body_fallback = format!("**{}** (Guest): {}", nickname, content);
+    let body_fallback = format_guest_body(nickname, content);
     let metadata = CummentsMetadata {
         author_name: nickname.to_string(),
         is_guest: true,
