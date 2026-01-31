@@ -291,14 +291,49 @@
                     ></div>
                 </div>
 
+                <!-- [新增] 顶部状态栏 & 分页 -->
+                <div
+                    class="flex items-center justify-between bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 text-xs text-gray-500 mb-4"
+                >
+                    <span id="pageInfo">加载中...</span>
+                    <div class="flex gap-2">
+                        <button
+                            onclick="changePage(-1)"
+                            class="hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                            id="prevBtn"
+                        >
+                            上一页
+                        </button>
+                        <span class="text-gray-300">|</span>
+                        <button
+                            onclick="changePage(1)"
+                            class="hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                            id="nextBtn"
+                        >
+                            下一页
+                        </button>
+                    </div>
+                </div>
+
                 <!-- 评论列表容器 -->
-                <div id="commentsContainer" class="space-y-4 pb-10">
+                <div
+                    id="commentsContainer"
+                    class="space-y-4 pb-4 min-h-[200px]"
+                >
                     <div
                         class="text-center py-10 text-gray-400 bg-white rounded-xl border border-gray-200 border-dashed"
                     >
                         点击左侧“加载”按钮获取评论
                     </div>
                 </div>
+
+                <!-- [新增] 底部加载更多 (用于长列表) -->
+                <button
+                    onclick="loadComments(getConfig(), state.currentPage, 100)"
+                    class="w-full py-2 bg-white border border-gray-200 text-gray-500 text-sm rounded-lg hover:bg-gray-50 transition shadow-sm"
+                >
+                    试图加载更多 (每页 100 条)
+                </button>
             </div>
         </div>
 
@@ -433,6 +468,14 @@
             let currentSse = null;
             let replyToId = null;
 
+            // [新增] 分页状态
+            const state = {
+                currentPage: 1,
+                totalPages: 1,
+                totalItems: 0,
+                perPage: 20,
+            };
+
             // ==========================================
             //  初始化逻辑
             // ==========================================
@@ -476,8 +519,9 @@
                     currentSse.close();
                     updateSseStatus(false);
                 }
-                // 1. 加载列表
-                await loadComments(cfg);
+                // 1. 加载列表 (默认第1页)
+                state.currentPage = 1;
+                await loadComments(cfg, 1, state.perPage);
                 // 2. 连接 SSE
                 connectSSE(cfg);
             }
@@ -486,39 +530,73 @@
             //  API: 读取与列表渲染
             // ==========================================
 
-            async function loadComments(cfg) {
+            async function loadComments(cfg, page = 1, perPage = 20) {
                 const container = document.getElementById("commentsContainer");
-                container.innerHTML =
-                    '<div class="text-center py-10"><div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-200 border-t-blue-500"></div></div>';
+                // 只有在不是由 SSE 触发的静默更新时才显示 Loading
+                container.style.opacity = "0.5";
 
                 try {
                     const res = await fetch(
-                        `${cfg.api}/api/${cfg.siteId}/comments/${cfg.slug}?per_page=50`,
+                        `${cfg.api}/api/${cfg.siteId}/comments/${cfg.slug}?page=${page}&per_page=${perPage}`,
                     );
                     if (!res.ok) throw new Error(await res.text());
                     const json = await res.json();
 
                     container.innerHTML = "";
+                    container.style.opacity = "1";
+
                     if (json.data.length === 0) {
                         container.innerHTML =
-                            '<div class="text-center py-10 text-gray-400">暂无评论，快来抢沙发</div>';
+                            '<div class="text-center py-10 text-gray-400">暂无评论 (或本页为空)</div>';
                     } else {
                         json.data.forEach((c) => renderComment(c));
                     }
 
-                    // 处理 Meta 信息 (Deep Link)
-                    const infoBox = document.getElementById("matrixInfo");
-                    if (json.meta && json.meta.matrix_to_link) {
-                        infoBox.classList.remove("hidden");
-                        document.getElementById("roomAlias").innerText =
-                            json.meta.room_alias;
-                        document.getElementById("matrixLink").href =
-                            json.meta.matrix_to_link;
-                    } else {
-                        infoBox.classList.add("hidden");
+                    // [新增] 更新分页状态
+                    if (json.meta) {
+                        state.currentPage = json.meta.page;
+                        state.totalPages = json.meta.total_pages;
+                        state.totalItems = json.meta.total;
+                        state.perPage = json.meta.per_page;
+                        updatePaginationUI(json.meta);
+
+                        // Deep Link 处理
+                        const infoBox = document.getElementById("matrixInfo");
+                        if (json.meta.matrix_to_link) {
+                            infoBox.classList.remove("hidden");
+                            document.getElementById("roomAlias").innerText =
+                                json.meta.room_alias;
+                            document.getElementById("matrixLink").href =
+                                json.meta.matrix_to_link;
+                        }
                     }
                 } catch (e) {
                     container.innerHTML = `<div class="bg-red-50 text-red-500 p-4 rounded-lg text-center border border-red-100">加载失败: ${e.message}</div>`;
+                    container.style.opacity = "1";
+                }
+            }
+
+            // [新增] 分页 UI 更新逻辑
+            function updatePaginationUI(meta) {
+                const info = document.getElementById("pageInfo");
+                const start = (meta.page - 1) * meta.per_page + 1;
+                const end = Math.min(start + meta.per_page - 1, meta.total);
+
+                info.innerText =
+                    meta.total > 0
+                        ? `显示 ${start}-${end} 条 (共 ${meta.total} 条)`
+                        : "暂无数据";
+
+                document.getElementById("prevBtn").disabled = meta.page <= 1;
+                document.getElementById("nextBtn").disabled =
+                    meta.page >= meta.total_pages;
+            }
+
+            // [新增] 翻页动作
+            function changePage(delta) {
+                const newPage = state.currentPage + delta;
+                if (newPage > 0 && newPage <= state.totalPages) {
+                    loadComments(getConfig(), newPage, state.perPage);
                 }
             }
 
@@ -827,7 +905,19 @@
                     flashTime();
                     const comment = JSON.parse(e.data);
                     console.log("SSE New:", comment);
-                    renderComment(comment, true);
+
+                    // [修改] 如果我们在查看最后一页（最新消息），或者就在第一页且没满，直接渲染。
+                    // 否则，为了数据一致性，重新加载当前页（因为插入新数据会导致 Offset 偏移）
+                    // 简单策略：直接刷新当前页，确保看到最新状态
+                    loadComments(getConfig(), state.currentPage, state.perPage);
+
+                    // 视觉提示
+                    const toast = document.createElement("div");
+                    toast.className =
+                        "fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded shadow-lg z-50 text-sm animate-bounce";
+                    toast.innerText = "收到新评论: " + comment.author_name;
+                    document.body.appendChild(toast);
+                    setTimeout(() => toast.remove(), 3000);
                 });
 
                 sse.addEventListener("update_comment", (e) => {
