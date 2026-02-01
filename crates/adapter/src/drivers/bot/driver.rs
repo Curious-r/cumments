@@ -58,6 +58,10 @@ impl MatrixDriver for BotDriver {
 
         let client = Client::builder()
             .homeserver_url(&self.config.homeserver_url)
+            .request_config(
+                matrix_sdk::config::RequestConfig::new()
+                    .timeout(std::time::Duration::from_secs(60)),
+            )
             .build()
             .await?;
 

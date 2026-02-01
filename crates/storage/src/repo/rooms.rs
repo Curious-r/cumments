@@ -75,4 +75,29 @@ impl Db {
         }
         Ok(())
     }
+
+    pub async fn reset_post_data(&self, site_id: &str, slug: &str) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let room_ids = sqlx::query!(
+            "SELECT room_id FROM rooms WHERE site_id = ? AND post_slug = ?",
+            site_id,
+            slug
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
+        for row in room_ids {
+            sqlx::query!("DELETE FROM comments WHERE room_id = ?", row.room_id)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query!("DELETE FROM rooms WHERE room_id = ?", row.room_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
 }

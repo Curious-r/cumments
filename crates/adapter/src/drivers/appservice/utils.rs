@@ -49,6 +49,7 @@ pub async fn ensure_room_for_as(
         &ServerName::parse(&config.server_name)?,
         cache,
         site_id,
+        owner_id,
     )
     .await?;
 

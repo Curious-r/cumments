@@ -3,10 +3,11 @@ use crate::common::matrix_utils::{
 };
 use crate::common::profile::ensure_profile_cached;
 use anyhow::Result;
-use domain::identity::compute_fingerprint;
 use domain::{protocol, Comment, IngestEvent, SiteId};
 use matrix_sdk::{
     ruma::{
+        // [新增] 引入删除别名请求
+        api::client::alias::delete_alias::v3::Request as DeleteAliasRequest,
         events::{
             relation::Replacement,
             room::message::{
@@ -15,12 +16,19 @@ use matrix_sdk::{
             AnyMessageLikeEvent, AnyMessageLikeEventContent, AnyTimelineEvent,
         },
         serde::Raw,
-        EventId, OwnedUserId, RoomAliasId, ServerName,
+        EventId,
+        OwnedUserId,
+        RoomAliasId,
+        ServerName,
     },
-    Client, Room,
+    // [新增] 引入 RoomState
+    Client,
+    Room,
+    RoomState,
 };
 use storage::Db;
 use tokio::sync::broadcast;
+use tracing::{info, warn};
 
 fn resolve_event_details(
     event: &OriginalSyncRoomMessageEvent,
@@ -160,18 +168,65 @@ pub async fn execute_send(
     reply_to: Option<String>,
     txn_id: Option<String>,
 ) -> Result<()> {
-    let fingerprint = compute_fingerprint(email.as_deref(), &guest_token, salt);
+    let fingerprint = domain::identity::compute_fingerprint(email.as_deref(), &guest_token, salt);
     let event_json = protocol::build_outbound_event(&nickname, &content, Some(fingerprint), txn_id);
 
-    let space_id = ensure_site_space(client, server_name, cache, &site_id).await?;
+    let space_id = ensure_site_space(client, server_name, cache, &site_id, owner_id).await?;
     let full_alias = format!("#{}_{}:{}", site_id.as_str(), post_slug, server_name);
     let room_alias = RoomAliasId::parse(&full_alias)?;
 
     let room = match client.resolve_room_alias(&room_alias).await {
-        Ok(resp) => match client.get_room(&resp.room_id) {
-            Some(r) => r,
-            None => client.join_room_by_id(&resp.room_id).await?,
-        },
+        Ok(resp) => {
+            let room_id = resp.room_id;
+
+            let state = client.get_room(&room_id).map(|r| r.state());
+
+            let recycle_alias_and_recreate = || async {
+                info!("Recycling orphan alias: {} -> {}", room_alias, room_id);
+
+                if let Err(e) = db.reset_post_data(site_id.as_str(), &post_slug).await {
+                    warn!("Failed to reset local DB data: {:?}", e);
+                }
+
+                let del_req = DeleteAliasRequest::new(room_alias.clone());
+                if let Err(e) = client.send(del_req, None).await {
+                    warn!(
+                        "Failed to delete alias (might already be gone or no perm): {:?}",
+                        e
+                    );
+                }
+
+                create_and_link_room(
+                    client,
+                    server_name,
+                    &space_id,
+                    &site_id,
+                    &post_slug,
+                    owner_id,
+                )
+                .await
+            };
+
+            match state {
+                Some(RoomState::Joined) => client.get_room(&room_id).expect("Checked"),
+
+                Some(RoomState::Left) | Some(RoomState::Invited) => {
+                    info!("Bot is Left/Invited. Recreating room...");
+                    recycle_alias_and_recreate().await?
+                }
+
+                None => {
+                    match client.join_room_by_id(&room_id).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            // [新增] Join 失败 (如 404 M_UNKNOWN)，说明房间已死
+                            warn!("Failed to join existing room ({:?}). Treating as dead.", e);
+                            recycle_alias_and_recreate().await?
+                        }
+                    }
+                }
+            }
+        }
         Err(_) => {
             create_and_link_room(
                 client,
@@ -306,7 +361,7 @@ pub async fn execute_ensure_room(
     site_id: SiteId,
     post_slug: String,
 ) -> Result<()> {
-    let space_id = ensure_site_space(client, server_name, cache, &site_id).await?;
+    let space_id = ensure_site_space(client, server_name, cache, &site_id, owner_id).await?;
     let full_alias = format!("#{}_{}:{}", site_id.as_str(), post_slug, server_name);
     let room_alias = RoomAliasId::parse(&full_alias)?;
 
