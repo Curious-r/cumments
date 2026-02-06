@@ -1,0 +1,11 @@
+[package]
+name = "cumments-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# This crate should have minimal dependencies.
+# `serde` is needed for serialization of intents and models.
+serde = { workspace = true, features = ["derive"] }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
