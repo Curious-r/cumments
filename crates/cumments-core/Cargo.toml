@@ -9,3 +9,5 @@ edition = "2021"
 serde = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "chrono"] }

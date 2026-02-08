@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cumments-core", "crates/cumments-storage", "crates/cumments-api"]
+members = ["crates/cumments-core", "crates/cumments-storage", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-operator", "crates/cumments-projection"]
 
 [workspace.package]
 version = "0.12.0"
@@ -8,33 +8,33 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "1.0"
-anyhow = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dotenvy = "0.15"
-config = { version = "0.13", features = ["toml"] }
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.101"
+thiserror = "2.0.18"
+anyhow = "1.0.100"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+dotenvy = "0.15.7"
+config = { version = "0.15.19", features = ["toml"] }
+chrono = { version = "0.4.43", features = ["serde"] }
+clap = { version = "4.5.57", features = ["derive"] }
 
-rand = "0.8"
-sha2 = "0.10"
-hex = "0.4"
-base64 = "0.21"
-hmac = "0.12"
+rand = "0.9.2"
+sha2 = "0.10.9"
+hex = "0.4.3"
+base64 = "0.22.1"
+hmac = "0.12.1"
 
-tokio = { version = "1.0", features = ["full"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
-futures = "0.3"
-async-trait = "0.1"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
+tokio-stream = { version = "0.1.18", features = ["sync"] }
+futures = "0.3.31"
+async-trait = "0.1.89"
 
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
 
-axum = "0.7"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
-reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
+axum = "0.8.8"
+tower-http = { version = "0.6.8", features = ["cors", "trace"] }
+reqwest = { version = "0.13.1", features = ["stream", "rustls-tls"] }
 
-matrix-sdk = { version = "0.7", default-features = false, features = ["rustls-tls", "markdown"] }
+matrix-sdk = { version = "0.14.0", default-features = false, features = ["rustls-tls", "markdown"] }

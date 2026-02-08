@@ -1,0 +1,14 @@
+[package]
+name = "cumments-projection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+cumments-core = { version = "0.1.0", path = "../cumments-core" }
+matrix-sdk.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite"] }
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true

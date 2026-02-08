@@ -1,7 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::intents::PostCommentIntent;
-use cumments_core::ports::IntentRepository;
+use cumments_core::models::Comment;
+use cumments_core::ports::{CommentRepository, IntentRepository};
 use sqlx::SqlitePool;
 
 /// A wrapper around the database pool that provides concrete implementations
@@ -37,5 +38,26 @@ impl IntentRepository for Storage {
         .await?;
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl CommentRepository for Storage {
+    async fn get_comments(&self, site_id: &str, post_slug: &str) -> Result<Vec<Comment>> {
+        let comments = sqlx::query_as!(
+            Comment,
+            r#"
+            SELECT event_id, author_nickname, content, timestamp
+            FROM comments
+            WHERE site_id = ? AND post_slug = ?
+            ORDER BY timestamp ASC
+            "#,
+            site_id,
+            post_slug
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(comments)
     }
 }
