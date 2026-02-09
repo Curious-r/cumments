@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::intents::PostCommentIntent;
+use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 
 pub mod bot;
 pub mod logging;
@@ -20,4 +20,7 @@ pub trait MatrixOperator: Send + Sync {
     /// # Returns
     /// The event ID of the newly posted message.
     async fn post_comment(&self, intent: &PostCommentIntent) -> Result<String>;
+
+    /// Redacts a comment in the appropriate Matrix room.
+    async fn redact_comment(&self, intent: &DeleteCommentIntent) -> Result<()>;
 }

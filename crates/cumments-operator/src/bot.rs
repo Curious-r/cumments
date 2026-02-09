@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use cumments_core::intents::PostCommentIntent;
+use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use matrix_sdk::room::create::CreateRoomBuilder;
 use matrix_sdk::{
     config::SyncSettings,
-    ruma::{room::RoomName, OwnedRoomAliasId},
+    ruma::{room::RoomName, EventId, OwnedRoomAliasId},
     Client,
 };
 use tracing::{debug, info, instrument};
@@ -138,5 +138,46 @@ impl MatrixOperator for BotOperator {
         info!("Message sent successfully. Event ID: {}", response.event_id);
 
         Ok(response.event_id.to_string())
+    }
+
+    #[instrument(skip(self, intent), fields(site_id = %intent.site_id.as_str(), post_slug = %intent.post_slug.as_str(), event_id = %intent.event_id))]
+    async fn redact_comment(&self, intent: &DeleteCommentIntent) -> Result<()> {
+        let homeserver = self
+            .client
+            .homeserver()
+            .ok_or_else(|| anyhow!("Client is not connected to a homeserver"))?;
+        let alias_localpart = format!(
+            "cumments_{}_{}",
+            intent.site_id.as_str(),
+            intent.post_slug.as_str()
+        );
+        let room_alias: OwnedRoomAliasId = OwnedRoomAliasId::from_localpart_and_server_name(
+            alias_localpart,
+            homeserver.to_owned(),
+        )?;
+
+        let room_id = self
+            .client
+            .resolve_room_alias(&room_alias)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Cannot redact comment in room '{}' that does not exist.",
+                    room_alias
+                )
+            })?;
+
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or_else(|| anyhow!("Room '{}' not found in client state", room_id))?;
+
+        let event_id: &EventId = intent.event_id.as_str().try_into()?;
+
+        info!("Redacting event '{}' in room {}", event_id, room.id());
+        room.redact(event_id, None, None).await?;
+        info!("Redaction successful.");
+
+        Ok(())
     }
 }

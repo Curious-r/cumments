@@ -90,8 +90,13 @@ async fn main() -> Result<()> {
 
     // 6. Wire up storage and API crates
     let storage = cumments_storage::Storage::new(db_pool);
+    let pow = cumments_api::pow::Pow::new(
+        settings.security.pow_secret,
+        settings.security.pow_difficulty,
+    );
     let api_state = cumments_api::ApiState {
         storage: std::sync::Arc::new(storage),
+        pow: std::sync::Arc::new(pow),
     };
     tracing::info!("Storage and API wired up.");
 

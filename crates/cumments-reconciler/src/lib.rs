@@ -1,10 +1,10 @@
 use anyhow::Result;
-use cumments_core::intents::PostCommentIntent;
+use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use cumments_operator::MatrixOperator;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct Reconciler {
     pool: SqlitePool,
@@ -38,9 +38,14 @@ impl Reconciler {
         }
     }
 
-    /// Fetches and processes pending intents from the database.
+    /// Fetches and processes all types of pending intents from the database.
     async fn process_intents(&self) -> Result<u64> {
-        // 1. Fetch pending intents
+        let post_count = self.process_post_intents().await?;
+        let delete_count = self.process_delete_intents().await?;
+        Ok(post_count + delete_count)
+    }
+
+    async fn process_post_intents(&self) -> Result<u64> {
         let rows = sqlx::query!(
             r#"
             SELECT id, payload
@@ -55,36 +60,26 @@ impl Reconciler {
         if rows.is_empty() {
             return Ok(0);
         }
-
         let num_rows = rows.len() as u64;
 
-        // 2. Process each intent
         for row in rows {
-            // Use a block to handle errors for a single intent without stopping the whole loop
             let process_result: Result<()> = (async {
                 let intent: PostCommentIntent = serde_json::from_str(&row.payload)?;
-
-                // Use the operator to do the work
                 self.operator.post_comment(&intent).await?;
-
-                // 3. Update the intent's status to 'completed'
                 sqlx::query!(
                     "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE id = ?",
                     row.id
                 )
                 .execute(&self.pool)
                 .await?;
-
                 Ok(())
             }).await;
 
             if let Err(e) = process_result {
-                tracing::error!(
-                    "Failed to process intent [{}]: {:?}. Setting status to 'failed'.",
-                    row.id,
-                    e
+                warn!(
+                    "Failed to process post intent [{}]: {:?}. Setting status to 'failed'.",
+                    row.id, e
                 );
-                // Mark as failed so we don't retry it indefinitely
                 sqlx::query!(
                     "UPDATE intent_queue_post_comment SET status = 'failed', updated_at = strftime('%s','now') WHERE id = ?",
                     row.id
@@ -93,7 +88,52 @@ impl Reconciler {
                 .await?;
             }
         }
+        Ok(num_rows)
+    }
 
+    async fn process_delete_intents(&self) -> Result<u64> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT id, payload
+            FROM intent_queue_delete_comment
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let num_rows = rows.len() as u64;
+
+        for row in rows {
+            let process_result: Result<()> = (async {
+                let intent: DeleteCommentIntent = serde_json::from_str(&row.payload)?;
+                self.operator.redact_comment(&intent).await?;
+                sqlx::query!(
+                    "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE id = ?",
+                    row.id
+                )
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }).await;
+
+            if let Err(e) = process_result {
+                warn!(
+                    "Failed to process delete intent [{}]: {:?}. Setting status to 'failed'.",
+                    row.id, e
+                );
+                sqlx::query!(
+                    "UPDATE intent_queue_delete_comment SET status = 'failed', updated_at = strftime('%s','now') WHERE id = ?",
+                    row.id
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+        }
         Ok(num_rows)
     }
 }

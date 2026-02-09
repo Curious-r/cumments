@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::intents::PostCommentIntent;
+use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use tracing::info;
 
 use crate::MatrixOperator;
@@ -22,5 +22,10 @@ impl MatrixOperator for LoggingOperator {
 
         // Return a fake event ID
         Ok("$fake_event_id_for_logging_operator".to_string())
+    }
+
+    async fn redact_comment(&self, intent: &DeleteCommentIntent) -> Result<()> {
+        info!("[LoggingOperator] Would redact event '{}'", intent.event_id);
+        Ok(())
     }
 }
