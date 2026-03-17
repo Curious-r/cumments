@@ -1,8 +1,15 @@
 use anyhow::Result;
 use matrix_sdk::{
+    Client, Session,
     config::SyncSettings,
-    ruma::events::{room::message::MessageType, AnySyncTimelineEvent, SyncMessageLikeEvent},
-    Client,
+    ruma::{
+        RoomId,
+        api::client::sync::sync_events::v3::InvitedRoom,
+        events::{
+            AnySyncTimelineEvent,
+            room::message::{MessageType, RoomMessageEventContent},
+        },
+    },
 };
 use sqlx::SqlitePool;
 use tracing::{debug, info, instrument, warn};
@@ -13,6 +20,15 @@ use tracing::{debug, info, instrument, warn};
 pub struct Projection {
     client: Client,
     pool: SqlitePool,
+}
+
+async fn on_invited_room(room: InvitedRoom, client: Client) {
+    info!("Got invited to room {}", room.room_id);
+    if let Err(e) = client.join_room_by_id(&room.room_id).await {
+        warn!("Failed to join invited room {}: {}", &room.room_id, e);
+    } else {
+        info!("Successfully joined invited room {}", &room.room_id);
+    }
 }
 
 impl Projection {
@@ -30,19 +46,22 @@ impl Projection {
             .await?;
 
         // Restore the login session
-        if let Some(device_id) = device_id {
-            client
-                .restore_login_with_device_id(user.into(), device_id.into(), token.into())
-                .await?;
-            debug!("Restored login session with device ID '{}'", device_id);
-        } else {
-            client.restore_login(user.into(), token.into()).await?;
-            debug!("Restored login session without a device ID");
-        }
+        let device_id =
+            device_id.expect("device_id is required for session restoration in matrix-sdk 0.14.0");
+
+        let session = Session {
+            access_token: token.to_string(),
+            refresh_token: None,
+            user_id: user.try_into()?,
+            device_id: device_id.try_into()?,
+        };
+
+        client.restore_session(session).await?;
+        debug!("Restored login session with device ID '{}'", device_id);
 
         info!(
             "Successfully restored Matrix session for user {}",
-            client.user_id().await.unwrap()
+            client.user_id().unwrap()
         );
 
         Ok(Self { client, pool })
@@ -54,8 +73,17 @@ impl Projection {
     pub async fn run(&self) -> Result<()> {
         info!("Registering event handler and starting projectionist sync loop...");
 
-        self.client.add_event_handler_context(self.clone());
-        self.client.add_event_handler(on_timeline_event);
+        self.client.add_event_handler_context(self.pool.clone());
+
+        self.client.add_event_handler(
+            |event: AnySyncTimelineEvent, client: Client, pool: SqlitePool| async move {
+                on_timeline_event(event, client, pool).await;
+            },
+        );
+        self.client
+            .add_event_handler(|room: InvitedRoom, client: Client| async move {
+                on_invited_room(room, client).await;
+            });
 
         let sync_settings = SyncSettings::default();
         self.client.sync(sync_settings).await?; // This will run forever
@@ -65,18 +93,26 @@ impl Projection {
 }
 
 /// The event handler for all timeline events.
-#[instrument(skip_all, fields(event_type = event.event_type().to_string()))]
-async fn on_timeline_event(event: AnySyncTimelineEvent, context: Projection) {
+#[instrument(skip_all, fields(event_id = ?event.event_id()))]
+async fn on_timeline_event(event: AnySyncTimelineEvent, client: Client, pool: SqlitePool) {
     let event_id = if let Some(id) = event.event_id() {
-        id
+        id.to_owned()
     } else {
         warn!("Received an event without an event ID. Skipping.");
         return;
     };
 
-    if let AnySyncTimelineEvent::MessageLike(SyncMessageLikeEvent::RoomMessage(msg)) = event {
-        if let MessageType::Text(text) = msg.content.msgtype {
-            let room = if let Some(room) = context.client.get_room(&room_id) {
+    if let AnySyncTimelineEvent::MessageLike(ev) = event {
+        if let Some(RoomMessageEventContent {
+            msgtype: MessageType::Text(text),
+            ..
+        }) = ev
+            .original_content()
+            .and_then(|c| c.as_original())
+            .and_then(|c| c.deserialize().ok())
+        {
+            let room_id: &RoomId = ev.room_id();
+            let room = if let Some(room) = client.get_room(room_id) {
                 room
             } else {
                 warn!(
@@ -86,10 +122,13 @@ async fn on_timeline_event(event: AnySyncTimelineEvent, context: Projection) {
                 return;
             };
 
-            let alias = if let Some(alias) = room.canonical_alias().await {
+            let alias = if let Some(alias) = room.canonical_alias() {
                 alias
             } else {
-                warn!("Room '{}' has no canonical alias. Skipping.", room.id());
+                warn!(
+                    "Room '{}' has no canonical alias. Skipping.",
+                    room.room_id()
+                );
                 return;
             };
 
@@ -110,38 +149,39 @@ async fn on_timeline_event(event: AnySyncTimelineEvent, context: Projection) {
             let site_id = parts[0];
             let post_slug = parts[1];
 
-            let author_mxid = msg.sender;
-            let author = if let Ok(Some(member)) = room.get_member(&author_mxid).await {
+            let author_mxid = ev.sender();
+            let author = if let Ok(Some(member)) = room.get_member(author_mxid).await {
                 member.display_name().map(ToString::to_string)
             } else {
                 None
             };
 
             let content = text.body;
-            let timestamp = chrono::DateTime::from_timestamp_millis(msg.origin_server_ts.0.into())
+            let timestamp = chrono::DateTime::from_timestamp_millis(ev.origin_server_ts().0.into())
                 .unwrap()
                 .naive_utc();
 
             match sqlx::query!(
-                            r#"
-                            INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, content, timestamp)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            "#,
-                            event_id.to_string(),
-                            room.id().to_string(),
-                            site_id,
-                            post_slug,
-                            author_mxid.to_string(),
-                            author,
-                            content,
-                            timestamp,
-                        )
-                        .execute(&context.pool)
-                        .await {
-                            Ok(_) => info!("Successfully projected comment event {}", event_id),
-                            // This can fail if the event is a duplicate, which is fine.
-                            Err(e) => debug!("Failed to project comment event {}: {:?}", event_id, e),
-                        }
+                r#"
+                INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, content, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+                event_id.to_string(),
+                room.room_id().to_string(),
+                site_id,
+                post_slug,
+                author_mxid.to_string(),
+                author,
+                content,
+                timestamp,
+            )
+            .execute(&pool)
+            .await
+            {
+                Ok(_) => info!("Successfully projected comment event {}", event_id),
+                // This can fail if the event is a duplicate, which is fine.
+                Err(e) => debug!("Failed to project comment event {}: {:?}", event_id, e),
+            }
         }
     }
 }

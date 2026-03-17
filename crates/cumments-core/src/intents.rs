@@ -44,4 +44,6 @@ pub struct DeleteCommentIntent {
     pub event_id: String,
     /// The fingerprint of the user attempting to delete the comment, for verification.
     pub author_fingerprint: String,
+    /// The client's response to the Proof-of-Work challenge.
+    pub challenge_response: String,
 }

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 cumments-core = { path = "../cumments-core" }
+chrono = { workspace = true }
 
 # Workspace dependencies
 anyhow = { workspace = true }

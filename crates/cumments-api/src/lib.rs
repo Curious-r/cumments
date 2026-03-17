@@ -1,12 +1,12 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use cumments_core::{
-    intents::PostCommentIntent,
+    intents::{DeleteCommentIntent, PostCommentIntent},
     models::Comment,
     ports::{CommentRepository, IntentRepository},
 };
@@ -15,10 +15,14 @@ use std::sync::Arc;
 
 pub mod pow;
 
+// Define a new trait that combines the repository traits for API use.
+pub trait ApiRepository: CommentRepository + IntentRepository + Send + Sync {}
+impl<T: CommentRepository + IntentRepository + Send + Sync> ApiRepository for T {}
+
 // The shared state for our API.
 #[derive(Clone)]
 pub struct ApiState {
-    pub storage: Arc<dyn CommentRepository + IntentRepository + Send + Sync>,
+    pub storage: Arc<dyn ApiRepository>,
     pub pow: Arc<pow::Pow>,
 }
 
@@ -59,6 +63,7 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/comments",
             post(post_comment_handler).get(get_comments_handler),
         )
+        .route("/api/comments/:comment_id", delete(delete_comment_handler))
         .route("/api/challenge", get(get_challenge_handler))
         .with_state(state)
 }
@@ -144,6 +149,50 @@ async fn post_comment_handler(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to queue comment.",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The handler for receiving a new delete comment request.
+/// It deserializes the user's request into a `DeleteCommentIntent` and
+/// saves it to the repository for later processing by a reconciler.
+async fn delete_comment_handler(
+    State(state): State<ApiState>,
+    Path(comment_id): Path<String>,
+    Json(mut intent): Json<DeleteCommentIntent>,
+) -> impl IntoResponse {
+    // 1. Verify the PoW challenge
+    if !state.pow.verify(&intent.challenge_response) {
+        return (StatusCode::FORBIDDEN, "Invalid Proof-of-Work response.").into_response();
+    }
+
+    // 2. Ensure consistency between path and body
+    if intent.event_id != comment_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Comment ID in path does not match ID in body.",
+        )
+            .into_response();
+    }
+    intent.event_id = comment_id;
+
+    // 3. Save the intent for the reconciler
+    match state.storage.save_delete_comment_intent(&intent).await {
+        Ok(_) => {
+            tracing::info!("Successfully saved a delete comment intent.");
+            (
+                StatusCode::ACCEPTED,
+                "Delete request received and queued for processing.",
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to save delete comment intent: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to queue delete request.",
             )
                 .into_response()
         }

@@ -59,14 +59,13 @@
     };
     rust = {
       enable = true;
-      channel = "nightly";
+      channel = "stable";
       components = [
         "rustc"
         "cargo"
         "clippy"
         "rustfmt"
         "rust-analyzer"
-        "miri"
       ];
     };
   };

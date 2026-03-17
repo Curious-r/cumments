@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use cumments_core::models::Comment;
 use cumments_core::ports::{CommentRepository, IntentRepository};
@@ -55,6 +56,27 @@ impl IntentRepository for Storage {
     }
 }
 
+// An intermediate struct for reading from the database, to handle the
+// NaiveDateTime -> DateTime<Utc> conversion.
+#[derive(sqlx::FromRow)]
+struct CommentRow {
+    event_id: String,
+    author_nickname: Option<String>,
+    content: String,
+    timestamp: NaiveDateTime,
+}
+
+impl From<CommentRow> for Comment {
+    fn from(row: CommentRow) -> Self {
+        Comment {
+            event_id: row.event_id,
+            author_nickname: row.author_nickname,
+            content: row.content,
+            timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+        }
+    }
+}
+
 #[async_trait]
 impl CommentRepository for Storage {
     async fn get_comments(
@@ -76,7 +98,7 @@ impl CommentRepository for Storage {
         .fetch_one(&self.pool);
 
         let comments_query = sqlx::query_as!(
-            Comment,
+            CommentRow,
             r#"
             SELECT event_id, author_nickname, content, timestamp
             FROM comments
@@ -91,8 +113,10 @@ impl CommentRepository for Storage {
         )
         .fetch_all(&self.pool);
 
-        let (total, comments) = tokio::try_join!(count_query, comments_query)?;
+        let (total, comment_rows) = tokio::try_join!(count_query, comments_query)?;
 
-        Ok((comments, total.unwrap_or(0)))
+        let comments = comment_rows.into_iter().map(Comment::from).collect();
+
+        Ok((comments, total))
     }
 }
