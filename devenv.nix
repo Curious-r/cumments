@@ -5,7 +5,6 @@
   inputs,
   ...
 }:
-
 {
   # https://devenv.sh/basics/
   env.GREET = "devenv";
