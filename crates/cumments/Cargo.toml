@@ -9,6 +9,7 @@ cumments-api = { path = "../cumments-api" }
 cumments-storage = { path = "../cumments-storage" }
 cumments-reconciler = { path = "../cumments-reconciler" }
 cumments-operator = { path = "../cumments-operator" }
+cumments-projection = { path = "../cumments-projection" }
 
 anyhow = { workspace = true }
 tokio = { workspace = true }

@@ -25,9 +25,9 @@ impl Pow {
 
     /// Generates a new PoW challenge.
     pub fn generate_challenge(&self) -> Challenge {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let prefix: String = (0..CHALLENGE_PREFIX_BYTES)
-            .map(|_| rng.gen::<char>())
+            .map(|_| rng.random::<char>())
             .collect();
         debug!("Generated new PoW challenge with prefix '{}'", prefix);
         Challenge {

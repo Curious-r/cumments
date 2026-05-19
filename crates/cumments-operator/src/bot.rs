@@ -2,12 +2,13 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use matrix_sdk::{
-    Client,
-    authentication::Session,
+    Client, SessionMeta,
+    authentication::SessionTokens,
+    authentication::matrix::MatrixSession as Session,
     config::SyncSettings,
     ruma::{
         EventId, OwnedRoomAliasId,
-        api::client::room::create_room::v3::{self, Preset},
+        api::client::room::create_room::v3::{self, RoomPreset as Preset},
         events::room::message::RoomMessageEventContent,
     },
 };
@@ -22,8 +23,7 @@ pub struct BotOperator {
 }
 
 impl BotOperator {
-    /// Creates a new BotOperator.
-    /// It will attempt to log in to the homeserver and perform an initial sync.
+    /// Creates a new BotOperator by restoring a Matrix session.
     pub async fn new(
         homeserver_url: &str,
         user: &str,
@@ -40,10 +40,14 @@ impl BotOperator {
             device_id.expect("device_id is required for session restoration in matrix-sdk 0.14.0");
 
         let session = Session {
-            access_token: token.to_string(),
-            refresh_token: None,
-            user_id: user.try_into()?,
-            device_id: device_id.try_into()?,
+            meta: SessionMeta {
+                user_id: user.try_into()?,
+                device_id: device_id.try_into()?,
+            },
+            tokens: SessionTokens {
+                access_token: token.to_string(),
+                refresh_token: None,
+            },
         };
         client.restore_session(session).await?;
         debug!("Restored login session with device ID '{}'", device_id);
@@ -54,7 +58,7 @@ impl BotOperator {
         );
 
         // Run an initial sync to get room states, etc.
-        // We run it in a separate task so the constructor can return.
+        // We do this in a background task to not block the reconciler.
         let sync_client = client.clone();
         tokio::spawn(async move {
             info!("Starting initial Matrix sync in background...");
@@ -71,17 +75,12 @@ impl BotOperator {
 
 #[async_trait]
 impl MatrixOperator for BotOperator {
-    /// Posts a comment to the appropriate Matrix room.
-    ///
     /// The room is identified by an alias in the format:
     /// `#{site_id}_{post_slug}:{homeserver_domain}`
     #[instrument(skip(self, intent), fields(site_id = %intent.site_id.as_str(), post_slug = %intent.post_slug.as_str()))]
     async fn post_comment(&self, intent: &PostCommentIntent) -> Result<String> {
         // 1. Determine the room alias based on the intent
-        let homeserver = self
-            .client
-            .homeserver()
-            .ok_or_else(|| anyhow!("Client is not connected to a homeserver"))?;
+        let homeserver = self.client.homeserver();
         let alias_localpart = format!(
             "cumments_{}_{}",
             intent.site_id.as_str(),
@@ -101,7 +100,8 @@ impl MatrixOperator for BotOperator {
         let room = if let Some(room_id) = self
             .client
             .resolve_room_alias(&room_alias)
-            .await?
+            .await
+            .ok()
             .map(|r| r.room_id)
         {
             info!("Found existing room {} for alias", room_id);
@@ -131,11 +131,14 @@ impl MatrixOperator for BotOperator {
             request.preset = Some(Preset::PublicChat);
 
             let response = self.client.create_room(request).await?;
-            info!("Successfully created and joined room {}", response.room_id);
-            self.client.get_room(&response.room_id).ok_or_else(|| {
+            info!(
+                "Successfully created and joined room {}",
+                response.room_id()
+            );
+            self.client.get_room(&response.room_id()).ok_or_else(|| {
                 anyhow!(
                     "Just-created room {} not found in client state",
-                    response.room_id
+                    response.room_id()
                 )
             })?
         };
@@ -146,17 +149,17 @@ impl MatrixOperator for BotOperator {
 
         info!("Sending message to room {}", room.room_id());
         let response = room.send(message_content).await?;
-        info!("Message sent successfully. Event ID: {}", response.event_id);
+        info!(
+            "Message sent successfully. Event ID: {}",
+            response.response.event_id
+        );
 
-        Ok(response.event_id.to_string())
+        Ok(response.response.event_id.to_string())
     }
 
     #[instrument(skip(self, intent), fields(site_id = %intent.site_id.as_str(), post_slug = %intent.post_slug.as_str(), event_id = %intent.event_id))]
     async fn redact_comment(&self, intent: &DeleteCommentIntent) -> Result<()> {
-        let homeserver = self
-            .client
-            .homeserver()
-            .ok_or_else(|| anyhow!("Client is not connected to a homeserver"))?;
+        let homeserver = self.client.homeserver();
 
         let room_alias_string = format!(
             "#cumments_{}_{}:{}",
@@ -169,7 +172,8 @@ impl MatrixOperator for BotOperator {
         let room_id = self
             .client
             .resolve_room_alias(&room_alias)
-            .await?
+            .await
+            .ok()
             .map(|r| r.room_id)
             .ok_or_else(|| {
                 anyhow!(
@@ -186,7 +190,7 @@ impl MatrixOperator for BotOperator {
         let event_id: &EventId = intent.event_id.as_str().try_into()?;
 
         info!("Redacting event '{}' in room {}", event_id, room.room_id());
-        room.redact(event_id, None).await?;
+        room.redact(event_id, None, None).await?;
         info!("Redaction successful.");
 
         Ok(())

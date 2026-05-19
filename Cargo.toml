@@ -37,4 +37,4 @@ axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }
 reqwest = { version = "0.13.1", features = ["stream", "rustls-tls"] }
 
-matrix-sdk = { version = "0.16.0", default-features = false, features = ["rustls-tls", "markdown"] }
+matrix-sdk = { version = "0.17.0", default-features = false, features = ["markdown"] }
