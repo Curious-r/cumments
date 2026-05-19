@@ -1,4 +1,4 @@
-use cumments_core::{events::ProjectorEvent, models::Comment, ports::IntentRepository};
+use cumments_core::{events::ProjectorEvent, models::Comment, ports::IntentStore};
 use matrix_sdk::{
     RoomState,
     room::Room,
@@ -14,13 +14,13 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, warn};
 
-/// The Projectionist is responsible for listening to Matrix events and
-/// updating the read-only database tables.
+/// The Projector is an engine that observes Matrix events and
+/// projects them into the local Read Store.
 #[derive(Clone)]
 pub struct Projector {
     client: matrix_sdk::Client,
     pool: SqlitePool,
-    intent_repository: Arc<dyn IntentRepository>,
+    intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
 }
 
@@ -29,13 +29,13 @@ impl Projector {
     pub fn new(
         client: matrix_sdk::Client,
         pool: SqlitePool,
-        intent_repository: Arc<dyn IntentRepository>,
+        intent_store: Arc<dyn IntentStore>,
         event_bus: broadcast::Sender<ProjectorEvent>,
     ) -> Self {
         Self {
             client,
             pool,
-            intent_repository,
+            intent_store,
             event_bus,
         }
     }
@@ -46,7 +46,7 @@ impl Projector {
 
         let pool = self.pool.clone();
         let bus = self.event_bus.clone();
-        let intents = self.intent_repository.clone();
+        let intents = self.intent_store.clone();
         self.client
             .add_event_handler(move |event: SyncRoomMessageEvent, room: Room| {
                 let pool = pool.clone();
@@ -59,7 +59,7 @@ impl Projector {
 
         let pool = self.pool.clone();
         let bus = self.event_bus.clone();
-        let intents = self.intent_repository.clone();
+        let intents = self.intent_store.clone();
         self.client
             .add_event_handler(move |event: SyncRoomRedactionEvent, room: Room| {
                 let pool = pool.clone();
@@ -95,7 +95,7 @@ async fn on_room_message(
     room: Room,
     pool: SqlitePool,
     bus: broadcast::Sender<ProjectorEvent>,
-    intents: Arc<dyn IntentRepository>,
+    intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomMessageEvent::Original(msg) = event {
         // 0. Closed-loop: Mark any waiting intent as completed
@@ -243,7 +243,7 @@ async fn on_room_redaction(
     room: Room,
     pool: SqlitePool,
     bus: broadcast::Sender<ProjectorEvent>,
-    intents: Arc<dyn IntentRepository>,
+    intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomRedactionEvent::Original(msg) = event {
         // redaction event can have target event id in content or in the top level redacts field

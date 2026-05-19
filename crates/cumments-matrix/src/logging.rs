@@ -2,14 +2,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
     models::{PostSlug, SiteId},
-    ports::MatrixOperator,
+    ports::MatrixDriver,
 };
 use tracing::info;
 
-pub struct LoggingOperator;
+pub struct LoggingMatrixDriver;
 
 #[async_trait]
-impl MatrixOperator for LoggingOperator {
+impl MatrixDriver for LoggingMatrixDriver {
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,

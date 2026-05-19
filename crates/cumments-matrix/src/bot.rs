@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::{
     models::{PostSlug, SiteId},
-    ports::MatrixOperator,
+    ports::MatrixDriver,
 };
 use matrix_sdk::{
     Client, RoomState,
@@ -22,15 +22,14 @@ use matrix_sdk::{
 use std::str::FromStr;
 use tracing::{info, instrument};
 
-/// A MatrixOperator that acts as a bot.
-/// It connects to a homeserver using a user account and token.
-pub struct BotOperator {
+/// A MatrixDriver that acts as a bot.
+pub struct BotMatrixDriver {
     client: Client,
     owner_id: OwnedUserId,
 }
 
-impl BotOperator {
-    /// Creates a new BotOperator using an existing Matrix client and owner ID.
+impl BotMatrixDriver {
+    /// Creates a new BotMatrixDriver using an existing Matrix client and owner ID.
     pub fn new(client: Client, owner_id: OwnedUserId) -> Self {
         Self { client, owner_id }
     }
@@ -44,7 +43,7 @@ impl BotOperator {
 }
 
 #[async_trait]
-impl MatrixOperator for BotOperator {
+impl MatrixDriver for BotMatrixDriver {
     #[instrument(skip(self), fields(site_id = %site_id.as_str()))]
     async fn create_site_space(&self, site_id: &SiteId) -> Result<String> {
         let site_id_str = site_id.as_str();

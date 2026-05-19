@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cumments_core::{
     intents::{DeleteCommentIntent, PostCommentIntent},
-    ports::{IntentRepository, MatrixOperator},
+    ports::{IntentStore, MatrixDriver},
     site_service::SiteService,
 };
 use sqlx::SqlitePool;
@@ -10,25 +10,25 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 /// The Reconciler acts as the Orchestrator of the background process.
-/// It coordinates between the SiteService (Brain) and the MatrixOperator (Hands).
+/// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
 pub struct Reconciler {
     pool: SqlitePool,
-    intent_repository: Arc<dyn IntentRepository>,
-    operator: Arc<dyn MatrixOperator>,
+    intent_store: Arc<dyn IntentStore>,
+    driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
 }
 
 impl Reconciler {
     pub fn new(
         pool: SqlitePool,
-        intent_repository: Arc<dyn IntentRepository>,
-        operator: Arc<dyn MatrixOperator>,
+        intent_store: Arc<dyn IntentStore>,
+        driver: Arc<dyn MatrixDriver>,
         site_service: Arc<SiteService>,
     ) -> Self {
         Self {
             pool,
-            intent_repository,
-            operator,
+            intent_store,
+            driver,
             site_service,
         }
     }
@@ -42,27 +42,27 @@ impl Reconciler {
             interval.tick().await;
             tracing::debug!("Reconciler tick: Checking for new intents...");
 
-            match self.process_intents().await {
+            match self.reconcile().await {
                 Ok(count) => {
                     if count > 0 {
-                        info!("Successfully processed {} intents.", count);
+                        info!("Successfully reconciled {} intents.", count);
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to process intents: {:?}", e);
+                    tracing::error!("Reconciliation failed: {:?}", e);
                 }
             }
         }
     }
 
-    /// Fetches and processes all types of pending intents from the database.
-    async fn process_intents(&self) -> Result<u64> {
-        let post_count = self.process_post_intents().await?;
-        let delete_count = self.process_delete_intents().await?;
+    /// Reconciles all types of pending intents from the database.
+    async fn reconcile(&self) -> Result<u64> {
+        let post_count = self.reconcile_posts().await?;
+        let delete_count = self.reconcile_deletions().await?;
         Ok(post_count + delete_count)
     }
 
-    async fn process_post_intents(&self) -> Result<u64> {
+    async fn reconcile_posts(&self) -> Result<u64> {
         let rows = sqlx::query!(
             r#"
             SELECT id, payload
@@ -87,23 +87,23 @@ impl Reconciler {
                 // 1. Brain: Ensure the site space is ready
                 let space_id = self
                     .site_service
-                    .ensure_space(&intent.site_id, self.operator.as_ref())
+                    .ensure_space(&intent.site_id, self.driver.as_ref())
                     .await?;
 
                 // 2. Hands: Ensure the post-specific room exists and is linked
                 let room_id = self
-                    .operator
+                    .driver
                     .ensure_comment_room(&intent.site_id, &intent.post_slug, &space_id)
                     .await?;
 
                 // 3. Hands: Post the actual message
                 let event_id = self
-                    .operator
+                    .driver
                     .post_message(&room_id, &intent.content, &intent.nickname)
                     .await?;
 
                 // 4. Closed-loop: Mark as waiting for sync instead of completed
-                self.intent_repository
+                self.intent_store
                     .mark_post_intent_waiting_for_sync(row.id, &event_id)
                     .await?;
                 // ORCHESTRATION END
@@ -114,7 +114,7 @@ impl Reconciler {
 
             if let Err(e) = process_result {
                 warn!(
-                    "Failed to process post intent [{}]: {:?}. Setting status to 'failed'.",
+                    "Failed to reconcile post intent [{}]: {:?}. Setting status to 'failed'.",
                     row.id, e
                 );
                 sqlx::query!(
@@ -128,7 +128,7 @@ impl Reconciler {
         Ok(num_rows)
     }
 
-    async fn process_delete_intents(&self) -> Result<u64> {
+    async fn reconcile_deletions(&self) -> Result<u64> {
         let rows = sqlx::query!(
             r#"
             SELECT id, payload
@@ -150,11 +150,9 @@ impl Reconciler {
                 let intent: DeleteCommentIntent = serde_json::from_str(&row.payload)?;
 
                 // Hands: Perform the redaction
-                self.operator.redact_message(&intent.site_id, &intent.post_slug, &intent.event_id).await?;
+                self.driver.redact_message(&intent.site_id, &intent.post_slug, &intent.event_id).await?;
 
-                // For deletions, we could also wait for sync, but target_event_id is already known.
-                // We'll transition to 'waiting_for_sync' conceptually, or just keep it simple for now.
-                // Let's use 'waiting_for_sync' for consistency.
+                // Concepts: Move to waiting_for_sync
                 sqlx::query!(
                     "UPDATE intent_queue_delete_comment SET status = 'waiting_for_sync', updated_at = strftime('%s','now') WHERE id = ?",
                     row.id
@@ -167,7 +165,7 @@ impl Reconciler {
 
             if let Err(e) = process_result {
                 warn!(
-                    "Failed to process delete intent [{}]: {:?}. Setting status to 'failed'.",
+                    "Failed to reconcile delete intent [{}]: {:?}. Setting status to 'failed'.",
                     row.id, e
                 );
                 sqlx::query!(

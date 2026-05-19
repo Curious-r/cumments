@@ -677,10 +677,10 @@ dependencies = [
  "config",
  "cumments-api",
  "cumments-core",
- "cumments-operator",
+ "cumments-matrix",
  "cumments-projector",
  "cumments-reconciler",
- "cumments-storage",
+ "cumments-store",
  "dotenvy",
  "matrix-sdk",
  "serde",
@@ -721,7 +721,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cumments-operator"
+name = "cumments-matrix"
 version = "0.12.0"
 dependencies = [
  "anyhow",
@@ -752,7 +752,7 @@ version = "0.12.0"
 dependencies = [
  "anyhow",
  "cumments-core",
- "cumments-operator",
+ "cumments-matrix",
  "serde_json",
  "sqlx",
  "tokio",
@@ -760,7 +760,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cumments-storage"
+name = "cumments-store"
 version = "0.12.0"
 dependencies = [
  "anyhow",

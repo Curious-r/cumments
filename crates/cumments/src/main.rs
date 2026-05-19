@@ -24,16 +24,16 @@ async fn main() -> Result<()> {
     tracing::info!("Configuration loaded successfully.");
     tracing::debug!("Loaded settings: {:?}", settings);
 
-    // 2. Initialize database pool and storage
+    // 2. Initialize database pool and Store
     let db_pool = sqlx::SqlitePool::connect(&settings.database.url)
         .await
         .expect("Failed to connect to database.");
     tracing::info!("Database pool initialized.");
 
-    let storage = Arc::new(cumments_storage::Storage::new(db_pool.clone()));
+    let sqlite_store = Arc::new(cumments_store::SqliteStore::new(db_pool.clone()));
 
-    // 3. Initialize Domain Services
-    let site_service = Arc::new(SiteService::new(storage.clone()));
+    // 3. Initialize Domain Services (Brain)
+    let site_service = Arc::new(SiteService::new(sqlite_store.clone()));
 
     // 4. Initialize Event Bus for real-time updates (SSE)
     let (event_bus, _) = broadcast::channel(100);
@@ -80,27 +80,26 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 6. Initialize operator based on configuration
-    let operator: Arc<dyn cumments_core::ports::MatrixOperator> =
-        match settings.matrix.mode.as_str() {
-            "bot" => {
-                let client = matrix_client
-                    .clone()
-                    .expect("Matrix client should be initialized");
-                let owner_id = settings.matrix.owner_id.clone().try_into()?;
-                Arc::new(cumments_operator::bot::BotOperator::new(client, owner_id))
-            }
-            _ => {
-                tracing::info!("Using 'logging' mode operator.");
-                Arc::new(cumments_operator::logging::LoggingOperator)
-            }
-        };
+    // 6. Initialize Matrix Driver (Hands) based on configuration
+    let driver: Arc<dyn cumments_core::ports::MatrixDriver> = match settings.matrix.mode.as_str() {
+        "bot" => {
+            let client = matrix_client
+                .clone()
+                .expect("Matrix client should be initialized");
+            let owner_id = settings.matrix.owner_id.clone().try_into()?;
+            Arc::new(cumments_matrix::bot::BotMatrixDriver::new(client, owner_id))
+        }
+        _ => {
+            tracing::info!("Using 'logging' mode driver.");
+            Arc::new(cumments_matrix::logging::LoggingMatrixDriver)
+        }
+    };
 
-    // 7. Initialize and run reconciler in the background
+    // 7. Initialize and run Reconciler (Orchestrator) in the background
     let reconciler = cumments_reconciler::Reconciler::new(
         db_pool.clone(),
-        storage.clone(),
-        operator.clone(),
+        sqlite_store.clone(),
+        driver.clone(),
         site_service.clone(),
     );
     tokio::spawn(async move {
@@ -108,12 +107,12 @@ async fn main() -> Result<()> {
     });
     tracing::info!("Reconciler started in background.");
 
-    // 8. Initialize projector if in bot mode
+    // 8. Initialize Projector (Observer) if in bot mode
     if let Some(client) = matrix_client.clone() {
         let projector = cumments_projector::Projector::new(
             client,
             db_pool.clone(),
-            storage.clone(),
+            sqlite_store.clone(),
             event_bus.clone(),
         );
         projector.register_handlers();
@@ -126,11 +125,11 @@ async fn main() -> Result<()> {
         settings.security.pow_difficulty,
     );
     let api_state = cumments_api::ApiState {
-        storage: storage.clone(),
+        store: sqlite_store.clone(),
         pow: Arc::new(pow),
         event_bus: event_bus.clone(),
     };
-    tracing::info!("Storage and API wired up.");
+    tracing::info!("Store and API wired up.");
 
     // 10. Start Matrix Sync Loop in background if in bot mode
     if let Some(client) = matrix_client {

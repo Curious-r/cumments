@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 cumments-core = { path = "../cumments-core" }
-cumments-operator = { path = "../cumments-operator" }
+cumments-matrix = { path = "../cumments-matrix" }
 
 anyhow.workspace = true
 sqlx.workspace = true

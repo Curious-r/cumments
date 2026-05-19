@@ -7,9 +7,9 @@ license.workspace = true
 [dependencies]
 cumments-core = { path = "../cumments-core" }
 cumments-api = { path = "../cumments-api" }
-cumments-storage = { path = "../cumments-storage" }
+cumments-store = { path = "../cumments-store" }
 cumments-reconciler = { path = "../cumments-reconciler" }
-cumments-operator = { path = "../cumments-operator" }
+cumments-matrix = { path = "../cumments-matrix" }
 cumments-projector = { path = "../cumments-projector" }
 matrix-sdk.workspace = true
 

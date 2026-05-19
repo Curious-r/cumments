@@ -3,25 +3,23 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
-use cumments_core::ports::{CommentRepository, IntentRepository, SiteRepository};
+use cumments_core::ports::{CommentStore, IntentStore, SiteStore};
 use sqlx::SqlitePool;
 
-/// A wrapper around the database pool that provides concrete implementations
-/// of the storage-related ports defined in `cumments-core`.
-pub struct Storage {
+/// A concrete implementation of the store ports using SQLite.
+pub struct SqliteStore {
     pool: SqlitePool,
 }
 
-impl Storage {
+impl SqliteStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 }
 
 #[async_trait]
-impl IntentRepository for Storage {
-    /// Saves a `PostCommentIntent` to the `intent_queue_post_comment` table.
-    async fn save_post_comment_intent(&self, intent: &PostCommentIntent) -> Result<()> {
+impl IntentStore for SqliteStore {
+    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
         let intent_json = serde_json::to_string(intent)?;
 
         sqlx::query!(
@@ -37,7 +35,7 @@ impl IntentRepository for Storage {
         Ok(())
     }
 
-    async fn save_delete_comment_intent(&self, intent: &DeleteCommentIntent) -> Result<()> {
+    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()> {
         let intent_json = serde_json::to_string(intent)?;
 
         sqlx::query!(
@@ -127,7 +125,7 @@ impl From<SiteRow> for Site {
 }
 
 #[async_trait]
-impl CommentRepository for Storage {
+impl CommentStore for SqliteStore {
     async fn get_comments(
         &self,
         site_id: &SiteId,
@@ -174,7 +172,7 @@ impl CommentRepository for Storage {
 }
 
 #[async_trait]
-impl SiteRepository for Storage {
+impl SiteStore for SqliteStore {
     async fn get_site(&self, id: &SiteId) -> Result<Option<Site>> {
         let id_str = id.as_str();
         let site_row = sqlx::query_as!(

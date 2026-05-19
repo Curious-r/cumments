@@ -5,9 +5,9 @@ use async_trait::async_trait;
 
 /// The port for all intent storage operations.
 #[async_trait]
-pub trait IntentRepository: Send + Sync {
-    async fn save_post_comment_intent(&self, intent: &PostCommentIntent) -> Result<()>;
-    async fn save_delete_comment_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
+pub trait IntentStore: Send + Sync {
+    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()>;
+    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
 
     /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()>;
@@ -21,7 +21,7 @@ pub trait IntentRepository: Send + Sync {
 
 /// The port for all comment projection storage operations.
 #[async_trait]
-pub trait CommentRepository: Send + Sync {
+pub trait CommentStore: Send + Sync {
     /// Fetches a paginated list of projected comments for a given site and post.
     /// Returns the list of comments and the total number of comments.
     async fn get_comments(
@@ -35,7 +35,7 @@ pub trait CommentRepository: Send + Sync {
 
 /// Defines the operations for managing sites in the local database.
 #[async_trait]
-pub trait SiteRepository: Send + Sync {
+pub trait SiteStore: Send + Sync {
     async fn get_site(&self, id: &SiteId) -> Result<Option<crate::models::Site>>;
     async fn save_site(&self, site: &crate::models::Site) -> Result<()>;
 }
@@ -43,7 +43,7 @@ pub trait SiteRepository: Send + Sync {
 /// Defines the atomic actions that can be performed on the Matrix network.
 /// This is the "Hands" of the system.
 #[async_trait]
-pub trait MatrixOperator: Send + Sync {
+pub trait MatrixDriver: Send + Sync {
     /// Ensures a room exists for a specific post and is linked to a space.
     /// Returns the room ID.
     async fn ensure_comment_room(

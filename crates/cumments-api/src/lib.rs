@@ -12,7 +12,7 @@ use cumments_core::{
     events::ProjectorEvent,
     intents::{DeleteCommentIntent, PostCommentIntent},
     models::{Comment, PostSlug, SiteId},
-    ports::{CommentRepository, IntentRepository, SiteRepository},
+    ports::{CommentStore, IntentStore, SiteStore},
 };
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
@@ -20,17 +20,14 @@ use tokio::sync::broadcast;
 
 pub mod pow;
 
-// Define a new trait that combines the repository traits for API use.
-pub trait ApiRepository:
-    CommentRepository + IntentRepository + SiteRepository + Send + Sync
-{
-}
-impl<T: CommentRepository + IntentRepository + SiteRepository + Send + Sync> ApiRepository for T {}
+// Define a new trait that combines the store traits for API use.
+pub trait ApiStore: CommentStore + IntentStore + SiteStore + Send + Sync {}
+impl<T: CommentStore + IntentStore + SiteStore + Send + Sync> ApiStore for T {}
 
 // The shared state for our API.
 #[derive(Clone)]
 pub struct ApiState {
-    pub storage: Arc<dyn ApiRepository>,
+    pub store: Arc<dyn ApiStore>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
 }
@@ -125,7 +122,7 @@ async fn get_comments_handler(
     let post_slug: PostSlug = query.post_slug.into();
 
     match state
-        .storage
+        .store
         .get_comments(&site_id, &post_slug, limit, offset)
         .await
     {
@@ -180,7 +177,7 @@ async fn post_comment_handler(
     };
 
     // 3. Save the intent for the reconciler
-    match state.storage.save_post_comment_intent(&intent).await {
+    match state.store.save_post_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
             (
@@ -229,7 +226,7 @@ async fn delete_comment_handler(
     };
 
     // 4. Save the intent for the reconciler
-    match state.storage.save_delete_comment_intent(&intent).await {
+    match state.store.save_delete_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a delete comment intent.");
             (
