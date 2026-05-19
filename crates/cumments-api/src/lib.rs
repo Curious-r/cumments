@@ -12,7 +12,7 @@ use cumments_core::{
     events::ProjectorEvent,
     intents::{DeleteCommentIntent, PostCommentIntent},
     models::Comment,
-    ports::{CommentRepository, IntentRepository},
+    ports::{CommentRepository, IntentRepository, SiteRepository},
 };
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
@@ -21,8 +21,11 @@ use tokio::sync::broadcast;
 pub mod pow;
 
 // Define a new trait that combines the repository traits for API use.
-pub trait ApiRepository: CommentRepository + IntentRepository + Send + Sync {}
-impl<T: CommentRepository + IntentRepository + Send + Sync> ApiRepository for T {}
+pub trait ApiRepository:
+    CommentRepository + IntentRepository + SiteRepository + Send + Sync
+{
+}
+impl<T: CommentRepository + IntentRepository + SiteRepository + Send + Sync> ApiRepository for T {}
 
 // The shared state for our API.
 #[derive(Clone)]

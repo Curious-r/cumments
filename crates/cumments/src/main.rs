@@ -23,11 +23,13 @@ async fn main() -> Result<()> {
     tracing::info!("Configuration loaded successfully.");
     tracing::debug!("Loaded settings: {:?}", settings);
 
-    // 2. Initialize database pool
+    // 2. Initialize database pool and storage
     let db_pool = sqlx::SqlitePool::connect(&settings.database.url)
         .await
         .expect("Failed to connect to database.");
     tracing::info!("Database pool initialized.");
+
+    let storage = Arc::new(cumments_storage::Storage::new(db_pool.clone()));
 
     // 3. Initialize Event Bus for real-time updates (SSE)
     let (event_bus, _) = broadcast::channel(100);
@@ -81,7 +83,11 @@ async fn main() -> Result<()> {
                 .clone()
                 .expect("Matrix client should be initialized");
             let owner_id = settings.matrix.owner_id.clone().try_into()?;
-            Arc::new(cumments_operator::bot::BotOperator::new(client, owner_id))
+            Arc::new(cumments_operator::bot::BotOperator::new(
+                client,
+                owner_id,
+                storage.clone(),
+            ))
         }
         _ => {
             tracing::info!("Using 'logging' mode operator.");
@@ -105,13 +111,12 @@ async fn main() -> Result<()> {
     }
 
     // 8. Wire up storage and API crates
-    let storage = cumments_storage::Storage::new(db_pool);
     let pow = cumments_api::pow::Pow::new(
         settings.security.pow_secret,
         settings.security.pow_difficulty,
     );
     let api_state = cumments_api::ApiState {
-        storage: Arc::new(storage),
+        storage: storage.clone(),
         pow: Arc::new(pow),
         event_bus: event_bus.clone(),
     };

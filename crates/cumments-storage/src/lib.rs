@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
-use cumments_core::models::Comment;
-use cumments_core::ports::{CommentRepository, IntentRepository};
+use cumments_core::models::{Comment, Site};
+use cumments_core::ports::{CommentRepository, IntentRepository, SiteRepository};
 use sqlx::SqlitePool;
 
 /// A wrapper around the database pool that provides concrete implementations
@@ -77,6 +77,25 @@ impl From<CommentRow> for Comment {
     }
 }
 
+// An intermediate struct for reading sites from the database.
+struct SiteRow {
+    id: String,
+    matrix_space_id: String,
+    display_name: Option<String>,
+    created_at: NaiveDateTime,
+}
+
+impl From<SiteRow> for Site {
+    fn from(row: SiteRow) -> Self {
+        Site {
+            id: row.id,
+            matrix_space_id: row.matrix_space_id,
+            display_name: row.display_name,
+            created_at: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+        }
+    }
+}
+
 #[async_trait]
 impl CommentRepository for Storage {
     async fn get_comments(
@@ -118,5 +137,44 @@ impl CommentRepository for Storage {
         let comments = comment_rows.into_iter().map(Comment::from).collect();
 
         Ok((comments, total))
+    }
+}
+
+#[async_trait]
+impl SiteRepository for Storage {
+    async fn get_site(&self, id: &str) -> Result<Option<Site>> {
+        let site_row = sqlx::query_as!(
+            SiteRow,
+            r#"
+            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!: NaiveDateTime"
+            FROM sites
+            WHERE id = ?
+            "#,
+            id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(site_row.map(Site::from))
+    }
+
+    async fn save_site(&self, site: &Site) -> Result<()> {
+        sqlx::query!(
+            r#"
+            INSERT INTO sites (id, matrix_space_id, display_name, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                matrix_space_id = excluded.matrix_space_id,
+                display_name = excluded.display_name
+            "#,
+            site.id,
+            site.matrix_space_id,
+            site.display_name,
+            site.created_at
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

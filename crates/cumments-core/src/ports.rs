@@ -34,3 +34,13 @@ pub trait CommentRepository {
         offset: i64,
     ) -> Result<(Vec<Comment>, i64)>;
 }
+
+/// Defines the operations for managing sites.
+#[async_trait]
+pub trait SiteRepository: Send + Sync {
+    /// Fetches a site by its ID.
+    async fn get_site(&self, id: &str) -> Result<Option<crate::models::Site>>;
+
+    /// Saves or updates a site.
+    async fn save_site(&self, site: &crate::models::Site) -> Result<()>;
+}

@@ -36,3 +36,12 @@ pub struct Comment {
     pub content: String,
     pub timestamp: DateTime<Utc>,
 }
+
+/// Represents a website that uses Cumments.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Site {
+    pub id: String,
+    pub matrix_space_id: String,
+    pub display_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
