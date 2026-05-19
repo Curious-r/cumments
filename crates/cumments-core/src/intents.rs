@@ -27,9 +27,6 @@ pub struct PostCommentIntent {
 
     /// If this comment is a reply, this field holds the ID of the parent comment.
     pub reply_to: Option<String>,
-
-    /// The client's response to the Proof-of-Work challenge.
-    pub challenge_response: String,
 }
 
 /// Represents the user's desire to delete a comment.
@@ -44,6 +41,4 @@ pub struct DeleteCommentIntent {
     pub event_id: String,
     /// The fingerprint of the user attempting to delete the comment, for verification.
     pub author_fingerprint: String,
-    /// The client's response to the Proof-of-Work challenge.
-    pub challenge_response: String,
 }

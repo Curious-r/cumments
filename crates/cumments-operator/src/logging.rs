@@ -1,31 +1,59 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
+use cumments_core::{
+    models::{PostSlug, SiteId},
+    ports::MatrixOperator,
+};
 use tracing::info;
 
-use crate::MatrixOperator;
-
-/// A dummy operator for testing and local development.
-/// It doesn't actually connect to Matrix, but instead logs the actions
-/// it would have taken.
 pub struct LoggingOperator;
 
 #[async_trait]
 impl MatrixOperator for LoggingOperator {
-    async fn post_comment(&self, intent: &PostCommentIntent) -> Result<String> {
+    async fn ensure_comment_room(
+        &self,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+        space_id: &str,
+    ) -> Result<String> {
         info!(
-            "[LoggingOperator] Would post comment to site '{}', post '{}': '{}'",
-            intent.site_id.as_str(),
-            intent.post_slug.as_str(),
-            intent.content
+            "LOGGING: Ensure room for site={}, slug={}, space={}",
+            site_id.as_str(),
+            post_slug.as_str(),
+            space_id
         );
-
-        // Return a fake event ID
-        Ok("$fake_event_id_for_logging_operator".to_string())
+        Ok(format!(
+            "log_room_{}_{}",
+            site_id.as_str(),
+            post_slug.as_str()
+        ))
     }
 
-    async fn redact_comment(&self, intent: &DeleteCommentIntent) -> Result<()> {
-        info!("[LoggingOperator] Would redact event '{}'", intent.event_id);
+    async fn create_site_space(&self, site_id: &SiteId) -> Result<String> {
+        info!("LOGGING: Create space for site={}", site_id.as_str());
+        Ok(format!("log_space_{}", site_id.as_str()))
+    }
+
+    async fn post_message(&self, room_id: &str, content: &str, nickname: &str) -> Result<String> {
+        info!(
+            "LOGGING: Post message to room={}. Author={}: {}",
+            room_id, nickname, content
+        );
+        Ok("log_event_id".to_string())
+    }
+
+    async fn redact_message(
+        &self,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+        event_id: &str,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Redact message {} in {}/{}",
+            event_id,
+            site_id.as_str(),
+            post_slug.as_str()
+        );
         Ok(())
     }
 }

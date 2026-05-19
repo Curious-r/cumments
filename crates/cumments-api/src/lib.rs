@@ -11,7 +11,7 @@ use axum::{
 use cumments_core::{
     events::ProjectorEvent,
     intents::{DeleteCommentIntent, PostCommentIntent},
-    models::Comment,
+    models::{Comment, PostSlug, SiteId},
     ports::{CommentRepository, IntentRepository, SiteRepository},
 };
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,29 @@ pub struct ChallengeResponse {
     pub difficulty: u32,
 }
 
+/// Request DTO for posting a comment.
+#[derive(Debug, Deserialize)]
+pub struct PostCommentRequest {
+    pub site_id: SiteId,
+    pub post_slug: PostSlug,
+    pub content: String,
+    pub nickname: String,
+    pub email: Option<String>,
+    pub author_fingerprint: String,
+    pub reply_to: Option<String>,
+    pub challenge_response: String,
+}
+
+/// Request DTO for deleting a comment.
+#[derive(Debug, Deserialize)]
+pub struct DeleteCommentRequest {
+    pub site_id: SiteId,
+    pub post_slug: PostSlug,
+    pub event_id: String,
+    pub author_fingerprint: String,
+    pub challenge_response: String,
+}
+
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState) -> Router {
     Router::new()
@@ -98,9 +121,12 @@ async fn get_comments_handler(
     let limit = per_page;
     let offset = (page - 1) * per_page;
 
+    let site_id: SiteId = query.site_id.into();
+    let post_slug: PostSlug = query.post_slug.into();
+
     match state
         .storage
-        .get_comments(&query.site_id, &query.post_slug, limit, offset)
+        .get_comments(&site_id, &post_slug, limit, offset)
         .await
     {
         Ok((comments, total)) => {
@@ -135,14 +161,25 @@ async fn get_comments_handler(
 /// The handler for receiving a new comment post.
 async fn post_comment_handler(
     State(state): State<ApiState>,
-    Json(intent): Json<PostCommentIntent>,
+    Json(req): Json<PostCommentRequest>,
 ) -> impl IntoResponse {
     // 1. Verify the PoW challenge
-    if !state.pow.verify(&intent.challenge_response) {
+    if !state.pow.verify(&req.challenge_response) {
         return (StatusCode::FORBIDDEN, "Invalid Proof-of-Work response.").into_response();
     }
 
-    // 2. Save the intent for the reconciler
+    // 2. Create the business intent
+    let intent = PostCommentIntent {
+        site_id: req.site_id,
+        post_slug: req.post_slug,
+        content: req.content,
+        nickname: req.nickname,
+        email: req.email,
+        author_fingerprint: req.author_fingerprint,
+        reply_to: req.reply_to,
+    };
+
+    // 3. Save the intent for the reconciler
     match state.storage.save_post_comment_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
@@ -167,24 +204,31 @@ async fn post_comment_handler(
 async fn delete_comment_handler(
     State(state): State<ApiState>,
     Path(comment_id): Path<String>,
-    Json(mut intent): Json<DeleteCommentIntent>,
+    Json(req): Json<DeleteCommentRequest>,
 ) -> impl IntoResponse {
     // 1. Verify the PoW challenge
-    if !state.pow.verify(&intent.challenge_response) {
+    if !state.pow.verify(&req.challenge_response) {
         return (StatusCode::FORBIDDEN, "Invalid Proof-of-Work response.").into_response();
     }
 
     // 2. Ensure consistency between path and body
-    if intent.event_id != comment_id {
+    if req.event_id != comment_id {
         return (
             StatusCode::BAD_REQUEST,
             "Comment ID in path does not match ID in body.",
         )
             .into_response();
     }
-    intent.event_id = comment_id;
 
-    // 3. Save the intent for the reconciler
+    // 3. Create the business intent
+    let intent = DeleteCommentIntent {
+        site_id: req.site_id,
+        post_slug: req.post_slug,
+        event_id: req.event_id,
+        author_fingerprint: req.author_fingerprint,
+    };
+
+    // 4. Save the intent for the reconciler
     match state.storage.save_delete_comment_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a delete comment intent.");

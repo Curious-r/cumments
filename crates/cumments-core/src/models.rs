@@ -16,6 +16,18 @@ impl SiteId {
     }
 }
 
+impl From<String> for SiteId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for SiteId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 // A validated, owned representation of a Post Slug.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -27,9 +39,21 @@ impl PostSlug {
     }
 }
 
+impl From<String> for PostSlug {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for PostSlug {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// A comment that has been projected into our read database.
 /// This is the data structure that will be returned by the API.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comment {
     pub event_id: String,
     pub author_nickname: Option<String>,
@@ -38,7 +62,7 @@ pub struct Comment {
 }
 
 /// Represents a website that uses Cumments.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Site {
     pub id: String,
     pub matrix_space_id: String,

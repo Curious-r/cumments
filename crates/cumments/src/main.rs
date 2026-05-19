@@ -1,4 +1,5 @@
 use anyhow::Result;
+use cumments_core::site_service::SiteService;
 use matrix_sdk::{
     Client, SessionMeta, authentication::SessionTokens, authentication::matrix::MatrixSession,
     config::SyncSettings,
@@ -31,10 +32,13 @@ async fn main() -> Result<()> {
 
     let storage = Arc::new(cumments_storage::Storage::new(db_pool.clone()));
 
-    // 3. Initialize Event Bus for real-time updates (SSE)
+    // 3. Initialize Domain Services
+    let site_service = Arc::new(SiteService::new(storage.clone()));
+
+    // 4. Initialize Event Bus for real-time updates (SSE)
     let (event_bus, _) = broadcast::channel(100);
 
-    // 4. Initialize Matrix Client if in bot mode
+    // 5. Initialize Matrix Client if in bot mode
     let matrix_client = if settings.matrix.mode == "bot" {
         tracing::info!("Initializing Matrix client for 'bot' mode.");
         let client = Client::builder()
@@ -76,33 +80,34 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 5. Initialize operator based on configuration
-    let operator: Arc<dyn cumments_operator::MatrixOperator> = match settings.matrix.mode.as_str() {
-        "bot" => {
-            let client = matrix_client
-                .clone()
-                .expect("Matrix client should be initialized");
-            let owner_id = settings.matrix.owner_id.clone().try_into()?;
-            Arc::new(cumments_operator::bot::BotOperator::new(
-                client,
-                owner_id,
-                storage.clone(),
-            ))
-        }
-        _ => {
-            tracing::info!("Using 'logging' mode operator.");
-            Arc::new(cumments_operator::logging::LoggingOperator)
-        }
-    };
+    // 6. Initialize operator based on configuration
+    let operator: Arc<dyn cumments_core::ports::MatrixOperator> =
+        match settings.matrix.mode.as_str() {
+            "bot" => {
+                let client = matrix_client
+                    .clone()
+                    .expect("Matrix client should be initialized");
+                let owner_id = settings.matrix.owner_id.clone().try_into()?;
+                Arc::new(cumments_operator::bot::BotOperator::new(client, owner_id))
+            }
+            _ => {
+                tracing::info!("Using 'logging' mode operator.");
+                Arc::new(cumments_operator::logging::LoggingOperator)
+            }
+        };
 
-    // 6. Initialize and run reconciler in the background
-    let reconciler = cumments_reconciler::Reconciler::new(db_pool.clone(), operator.clone());
+    // 7. Initialize and run reconciler in the background
+    let reconciler = cumments_reconciler::Reconciler::new(
+        db_pool.clone(),
+        operator.clone(),
+        site_service.clone(),
+    );
     tokio::spawn(async move {
         reconciler.run().await;
     });
     tracing::info!("Reconciler started in background.");
 
-    // 7. Initialize projector if in bot mode
+    // 8. Initialize projector if in bot mode
     if let Some(client) = matrix_client.clone() {
         let projector =
             cumments_projector::Projector::new(client, db_pool.clone(), event_bus.clone());
@@ -110,7 +115,7 @@ async fn main() -> Result<()> {
         tracing::info!("Projector handlers registered.");
     }
 
-    // 8. Wire up storage and API crates
+    // 9. Wire up API crates
     let pow = cumments_api::pow::Pow::new(
         settings.security.pow_secret,
         settings.security.pow_difficulty,
@@ -122,7 +127,7 @@ async fn main() -> Result<()> {
     };
     tracing::info!("Storage and API wired up.");
 
-    // 9. Start Matrix Sync Loop in background if in bot mode
+    // 10. Start Matrix Sync Loop in background if in bot mode
     if let Some(client) = matrix_client {
         tokio::spawn(async move {
             tracing::info!("Starting Matrix sync loop...");
@@ -132,7 +137,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // 10. Launch the web server
+    // 11. Launch the web server
     let address = format!("{}:{}", settings.server.host, settings.server.port);
     let listener = tokio::net::TcpListener::bind(&address)
         .await

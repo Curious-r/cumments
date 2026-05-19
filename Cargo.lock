@@ -676,6 +676,7 @@ dependencies = [
  "axum",
  "config",
  "cumments-api",
+ "cumments-core",
  "cumments-operator",
  "cumments-projector",
  "cumments-reconciler",
@@ -715,7 +716,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "serde",
- "sqlx",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

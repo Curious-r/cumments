@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
-use cumments_core::models::{Comment, Site};
+use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentRepository, IntentRepository, SiteRepository};
 use sqlx::SqlitePool;
 
@@ -100,19 +100,22 @@ impl From<SiteRow> for Site {
 impl CommentRepository for Storage {
     async fn get_comments(
         &self,
-        site_id: &str,
-        post_slug: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<Comment>, i64)> {
+        let site_id_str = site_id.as_str();
+        let post_slug_str = post_slug.as_str();
+
         let count_query = sqlx::query_scalar!(
             r#"
             SELECT COUNT(*) as "count: i64"
             FROM comments
             WHERE site_id = ? AND post_slug = ?
             "#,
-            site_id,
-            post_slug
+            site_id_str,
+            post_slug_str
         )
         .fetch_one(&self.pool);
 
@@ -125,8 +128,8 @@ impl CommentRepository for Storage {
             ORDER BY timestamp ASC
             LIMIT ? OFFSET ?
             "#,
-            site_id,
-            post_slug,
+            site_id_str,
+            post_slug_str,
             limit,
             offset
         )
@@ -142,7 +145,8 @@ impl CommentRepository for Storage {
 
 #[async_trait]
 impl SiteRepository for Storage {
-    async fn get_site(&self, id: &str) -> Result<Option<Site>> {
+    async fn get_site(&self, id: &SiteId) -> Result<Option<Site>> {
+        let id_str = id.as_str();
         let site_row = sqlx::query_as!(
             SiteRow,
             r#"
@@ -150,7 +154,7 @@ impl SiteRepository for Storage {
             FROM sites
             WHERE id = ?
             "#,
-            id
+            id_str
         )
         .fetch_optional(&self.pool)
         .await?;

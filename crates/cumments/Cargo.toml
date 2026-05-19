@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cumments-core = { path = "../cumments-core" }
 cumments-api = { path = "../cumments-api" }
 cumments-storage = { path = "../cumments-storage" }
 cumments-reconciler = { path = "../cumments-reconciler" }

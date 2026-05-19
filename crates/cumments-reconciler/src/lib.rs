@@ -1,19 +1,33 @@
 use anyhow::Result;
-use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
-use cumments_operator::MatrixOperator;
+use cumments_core::{
+    intents::{DeleteCommentIntent, PostCommentIntent},
+    ports::MatrixOperator,
+    site_service::SiteService,
+};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
+/// The Reconciler acts as the Orchestrator of the background process.
+/// It coordinates between the SiteService (Brain) and the MatrixOperator (Hands).
 pub struct Reconciler {
     pool: SqlitePool,
     operator: Arc<dyn MatrixOperator>,
+    site_service: Arc<SiteService>,
 }
 
 impl Reconciler {
-    pub fn new(pool: SqlitePool, operator: Arc<dyn MatrixOperator>) -> Self {
-        Self { pool, operator }
+    pub fn new(
+        pool: SqlitePool,
+        operator: Arc<dyn MatrixOperator>,
+        site_service: Arc<SiteService>,
+    ) -> Self {
+        Self {
+            pool,
+            operator,
+            site_service,
+        }
     }
 
     /// Runs the main reconciliation loop.
@@ -65,7 +79,18 @@ impl Reconciler {
         for row in rows {
             let process_result: Result<()> = (async {
                 let intent: PostCommentIntent = serde_json::from_str(&row.payload)?;
-                self.operator.post_comment(&intent).await?;
+
+                // ORCHESTRATION START
+                // 1. Brain: Ensure the site space is ready
+                let space_id = self.site_service.ensure_space(&intent.site_id, self.operator.as_ref()).await?;
+
+                // 2. Hands: Ensure the post-specific room exists and is linked
+                let room_id = self.operator.ensure_comment_room(&intent.site_id, &intent.post_slug, &space_id).await?;
+
+                // 3. Hands: Post the actual message
+                self.operator.post_message(&room_id, &intent.content, &intent.nickname).await?;
+                // ORCHESTRATION END
+
                 sqlx::query!(
                     "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE id = ?",
                     row.id
@@ -111,7 +136,10 @@ impl Reconciler {
         for row in rows {
             let process_result: Result<()> = (async {
                 let intent: DeleteCommentIntent = serde_json::from_str(&row.payload)?;
-                self.operator.redact_comment(&intent).await?;
+
+                // Hands: Perform the redaction
+                self.operator.redact_message(&intent.site_id, &intent.post_slug, &intent.event_id).await?;
+
                 sqlx::query!(
                     "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE id = ?",
                     row.id
