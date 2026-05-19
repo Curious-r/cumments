@@ -80,7 +80,8 @@ async fn main() -> Result<()> {
             let client = matrix_client
                 .clone()
                 .expect("Matrix client should be initialized");
-            Arc::new(cumments_operator::bot::BotOperator::new(client))
+            let owner_id = settings.matrix.owner_id.clone().try_into()?;
+            Arc::new(cumments_operator::bot::BotOperator::new(client, owner_id))
         }
         _ => {
             tracing::info!("Using 'logging' mode operator.");

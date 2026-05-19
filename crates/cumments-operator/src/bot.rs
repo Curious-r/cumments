@@ -4,11 +4,16 @@ use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use matrix_sdk::{
     Client,
     ruma::{
-        EventId, OwnedRoomAliasId,
+        EventId, Int, OwnedRoomAliasId, OwnedUserId,
         api::client::room::create_room::v3::{self, RoomPreset},
-        events::room::message::RoomMessageEventContent,
+        events::{
+            InitialStateEvent,
+            room::{message::RoomMessageEventContent, power_levels::RoomPowerLevelsEventContent},
+        },
+        room_version_rules::AuthorizationRules,
     },
 };
+use std::collections::BTreeMap;
 use tracing::{info, instrument};
 
 use crate::MatrixOperator;
@@ -17,12 +22,13 @@ use crate::MatrixOperator;
 /// It connects to a homeserver using a user account and token.
 pub struct BotOperator {
     client: Client,
+    owner_id: OwnedUserId,
 }
 
 impl BotOperator {
-    /// Creates a new BotOperator using an existing Matrix client.
-    pub fn new(client: Client) -> Self {
-        Self { client }
+    /// Creates a new BotOperator using an existing Matrix client and owner ID.
+    pub fn new(client: Client, owner_id: OwnedUserId) -> Self {
+        Self { client, owner_id }
     }
 }
 
@@ -82,6 +88,21 @@ impl MatrixOperator for BotOperator {
             request.topic = Some(topic);
             request.room_alias_name = Some(alias_localpart.try_into()?);
             request.preset = Some(RoomPreset::PublicChat);
+
+            // [Dyarchy] Invite owner and grant Admin (PL 100)
+            request.invite = vec![self.owner_id.clone()];
+
+            let mut power_levels = RoomPowerLevelsEventContent::new(&AuthorizationRules::V1);
+            let mut users = BTreeMap::new();
+            // Bot itself is PL 100 by default as creator, but let's be explicit
+            if let Some(bot_id) = self.client.user_id() {
+                users.insert(bot_id.to_owned(), Int::from(100));
+            }
+            users.insert(self.owner_id.clone(), Int::from(100));
+            power_levels.users = users;
+
+            let pl_event = InitialStateEvent::with_empty_state_key(power_levels);
+            request.initial_state = vec![pl_event.to_raw_any()];
 
             let response = self.client.create_room(request).await?;
             info!(
