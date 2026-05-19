@@ -5,11 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-cumments-core = { path = "../cumments-core" }
+cumments-core.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-matrix-sdk.workspace = true
-tracing.workspace = true
-tokio.workspace = true
 chrono.workspace = true
+matrix-sdk.workspace = true
+tokio.workspace = true
+tracing.workspace = true

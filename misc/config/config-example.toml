@@ -30,8 +30,7 @@ url = "sqlite://data/cumments.db"
 # Use a random secret string in production environments
 identity_salt = "${YOUR_IDENTITY_SALT_HERE}"
 
-# Administrator token for accessing /api/admin/* endpoints
-# Keep this secret and change it in production
+# Administrator token (reserved for future use)
 admin_token = "${YOUR_ADMIN_TOKEN_HERE}"
 
 # Proof-of-Work secret for issuing anti-spam challenges

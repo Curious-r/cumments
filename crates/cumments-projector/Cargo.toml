@@ -5,9 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cumments-core.workspace = true
+
 anyhow.workspace = true
 chrono.workspace = true
-cumments-core = { version = "0.12.0", path = "../cumments-core" }
 matrix-sdk.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
