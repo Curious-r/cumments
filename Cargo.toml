@@ -31,7 +31,7 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 futures = "0.3.31"
 async-trait = "0.1.89"
 
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
 
 axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }

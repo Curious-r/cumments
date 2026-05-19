@@ -10,14 +10,14 @@ cumments-storage = { path = "../cumments-storage" }
 cumments-reconciler = { path = "../cumments-reconciler" }
 cumments-operator = { path = "../cumments-operator" }
 cumments-projection = { path = "../cumments-projection" }
-matrix-sdk = { workspace = true }
+matrix-sdk.workspace = true
 
-anyhow = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-dotenvy = { workspace = true }
-sqlx = { workspace = true }
-config = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-axum = { workspace = true }
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dotenvy.workspace = true
+sqlx.workspace = true
+config.workspace = true
+serde.workspace = true
+axum.workspace = true
