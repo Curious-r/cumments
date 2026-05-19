@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cumments-core", "crates/cumments-storage", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-operator", "crates/cumments-projection"]
+members = ["crates/cumments-core", "crates/cumments-storage", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-operator", "crates/cumments-projector"]
 
 [workspace.package]
 version = "0.12.0"

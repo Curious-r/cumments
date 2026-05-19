@@ -1,9 +1,10 @@
 use matrix_sdk::{
-    Client, RoomState,
+    RoomState,
     room::Room,
     ruma::events::room::{
         member::StrippedRoomMemberEvent,
-        message::{MessageType, SyncRoomMessageEvent},
+        message::{MessageType, Relation, SyncRoomMessageEvent},
+        redaction::SyncRoomRedactionEvent,
     },
 };
 use sqlx::SqlitePool;
@@ -12,14 +13,14 @@ use tracing::{debug, info, instrument, warn};
 /// The Projectionist is responsible for listening to Matrix events and
 /// updating the read-only database tables.
 #[derive(Clone)]
-pub struct Projection {
-    client: Client,
+pub struct Projector {
+    client: matrix_sdk::Client,
     pool: SqlitePool,
 }
 
-impl Projection {
-    /// Creates a new Projection using an existing Matrix client.
-    pub fn new(client: Client, pool: SqlitePool) -> Self {
+impl Projector {
+    /// Creates a new Projector using an existing Matrix client.
+    pub fn new(client: matrix_sdk::Client, pool: SqlitePool) -> Self {
         Self { client, pool }
     }
 
@@ -33,6 +34,15 @@ impl Projection {
                 let pool = pool.clone();
                 async move {
                     on_room_message(event, room, pool).await;
+                }
+            });
+
+        let pool = self.pool.clone();
+        self.client
+            .add_event_handler(move |event: SyncRoomRedactionEvent, room: Room| {
+                let pool = pool.clone();
+                async move {
+                    on_room_redaction(event, room, pool).await;
                 }
             });
 
@@ -54,10 +64,37 @@ async fn on_invited_room(room: Room) {
     }
 }
 
-/// The event handler for room message events.
+/// The event handler for room message events (including edits).
 #[instrument(skip_all, fields(event_id = ?event.event_id()))]
 async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePool) {
     if let SyncRoomMessageEvent::Original(msg) = event {
+        // Handle Edits (Replacements)
+        if let Some(Relation::Replacement(replacement)) = &msg.content.relates_to {
+            let target_event_id = &replacement.event_id;
+            if let MessageType::Text(text) = &replacement.new_content.msgtype {
+                info!("Handling edit for event {}", target_event_id);
+                let content = text.body.clone();
+                let target_event_id_str = target_event_id.to_string();
+
+                match sqlx::query!(
+                    "UPDATE comments SET content = ? WHERE event_id = ?",
+                    content,
+                    target_event_id_str
+                )
+                .execute(&pool)
+                .await
+                {
+                    Ok(result) if result.rows_affected() > 0 => {
+                        info!("Successfully updated comment {}", target_event_id)
+                    }
+                    Ok(_) => debug!("Edit received for unknown comment {}", target_event_id),
+                    Err(e) => warn!("Failed to update comment {}: {:?}", target_event_id, e),
+                }
+            }
+            return;
+        }
+
+        // Handle Original Posts
         if let MessageType::Text(text) = &msg.content.msgtype {
             let event_id = msg.event_id;
             let alias = if let Some(alias) = room.canonical_alias() {
@@ -121,8 +158,46 @@ async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePo
             .await
             {
                 Ok(_) => info!("Successfully projected comment event {}", event_id),
-                // This can fail if the event is a duplicate, which is fine.
                 Err(e) => debug!("Failed to project comment event {}: {:?}", event_id, e),
+            }
+        }
+    }
+}
+
+/// The event handler for redactions (deletions).
+#[instrument(skip_all, fields(event_id = ?event.event_id()))]
+async fn on_room_redaction(event: SyncRoomRedactionEvent, room: Room, pool: SqlitePool) {
+    if let SyncRoomRedactionEvent::Original(msg) = event {
+        // redaction event can have target event id in content or in the top level redacts field
+        let target_event_id = msg.redacts.as_ref().or(msg.content.redacts.as_ref());
+
+        if let Some(target_event_id) = target_event_id {
+            info!(
+                "Handling redaction for event {} in room {}",
+                target_event_id,
+                room.room_id()
+            );
+
+            let target_event_id_str = target_event_id.to_string();
+
+            match sqlx::query!(
+                "DELETE FROM comments WHERE event_id = ?",
+                target_event_id_str
+            )
+            .execute(&pool)
+            .await
+            {
+                Ok(result) if result.rows_affected() > 0 => {
+                    info!("Successfully deleted redacted comment {}", target_event_id)
+                }
+                Ok(_) => debug!(
+                    "Redaction received for unknown or already deleted comment {}",
+                    target_event_id
+                ),
+                Err(e) => warn!(
+                    "Failed to delete redacted comment {}: {:?}",
+                    target_event_id, e
+                ),
             }
         }
     }

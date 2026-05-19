@@ -677,7 +677,7 @@ dependencies = [
  "config",
  "cumments-api",
  "cumments-operator",
- "cumments-projection",
+ "cumments-projector",
  "cumments-reconciler",
  "cumments-storage",
  "dotenvy",
@@ -729,7 +729,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cumments-projection"
+name = "cumments-projector"
 version = "0.12.0"
 dependencies = [
  "anyhow",

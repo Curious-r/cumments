@@ -91,11 +91,11 @@ async fn main() -> Result<()> {
     });
     tracing::info!("Reconciler started in background.");
 
-    // 6. Initialize projectionist if in bot mode
+    // 6. Initialize projector if in bot mode
     if let Some(client) = matrix_client.clone() {
-        let projectionist = cumments_projection::Projection::new(client, db_pool.clone());
-        projectionist.register_handlers();
-        tracing::info!("Projectionist handlers registered.");
+        let projector = cumments_projector::Projector::new(client, db_pool.clone());
+        projector.register_handlers();
+        tracing::info!("Projector handlers registered.");
     }
 
     // 7. Wire up storage and API crates
