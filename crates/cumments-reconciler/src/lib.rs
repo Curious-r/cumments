@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cumments_core::{
     intents::{DeleteCommentIntent, PostCommentIntent},
-    ports::MatrixOperator,
+    ports::{IntentRepository, MatrixOperator},
     site_service::SiteService,
 };
 use sqlx::SqlitePool;
@@ -13,6 +13,7 @@ use tracing::{info, warn};
 /// It coordinates between the SiteService (Brain) and the MatrixOperator (Hands).
 pub struct Reconciler {
     pool: SqlitePool,
+    intent_repository: Arc<dyn IntentRepository>,
     operator: Arc<dyn MatrixOperator>,
     site_service: Arc<SiteService>,
 }
@@ -20,11 +21,13 @@ pub struct Reconciler {
 impl Reconciler {
     pub fn new(
         pool: SqlitePool,
+        intent_repository: Arc<dyn IntentRepository>,
         operator: Arc<dyn MatrixOperator>,
         site_service: Arc<SiteService>,
     ) -> Self {
         Self {
             pool,
+            intent_repository,
             operator,
             site_service,
         }
@@ -82,23 +85,32 @@ impl Reconciler {
 
                 // ORCHESTRATION START
                 // 1. Brain: Ensure the site space is ready
-                let space_id = self.site_service.ensure_space(&intent.site_id, self.operator.as_ref()).await?;
+                let space_id = self
+                    .site_service
+                    .ensure_space(&intent.site_id, self.operator.as_ref())
+                    .await?;
 
                 // 2. Hands: Ensure the post-specific room exists and is linked
-                let room_id = self.operator.ensure_comment_room(&intent.site_id, &intent.post_slug, &space_id).await?;
+                let room_id = self
+                    .operator
+                    .ensure_comment_room(&intent.site_id, &intent.post_slug, &space_id)
+                    .await?;
 
                 // 3. Hands: Post the actual message
-                self.operator.post_message(&room_id, &intent.content, &intent.nickname).await?;
+                let event_id = self
+                    .operator
+                    .post_message(&room_id, &intent.content, &intent.nickname)
+                    .await?;
+
+                // 4. Closed-loop: Mark as waiting for sync instead of completed
+                self.intent_repository
+                    .mark_post_intent_waiting_for_sync(row.id, &event_id)
+                    .await?;
                 // ORCHESTRATION END
 
-                sqlx::query!(
-                    "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE id = ?",
-                    row.id
-                )
-                .execute(&self.pool)
-                .await?;
                 Ok(())
-            }).await;
+            })
+            .await;
 
             if let Err(e) = process_result {
                 warn!(
@@ -140,12 +152,16 @@ impl Reconciler {
                 // Hands: Perform the redaction
                 self.operator.redact_message(&intent.site_id, &intent.post_slug, &intent.event_id).await?;
 
+                // For deletions, we could also wait for sync, but target_event_id is already known.
+                // We'll transition to 'waiting_for_sync' conceptually, or just keep it simple for now.
+                // Let's use 'waiting_for_sync' for consistency.
                 sqlx::query!(
-                    "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE id = ?",
+                    "UPDATE intent_queue_delete_comment SET status = 'waiting_for_sync', updated_at = strftime('%s','now') WHERE id = ?",
                     row.id
                 )
                 .execute(&self.pool)
                 .await?;
+
                 Ok(())
             }).await;
 

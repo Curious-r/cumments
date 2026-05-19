@@ -21,8 +21,6 @@ impl Storage {
 #[async_trait]
 impl IntentRepository for Storage {
     /// Saves a `PostCommentIntent` to the `intent_queue_post_comment` table.
-    /// The intent is serialized to JSON for storage. The Reconciler will
-    /// later deserialize it for processing.
     async fn save_post_comment_intent(&self, intent: &PostCommentIntent) -> Result<()> {
         let intent_json = serde_json::to_string(intent)?;
 
@@ -44,14 +42,46 @@ impl IntentRepository for Storage {
 
         sqlx::query!(
             r#"
-            INSERT INTO intent_queue_delete_comment (payload)
-            VALUES (?)
+            INSERT INTO intent_queue_delete_comment (payload, target_event_id)
+            VALUES (?, ?)
             "#,
-            intent_json
+            intent_json,
+            intent.event_id
         )
         .execute(&self.pool)
         .await?;
 
+        Ok(())
+    }
+
+    async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()> {
+        sqlx::query!(
+            "UPDATE intent_queue_post_comment SET status = 'waiting_for_sync', matrix_event_id = ?, updated_at = strftime('%s','now') WHERE id = ?",
+            event_id,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()> {
+        sqlx::query!(
+            "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE matrix_event_id = ?",
+            event_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
+        sqlx::query!(
+            "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE target_event_id = ?",
+            target_event_id
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }

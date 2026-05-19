@@ -8,11 +8,22 @@ use async_trait::async_trait;
 pub trait IntentRepository: Send + Sync {
     async fn save_post_comment_intent(&self, intent: &PostCommentIntent) -> Result<()>;
     async fn save_delete_comment_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
+
+    /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
+    async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()>;
+
+    /// Transitions a post intent to 'completed' when the projector sees the event.
+    async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
+
+    /// Transitions a delete intent to 'completed' when the projector sees the redaction.
+    async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()>;
 }
 
 /// The port for all comment projection storage operations.
 #[async_trait]
 pub trait CommentRepository: Send + Sync {
+    /// Fetches a paginated list of projected comments for a given site and post.
+    /// Returns the list of comments and the total number of comments.
     async fn get_comments(
         &self,
         site_id: &SiteId,

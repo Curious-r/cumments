@@ -1,4 +1,4 @@
-use cumments_core::{events::ProjectorEvent, models::Comment};
+use cumments_core::{events::ProjectorEvent, models::Comment, ports::IntentRepository};
 use matrix_sdk::{
     RoomState,
     room::Room,
@@ -9,6 +9,8 @@ use matrix_sdk::{
     },
 };
 use sqlx::SqlitePool;
+use sqlx::types::chrono::NaiveDateTime;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, warn};
 
@@ -18,6 +20,7 @@ use tracing::{debug, info, instrument, warn};
 pub struct Projector {
     client: matrix_sdk::Client,
     pool: SqlitePool,
+    intent_repository: Arc<dyn IntentRepository>,
     event_bus: broadcast::Sender<ProjectorEvent>,
 }
 
@@ -26,11 +29,13 @@ impl Projector {
     pub fn new(
         client: matrix_sdk::Client,
         pool: SqlitePool,
+        intent_repository: Arc<dyn IntentRepository>,
         event_bus: broadcast::Sender<ProjectorEvent>,
     ) -> Self {
         Self {
             client,
             pool,
+            intent_repository,
             event_bus,
         }
     }
@@ -41,23 +46,27 @@ impl Projector {
 
         let pool = self.pool.clone();
         let bus = self.event_bus.clone();
+        let intents = self.intent_repository.clone();
         self.client
             .add_event_handler(move |event: SyncRoomMessageEvent, room: Room| {
                 let pool = pool.clone();
                 let bus = bus.clone();
+                let intents = intents.clone();
                 async move {
-                    on_room_message(event, room, pool, bus).await;
+                    on_room_message(event, room, pool, bus, intents).await;
                 }
             });
 
         let pool = self.pool.clone();
         let bus = self.event_bus.clone();
+        let intents = self.intent_repository.clone();
         self.client
             .add_event_handler(move |event: SyncRoomRedactionEvent, room: Room| {
                 let pool = pool.clone();
                 let bus = bus.clone();
+                let intents = intents.clone();
                 async move {
-                    on_room_redaction(event, room, pool, bus).await;
+                    on_room_redaction(event, room, pool, bus, intents).await;
                 }
             });
 
@@ -86,8 +95,19 @@ async fn on_room_message(
     room: Room,
     pool: SqlitePool,
     bus: broadcast::Sender<ProjectorEvent>,
+    intents: Arc<dyn IntentRepository>,
 ) {
     if let SyncRoomMessageEvent::Original(msg) = event {
+        // 0. Closed-loop: Mark any waiting intent as completed
+        let event_id = msg.event_id;
+        let event_id_str = event_id.to_string();
+        if let Err(e) = intents.mark_post_intent_completed(&event_id_str).await {
+            debug!(
+                "Failed to mark intent as completed (normal if external msg): {:?}",
+                e
+            );
+        }
+
         // Handle Edits (Replacements)
         if let Some(Relation::Replacement(replacement)) = &msg.content.relates_to {
             let target_event_id = &replacement.event_id;
@@ -110,7 +130,7 @@ async fn on_room_message(
                         // Try to fetch updated comment to emit full object
                         if let Ok(row) = sqlx::query_as!(
                             crate::CommentRow,
-                            "SELECT event_id, author_nickname, content, timestamp, site_id, post_slug FROM comments WHERE event_id = ?",
+                            r#"SELECT event_id, author_nickname, content, timestamp as "timestamp: NaiveDateTime", site_id, post_slug FROM comments WHERE event_id = ?"#,
                             target_event_id_str
                         )
                         .fetch_one(&pool)
@@ -137,7 +157,6 @@ async fn on_room_message(
 
         // Handle Original Posts
         if let MessageType::Text(text) = &msg.content.msgtype {
-            let event_id = msg.event_id;
             let alias = if let Some(alias) = room.canonical_alias() {
                 alias
             } else {
@@ -178,7 +197,6 @@ async fn on_room_message(
                     .unwrap()
                     .naive_utc();
 
-            let event_id_str = event_id.to_string();
             let room_id_str = room.room_id().to_string();
             let author_mxid_str = author_mxid.to_string();
 
@@ -225,19 +243,28 @@ async fn on_room_redaction(
     room: Room,
     pool: SqlitePool,
     bus: broadcast::Sender<ProjectorEvent>,
+    intents: Arc<dyn IntentRepository>,
 ) {
     if let SyncRoomRedactionEvent::Original(msg) = event {
         // redaction event can have target event id in content or in the top level redacts field
         let target_event_id = msg.redacts.as_ref().or(msg.content.redacts.as_ref());
 
         if let Some(target_event_id) = target_event_id {
+            let target_event_id_str = target_event_id.to_string();
+
+            // 0. Closed-loop: Mark delete intent as completed
+            if let Err(e) = intents
+                .mark_delete_intent_completed(&target_event_id_str)
+                .await
+            {
+                debug!("Failed to mark delete intent as completed: {:?}", e);
+            }
+
             info!(
                 "Handling redaction for event {} in room {}",
                 target_event_id,
                 room.room_id()
             );
-
-            let target_event_id_str = target_event_id.to_string();
 
             // Fetch site_id and post_slug before deleting to emit event
             let meta = sqlx::query!(
@@ -285,7 +312,7 @@ struct CommentRow {
     event_id: String,
     author_nickname: Option<String>,
     content: String,
-    timestamp: chrono::NaiveDateTime,
+    timestamp: NaiveDateTime,
     site_id: String,
     post_slug: String,
 }

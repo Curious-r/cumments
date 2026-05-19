@@ -99,6 +99,7 @@ async fn main() -> Result<()> {
     // 7. Initialize and run reconciler in the background
     let reconciler = cumments_reconciler::Reconciler::new(
         db_pool.clone(),
+        storage.clone(),
         operator.clone(),
         site_service.clone(),
     );
@@ -109,8 +110,12 @@ async fn main() -> Result<()> {
 
     // 8. Initialize projector if in bot mode
     if let Some(client) = matrix_client.clone() {
-        let projector =
-            cumments_projector::Projector::new(client, db_pool.clone(), event_bus.clone());
+        let projector = cumments_projector::Projector::new(
+            client,
+            db_pool.clone(),
+            storage.clone(),
+            event_bus.clone(),
+        );
         projector.register_handlers();
         tracing::info!("Projector handlers registered.");
     }
