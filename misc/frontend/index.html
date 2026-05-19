@@ -532,12 +532,11 @@
 
             async function loadComments(cfg, page = 1, perPage = 20) {
                 const container = document.getElementById("commentsContainer");
-                // 只有在不是由 SSE 触发的静默更新时才显示 Loading
                 container.style.opacity = "0.5";
 
                 try {
                     const res = await fetch(
-                        `${cfg.api}/api/${cfg.siteId}/comments/${cfg.slug}?page=${page}&per_page=${perPage}`,
+                        `${cfg.api}/api/comments?site_id=${cfg.siteId}&post_slug=${cfg.slug}&page=${page}&per_page=${perPage}`,
                     );
                     if (!res.ok) throw new Error(await res.text());
                     const json = await res.json();
@@ -749,63 +748,43 @@
 
             // 删除
             async function deleteComment(commentId) {
-                // 参数变了
                 if (!confirm("确定要删除这条评论吗？")) return;
                 const cfg = getConfig();
 
                 try {
+                    // 1. 获取 PoW 挑战 (删除也需要 PoW 以防滥用，与 API 设计对齐)
+                    const chalRes = await fetch(`${cfg.api}/api/challenge`);
+                    const chal = await chalRes.json();
+                    const nonce = await solvePoW(chal.prefix, chal.difficulty);
+
                     const res = await fetch(
-                        `${cfg.api}/api/${cfg.siteId}/comments/${cfg.slug}/${commentId}`,
+                        `${cfg.api}/api/comments/${commentId}`,
                         {
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
-                                // [修改] 发送凭证
-                                guest_token: cfg.token,
-                                email: cfg.email || null,
+                                site_id: cfg.siteId,
+                                post_slug: cfg.slug,
+                                event_id: commentId,
+                                author_fingerprint: cfg.token, // 暂时用 token 作为指纹演示
+                                challenge_response: `${chal.prefix}|${nonce}`,
                             }),
                         },
                     );
-                    // ... (保持不变)
                     if (!res.ok) throw new Error(await res.text());
-                    // 不刷新页面，等待 SSE 推送删除事件
                     console.log("Delete requested");
                 } catch (e) {
                     alert("删除失败: " + e.message);
                 }
             }
 
-            // 编辑
+            // 编辑 (当前 API 未实现 PUT，仅做界面保留或根据实际情况调整)
             async function submitEdit(commentId, newContent, domElement) {
-                // 参数变了
-                const cfg = getConfig();
-                try {
-                    const res = await fetch(
-                        `${cfg.api}/api/${cfg.siteId}/comments/${cfg.slug}/${commentId}/edit`,
-                        {
-                            method: "PUT",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                content: newContent,
-                                // [修改] 发送凭证
-                                guest_token: cfg.token,
-                                email: cfg.email || null,
-                            }),
-                        },
-                    );
-                    // ... (保持不变)
-                    if (!res.ok) throw new Error(await res.text());
-
-                    // 乐观关闭编辑框
-                    domElement
-                        .querySelector(".edit-area")
-                        .classList.add("hidden");
-                    domElement
-                        .querySelector(".markdown-body")
-                        .classList.remove("hidden");
-                } catch (e) {
-                    alert("编辑失败: " + e.message);
-                }
+                alert("当前后端暂未开放编辑接口，请使用删除并重新发布。");
+                domElement.querySelector(".edit-area").classList.add("hidden");
+                domElement
+                    .querySelector(".markdown-body")
+                    .classList.remove("hidden");
             }
 
             // ==========================================
@@ -829,30 +808,28 @@
 
                     // 2. 计算 PoW
                     status.innerText = `计算 Hash (难度 ${chal.difficulty})...`;
-                    const nonce = await solvePoW(chal.secret, chal.difficulty);
-                    const challengeResponse = `${chal.secret}|${nonce}`;
+                    const nonce = await solvePoW(chal.prefix, chal.difficulty);
+
+                    const challengeResponse = `${chal.prefix}|${nonce}`;
 
                     // 3. 提交
                     status.innerText = "正在提交...";
                     const payload = {
+                        site_id: cfg.siteId,
                         post_slug: cfg.slug,
                         content: content,
                         nickname: cfg.nickname,
                         email: cfg.email || null,
-                        guest_token: cfg.token,
+                        author_fingerprint: cfg.token, // 简化示例：使用 token 作为指纹
                         challenge_response: challengeResponse,
                         reply_to: replyToId,
-                        txn_id: crypto.randomUUID(), // 生成并透传 txn_id
                     };
 
-                    const res = await fetch(
-                        `${cfg.api}/api/${cfg.siteId}/comments`,
-                        {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(payload),
-                        },
-                    );
+                    const res = await fetch(`${cfg.api}/api/comments`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload),
+                    });
 
                     if (!res.ok) throw new Error(await res.text());
 

@@ -3,38 +3,43 @@ resolver = "2"
 members = ["crates/cumments-core", "crates/cumments-store", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-matrix", "crates/cumments-projector"]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.101"
-thiserror = "2.0.18"
+# Internal crates
+cumments-core = { path = "crates/cumments-core" }
+cumments-store = { path = "crates/cumments-store" }
+cumments-api = { path = "crates/cumments-api" }
+cumments-reconciler = { path = "crates/cumments-reconciler" }
+cumments-matrix = { path = "crates/cumments-matrix" }
+cumments-projector = { path = "crates/cumments-projector" }
+
+# External dependencies
 anyhow = "1.0.100"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-dotenvy = "0.15.7"
-config = { version = "0.15.19", features = ["toml"] }
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+axum = "0.8.8"
+base64 = "0.22.1"
 chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.57", features = ["derive"] }
-
-rand = "0.9.2"
-sha2 = "0.10.9"
-hex = "0.4.3"
-base64 = "0.22.1"
-hmac = "0.12.1"
-
-tokio = { version = "1.49.0", features = ["full"] }
-tokio-util = { version = "0.7.18", features = ["codec"] }
-tokio-stream = { version = "0.1.18", features = ["sync"] }
+config = { version = "0.15.19", features = ["toml"] }
+dotenvy = "0.15.7"
 futures = "0.3.31"
-async-trait = "0.1.89"
-
-sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
-
-axum = "0.8.8"
-tower-http = { version = "0.6.8", features = ["cors", "trace"] }
-reqwest = { version = "0.13.1", features = ["stream", "rustls-tls"] }
-
+hex = "0.4.3"
+hmac = "0.12.1"
 matrix-sdk = { version = "0.17.0", default-features = false, features = ["markdown"] }
+rand = "0.9.2"
+reqwest = { version = "0.13.1", features = ["stream", "rustls-tls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.101"
+sha2 = "0.10.9"
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-stream = { version = "0.1.18", features = ["sync"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
+tower-http = { version = "0.6.8", features = ["cors", "trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

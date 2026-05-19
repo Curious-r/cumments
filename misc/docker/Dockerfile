@@ -11,18 +11,18 @@ COPY crates ./crates
 COPY migrations ./migrations
 
 # Create a dummy main to allow cargo to download dependencies
-RUN mkdir -p crates/server/src && \
-    echo 'fn main() { println!("Dummy build"); }' > crates/server/src/main.rs
+RUN mkdir -p crates/cumments/src && \
+    echo 'fn main() { println!("Dummy build"); }' > crates/cumments/src/main.rs
 
 # Download and compile dependencies
-RUN cargo build --release --bin server
+RUN cargo build --release --bin cumments
 RUN rm -rf target/release/deps/cumments*
 
 # Copy actual source code
 COPY . .
 
-# Build the server binary
-RUN cargo build --release --bin server
+# Build the cumments binary
+RUN cargo build --release --bin cumments
 
 # Runtime stage
 FROM alpine:latest
@@ -33,11 +33,14 @@ RUN apk --no-cache add ca-certificates openssl sqlite-libs
 WORKDIR /app
 
 # Copy the binary from builder stage
-COPY --from=builder /usr/src/app/target/release/server ./server
+COPY --from=builder /usr/src/app/target/release/cumments ./cumments
 
 # Create data directory for SQLite database
 RUN mkdir -p /app/data
 
 EXPOSE 3000
 
-CMD ["./server"]
+# Set default log level
+ENV RUST_LOG=info
+
+CMD ["./cumments"]
