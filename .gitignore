@@ -14,3 +14,4 @@ devenv.local.nix
 /data/*
 !/data/.keep
 /misc/config/config.toml
+/config.toml

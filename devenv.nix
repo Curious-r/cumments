@@ -5,7 +5,6 @@
   inputs,
   ...
 }:
-
 {
   # https://devenv.sh/basics/
   env.GREET = "devenv";
@@ -13,6 +12,7 @@
   # https://devenv.sh/packages/
   packages = with pkgs; [
     sqlx-cli
+    sqlite
     nixfmt
     yaml-language-server
   ];
@@ -58,14 +58,13 @@
     };
     rust = {
       enable = true;
-      channel = "nightly";
+      channel = "stable";
       components = [
         "rustc"
         "cargo"
         "clippy"
         "rustfmt"
         "rust-analyzer"
-        "miri"
       ];
     };
   };
