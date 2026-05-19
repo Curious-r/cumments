@@ -1,7 +1,7 @@
 use anyhow::Result;
 use matrix_sdk::{
-    Client, SessionMeta, authentication::SessionTokens,
-    authentication::matrix::MatrixSession as Session, config::SyncSettings,
+    Client, SessionMeta, authentication::SessionTokens, authentication::matrix::MatrixSession,
+    config::SyncSettings,
 };
 use std::sync::Arc;
 
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
             .as_deref()
             .expect("Matrix device_id not set for bot mode");
 
-        let session = Session {
+        let session = MatrixSession {
             meta: SessionMeta {
                 user_id: user_id.try_into()?,
                 device_id: device_id.try_into()?,

@@ -5,7 +5,7 @@ use matrix_sdk::{
     Client,
     ruma::{
         EventId, OwnedRoomAliasId,
-        api::client::room::create_room::v3::{self, RoomPreset as Preset},
+        api::client::room::create_room::v3::{self, RoomPreset},
         events::room::message::RoomMessageEventContent,
     },
 };
@@ -81,7 +81,7 @@ impl MatrixOperator for BotOperator {
             request.name = Some(room_name);
             request.topic = Some(topic);
             request.room_alias_name = Some(alias_localpart.try_into()?);
-            request.preset = Some(Preset::PublicChat);
+            request.preset = Some(RoomPreset::PublicChat);
 
             let response = self.client.create_room(request).await?;
             info!(
