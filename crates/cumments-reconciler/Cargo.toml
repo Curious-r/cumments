@@ -8,8 +8,8 @@ license.workspace = true
 cumments-core = { path = "../cumments-core" }
 cumments-operator = { path = "../cumments-operator" }
 
-anyhow = { workspace = true }
-sqlx = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-serde_json = { workspace = true }
+anyhow.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true

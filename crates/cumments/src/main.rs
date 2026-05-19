@@ -4,6 +4,7 @@ use matrix_sdk::{
     config::SyncSettings,
 };
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub mod config;
 
@@ -28,7 +29,10 @@ async fn main() -> Result<()> {
         .expect("Failed to connect to database.");
     tracing::info!("Database pool initialized.");
 
-    // 3. Initialize Matrix Client if in bot mode
+    // 3. Initialize Event Bus for real-time updates (SSE)
+    let (event_bus, _) = broadcast::channel(100);
+
+    // 4. Initialize Matrix Client if in bot mode
     let matrix_client = if settings.matrix.mode == "bot" {
         tracing::info!("Initializing Matrix client for 'bot' mode.");
         let client = Client::builder()
@@ -70,7 +74,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 4. Initialize operator based on configuration
+    // 5. Initialize operator based on configuration
     let operator: Arc<dyn cumments_operator::MatrixOperator> = match settings.matrix.mode.as_str() {
         "bot" => {
             let client = matrix_client
@@ -84,21 +88,22 @@ async fn main() -> Result<()> {
         }
     };
 
-    // 5. Initialize and run reconciler in the background
+    // 6. Initialize and run reconciler in the background
     let reconciler = cumments_reconciler::Reconciler::new(db_pool.clone(), operator.clone());
     tokio::spawn(async move {
         reconciler.run().await;
     });
     tracing::info!("Reconciler started in background.");
 
-    // 6. Initialize projector if in bot mode
+    // 7. Initialize projector if in bot mode
     if let Some(client) = matrix_client.clone() {
-        let projector = cumments_projector::Projector::new(client, db_pool.clone());
+        let projector =
+            cumments_projector::Projector::new(client, db_pool.clone(), event_bus.clone());
         projector.register_handlers();
         tracing::info!("Projector handlers registered.");
     }
 
-    // 7. Wire up storage and API crates
+    // 8. Wire up storage and API crates
     let storage = cumments_storage::Storage::new(db_pool);
     let pow = cumments_api::pow::Pow::new(
         settings.security.pow_secret,
@@ -107,10 +112,11 @@ async fn main() -> Result<()> {
     let api_state = cumments_api::ApiState {
         storage: Arc::new(storage),
         pow: Arc::new(pow),
+        event_bus: event_bus.clone(),
     };
     tracing::info!("Storage and API wired up.");
 
-    // 8. Start Matrix Sync Loop in background if in bot mode
+    // 9. Start Matrix Sync Loop in background if in bot mode
     if let Some(client) = matrix_client {
         tokio::spawn(async move {
             tracing::info!("Starting Matrix sync loop...");
@@ -120,7 +126,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // 9. Launch the web server
+    // 10. Launch the web server
     let address = format!("{}:{}", settings.server.host, settings.server.port);
     let listener = tokio::net::TcpListener::bind(&address)
         .await

@@ -1,17 +1,22 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{delete, get, post},
-    Json, Router,
 };
 use cumments_core::{
+    events::ProjectorEvent,
     intents::{DeleteCommentIntent, PostCommentIntent},
     models::Comment,
     ports::{CommentRepository, IntentRepository},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
+use tokio::sync::broadcast;
 
 pub mod pow;
 
@@ -24,6 +29,7 @@ impl<T: CommentRepository + IntentRepository + Send + Sync> ApiRepository for T 
 pub struct ApiState {
     pub storage: Arc<dyn ApiRepository>,
     pub pow: Arc<pow::Pow>,
+    pub event_bus: broadcast::Sender<ProjectorEvent>,
 }
 
 /// The query parameters for the `GET /api/comments` endpoint.
@@ -64,6 +70,7 @@ pub fn build_router(state: ApiState) -> Router {
             post(post_comment_handler).get(get_comments_handler),
         )
         .route("/api/comments/:comment_id", delete(delete_comment_handler))
+        .route("/api/:site_id/comments/:post_slug/sse", get(sse_handler))
         .route("/api/challenge", get(get_challenge_handler))
         .with_state(state)
 }
@@ -123,8 +130,6 @@ async fn get_comments_handler(
 }
 
 /// The handler for receiving a new comment post.
-/// It deserializes the user's request into a `PostCommentIntent` and
-/// saves it to the repository for later processing by a reconciler.
 async fn post_comment_handler(
     State(state): State<ApiState>,
     Json(intent): Json<PostCommentIntent>,
@@ -156,8 +161,6 @@ async fn post_comment_handler(
 }
 
 /// The handler for receiving a new delete comment request.
-/// It deserializes the user's request into a `DeleteCommentIntent` and
-/// saves it to the repository for later processing by a reconciler.
 async fn delete_comment_handler(
     State(state): State<ApiState>,
     Path(comment_id): Path<String>,
@@ -197,4 +200,31 @@ async fn delete_comment_handler(
                 .into_response()
         }
     }
+}
+
+/// SSE handler that streams projector events for a specific post.
+async fn sse_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let mut rx = state.event_bus.subscribe();
+
+    let stream = async_stream::stream! {
+        while let Ok(event) = rx.recv().await {
+            // Filter events by site_id and post_slug
+            let matches = match &event {
+                ProjectorEvent::NewComment { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                ProjectorEvent::CommentUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                ProjectorEvent::CommentDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+            };
+
+            if matches {
+                if let Ok(json) = serde_json::to_string(&event) {
+                    yield Ok(Event::default().data(json));
+                }
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }

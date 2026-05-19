@@ -1,3 +1,4 @@
+use cumments_core::{events::ProjectorEvent, models::Comment};
 use matrix_sdk::{
     RoomState,
     room::Room,
@@ -8,6 +9,7 @@ use matrix_sdk::{
     },
 };
 use sqlx::SqlitePool;
+use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, warn};
 
 /// The Projectionist is responsible for listening to Matrix events and
@@ -16,12 +18,21 @@ use tracing::{debug, info, instrument, warn};
 pub struct Projector {
     client: matrix_sdk::Client,
     pool: SqlitePool,
+    event_bus: broadcast::Sender<ProjectorEvent>,
 }
 
 impl Projector {
-    /// Creates a new Projector using an existing Matrix client.
-    pub fn new(client: matrix_sdk::Client, pool: SqlitePool) -> Self {
-        Self { client, pool }
+    /// Creates a new Projector using an existing Matrix client and an event bus.
+    pub fn new(
+        client: matrix_sdk::Client,
+        pool: SqlitePool,
+        event_bus: broadcast::Sender<ProjectorEvent>,
+    ) -> Self {
+        Self {
+            client,
+            pool,
+            event_bus,
+        }
     }
 
     /// Registers the event handlers on the Matrix client.
@@ -29,20 +40,24 @@ impl Projector {
         info!("Registering projectionist event handlers...");
 
         let pool = self.pool.clone();
+        let bus = self.event_bus.clone();
         self.client
             .add_event_handler(move |event: SyncRoomMessageEvent, room: Room| {
                 let pool = pool.clone();
+                let bus = bus.clone();
                 async move {
-                    on_room_message(event, room, pool).await;
+                    on_room_message(event, room, pool, bus).await;
                 }
             });
 
         let pool = self.pool.clone();
+        let bus = self.event_bus.clone();
         self.client
             .add_event_handler(move |event: SyncRoomRedactionEvent, room: Room| {
                 let pool = pool.clone();
+                let bus = bus.clone();
                 async move {
-                    on_room_redaction(event, room, pool).await;
+                    on_room_redaction(event, room, pool, bus).await;
                 }
             });
 
@@ -66,7 +81,12 @@ async fn on_invited_room(room: Room) {
 
 /// The event handler for room message events (including edits).
 #[instrument(skip_all, fields(event_id = ?event.event_id()))]
-async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePool) {
+async fn on_room_message(
+    event: SyncRoomMessageEvent,
+    room: Room,
+    pool: SqlitePool,
+    bus: broadcast::Sender<ProjectorEvent>,
+) {
     if let SyncRoomMessageEvent::Original(msg) = event {
         // Handle Edits (Replacements)
         if let Some(Relation::Replacement(replacement)) = &msg.content.relates_to {
@@ -85,7 +105,28 @@ async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePo
                 .await
                 {
                     Ok(result) if result.rows_affected() > 0 => {
-                        info!("Successfully updated comment {}", target_event_id)
+                        info!("Successfully updated comment {}", target_event_id);
+
+                        // Try to fetch updated comment to emit full object
+                        if let Ok(row) = sqlx::query_as!(
+                            crate::CommentRow,
+                            "SELECT event_id, author_nickname, content, timestamp, site_id, post_slug FROM comments WHERE event_id = ?",
+                            target_event_id_str
+                        )
+                        .fetch_one(&pool)
+                        .await
+                        {
+                            let _ = bus.send(ProjectorEvent::CommentUpdated {
+                                site_id: row.site_id,
+                                post_slug: row.post_slug,
+                                comment: Comment {
+                                    event_id: row.event_id,
+                                    author_nickname: row.author_nickname,
+                                    content: row.content,
+                                    timestamp: chrono::DateTime::from_naive_utc_and_offset(row.timestamp, chrono::Utc),
+                                },
+                            });
+                        }
                     }
                     Ok(_) => debug!("Edit received for unknown comment {}", target_event_id),
                     Err(e) => warn!("Failed to update comment {}: {:?}", target_event_id, e),
@@ -121,8 +162,8 @@ async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePo
                 );
                 return;
             }
-            let site_id = parts[0];
-            let post_slug = parts[1];
+            let site_id = parts[0].to_string();
+            let post_slug = parts[1].to_string();
 
             let author_mxid = msg.sender;
             let author = if let Ok(Some(member)) = room.get_member(&author_mxid).await {
@@ -132,9 +173,10 @@ async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePo
             };
 
             let content = text.body.clone();
-            let timestamp = chrono::DateTime::from_timestamp_millis(msg.origin_server_ts.0.into())
-                .unwrap()
-                .naive_utc();
+            let timestamp_dt =
+                chrono::DateTime::from_timestamp_millis(msg.origin_server_ts.0.into())
+                    .unwrap()
+                    .naive_utc();
 
             let event_id_str = event_id.to_string();
             let room_id_str = room.room_id().to_string();
@@ -152,12 +194,24 @@ async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePo
                 author_mxid_str,
                 author,
                 content,
-                timestamp,
+                timestamp_dt,
             )
             .execute(&pool)
             .await
             {
-                Ok(_) => info!("Successfully projected comment event {}", event_id),
+                Ok(_) => {
+                    info!("Successfully projected comment event {}", event_id);
+                    let _ = bus.send(ProjectorEvent::NewComment {
+                        site_id,
+                        post_slug,
+                        comment: Comment {
+                            event_id: event_id_str,
+                            author_nickname: author,
+                            content,
+                            timestamp: chrono::DateTime::from_naive_utc_and_offset(timestamp_dt, chrono::Utc),
+                        },
+                    });
+                },
                 Err(e) => debug!("Failed to project comment event {}: {:?}", event_id, e),
             }
         }
@@ -166,7 +220,12 @@ async fn on_room_message(event: SyncRoomMessageEvent, room: Room, pool: SqlitePo
 
 /// The event handler for redactions (deletions).
 #[instrument(skip_all, fields(event_id = ?event.event_id()))]
-async fn on_room_redaction(event: SyncRoomRedactionEvent, room: Room, pool: SqlitePool) {
+async fn on_room_redaction(
+    event: SyncRoomRedactionEvent,
+    room: Room,
+    pool: SqlitePool,
+    bus: broadcast::Sender<ProjectorEvent>,
+) {
     if let SyncRoomRedactionEvent::Original(msg) = event {
         // redaction event can have target event id in content or in the top level redacts field
         let target_event_id = msg.redacts.as_ref().or(msg.content.redacts.as_ref());
@@ -180,6 +239,16 @@ async fn on_room_redaction(event: SyncRoomRedactionEvent, room: Room, pool: Sqli
 
             let target_event_id_str = target_event_id.to_string();
 
+            // Fetch site_id and post_slug before deleting to emit event
+            let meta = sqlx::query!(
+                "SELECT site_id, post_slug FROM comments WHERE event_id = ?",
+                target_event_id_str
+            )
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+
             match sqlx::query!(
                 "DELETE FROM comments WHERE event_id = ?",
                 target_event_id_str
@@ -188,7 +257,14 @@ async fn on_room_redaction(event: SyncRoomRedactionEvent, room: Room, pool: Sqli
             .await
             {
                 Ok(result) if result.rows_affected() > 0 => {
-                    info!("Successfully deleted redacted comment {}", target_event_id)
+                    info!("Successfully deleted redacted comment {}", target_event_id);
+                    if let Some(meta) = meta {
+                        let _ = bus.send(ProjectorEvent::CommentDeleted {
+                            site_id: meta.site_id,
+                            post_slug: meta.post_slug,
+                            event_id: target_event_id_str,
+                        });
+                    }
                 }
                 Ok(_) => debug!(
                     "Redaction received for unknown or already deleted comment {}",
@@ -201,4 +277,15 @@ async fn on_room_redaction(event: SyncRoomRedactionEvent, room: Room, pool: Sqli
             }
         }
     }
+}
+
+// Internal helper for fetching updated comments
+#[derive(sqlx::FromRow)]
+struct CommentRow {
+    event_id: String,
+    author_nickname: Option<String>,
+    content: String,
+    timestamp: chrono::NaiveDateTime,
+    site_id: String,
+    post_slug: String,
 }

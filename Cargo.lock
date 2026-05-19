@@ -691,9 +691,10 @@ dependencies = [
 
 [[package]]
 name = "cumments-api"
-version = "0.1.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "axum",
  "cumments-core",
  "hex",
@@ -702,6 +703,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -756,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-storage"
-version = "0.1.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
