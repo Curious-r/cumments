@@ -681,6 +681,7 @@ dependencies = [
  "cumments-reconciler",
  "cumments-storage",
  "dotenvy",
+ "matrix-sdk",
  "serde",
  "sqlx",
  "tokio",

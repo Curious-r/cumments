@@ -10,6 +10,7 @@ cumments-storage = { path = "../cumments-storage" }
 cumments-reconciler = { path = "../cumments-reconciler" }
 cumments-operator = { path = "../cumments-operator" }
 cumments-projection = { path = "../cumments-projection" }
+matrix-sdk = { workspace = true }
 
 anyhow = { workspace = true }
 tokio = { workspace = true }

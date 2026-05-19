@@ -2,17 +2,14 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
 use matrix_sdk::{
-    Client, SessionMeta,
-    authentication::SessionTokens,
-    authentication::matrix::MatrixSession as Session,
-    config::SyncSettings,
+    Client,
     ruma::{
         EventId, OwnedRoomAliasId,
         api::client::room::create_room::v3::{self, RoomPreset as Preset},
         events::room::message::RoomMessageEventContent,
     },
 };
-use tracing::{debug, info, instrument};
+use tracing::{info, instrument};
 
 use crate::MatrixOperator;
 
@@ -23,53 +20,9 @@ pub struct BotOperator {
 }
 
 impl BotOperator {
-    /// Creates a new BotOperator by restoring a Matrix session.
-    pub async fn new(
-        homeserver_url: &str,
-        user: &str,
-        token: &str,
-        device_id: Option<&str>,
-    ) -> Result<Self> {
-        let client = Client::builder()
-            .homeserver_url(homeserver_url)
-            .build()
-            .await?;
-
-        // Restore the login session
-        let device_id =
-            device_id.expect("device_id is required for session restoration in matrix-sdk 0.14.0");
-
-        let session = Session {
-            meta: SessionMeta {
-                user_id: user.try_into()?,
-                device_id: device_id.try_into()?,
-            },
-            tokens: SessionTokens {
-                access_token: token.to_string(),
-                refresh_token: None,
-            },
-        };
-        client.restore_session(session).await?;
-        debug!("Restored login session with device ID '{}'", device_id);
-
-        info!(
-            "Successfully restored Matrix session for user {}",
-            client.user_id().unwrap()
-        );
-
-        // Run an initial sync to get room states, etc.
-        // We do this in a background task to not block the reconciler.
-        let sync_client = client.clone();
-        tokio::spawn(async move {
-            info!("Starting initial Matrix sync in background...");
-            if let Err(e) = sync_client.sync_once(SyncSettings::default()).await {
-                tracing::error!("Initial Matrix sync failed: {:?}", e);
-            } else {
-                info!("Initial Matrix sync completed.");
-            }
-        });
-
-        Ok(Self { client })
+    /// Creates a new BotOperator using an existing Matrix client.
+    pub fn new(client: Client) -> Self {
+        Self { client }
     }
 }
 
