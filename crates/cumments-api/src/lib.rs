@@ -17,6 +17,7 @@ use cumments_core::{
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
 use tokio::sync::broadcast;
+use validator::Validate;
 
 pub mod pow;
 
@@ -26,10 +27,13 @@ pub mod pow;
 pub struct ErrorResponse {
     pub error: String,
     pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 pub enum AppError {
     InvalidPoW,
+    Validation(validator::ValidationErrors),
     NotFound(String),
     Unauthorized(String),
     BadRequest(String),
@@ -38,21 +42,34 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_msg, code) = match self {
+        let (status, error_msg, code, details) = match self {
             AppError::InvalidPoW => (
                 StatusCode::FORBIDDEN,
                 "Invalid Proof-of-Work response.".to_string(),
                 "INVALID_POW",
+                None,
             ),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "NOT_FOUND"),
-            AppError::Unauthorized(msg) => (StatusCode::FORBIDDEN, msg, "UNAUTHORIZED"),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST"),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg, "INTERNAL_ERROR"),
+            AppError::Validation(errs) => (
+                StatusCode::BAD_REQUEST,
+                "Input validation failed.".to_string(),
+                "VALIDATION_ERROR",
+                serde_json::to_value(errs).ok(),
+            ),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "NOT_FOUND", None),
+            AppError::Unauthorized(msg) => (StatusCode::FORBIDDEN, msg, "UNAUTHORIZED", None),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST", None),
+            AppError::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                msg,
+                "INTERNAL_ERROR",
+                None,
+            ),
         };
 
         let body = Json(ErrorResponse {
             error: error_msg,
             code: code.to_string(),
+            details,
         });
 
         (status, body).into_response()
@@ -74,9 +91,11 @@ pub struct ApiState {
 }
 
 /// The query parameters for pagination.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct PaginationQuery {
+    #[validate(range(min = 1))]
     pub page: Option<i64>,
+    #[validate(range(min = 1, max = 100))]
     pub per_page: Option<i64>,
 }
 
@@ -102,19 +121,24 @@ pub struct ChallengeResponse {
 }
 
 /// Request DTO for posting a comment.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct PostCommentRequest {
+    #[validate(length(min = 1, max = 5000))]
     pub content: String,
+    #[validate(length(min = 1, max = 50))]
     pub nickname: String,
+    #[validate(email)]
     pub email: Option<String>,
+    #[validate(length(min = 8, max = 128))]
     pub author_fingerprint: String,
     pub reply_to: Option<String>,
     pub challenge_response: String,
 }
 
 /// Request DTO for deleting a comment.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct DeleteCommentRequest {
+    #[validate(length(min = 8, max = 128))]
     pub author_fingerprint: String,
     pub challenge_response: String,
 }
@@ -151,6 +175,9 @@ async fn get_comments_handler(
     Path((site_id, post_slug)): Path<(String, String)>,
     Query(query): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    // 1. Validate input
+    query.validate().map_err(AppError::Validation)?;
+
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let limit = per_page;
@@ -197,21 +224,12 @@ async fn post_comment_handler(
     Path((site_id, post_slug)): Path<(String, String)>,
     Json(req): Json<PostCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    // 1. Verify the PoW challenge
+    // 1. Validate input
+    req.validate().map_err(AppError::Validation)?;
+
+    // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
         return Err(AppError::InvalidPoW);
-    }
-
-    // 2. Basic Validation
-    if req.nickname.trim().is_empty() || req.nickname.len() > 50 {
-        return Err(AppError::BadRequest(
-            "Nickname must be between 1 and 50 characters.".to_string(),
-        ));
-    }
-    if req.content.trim().is_empty() || req.content.len() > 5000 {
-        return Err(AppError::BadRequest(
-            "Comment content must be between 1 and 5000 characters.".to_string(),
-        ));
     }
 
     // 3. Create the business intent
@@ -247,7 +265,10 @@ async fn delete_comment_handler(
     Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
     Json(req): Json<DeleteCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    // 1. Verify the PoW challenge
+    // 1. Validate input
+    req.validate().map_err(AppError::Validation)?;
+
+    // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
         return Err(AppError::InvalidPoW);
     }
