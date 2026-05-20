@@ -44,11 +44,21 @@ pub struct Matrix {
     // AppService mode fields are ignored for now
 }
 
-/// Reads configuration from `config.toml` and environment variables.
-pub fn get_configuration() -> Result<Settings, config::ConfigError> {
-    let settings = config::Config::builder()
-        // Start with a config file named `config`
-        .add_source(config::File::with_name("config").required(true))
+/// Reads configuration from a file and environment variables.
+/// If `config_path` is provided, it loads that specific file.
+/// Otherwise, it looks for `config.toml` (or other supported formats) in the current directory.
+pub fn get_configuration(config_path: Option<&str>) -> Result<Settings, config::ConfigError> {
+    let mut builder = config::Config::builder();
+
+    if let Some(path) = config_path {
+        // Load specific file
+        builder = builder.add_source(config::File::with_name(path).required(true));
+    } else {
+        // Fallback to default search
+        builder = builder.add_source(config::File::with_name("config").required(false));
+    }
+
+    let settings = builder
         // Add in environment variables with a prefix of CUMMENTS and separator __
         // e.g. `CUMMENTS_SERVER__PORT=5000` would override `port` in `[server]`
         .add_source(config::Environment::with_prefix("CUMMENTS").separator("__"))
