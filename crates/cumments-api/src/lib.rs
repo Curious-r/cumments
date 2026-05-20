@@ -10,13 +10,13 @@ use axum::{
 };
 use cumments_core::{
     events::ProjectorEvent,
-    intents::{DeleteCommentIntent, PostCommentIntent},
+    intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
     models::{Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
 };
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use validator::Validate;
@@ -90,6 +90,7 @@ pub struct ApiState {
     pub store: Arc<dyn ApiStore>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
+    pub reconciler_notify: Arc<Notify>,
 }
 
 /// The query parameters for pagination.
@@ -145,6 +146,16 @@ pub struct DeleteCommentRequest {
     pub challenge_response: String,
 }
 
+/// Request DTO for updating a comment.
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateCommentRequest {
+    #[validate(length(min = 1, max = 5000))]
+    pub content: String,
+    #[validate(length(min = 8, max = 128))]
+    pub author_fingerprint: String,
+    pub challenge_response: String,
+}
+
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState) -> Router {
     Router::new()
@@ -154,7 +165,7 @@ pub fn build_router(state: ApiState) -> Router {
         )
         .route(
             "/api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
-            delete(delete_comment_handler),
+            delete(delete_comment_handler).patch(update_comment_handler),
         )
         .route(
             "/api/sites/{site_id}/posts/{post_slug}/sse",
@@ -255,16 +266,17 @@ async fn post_comment_handler(
         author_fingerprint: req.author_fingerprint,
         reply_to: req.reply_to,
     };
-
     // 3. Save the intent for the reconciler
     match state.store.save_post_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
+            state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
                 "Comment received and queued for processing.",
             ))
         }
+
         Err(e) => {
             tracing::error!("Failed to save comment intent: {:?}", e);
             Err(AppError::Internal("Failed to queue comment.".to_string()))
@@ -324,6 +336,7 @@ async fn delete_comment_handler(
     match state.store.save_delete_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a delete comment intent.");
+            state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
                 "Delete request received and queued for processing.",
@@ -333,6 +346,74 @@ async fn delete_comment_handler(
             tracing::error!("Failed to save delete comment intent: {:?}", e);
             Err(AppError::Internal(
                 "Failed to queue delete request.".to_string(),
+            ))
+        }
+    }
+}
+
+/// The handler for receiving a new update comment request.
+async fn update_comment_handler(
+    State(state): State<ApiState>,
+    Path((_site_id, _post_slug, comment_id)): Path<(String, String, String)>,
+    Json(req): Json<UpdateCommentRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    // 1. Validate input
+    req.validate().map_err(AppError::Validation)?;
+
+    // 2. Verify the PoW challenge
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+
+    // 3. Authorization: Verify that the fingerprint matches the original author
+    match state.store.get_comment(&comment_id).await {
+        Ok(Some(comment)) => {
+            if let Some(original_fp) = comment.author_fingerprint {
+                if original_fp != req.author_fingerprint {
+                    return Err(AppError::Unauthorized(
+                        "You are not authorized to edit this comment.".to_string(),
+                    ));
+                }
+            } else {
+                return Err(AppError::Unauthorized(
+                    "Cannot verify ownership for this comment.".to_string(),
+                ));
+            }
+        }
+        Ok(None) => {
+            return Err(AppError::NotFound("Comment not found.".to_string()));
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch comment for authorization: {:?}", e);
+            return Err(AppError::Internal(
+                "Internal server error during authorization.".to_string(),
+            ));
+        }
+    }
+
+    // 4. Create the business intent
+    let intent = UpdateCommentIntent {
+        site_id: _site_id.into(),
+        post_slug: _post_slug.into(),
+        event_id: comment_id,
+        content: req.content,
+        author_fingerprint: req.author_fingerprint,
+    };
+
+    // 5. Save the intent for the reconciler
+    match state.store.save_update_intent(&intent).await {
+        Ok(_) => {
+            tracing::info!("Successfully saved an update comment intent.");
+            state.reconciler_notify.notify_one();
+            Ok((
+                StatusCode::ACCEPTED,
+                "Update request received and queued for processing.",
+            ))
+        }
+        Err(e) => {
+            tracing::error!("Failed to save update comment intent: {:?}", e);
+            Err(AppError::Internal(
+                "Failed to queue update request.".to_string(),
             ))
         }
     }

@@ -110,12 +110,17 @@ async fn main() -> Result<()> {
         }
     };
 
+    // 6. Initialize Shared Coordination Signals
+    let reconciler_notify = Arc::new(tokio::sync::Notify::new());
+
     // 7. Initialize and run Reconciler (Orchestrator) in the background
     let reconciler = cumments_reconciler::Reconciler::new(
         db_pool.clone(),
         sqlite_store.clone(),
+        sqlite_store.clone(), // RegistryStore
         driver.clone(),
         site_service.clone(),
+        reconciler_notify.clone(),
     );
     tokio::spawn(async move {
         reconciler.run().await;
@@ -140,9 +145,10 @@ async fn main() -> Result<()> {
         settings.security.pow_difficulty,
     );
     let api_state = cumments_api::ApiState {
-        store: sqlite_store.clone(),
+        store: sqlite_store,
         pow: Arc::new(pow),
-        event_bus: event_bus.clone(),
+        event_bus,
+        reconciler_notify,
     };
     tracing::info!("Store and API wired up.");
 
