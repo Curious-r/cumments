@@ -17,6 +17,8 @@ use cumments_core::{
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use validator::Validate;
 
 pub mod pow;
@@ -159,6 +161,8 @@ pub fn build_router(state: ApiState) -> Router {
             get(sse_handler),
         )
         .route("/api/challenge", get(get_challenge_handler))
+        .layer(TraceLayer::new_for_http())
+        .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
