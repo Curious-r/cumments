@@ -354,10 +354,8 @@ async fn sse_handler(
                 ProjectorEvent::CommentDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
             };
 
-            if matches {
-                if let Ok(json) = serde_json::to_string(&event) {
-                    yield Ok(Event::default().data(json));
-                }
+            if matches && let Ok(json) = serde_json::to_string(&event) {
+                yield Ok(Event::default().data(json));
             }
         }
     };

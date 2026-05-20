@@ -15,7 +15,6 @@ use matrix_sdk::{
     },
 };
 use serde::Deserialize;
-
 use sqlx::SqlitePool;
 use sqlx::types::chrono::NaiveDateTime;
 use std::sync::Arc;
@@ -38,8 +37,6 @@ struct RoomMetadata {
 
 /// The Projector is an engine that observes Matrix events and
 /// projects them into the local Read Store.
-// ... (rest of imports and struct)
-
 pub struct Projector {
     client: matrix_sdk::Client,
     pool: SqlitePool,
@@ -98,18 +95,6 @@ impl Projector {
         // Registry Handler: Watch for Space children changes
         let pool = self.pool.clone();
         self.client.add_event_handler(
-            move |event: Raw<matrix_sdk::ruma::events::room::topic::SyncRoomTopicEvent>,
-                  room: Room| {
-                // Topic is just a placeholder here, we actually want any state event in a space
-                // But matrix-sdk allows us to add generic state handlers
-                let _ = (event, room, pool.clone());
-                async move {}
-            },
-        );
-
-        // Better way: use a generic state event handler if possible, or specifically SpaceChild
-        let pool = self.pool.clone();
-        self.client.add_event_handler(
             move |event: Raw<matrix_sdk::ruma::events::AnySyncStateEvent>, room: Room| {
                 let pool = pool.clone();
                 async move {
@@ -130,24 +115,19 @@ impl Projector {
     }
 }
 
-// ...
-
 /// The event handler for Space children changes (Registry).
 #[instrument(skip_all)]
+#[allow(clippy::collapsible_if)]
 async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool) {
     // 1. Identify which site this Space belongs to
-    // Space metadata only has site_id, post_slug is None
     let site_id = if let Ok(Some(meta_ev)) = room
         .get_state_event("im.cumments.metadata".into(), "")
         .await
     {
-        if let Ok(json_str) = serde_json::to_string(&meta_ev) {
-            serde_json::from_str::<RoomMetadata>(&json_str)
-                .ok()
-                .map(|m| m.site_id)
-        } else {
-            None
-        }
+        serde_json::to_string(&meta_ev)
+            .ok()
+            .and_then(|json| serde_json::from_str::<RoomMetadata>(&json).ok())
+            .map(|m| m.site_id)
     } else {
         None
     };
@@ -161,9 +141,7 @@ async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool
 
     // Determine if it was added or removed
     if let SyncSpaceChildEvent::Original(msg) = event {
-        let is_active = !msg.content.via.is_empty();
-
-        if is_active {
+        if !msg.content.via.is_empty() {
             // Register/Update the room in registry
             if let Ok(child_room_id) =
                 matrix_sdk::ruma::OwnedRoomId::try_from(child_room_id_str.clone())
@@ -274,9 +252,6 @@ async fn on_room_message(
             // If not in registry, maybe it's a new room we haven't registered yet?
             // Let's attempt a just-in-time registration if it has metadata.
             if let Some((site_id, post_slug)) = get_room_identity(&room).await {
-                // If it's a managed room, we check if it belongs to a valid Space (later)
-                // For now, if it has metadata, we assume it's legit but might have missed the Space event.
-                // In Phase 2, we should ideally verify against the Space.
                 let _ = sqlx::query!(
                     r#"
                     INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
