@@ -14,13 +14,13 @@ impl MatrixDriver for LoggingMatrixDriver {
         &self,
         site_id: &SiteId,
         post_slug: &PostSlug,
-        space_id: &str,
+        _space_id: &str,
+        _candidate_room_id: Option<&str>,
     ) -> Result<String> {
         info!(
-            "LOGGING: Ensure room for site={}, slug={}, space={}",
+            "LOGGING: Ensure comment room for site={} post={}",
             site_id.as_str(),
-            post_slug.as_str(),
-            space_id
+            post_slug.as_str()
         );
         Ok(format!(
             "log_room_{}_{}",
@@ -63,18 +63,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(format!("log_update_{}", event_id))
     }
 
-    async fn redact_message(
-        &self,
-        site_id: &SiteId,
-        post_slug: &PostSlug,
-        event_id: &str,
-    ) -> Result<()> {
-        info!(
-            "LOGGING: Redact message {} in {}/{}",
-            event_id,
-            site_id.as_str(),
-            post_slug.as_str()
-        );
+    async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()> {
+        info!("LOGGING: Redact message {} in room={}", event_id, room_id);
         Ok(())
     }
 }

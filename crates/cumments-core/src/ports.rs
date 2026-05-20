@@ -43,6 +43,20 @@ pub trait CommentStore: Send + Sync {
     ) -> Result<(Vec<Comment>, i64)>;
 }
 
+/// Port for managing the local room registry cache (Mirror of Space relationships).
+#[async_trait]
+pub trait RegistryStore: Send + Sync {
+    /// Returns the room ID for a site/post from the local registry, if it exists and is active.
+    async fn get_registered_room(
+        &self,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<Option<String>>;
+
+    /// Invalidates a room in the local registry (e.g. if metadata verification failed).
+    async fn invalidate_room_registry(&self, room_id: &str) -> Result<()>;
+}
+
 /// Defines the operations for managing sites in the local database.
 #[async_trait]
 pub trait SiteStore: Send + Sync {
@@ -55,12 +69,14 @@ pub trait SiteStore: Send + Sync {
 #[async_trait]
 pub trait MatrixDriver: Send + Sync {
     /// Ensures a room exists for a specific post and is linked to a space.
+    /// Uses candidate_room_id as a hint for O(1) discovery if provided.
     /// Returns the room ID.
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,
         post_slug: &PostSlug,
         space_id: &str,
+        candidate_room_id: Option<&str>,
     ) -> Result<String>;
 
     /// Creates a new Space for a site.
@@ -87,10 +103,5 @@ pub trait MatrixDriver: Send + Sync {
     ) -> Result<String>;
 
     /// Redacts a message in a specific room.
-    async fn redact_message(
-        &self,
-        site_id: &SiteId,
-        post_slug: &PostSlug,
-        event_id: &str,
-    ) -> Result<()>;
+    async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()>;
 }

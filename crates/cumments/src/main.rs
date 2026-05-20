@@ -117,6 +117,7 @@ async fn main() -> Result<()> {
     let reconciler = cumments_reconciler::Reconciler::new(
         db_pool.clone(),
         sqlite_store.clone(),
+        sqlite_store.clone(), // RegistryStore
         driver.clone(),
         site_service.clone(),
         reconciler_notify.clone(),

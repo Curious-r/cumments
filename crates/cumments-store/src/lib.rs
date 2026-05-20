@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
-use cumments_core::ports::{CommentStore, IntentStore, SiteStore};
+use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
 use sqlx::SqlitePool;
 
 /// A SqliteStore implementation of the storage ports.
@@ -187,6 +187,38 @@ impl CommentStore for SqliteStore {
         let comments = comment_rows.into_iter().map(Comment::from).collect();
 
         Ok((comments, total))
+    }
+}
+
+#[async_trait]
+impl RegistryStore for SqliteStore {
+    async fn get_registered_room(
+        &self,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<Option<String>> {
+        let s_id = site_id.as_str();
+        let p_slug = post_slug.as_str();
+        let room_id = sqlx::query_scalar!(
+            "SELECT room_id FROM room_registry WHERE site_id = ? AND post_slug = ? AND is_active = 1",
+            s_id,
+            p_slug
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+
+        Ok(room_id)
+    }
+
+    async fn invalidate_room_registry(&self, room_id: &str) -> Result<()> {
+        sqlx::query!(
+            "UPDATE room_registry SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
+            room_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

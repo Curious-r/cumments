@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cumments_core::{
     intents::{DeleteCommentIntent, PostCommentIntent},
-    ports::{IntentStore, MatrixDriver},
+    ports::{IntentStore, MatrixDriver, RegistryStore},
     site_service::SiteService,
 };
 use sqlx::SqlitePool;
@@ -16,6 +16,7 @@ use tokio::sync::Notify;
 pub struct Reconciler {
     pool: SqlitePool,
     intent_store: Arc<dyn IntentStore>,
+    registry_store: Arc<dyn RegistryStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
     notify: Arc<Notify>,
@@ -25,6 +26,7 @@ impl Reconciler {
     pub fn new(
         pool: SqlitePool,
         intent_store: Arc<dyn IntentStore>,
+        registry_store: Arc<dyn RegistryStore>,
         driver: Arc<dyn MatrixDriver>,
         site_service: Arc<SiteService>,
         notify: Arc<Notify>,
@@ -32,6 +34,7 @@ impl Reconciler {
         Self {
             pool,
             intent_store,
+            registry_store,
             driver,
             site_service,
             notify,
@@ -103,13 +106,24 @@ impl Reconciler {
                     .ensure_space(&intent.site_id, self.driver.as_ref())
                     .await?;
 
-                // 2. Hands: Ensure the post-specific room exists and is linked
-                let room_id = self
-                    .driver
-                    .ensure_comment_room(&intent.site_id, &intent.post_slug, &space_id)
+                // 2. Registry: Check for existing room in local cache (O(1) hint)
+                let candidate_room_id = self
+                    .registry_store
+                    .get_registered_room(&intent.site_id, &intent.post_slug)
                     .await?;
 
-                // 3. Hands: Post the actual message
+                // 3. Hands: Ensure the post-specific room exists and is linked
+                let room_id = self
+                    .driver
+                    .ensure_comment_room(
+                        &intent.site_id,
+                        &intent.post_slug,
+                        &space_id,
+                        candidate_room_id.as_deref(),
+                    )
+                    .await?;
+
+                // 4. Hands: Post the actual message
                 let event_id = self
                     .driver
                     .post_message(
@@ -120,7 +134,7 @@ impl Reconciler {
                     )
                     .await?;
 
-                // 4. Closed-loop: Mark as waiting for sync instead of completed
+                // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.intent_store
                     .mark_post_intent_waiting_for_sync(row.id, &event_id)
                     .await?;
@@ -167,10 +181,24 @@ impl Reconciler {
             let process_result: Result<()> = (async {
                 let intent: DeleteCommentIntent = serde_json::from_str(&row.payload)?;
 
-                // Hands: Perform the redaction
-                self.driver.redact_message(&intent.site_id, &intent.post_slug, &intent.event_id).await?;
+                // 1. Registry: Locate the room ID for this deletion
+                let room_id = self
+                    .registry_store
+                    .get_registered_room(&intent.site_id, &intent.post_slug)
+                    .await?;
 
-                // Concepts: Move to waiting_for_sync
+                let room_id = room_id.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Room not found in registry for site {} post {}",
+                        intent.site_id.as_str(),
+                        intent.post_slug.as_str()
+                    )
+                })?;
+
+                // 2. Hands: Perform the redaction
+                self.driver.redact_message(&room_id, &intent.event_id).await?;
+
+                // 3. Concepts: Move to waiting_for_sync
                 sqlx::query!(
                     "UPDATE intent_queue_delete_comment SET status = 'waiting_for_sync', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     row.id
@@ -225,13 +253,24 @@ impl Reconciler {
                     .ensure_space(&site_id, self.driver.as_ref())
                     .await?;
 
-                // 2. Hands: Ensure room
-                let room_id = self
-                    .driver
-                    .ensure_comment_room(&site_id, &post_slug, &space_id)
+                // 2. Registry: Check for existing room in local cache (O(1) hint)
+                let candidate_room_id = self
+                    .registry_store
+                    .get_registered_room(&site_id, &post_slug)
                     .await?;
 
-                // 3. Hands: Fetch original nickname to maintain it
+                // 3. Hands: Ensure room
+                let room_id = self
+                    .driver
+                    .ensure_comment_room(
+                        &site_id,
+                        &post_slug,
+                        &space_id,
+                        candidate_room_id.as_deref(),
+                    )
+                    .await?;
+
+                // 4. Hands: Fetch original nickname to maintain it
                 let nickname = sqlx::query_scalar!(
                     "SELECT author_nickname FROM comments WHERE event_id = ?",
                     row.event_id
@@ -241,7 +280,7 @@ impl Reconciler {
                 .flatten()
                 .unwrap_or_else(|| "Guest".to_string());
 
-                // 4. Hands: Perform the update (m.replace)
+                // 5. Hands: Perform the update (m.replace)
                 self.driver
                     .update_message(
                         &room_id,
@@ -252,7 +291,7 @@ impl Reconciler {
                     )
                     .await?;
 
-                // 5. Closed-loop: Mark as waiting for sync
+                // 6. Closed-loop: Mark as waiting for sync
                 self.intent_store
                     .mark_update_intent_waiting_for_sync(row.id.unwrap())
                     .await?;

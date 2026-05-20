@@ -149,6 +149,7 @@ impl MatrixDriver for BotMatrixDriver {
         site_id: &SiteId,
         post_slug: &PostSlug,
         space_id: &str,
+        candidate_room_id: Option<&str>,
     ) -> Result<String> {
         let space_room_id: OwnedRoomId = space_id.try_into()?;
         let space = self
@@ -156,44 +157,79 @@ impl MatrixDriver for BotMatrixDriver {
             .get_room(&space_room_id)
             .ok_or_else(|| anyhow!("Space room {} not found", space_id))?;
 
-        // --- PHASE 1: DISCOVERY (Traverse Space Children) ---
-        info!("Searching for existing room in space {}", space_id);
-
         let mut target_room_id = None;
-        let child_events = space.get_state_events("m.space.child".into()).await?;
 
-        for event in child_events {
-            // Since RawAnySyncOrStrippedState is private, we use the JSON representation
-            if let Ok(json_val) = serde_json::to_value(&event) {
-                let state_key = json_val.get("state_key").and_then(|v| v.as_str());
-                if let Some(sk) = state_key {
-                    if let Ok(child_room_id) = OwnedRoomId::try_from(sk) {
-                        // Check if this room has the correct metadata
-                        if let Some(child_room) = self.client.get_room(&child_room_id) {
-                            if let Ok(Some(meta_ev)) = child_room
-                                .get_state_event_static::<RoomMetadataContent>()
-                                .await
+        // --- PHASE 0: O(1) DISCOVERY (Check Candidate) ---
+        if let Some(candidate) = candidate_room_id {
+            if let Ok(id) = OwnedRoomId::try_from(candidate) {
+                if let Some(room) = self.client.get_room(&id) {
+                    if let Ok(Some(meta_ev)) =
+                        room.get_state_event_static::<RoomMetadataContent>().await
+                    {
+                        if let Ok(json_str) = serde_json::to_string(&meta_ev) {
+                            if let Ok(full_json) =
+                                serde_json::from_str::<serde_json::Value>(&json_str)
                             {
-                                if let Ok(json_str) = serde_json::to_string(&meta_ev) {
-                                    if let Ok(full_json) =
-                                        serde_json::from_str::<serde_json::Value>(&json_str)
-                                    {
-                                        if let Some(content_val) = full_json.get("content") {
-                                            if let Ok(m) =
-                                                serde_json::from_value::<RoomMetadataContent>(
-                                                    content_val.clone(),
-                                                )
-                                            {
-                                                if m.site_id == site_id.as_str()
-                                                    && m.post_slug.as_deref()
-                                                        == Some(post_slug.as_str())
+                                if let Some(content_val) = full_json.get("content") {
+                                    if let Ok(m) = serde_json::from_value::<RoomMetadataContent>(
+                                        content_val.clone(),
+                                    ) {
+                                        if m.site_id == site_id.as_str()
+                                            && m.post_slug.as_deref() == Some(post_slug.as_str())
+                                        {
+                                            info!(
+                                                "Validated candidate room {} via metadata",
+                                                candidate
+                                            );
+                                            target_room_id = Some(id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- PHASE 1: DISCOVERY (Traverse Space Children) ---
+        if target_room_id.is_none() {
+            info!("Searching for existing room in space {}", space_id);
+            let child_events = space.get_state_events("m.space.child".into()).await?;
+
+            for event in child_events {
+                // Since RawAnySyncOrStrippedState is private, we use the JSON representation
+                if let Ok(json_val) = serde_json::to_value(&event) {
+                    let state_key = json_val.get("state_key").and_then(|v| v.as_str());
+                    if let Some(sk) = state_key {
+                        if let Ok(child_room_id) = OwnedRoomId::try_from(sk) {
+                            // Check if this room has the correct metadata
+                            if let Some(child_room) = self.client.get_room(&child_room_id) {
+                                if let Ok(Some(meta_ev)) = child_room
+                                    .get_state_event_static::<RoomMetadataContent>()
+                                    .await
+                                {
+                                    if let Ok(json_str) = serde_json::to_string(&meta_ev) {
+                                        if let Ok(full_json) =
+                                            serde_json::from_str::<serde_json::Value>(&json_str)
+                                        {
+                                            if let Some(content_val) = full_json.get("content") {
+                                                if let Ok(m) =
+                                                    serde_json::from_value::<RoomMetadataContent>(
+                                                        content_val.clone(),
+                                                    )
                                                 {
-                                                    info!(
-                                                        "Found matching room {} via metadata",
-                                                        child_room_id
-                                                    );
-                                                    target_room_id = Some(child_room_id);
-                                                    break;
+                                                    if m.site_id == site_id.as_str()
+                                                        && m.post_slug.as_deref()
+                                                            == Some(post_slug.as_str())
+                                                    {
+                                                        info!(
+                                                            "Found matching room {} via metadata",
+                                                            child_room_id
+                                                        );
+                                                        target_room_id = Some(child_room_id);
+                                                        break;
+                                                    }
                                                 }
                                             }
                                         }
@@ -345,21 +381,11 @@ impl MatrixDriver for BotMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    async fn redact_message(
-        &self,
-        site_id: &SiteId,
-        post_slug: &PostSlug,
-        event_id: &str,
-    ) -> Result<()> {
-        let space_id = self.create_site_space(site_id).await?;
-        let room_id_str = self
-            .ensure_comment_room(site_id, post_slug, &space_id)
-            .await?;
-
-        let room_id: OwnedRoomId = room_id_str.try_into()?;
+    async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()> {
+        let room_id_owned: OwnedRoomId = room_id.try_into()?;
         let room = self
             .client
-            .get_room(&room_id)
+            .get_room(&room_id_owned)
             .ok_or_else(|| anyhow!("Room {} not found in state", room_id))?;
 
         let event_id_owned: OwnedEventId = event_id.try_into()?;
