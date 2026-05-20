@@ -145,36 +145,80 @@ impl MatrixDriver for BotMatrixDriver {
         post_slug: &PostSlug,
         space_id: &str,
     ) -> Result<String> {
-        let homeserver_domain = self.server_name()?;
-        let alias_localpart = format!("cumments_{}_{}", site_id.as_str(), post_slug.as_str());
-        let room_alias_string = format!(
-            "#cumments_{}_{}:{}",
-            site_id.as_str(),
-            post_slug.as_str(),
-            homeserver_domain
-        );
-        let room_alias: OwnedRoomAliasId = room_alias_string.as_str().try_into()?;
         let space_room_id: OwnedRoomId = space_id.try_into()?;
-
-        // 1. Try to resolve the alias
-        let room_id = if let Some(room_id) = self
+        let space = self
             .client
-            .resolve_room_alias(&room_alias)
-            .await
-            .ok()
-            .map(|r| r.room_id)
-        {
-            if let Some(room) = self.client.get_room(&room_id) {
+            .get_room(&space_room_id)
+            .ok_or_else(|| anyhow!("Space room {} not found", space_id))?;
+
+        // --- PHASE 1: DISCOVERY (Traverse Space Children) ---
+        info!("Searching for existing room in space {}", space_id);
+
+        let mut target_room_id = None;
+        let child_events = space.get_state_events("m.space.child".into()).await?;
+
+        for event in child_events {
+            // Since RawAnySyncOrStrippedState is private, we use the JSON representation
+            if let Ok(json_val) = serde_json::to_value(&event) {
+                if let Some(state_key) = json_val.get("state_key").and_then(|v| v.as_str()) {
+                    if let Ok(child_room_id) = OwnedRoomId::try_from(state_key) {
+                        // Check if this room has the correct metadata
+                        if let Some(child_room) = self.client.get_room(&child_room_id) {
+                            if let Ok(Some(meta_ev)) = child_room
+                                .get_state_event_static::<RoomMetadataContent>()
+                                .await
+                            {
+                                // meta_ev is SyncOrStrippedState<RoomMetadataContent>
+                                // We use serialization to bypass the private enum variants
+                                if let Ok(json_str) = serde_json::to_string(&meta_ev) {
+                                    // The serialized form will have a "content" field
+                                    if let Ok(full_json) =
+                                        serde_json::from_str::<serde_json::Value>(&json_str)
+                                    {
+                                        if let Some(content_val) = full_json.get("content") {
+                                            if let Ok(m) =
+                                                serde_json::from_value::<RoomMetadataContent>(
+                                                    content_val.clone(),
+                                                )
+                                            {
+                                                if m.site_id == site_id.as_str()
+                                                    && m.post_slug.as_deref()
+                                                        == Some(post_slug.as_str())
+                                                {
+                                                    info!(
+                                                        "Found matching room {} via metadata",
+                                                        child_room_id
+                                                    );
+                                                    target_room_id = Some(child_room_id);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- PHASE 2: CREATION OR RESOLUTION ---
+        let room_id = if let Some(id) = target_room_id {
+            // Found existing room via metadata
+            if let Some(room) = self.client.get_room(&id) {
                 if room.state() != RoomState::Joined {
                     room.join().await?;
                 }
             } else {
-                self.client.join_room_by_id(&room_id).await?;
+                self.client.join_room_by_id(&id).await?;
             }
-            room_id
+            id
         } else {
-            // 2. Create room if not exists
-            info!("Creating new comment room for {}", post_slug.as_str());
+            // No room found in space metadata, create a new one
+            info!("No matching room found in space. Creating new comment room.");
+            let alias_localpart = format!("cumments_{}_{}", site_id.as_str(), post_slug.as_str());
+
             let mut request = v3::Request::new();
             request.name = Some(format!(
                 "Comments: {}/{}",
@@ -196,31 +240,28 @@ impl MatrixDriver for BotMatrixDriver {
             request.initial_state = vec![pl_event.to_raw_any()];
 
             let response = self.client.create_room(request).await?;
-            let room_id = response.room_id().to_owned();
+            let new_room_id = response.room_id().to_owned();
 
-            // 3. Link to Space
+            // Link to Space (Registry Update)
             let server_name = self.server_name()?;
+            let child_content = SpaceChildEventContent::new(vec![server_name.clone()]);
+            let _ = space
+                .send_state_event_for_key(&new_room_id, child_content)
+                .await;
 
-            // Add room as child of space
-            if let Some(space_room) = self.client.get_room(&space_room_id) {
-                let child_content = SpaceChildEventContent::new(vec![server_name.clone()]);
-                let _ = space_room
-                    .send_state_event_for_key(&room_id, child_content)
-                    .await;
-            }
-
-            // Add space as parent of room
-            if let Some(child_room) = self.client.get_room(&room_id) {
+            if let Some(child_room) = self.client.get_room(&new_room_id) {
                 let parent_content = SpaceParentEventContent::new(vec![server_name]);
                 let _ = child_room
                     .send_state_event_for_key(&space_room_id, parent_content)
                     .await;
             }
-            room_id
+            new_room_id
         };
 
+        // --- PHASE 3: METADATA ENFORCEMENT ---
         let room_id_str = room_id.to_string();
-        // Ensure metadata is set
+
+        // Ensure metadata is set (Source of Truth)
         let _ = self
             .set_room_metadata(&room_id_str, site_id, Some(post_slug))
             .await;
