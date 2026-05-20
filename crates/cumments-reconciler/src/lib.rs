@@ -59,7 +59,8 @@ impl Reconciler {
     async fn reconcile(&self) -> Result<u64> {
         let post_count = self.reconcile_posts().await?;
         let delete_count = self.reconcile_deletions().await?;
-        Ok(post_count + delete_count)
+        let update_count = self.reconcile_updates().await?;
+        Ok(post_count + delete_count + update_count)
     }
 
     async fn reconcile_posts(&self) -> Result<u64> {
@@ -123,7 +124,7 @@ impl Reconciler {
                     row.id, e
                 );
                 sqlx::query!(
-                    "UPDATE intent_queue_post_comment SET status = 'failed', updated_at = strftime('%s','now') WHERE id = ?",
+                    "UPDATE intent_queue_post_comment SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     row.id
                 )
                 .execute(&self.pool)
@@ -159,7 +160,7 @@ impl Reconciler {
 
                 // Concepts: Move to waiting_for_sync
                 sqlx::query!(
-                    "UPDATE intent_queue_delete_comment SET status = 'waiting_for_sync', updated_at = strftime('%s','now') WHERE id = ?",
+                    "UPDATE intent_queue_delete_comment SET status = 'waiting_for_sync', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     row.id
                 )
                 .execute(&self.pool)
@@ -174,7 +175,87 @@ impl Reconciler {
                     row.id, e
                 );
                 sqlx::query!(
-                    "UPDATE intent_queue_delete_comment SET status = 'failed', updated_at = strftime('%s','now') WHERE id = ?",
+                    "UPDATE intent_queue_delete_comment SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    row.id
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+        Ok(num_rows)
+    }
+
+    async fn reconcile_updates(&self) -> Result<u64> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT id, site_id, post_slug, event_id, content, author_fingerprint
+            FROM intent_queue_update_comment
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let num_rows = rows.len() as u64;
+
+        for row in rows {
+            let process_result: Result<()> = (async {
+                let site_id = row.site_id.clone().into();
+                let post_slug = row.post_slug.clone().into();
+
+                // 1. Brain: Ensure site space
+                let space_id = self
+                    .site_service
+                    .ensure_space(&site_id, self.driver.as_ref())
+                    .await?;
+
+                // 2. Hands: Ensure room
+                let room_id = self
+                    .driver
+                    .ensure_comment_room(&site_id, &post_slug, &space_id)
+                    .await?;
+
+                // 3. Hands: Fetch original nickname to maintain it
+                let nickname = sqlx::query_scalar!(
+                    "SELECT author_nickname FROM comments WHERE event_id = ?",
+                    row.event_id
+                )
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten()
+                .unwrap_or_else(|| "Guest".to_string());
+
+                // 4. Hands: Perform the update (m.replace)
+                self.driver
+                    .update_message(
+                        &room_id,
+                        &row.event_id,
+                        &row.content,
+                        &nickname,
+                        &row.author_fingerprint,
+                    )
+                    .await?;
+
+                // 5. Closed-loop: Mark as waiting for sync
+                self.intent_store
+                    .mark_update_intent_waiting_for_sync(row.id.unwrap())
+                    .await?;
+
+                Ok(())
+            })
+            .await;
+
+            if let Err(e) = process_result {
+                warn!(
+                    "Failed to reconcile update intent [{:?}]: {:?}. Setting status to 'failed'.",
+                    row.id, e
+                );
+                sqlx::query!(
+                    "UPDATE intent_queue_update_comment SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     row.id
                 )
                 .execute(&self.pool)
