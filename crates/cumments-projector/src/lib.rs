@@ -25,9 +25,17 @@ struct CustomMessageContent {
     author_fingerprint: Option<String>,
 }
 
+/// A custom struct to extract our metadata from room state.
+#[derive(Deserialize)]
+struct RoomMetadata {
+    site_id: String,
+    post_slug: Option<String>,
+}
+
 /// The Projector is an engine that observes Matrix events and
 /// projects them into the local Read Store.
-#[derive(Clone)]
+// ... (rest of imports and struct)
+
 pub struct Projector {
     client: matrix_sdk::Client,
     pool: SqlitePool,
@@ -102,6 +110,42 @@ async fn on_invited_room(room: Room) {
     }
 }
 
+/// Extracts site_id and post_slug from room state metadata or falls back to alias parsing.
+async fn get_room_identity(room: &Room) -> Option<(String, String)> {
+    // 1. Try metadata state event first (im.cumments.metadata)
+    if let Ok(Some(ev)) = room
+        .get_state_event("im.cumments.metadata".into(), "")
+        .await
+    {
+        // Since the Enum is private, we'll use the JSON representation
+        // to bypass the type system safely.
+        if let Ok(json_str) = serde_json::to_string(&ev) {
+            if let Ok(m) = serde_json::from_str::<RoomMetadata>(&json_str) {
+                if let Some(slug) = m.post_slug {
+                    return Some((m.site_id, slug));
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to alias parsing for legacy compatibility
+    let alias = room.canonical_alias()?;
+    let alias_str = alias.as_str();
+
+    // Parse site_id and post_slug from alias.
+    // Supports #cumments_SITE_ID_POST_SLUG:domain and #SITE_ID_POST_SLUG:domain
+    let localpart = alias_str.split(':').next()?.strip_prefix('#')?;
+
+    let content_part = localpart.strip_prefix("cumments_").unwrap_or(localpart);
+    let parts: Vec<_> = content_part.splitn(2, '_').collect();
+
+    if parts.len() == 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
+    }
+}
+
 /// The event handler for room message events (including edits).
 #[instrument(skip_all, fields(event_id = ?event.event_id()))]
 async fn on_room_message(
@@ -112,7 +156,13 @@ async fn on_room_message(
     intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomMessageEvent::Original(msg) = event {
-        // 0. Closed-loop: Mark any waiting intent as completed
+        // 0. Identify the room context
+        let (site_id, post_slug) = match get_room_identity(&room).await {
+            Some(id) => id,
+            None => return, // Not a cumments room
+        };
+
+        // 1. Closed-loop: Mark any waiting intent as completed
         let event_id = msg.event_id;
         let event_id_str = event_id.to_string();
         if let Err(e) = intents.mark_post_intent_completed(&event_id_str).await {
@@ -172,33 +222,6 @@ async fn on_room_message(
 
         // Handle Original Posts
         if let MessageType::Text(text) = &msg.content.msgtype {
-            let alias = if let Some(alias) = room.canonical_alias() {
-                alias
-            } else {
-                warn!(
-                    "Room '{}' has no canonical alias. Skipping.",
-                    room.room_id()
-                );
-                return;
-            };
-
-            // Parse site_id and post_slug from alias: #cumments_SITE_SLUG:domain
-            let alias_str = alias.as_str();
-            let parts: Vec<_> = alias_str
-                .strip_prefix("#cumments_")
-                .and_then(|s| s.split_once(':'))
-                .map(|(p, _)| p.splitn(2, '_').collect())
-                .unwrap_or_default();
-            if parts.len() != 2 {
-                warn!(
-                    "Room alias '{}' does not match expected format. Skipping.",
-                    alias_str
-                );
-                return;
-            }
-            let site_id = parts[0].to_string();
-            let post_slug = parts[1].to_string();
-
             let author_mxid = msg.sender;
             let author = if let Ok(Some(member)) = room.get_member(&author_mxid).await {
                 member.display_name().map(ToString::to_string)

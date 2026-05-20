@@ -833,6 +833,7 @@ dependencies = [
  "chrono",
  "cumments-core",
  "matrix-sdk",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
