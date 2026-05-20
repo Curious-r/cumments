@@ -2,21 +2,41 @@ use cumments_core::{events::ProjectorEvent, models::Comment, ports::IntentStore}
 use matrix_sdk::{
     RoomState,
     room::Room,
-    ruma::events::room::{
-        member::StrippedRoomMemberEvent,
-        message::{MessageType, Relation, SyncRoomMessageEvent},
-        redaction::SyncRoomRedactionEvent,
+    ruma::{
+        events::{
+            room::{
+                member::StrippedRoomMemberEvent,
+                message::{MessageType, Relation, SyncRoomMessageEvent},
+                redaction::SyncRoomRedactionEvent,
+            },
+            space::child::SyncSpaceChildEvent,
+        },
+        serde::Raw,
     },
 };
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use sqlx::types::chrono::NaiveDateTime;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, warn};
 
+/// A custom struct to extract our fingerprint from the Matrix event content.
+#[derive(Deserialize)]
+struct CustomMessageContent {
+    #[serde(rename = "cumments_author_fingerprint")]
+    author_fingerprint: Option<String>,
+}
+
+/// A custom struct to extract our metadata from room state.
+#[derive(Deserialize)]
+struct RoomMetadata {
+    site_id: String,
+    post_slug: Option<String>,
+}
+
 /// The Projector is an engine that observes Matrix events and
 /// projects them into the local Read Store.
-#[derive(Clone)]
 pub struct Projector {
     client: matrix_sdk::Client,
     pool: SqlitePool,
@@ -48,12 +68,14 @@ impl Projector {
         let bus = self.event_bus.clone();
         let intents = self.intent_store.clone();
         self.client
-            .add_event_handler(move |event: SyncRoomMessageEvent, room: Room| {
+            .add_event_handler(move |event: Raw<SyncRoomMessageEvent>, room: Room| {
                 let pool = pool.clone();
                 let bus = bus.clone();
                 let intents = intents.clone();
                 async move {
-                    on_room_message(event, room, pool, bus, intents).await;
+                    if let Ok(event) = event.deserialize() {
+                        on_room_message(event, room, pool, bus, intents).await;
+                    }
                 }
             });
 
@@ -70,10 +92,91 @@ impl Projector {
                 }
             });
 
+        // Registry Handler: Watch for Space children changes
+        let pool = self.pool.clone();
+        self.client.add_event_handler(
+            move |event: Raw<matrix_sdk::ruma::events::AnySyncStateEvent>, room: Room| {
+                let pool = pool.clone();
+                async move {
+                    if let Ok(ev) = event.deserialize() {
+                        use matrix_sdk::ruma::events::AnySyncStateEvent;
+                        if let AnySyncStateEvent::SpaceChild(child_ev) = ev {
+                            on_space_child(child_ev, room, pool).await;
+                        }
+                    }
+                }
+            },
+        );
+
         self.client
             .add_event_handler(|_event: StrippedRoomMemberEvent, room: Room| async move {
                 on_invited_room(room).await;
             });
+    }
+}
+
+/// The event handler for Space children changes (Registry).
+#[instrument(skip_all)]
+#[allow(clippy::collapsible_if)]
+async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool) {
+    // 1. Identify which site this Space belongs to
+    let site_id = if let Ok(Some(meta_ev)) = room
+        .get_state_event("im.cumments.metadata".into(), "")
+        .await
+    {
+        serde_json::to_string(&meta_ev)
+            .ok()
+            .and_then(|json| serde_json::from_str::<RoomMetadata>(&json).ok())
+            .map(|m| m.site_id)
+    } else {
+        None
+    };
+
+    let site_id = match site_id {
+        Some(id) => id,
+        None => return, // Not a managed Space
+    };
+
+    let child_room_id_str = event.state_key().to_string();
+
+    // Determine if it was added or removed
+    if let SyncSpaceChildEvent::Original(msg) = event {
+        if !msg.content.via.is_empty() {
+            // Register/Update the room in registry
+            if let Ok(child_room_id) =
+                matrix_sdk::ruma::OwnedRoomId::try_from(child_room_id_str.clone())
+            {
+                if let Some(child_room) = room.client().get_room(&child_room_id) {
+                    if let Some((_, post_slug)) = get_room_identity(&child_room).await {
+                        let _ = sqlx::query!(
+                            r#"
+                            INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
+                            VALUES (?, ?, ?, 1)
+                            ON CONFLICT(room_id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+                            "#,
+                            child_room_id_str,
+                            site_id,
+                            post_slug
+                        )
+                        .execute(&pool)
+                        .await;
+                        info!(
+                            "Registered active room {} for site {}",
+                            child_room_id_str, site_id
+                        );
+                    }
+                }
+            }
+        } else {
+            // Mark as inactive
+            let _ = sqlx::query!(
+                "UPDATE room_registry SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
+                child_room_id_str
+            )
+            .execute(&pool)
+            .await;
+            info!("Unregistered room {} from registry", child_room_id_str);
+        }
     }
 }
 
@@ -88,6 +191,42 @@ async fn on_invited_room(room: Room) {
     }
 }
 
+/// Extracts site_id and post_slug from room state metadata or falls back to alias parsing.
+async fn get_room_identity(room: &Room) -> Option<(String, String)> {
+    // 1. Try metadata state event first (im.cumments.metadata)
+    if let Ok(Some(ev)) = room
+        .get_state_event("im.cumments.metadata".into(), "")
+        .await
+    {
+        // Since the Enum is private, we'll use the JSON representation
+        // to bypass the type system safely.
+        if let Ok(json_str) = serde_json::to_string(&ev) {
+            if let Ok(m) = serde_json::from_str::<RoomMetadata>(&json_str) {
+                if let Some(slug) = m.post_slug {
+                    return Some((m.site_id, slug));
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to alias parsing for legacy compatibility
+    let alias = room.canonical_alias()?;
+    let alias_str = alias.as_str();
+
+    // Parse site_id and post_slug from alias.
+    // Supports #cumments_SITE_ID_POST_SLUG:domain and #SITE_ID_POST_SLUG:domain
+    let localpart = alias_str.split(':').next()?.strip_prefix('#')?;
+
+    let content_part = localpart.strip_prefix("cumments_").unwrap_or(localpart);
+    let parts: Vec<_> = content_part.splitn(2, '_').collect();
+
+    if parts.len() == 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
+    }
+}
+
 /// The event handler for room message events (including edits).
 #[instrument(skip_all, fields(event_id = ?event.event_id()))]
 async fn on_room_message(
@@ -98,7 +237,46 @@ async fn on_room_message(
     intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomMessageEvent::Original(msg) = event {
-        // 0. Closed-loop: Mark any waiting intent as completed
+        // --- PRINCIPLE B: REGISTRY ENFORCEMENT ---
+        let room_id_str = room.room_id().to_string();
+        let is_active = sqlx::query_scalar!(
+            "SELECT is_active FROM room_registry WHERE room_id = ?",
+            room_id_str
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or(Some(false))
+        .unwrap_or(false);
+
+        if !is_active {
+            // If not in registry, maybe it's a new room we haven't registered yet?
+            // Let's attempt a just-in-time registration if it has metadata.
+            if let Some((site_id, post_slug)) = get_room_identity(&room).await {
+                let _ = sqlx::query!(
+                    r#"
+                    INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
+                    VALUES (?, ?, ?, 1)
+                    ON CONFLICT(room_id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+                    "#,
+                    room_id_str,
+                    site_id,
+                    post_slug
+                )
+                .execute(&pool)
+                .await;
+            } else {
+                debug!("Ignoring message from unregistered room {}", room_id_str);
+                return;
+            }
+        }
+
+        // 0. Identify the room context
+        let (site_id, post_slug) = match get_room_identity(&room).await {
+            Some(id) => id,
+            None => return, // Not a cumments room
+        };
+
+        // 1. Closed-loop: Mark any waiting intent as completed
         let event_id = msg.event_id;
         let event_id_str = event_id.to_string();
         if let Err(e) = intents.mark_post_intent_completed(&event_id_str).await {
@@ -130,7 +308,7 @@ async fn on_room_message(
                         // Try to fetch updated comment to emit full object
                         if let Ok(row) = sqlx::query_as!(
                             crate::CommentRow,
-                            r#"SELECT event_id, author_nickname, content, timestamp as "timestamp: NaiveDateTime", site_id, post_slug FROM comments WHERE event_id = ?"#,
+                            r#"SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime", site_id, post_slug FROM comments WHERE event_id = ?"#,
                             target_event_id_str
                         )
                         .fetch_one(&pool)
@@ -142,6 +320,7 @@ async fn on_room_message(
                                 comment: Comment {
                                     event_id: row.event_id,
                                     author_nickname: row.author_nickname,
+                                    author_fingerprint: row.author_fingerprint,
                                     content: row.content,
                                     timestamp: chrono::DateTime::from_naive_utc_and_offset(row.timestamp, chrono::Utc),
                                 },
@@ -157,39 +336,18 @@ async fn on_room_message(
 
         // Handle Original Posts
         if let MessageType::Text(text) = &msg.content.msgtype {
-            let alias = if let Some(alias) = room.canonical_alias() {
-                alias
-            } else {
-                warn!(
-                    "Room '{}' has no canonical alias. Skipping.",
-                    room.room_id()
-                );
-                return;
-            };
-
-            // Parse site_id and post_slug from alias: #cumments_SITE_SLUG:domain
-            let alias_str = alias.as_str();
-            let parts: Vec<_> = alias_str
-                .strip_prefix("#cumments_")
-                .and_then(|s| s.split_once(':'))
-                .map(|(p, _)| p.splitn(2, '_').collect())
-                .unwrap_or_default();
-            if parts.len() != 2 {
-                warn!(
-                    "Room alias '{}' does not match expected format. Skipping.",
-                    alias_str
-                );
-                return;
-            }
-            let site_id = parts[0].to_string();
-            let post_slug = parts[1].to_string();
-
             let author_mxid = msg.sender;
             let author = if let Ok(Some(member)) = room.get_member(&author_mxid).await {
                 member.display_name().map(ToString::to_string)
             } else {
                 None
             };
+
+            // Extract fingerprint from custom field
+            let fingerprint = serde_json::to_value(&msg.content)
+                .ok()
+                .and_then(|v| serde_json::from_value::<CustomMessageContent>(v).ok())
+                .and_then(|c| c.author_fingerprint);
 
             let content = text.body.clone();
             let timestamp_dt =
@@ -202,8 +360,8 @@ async fn on_room_message(
 
             match sqlx::query!(
                 r#"
-                INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, content, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, author_fingerprint, content, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
                 event_id_str,
                 room_id_str,
@@ -211,6 +369,7 @@ async fn on_room_message(
                 post_slug,
                 author_mxid_str,
                 author,
+                fingerprint,
                 content,
                 timestamp_dt,
             )
@@ -225,6 +384,7 @@ async fn on_room_message(
                         comment: Comment {
                             event_id: event_id_str,
                             author_nickname: author,
+                            author_fingerprint: fingerprint,
                             content,
                             timestamp: chrono::DateTime::from_naive_utc_and_offset(timestamp_dt, chrono::Utc),
                         },
@@ -311,6 +471,7 @@ async fn on_room_redaction(
 struct CommentRow {
     event_id: String,
     author_nickname: Option<String>,
+    author_fingerprint: Option<String>,
     content: String,
     timestamp: NaiveDateTime,
     site_id: String,

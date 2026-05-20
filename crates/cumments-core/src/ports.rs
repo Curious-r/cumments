@@ -22,6 +22,9 @@ pub trait IntentStore: Send + Sync {
 /// The port for all comment projection storage operations.
 #[async_trait]
 pub trait CommentStore: Send + Sync {
+    /// Fetches a single comment by its Matrix event ID.
+    async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>>;
+
     /// Fetches a paginated list of projected comments for a given site and post.
     /// Returns the list of comments and the total number of comments.
     async fn get_comments(
@@ -58,7 +61,13 @@ pub trait MatrixDriver: Send + Sync {
     async fn create_site_space(&self, site_id: &SiteId) -> Result<String>;
 
     /// Posts a message to a specific room.
-    async fn post_message(&self, room_id: &str, content: &str, nickname: &str) -> Result<String>;
+    async fn post_message(
+        &self,
+        room_id: &str,
+        content: &str,
+        nickname: &str,
+        fingerprint: &str,
+    ) -> Result<String>;
 
     /// Redacts a message in a specific room.
     async fn redact_message(

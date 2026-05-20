@@ -3,51 +3,63 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use validator::Validate;
+
+lazy_static::lazy_static! {
+    pub static ref ID_REGEX: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
+}
 
 // A validated, owned representation of a Site ID.
-// More validation logic will be added later.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(transparent)]
-pub struct SiteId(String);
+pub struct SiteId {
+    #[validate(regex(path = "*crate::models::ID_REGEX"))]
+    pub id: String,
+}
 
 impl SiteId {
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.id
     }
 }
 
 impl From<String> for SiteId {
-    fn from(s: String) -> Self {
-        Self(s)
+    fn from(id: String) -> Self {
+        Self { id }
     }
 }
 
 impl From<&str> for SiteId {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self { id: s.to_string() }
     }
 }
 
 // A validated, owned representation of a Post Slug.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(transparent)]
-pub struct PostSlug(String);
+pub struct PostSlug {
+    #[validate(regex(path = "*crate::models::ID_REGEX"))]
+    pub slug: String,
+}
 
 impl PostSlug {
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.slug
     }
 }
 
 impl From<String> for PostSlug {
-    fn from(s: String) -> Self {
-        Self(s)
+    fn from(slug: String) -> Self {
+        Self { slug }
     }
 }
 
 impl From<&str> for PostSlug {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self {
+            slug: s.to_string(),
+        }
     }
 }
 
@@ -57,6 +69,7 @@ impl From<&str> for PostSlug {
 pub struct Comment {
     pub event_id: String,
     pub author_nickname: Option<String>,
+    pub author_fingerprint: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
 }

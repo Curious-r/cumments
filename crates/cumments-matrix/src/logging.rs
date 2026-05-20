@@ -34,10 +34,16 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(format!("log_space_{}", site_id.as_str()))
     }
 
-    async fn post_message(&self, room_id: &str, content: &str, nickname: &str) -> Result<String> {
+    async fn post_message(
+        &self,
+        room_id: &str,
+        content: &str,
+        nickname: &str,
+        fingerprint: &str,
+    ) -> Result<String> {
         info!(
-            "LOGGING: Post message to room={}. Author={}: {}",
-            room_id, nickname, content
+            "LOGGING: Post message to room={}. Author={} (fp={}): {}",
+            room_id, nickname, fingerprint, content
         );
         Ok("log_event_id".to_string())
     }

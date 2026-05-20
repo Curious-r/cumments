@@ -99,7 +99,12 @@ impl Reconciler {
                 // 3. Hands: Post the actual message
                 let event_id = self
                     .driver
-                    .post_message(&room_id, &intent.content, &intent.nickname)
+                    .post_message(
+                        &room_id,
+                        &intent.content,
+                        &intent.nickname,
+                        &intent.author_fingerprint,
+                    )
                     .await?;
 
                 // 4. Closed-loop: Mark as waiting for sync instead of completed

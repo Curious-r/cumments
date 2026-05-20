@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use cumments_core::site_service::SiteService;
 use matrix_sdk::{
     Client, SessionMeta, authentication::SessionTokens, authentication::matrix::MatrixSession,
@@ -9,18 +10,32 @@ use tokio::sync::broadcast;
 
 pub mod config;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the configuration file
+    #[arg(short, long)]
+    config: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Setup logging from .env and RUST_LOG
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
 
-    tracing::info!("Starting Cumments v2...");
+    // Parse CLI arguments
+    let args = Args::parse();
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    tracing::info!("Starting Cumments v{}...", env!("CARGO_PKG_VERSION"));
 
     // 1. Read configuration
-    let settings = config::get_configuration().expect("Failed to read configuration.");
+    let settings =
+        config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
     tracing::info!("Configuration loaded successfully.");
     tracing::debug!("Loaded settings: {:?}", settings);
 
