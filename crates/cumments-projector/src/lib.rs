@@ -2,17 +2,28 @@ use cumments_core::{events::ProjectorEvent, models::Comment, ports::IntentStore}
 use matrix_sdk::{
     RoomState,
     room::Room,
-    ruma::events::room::{
-        member::StrippedRoomMemberEvent,
-        message::{MessageType, Relation, SyncRoomMessageEvent},
-        redaction::SyncRoomRedactionEvent,
+    ruma::{
+        events::room::{
+            member::StrippedRoomMemberEvent,
+            message::{MessageType, Relation, SyncRoomMessageEvent},
+            redaction::SyncRoomRedactionEvent,
+        },
+        serde::Raw,
     },
 };
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use sqlx::types::chrono::NaiveDateTime;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, warn};
+
+/// A custom struct to extract our fingerprint from the Matrix event content.
+#[derive(Deserialize)]
+struct CustomMessageContent {
+    #[serde(rename = "cumments_author_fingerprint")]
+    author_fingerprint: Option<String>,
+}
 
 /// The Projector is an engine that observes Matrix events and
 /// projects them into the local Read Store.
@@ -48,14 +59,17 @@ impl Projector {
         let bus = self.event_bus.clone();
         let intents = self.intent_store.clone();
         self.client
-            .add_event_handler(move |event: SyncRoomMessageEvent, room: Room| {
+            .add_event_handler(move |event: Raw<SyncRoomMessageEvent>, room: Room| {
                 let pool = pool.clone();
                 let bus = bus.clone();
                 let intents = intents.clone();
                 async move {
-                    on_room_message(event, room, pool, bus, intents).await;
+                    if let Ok(event) = event.deserialize() {
+                        on_room_message(event, room, pool, bus, intents).await;
+                    }
                 }
             });
+        // ... (rest of the file)
 
         let pool = self.pool.clone();
         let bus = self.event_bus.clone();
@@ -130,7 +144,7 @@ async fn on_room_message(
                         // Try to fetch updated comment to emit full object
                         if let Ok(row) = sqlx::query_as!(
                             crate::CommentRow,
-                            r#"SELECT event_id, author_nickname, content, timestamp as "timestamp: NaiveDateTime", site_id, post_slug FROM comments WHERE event_id = ?"#,
+                            r#"SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime", site_id, post_slug FROM comments WHERE event_id = ?"#,
                             target_event_id_str
                         )
                         .fetch_one(&pool)
@@ -142,6 +156,7 @@ async fn on_room_message(
                                 comment: Comment {
                                     event_id: row.event_id,
                                     author_nickname: row.author_nickname,
+                                    author_fingerprint: row.author_fingerprint,
                                     content: row.content,
                                     timestamp: chrono::DateTime::from_naive_utc_and_offset(row.timestamp, chrono::Utc),
                                 },
@@ -191,6 +206,12 @@ async fn on_room_message(
                 None
             };
 
+            // Extract fingerprint from custom field
+            let fingerprint = serde_json::to_value(&msg.content)
+                .ok()
+                .and_then(|v| serde_json::from_value::<CustomMessageContent>(v).ok())
+                .and_then(|c| c.author_fingerprint);
+
             let content = text.body.clone();
             let timestamp_dt =
                 chrono::DateTime::from_timestamp_millis(msg.origin_server_ts.0.into())
@@ -202,8 +223,8 @@ async fn on_room_message(
 
             match sqlx::query!(
                 r#"
-                INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, content, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, author_fingerprint, content, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
                 event_id_str,
                 room_id_str,
@@ -211,6 +232,7 @@ async fn on_room_message(
                 post_slug,
                 author_mxid_str,
                 author,
+                fingerprint,
                 content,
                 timestamp_dt,
             )
@@ -225,6 +247,7 @@ async fn on_room_message(
                         comment: Comment {
                             event_id: event_id_str,
                             author_nickname: author,
+                            author_fingerprint: fingerprint,
                             content,
                             timestamp: chrono::DateTime::from_naive_utc_and_offset(timestamp_dt, chrono::Utc),
                         },
@@ -311,6 +334,7 @@ async fn on_room_redaction(
 struct CommentRow {
     event_id: String,
     author_nickname: Option<String>,
+    author_fingerprint: Option<String>,
     content: String,
     timestamp: NaiveDateTime,
     site_id: String,

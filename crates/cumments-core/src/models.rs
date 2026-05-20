@@ -57,6 +57,7 @@ impl From<&str> for PostSlug {
 pub struct Comment {
     pub event_id: String,
     pub author_nickname: Option<String>,
+    pub author_fingerprint: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
 }

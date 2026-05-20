@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{
-        IntoResponse,
+        IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
     routing::{delete, get, post},
@@ -20,6 +20,47 @@ use tokio::sync::broadcast;
 
 pub mod pow;
 
+// --- Error Handling ---
+
+#[derive(Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+    pub code: String,
+}
+
+pub enum AppError {
+    InvalidPoW,
+    NotFound(String),
+    Unauthorized(String),
+    BadRequest(String),
+    Internal(String),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, error_msg, code) = match self {
+            AppError::InvalidPoW => (
+                StatusCode::FORBIDDEN,
+                "Invalid Proof-of-Work response.".to_string(),
+                "INVALID_POW",
+            ),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "NOT_FOUND"),
+            AppError::Unauthorized(msg) => (StatusCode::FORBIDDEN, msg, "UNAUTHORIZED"),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST"),
+            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg, "INTERNAL_ERROR"),
+        };
+
+        let body = Json(ErrorResponse {
+            error: error_msg,
+            code: code.to_string(),
+        });
+
+        (status, body).into_response()
+    }
+}
+
+// ----------------------
+
 // Define a new trait that combines the store traits for API use.
 pub trait ApiStore: CommentStore + IntentStore + SiteStore + Send + Sync {}
 impl<T: CommentStore + IntentStore + SiteStore + Send + Sync> ApiStore for T {}
@@ -32,11 +73,9 @@ pub struct ApiState {
     pub event_bus: broadcast::Sender<ProjectorEvent>,
 }
 
-/// The query parameters for the `GET /api/comments` endpoint.
+/// The query parameters for pagination.
 #[derive(Debug, Deserialize)]
-pub struct GetCommentsQuery {
-    pub site_id: String,
-    pub post_slug: String,
+pub struct PaginationQuery {
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
@@ -65,8 +104,6 @@ pub struct ChallengeResponse {
 /// Request DTO for posting a comment.
 #[derive(Debug, Deserialize)]
 pub struct PostCommentRequest {
-    pub site_id: SiteId,
-    pub post_slug: PostSlug,
     pub content: String,
     pub nickname: String,
     pub email: Option<String>,
@@ -78,9 +115,6 @@ pub struct PostCommentRequest {
 /// Request DTO for deleting a comment.
 #[derive(Debug, Deserialize)]
 pub struct DeleteCommentRequest {
-    pub site_id: SiteId,
-    pub post_slug: PostSlug,
-    pub event_id: String,
     pub author_fingerprint: String,
     pub challenge_response: String,
 }
@@ -89,11 +123,14 @@ pub struct DeleteCommentRequest {
 pub fn build_router(state: ApiState) -> Router {
     Router::new()
         .route(
-            "/api/comments",
+            "/api/sites/:site_id/posts/:post_slug/comments",
             post(post_comment_handler).get(get_comments_handler),
         )
-        .route("/api/comments/:comment_id", delete(delete_comment_handler))
-        .route("/api/:site_id/comments/:post_slug/sse", get(sse_handler))
+        .route(
+            "/api/sites/:site_id/posts/:post_slug/comments/:comment_id",
+            delete(delete_comment_handler),
+        )
+        .route("/api/sites/:site_id/posts/:post_slug/sse", get(sse_handler))
         .route("/api/challenge", get(get_challenge_handler))
         .with_state(state)
 }
@@ -111,19 +148,20 @@ async fn get_challenge_handler(State(state): State<ApiState>) -> impl IntoRespon
 /// The handler for fetching all comments for a given page.
 async fn get_comments_handler(
     State(state): State<ApiState>,
-    Query(query): Query<GetCommentsQuery>,
-) -> impl IntoResponse {
+    Path((site_id, post_slug)): Path<(String, String)>,
+    Query(query): Query<PaginationQuery>,
+) -> Result<impl IntoResponse, AppError> {
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let limit = per_page;
     let offset = (page - 1) * per_page;
 
-    let site_id: SiteId = query.site_id.into();
-    let post_slug: PostSlug = query.post_slug.into();
+    let site_id_val: SiteId = site_id.into();
+    let post_slug_val: PostSlug = post_slug.into();
 
     match state
         .store
-        .get_comments(&site_id, &post_slug, limit, offset)
+        .get_comments(&site_id_val, &post_slug_val, limit, offset)
         .await
     {
         Ok((comments, total)) => {
@@ -142,15 +180,13 @@ async fn get_comments_handler(
                     total_pages,
                 },
             };
-            (StatusCode::OK, Json(response)).into_response()
+            Ok((StatusCode::OK, Json(response)))
         }
         Err(e) => {
             tracing::error!("Failed to get comments: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to retrieve comments.",
-            )
-                .into_response()
+            Err(AppError::Internal(
+                "Failed to retrieve comments.".to_string(),
+            ))
         }
     }
 }
@@ -158,17 +194,30 @@ async fn get_comments_handler(
 /// The handler for receiving a new comment post.
 async fn post_comment_handler(
     State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
     Json(req): Json<PostCommentRequest>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, AppError> {
     // 1. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
-        return (StatusCode::FORBIDDEN, "Invalid Proof-of-Work response.").into_response();
+        return Err(AppError::InvalidPoW);
     }
 
-    // 2. Create the business intent
+    // 2. Basic Validation
+    if req.nickname.trim().is_empty() || req.nickname.len() > 50 {
+        return Err(AppError::BadRequest(
+            "Nickname must be between 1 and 50 characters.".to_string(),
+        ));
+    }
+    if req.content.trim().is_empty() || req.content.len() > 5000 {
+        return Err(AppError::BadRequest(
+            "Comment content must be between 1 and 5000 characters.".to_string(),
+        ));
+    }
+
+    // 3. Create the business intent
     let intent = PostCommentIntent {
-        site_id: req.site_id,
-        post_slug: req.post_slug,
+        site_id: site_id.into(),
+        post_slug: post_slug.into(),
         content: req.content,
         nickname: req.nickname,
         email: req.email,
@@ -180,19 +229,14 @@ async fn post_comment_handler(
     match state.store.save_post_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
-            (
+            Ok((
                 StatusCode::ACCEPTED,
                 "Comment received and queued for processing.",
-            )
-                .into_response()
+            ))
         }
         Err(e) => {
             tracing::error!("Failed to save comment intent: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to queue comment.",
-            )
-                .into_response()
+            Err(AppError::Internal("Failed to queue comment.".to_string()))
         }
     }
 }
@@ -200,28 +244,45 @@ async fn post_comment_handler(
 /// The handler for receiving a new delete comment request.
 async fn delete_comment_handler(
     State(state): State<ApiState>,
-    Path(comment_id): Path<String>,
+    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
     Json(req): Json<DeleteCommentRequest>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, AppError> {
     // 1. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
-        return (StatusCode::FORBIDDEN, "Invalid Proof-of-Work response.").into_response();
+        return Err(AppError::InvalidPoW);
     }
 
-    // 2. Ensure consistency between path and body
-    if req.event_id != comment_id {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Comment ID in path does not match ID in body.",
-        )
-            .into_response();
+    // 2. Authorization: Verify that the fingerprint matches the original author
+    match state.store.get_comment(&comment_id).await {
+        Ok(Some(comment)) => {
+            if let Some(original_fp) = comment.author_fingerprint {
+                if original_fp != req.author_fingerprint {
+                    return Err(AppError::Unauthorized(
+                        "You are not authorized to delete this comment.".to_string(),
+                    ));
+                }
+            } else {
+                return Err(AppError::Unauthorized(
+                    "Cannot verify ownership for this comment.".to_string(),
+                ));
+            }
+        }
+        Ok(None) => {
+            return Err(AppError::NotFound("Comment not found.".to_string()));
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch comment for authorization: {:?}", e);
+            return Err(AppError::Internal(
+                "Internal server error during authorization.".to_string(),
+            ));
+        }
     }
 
     // 3. Create the business intent
     let intent = DeleteCommentIntent {
-        site_id: req.site_id,
-        post_slug: req.post_slug,
-        event_id: req.event_id,
+        site_id: site_id.into(),
+        post_slug: post_slug.into(),
+        event_id: comment_id,
         author_fingerprint: req.author_fingerprint,
     };
 
@@ -229,19 +290,16 @@ async fn delete_comment_handler(
     match state.store.save_delete_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a delete comment intent.");
-            (
+            Ok((
                 StatusCode::ACCEPTED,
                 "Delete request received and queued for processing.",
-            )
-                .into_response()
+            ))
         }
         Err(e) => {
             tracing::error!("Failed to save delete comment intent: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to queue delete request.",
-            )
-                .into_response()
+            Err(AppError::Internal(
+                "Failed to queue delete request.".to_string(),
+            ))
         }
     }
 }

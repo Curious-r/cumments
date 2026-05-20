@@ -90,6 +90,7 @@ impl IntentStore for SqliteStore {
 struct CommentRow {
     event_id: String,
     author_nickname: Option<String>,
+    author_fingerprint: Option<String>,
     content: String,
     timestamp: NaiveDateTime,
 }
@@ -99,6 +100,7 @@ impl From<CommentRow> for Comment {
         Comment {
             event_id: row.event_id,
             author_nickname: row.author_nickname,
+            author_fingerprint: row.author_fingerprint,
             content: row.content,
             timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
         }
@@ -126,6 +128,22 @@ impl From<SiteRow> for Site {
 
 #[async_trait]
 impl CommentStore for SqliteStore {
+    async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>> {
+        let row = sqlx::query_as!(
+            CommentRow,
+            r#"
+            SELECT event_id, author_nickname, author_fingerprint, content, timestamp
+            FROM comments
+            WHERE event_id = ?
+            "#,
+            event_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(Comment::from))
+    }
+
     async fn get_comments(
         &self,
         site_id: &SiteId,
@@ -150,7 +168,7 @@ impl CommentStore for SqliteStore {
         let comments_query = sqlx::query_as!(
             CommentRow,
             r#"
-            SELECT event_id, author_nickname, content, timestamp
+            SELECT event_id, author_nickname, author_fingerprint, content, timestamp
             FROM comments
             WHERE site_id = ? AND post_slug = ?
             ORDER BY timestamp ASC

@@ -158,7 +158,13 @@ impl MatrixDriver for BotMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    async fn post_message(&self, room_id: &str, content: &str, nickname: &str) -> Result<String> {
+    async fn post_message(
+        &self,
+        room_id: &str,
+        content: &str,
+        nickname: &str,
+        fingerprint: &str,
+    ) -> Result<String> {
         let room_id_owned: OwnedRoomId = room_id.try_into()?;
         let room = self
             .client
@@ -166,9 +172,20 @@ impl MatrixDriver for BotMatrixDriver {
             .ok_or_else(|| anyhow!("Room {} not found", room_id))?;
 
         let formatted_content = format!("**{}**: {}", nickname, content);
-        let message_content = RoomMessageEventContent::text_markdown(formatted_content);
 
-        let response = room.send(message_content).await?;
+        // We use a custom JSON structure to include the fingerprint as a top-level field
+        // while still being compatible with standard Matrix clients (msgtype: m.text)
+        let message_json = serde_json::json!({
+            "msgtype": "m.text",
+            "body": formatted_content,
+            "format": "org.matrix.custom.html",
+            "formatted_body": format!("<strong>{}</strong>: {}", nickname, content),
+            "cumments_author_fingerprint": fingerprint,
+        });
+
+        let content: RoomMessageEventContent = serde_json::from_value(message_json)?;
+
+        let response = room.send(content).await?;
         Ok(response.response.event_id.to_string())
     }
 

@@ -536,7 +536,7 @@
 
                 try {
                     const res = await fetch(
-                        `${cfg.api}/api/comments?site_id=${cfg.siteId}&post_slug=${cfg.slug}&page=${page}&per_page=${perPage}`,
+                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments?page=${page}&per_page=${perPage}`,
                     );
                     if (!res.ok) throw new Error(await res.text());
                     const json = await res.json();
@@ -752,21 +752,18 @@
                 const cfg = getConfig();
 
                 try {
-                    // 1. 获取 PoW 挑战 (删除也需要 PoW 以防滥用，与 API 设计对齐)
+                    // 1. 获取 PoW 挑战
                     const chalRes = await fetch(`${cfg.api}/api/challenge`);
                     const chal = await chalRes.json();
                     const nonce = await solvePoW(chal.prefix, chal.difficulty);
 
                     const res = await fetch(
-                        `${cfg.api}/api/comments/${commentId}`,
+                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
                         {
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
-                                site_id: cfg.siteId,
-                                post_slug: cfg.slug,
-                                event_id: commentId,
-                                author_fingerprint: cfg.token, // 暂时用 token 作为指纹演示
+                                author_fingerprint: cfg.token,
                                 challenge_response: `${chal.prefix}|${nonce}`,
                             }),
                         },
@@ -815,8 +812,6 @@
                     // 3. 提交
                     status.innerText = "正在提交...";
                     const payload = {
-                        site_id: cfg.siteId,
-                        post_slug: cfg.slug,
                         content: content,
                         nickname: cfg.nickname,
                         email: cfg.email || null,
@@ -825,11 +820,14 @@
                         reply_to: replyToId,
                     };
 
-                    const res = await fetch(`${cfg.api}/api/comments`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload),
-                    });
+                    const res = await fetch(
+                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(payload),
+                        },
+                    );
 
                     if (!res.ok) throw new Error(await res.text());
 
@@ -871,7 +869,7 @@
             // ==========================================
 
             function connectSSE(cfg) {
-                const url = `${cfg.api}/api/${cfg.siteId}/comments/${cfg.slug}/sse`;
+                const url = `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/sse`;
                 const sse = new EventSource(url);
                 currentSse = sse;
 
