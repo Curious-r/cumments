@@ -185,6 +185,12 @@ async fn get_comments_handler(
     // 1. Validate input
     query.validate().map_err(AppError::Validation)?;
 
+    tracing::info!(
+        "Fetching comments for site: {}, post: {}",
+        site_id,
+        post_slug
+    );
+
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let limit = per_page;

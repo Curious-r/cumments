@@ -47,8 +47,34 @@ impl MatrixDriver for BotMatrixDriver {
     #[instrument(skip(self), fields(site_id = %site_id.as_str()))]
     async fn create_site_space(&self, site_id: &SiteId) -> Result<String> {
         let site_id_str = site_id.as_str();
+        let homeserver_domain = self.server_name()?;
         let alias_localpart = format!("cumments_{}", site_id_str);
+        let room_alias_string = format!("#cumments_{}:{}", site_id_str, homeserver_domain);
+        let room_alias: OwnedRoomAliasId = room_alias_string.as_str().try_into()?;
 
+        // 1. Try to resolve the alias first (Idempotency)
+        if let Some(room_id) = self
+            .client
+            .resolve_room_alias(&room_alias)
+            .await
+            .ok()
+            .map(|r| r.room_id)
+        {
+            info!(
+                "Space for site {} already exists, resolving to {}",
+                site_id_str, room_id
+            );
+            if let Some(room) = self.client.get_room(&room_id) {
+                if room.state() != RoomState::Joined {
+                    room.join().await?;
+                }
+            } else {
+                self.client.join_room_by_id(&room_id).await?;
+            }
+            return Ok(room_id.to_string());
+        }
+
+        // 2. Create new space if not found
         info!("Creating new space for site {}", site_id_str);
 
         let mut request = v3::Request::new();
