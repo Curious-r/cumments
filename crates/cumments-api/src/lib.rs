@@ -147,14 +147,17 @@ pub struct DeleteCommentRequest {
 pub fn build_router(state: ApiState) -> Router {
     Router::new()
         .route(
-            "/api/sites/:site_id/posts/:post_slug/comments",
+            "/api/sites/{site_id}/posts/{post_slug}/comments",
             post(post_comment_handler).get(get_comments_handler),
         )
         .route(
-            "/api/sites/:site_id/posts/:post_slug/comments/:comment_id",
+            "/api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
             delete(delete_comment_handler),
         )
-        .route("/api/sites/:site_id/posts/:post_slug/sse", get(sse_handler))
+        .route(
+            "/api/sites/{site_id}/posts/{post_slug}/sse",
+            get(sse_handler),
+        )
         .route("/api/challenge", get(get_challenge_handler))
         .with_state(state)
 }

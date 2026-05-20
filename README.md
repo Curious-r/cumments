@@ -107,19 +107,19 @@ Returns a signed challenge string and difficulty.
 
 ### Comment Operations
 
-**`GET /api/sites/:site_id/posts/:post_slug/comments`**
+**`GET /api/sites/{site_id}/posts/{post_slug}/comments`**
 - **Query Params**: `page`, `per_page`.
 
-**`POST /api/sites/:site_id/posts/:post_slug/comments`**
+**`POST /api/sites/{site_id}/posts/{post_slug}/comments`**
 - **Body**: `content`, `nickname`, `email`, `author_fingerprint`, `challenge_response`.
 - Note: `challenge_response` format is `challenge_string|nonce`.
 
-**`DELETE /api/sites/:site_id/posts/:post_slug/comments/:comment_id`**
+**`DELETE /api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`**
 - **Body**: `author_fingerprint`, `challenge_response`.
 
 ### Real-time Push (SSE)
 
-**`GET /api/sites/:site_id/posts/:post_slug/sse`**
+**`GET /api/sites/{site_id}/posts/{post_slug}/sse`**
 Server-Sent Events for real-time updates.
 - Events: `new_comment`, `update_comment`, `delete_comment`.
 
@@ -184,10 +184,10 @@ docker build -t cumments -f misc/docker/Dockerfile .
 ## 5. 关键 API
 
 - `GET /api/challenge`: 获取 PoW 挑战签名和难度。
-- `GET /api/sites/:site_id/posts/:post_slug/comments`: 获取评论列表（支持分页）。
-- `POST /api/sites/:site_id/posts/:post_slug/comments`: 提交发布评论意图。
-- `DELETE /api/sites/:site_id/posts/:post_slug/comments/:id`: 提交删除评论意图。
-- `GET /api/sites/:site_id/posts/:post_slug/sse`: SSE 实时推送接口。
+- `GET /api/sites/{site_id}/posts/{post_slug}/comments`: 获取评论列表（支持分页）。
+- `POST /api/sites/{site_id}/posts/{post_slug}/comments`: 提交发布评论意图。
+- `DELETE /api/sites/{site_id}/posts/{post_slug}/comments/{id}`: 提交删除评论意图。
+- `GET /api/sites/{site_id}/posts/{post_slug}/sse`: SSE 实时推送接口。
 
 ---
 
