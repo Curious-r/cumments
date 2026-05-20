@@ -1,17 +1,19 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent};
+use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, SiteStore};
 use sqlx::SqlitePool;
 
-/// A concrete implementation of the store ports using SQLite.
+/// A SqliteStore implementation of the storage ports.
+#[derive(Clone)]
 pub struct SqliteStore {
     pool: SqlitePool,
 }
 
 impl SqliteStore {
+    /// Creates a new SqliteStore using an existing SqlitePool.
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -20,14 +22,14 @@ impl SqliteStore {
 #[async_trait]
 impl IntentStore for SqliteStore {
     async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
-        let intent_json = serde_json::to_string(intent)?;
+        let payload = serde_json::to_string(intent)?;
 
         sqlx::query!(
             r#"
             INSERT INTO intent_queue_post_comment (payload)
             VALUES (?)
             "#,
-            intent_json
+            payload
         )
         .execute(&self.pool)
         .await?;
@@ -36,15 +38,36 @@ impl IntentStore for SqliteStore {
     }
 
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()> {
-        let intent_json = serde_json::to_string(intent)?;
+        let payload = serde_json::to_string(intent)?;
 
         sqlx::query!(
             r#"
             INSERT INTO intent_queue_delete_comment (payload, target_event_id)
             VALUES (?, ?)
             "#,
-            intent_json,
+            payload,
             intent.event_id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()> {
+        let site_id = intent.site_id.as_str();
+        let post_slug = intent.post_slug.as_str();
+
+        sqlx::query!(
+            r#"
+            INSERT INTO intent_queue_update_comment (site_id, post_slug, event_id, content, author_fingerprint)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+            site_id,
+            post_slug,
+            intent.event_id,
+            intent.content,
+            intent.author_fingerprint
         )
         .execute(&self.pool)
         .await?;
@@ -54,8 +77,18 @@ impl IntentStore for SqliteStore {
 
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()> {
         sqlx::query!(
-            "UPDATE intent_queue_post_comment SET status = 'waiting_for_sync', matrix_event_id = ?, updated_at = strftime('%s','now') WHERE id = ?",
+            "UPDATE intent_queue_post_comment SET status = 'waiting_for_sync', matrix_event_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             event_id,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
+        sqlx::query!(
+            "UPDATE intent_queue_update_comment SET status = 'waiting_for_sync', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             id
         )
         .execute(&self.pool)
@@ -65,7 +98,7 @@ impl IntentStore for SqliteStore {
 
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()> {
         sqlx::query!(
-            "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE matrix_event_id = ?",
+            "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE matrix_event_id = ?",
             event_id
         )
         .execute(&self.pool)
@@ -75,54 +108,22 @@ impl IntentStore for SqliteStore {
 
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
         sqlx::query!(
-            "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = strftime('%s','now') WHERE target_event_id = ?",
+            "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE target_event_id = ?",
             target_event_id
         )
         .execute(&self.pool)
         .await?;
         Ok(())
     }
-}
 
-// An intermediate struct for reading from the database, to handle the
-// NaiveDateTime -> DateTime<Utc> conversion.
-#[derive(sqlx::FromRow)]
-struct CommentRow {
-    event_id: String,
-    author_nickname: Option<String>,
-    author_fingerprint: Option<String>,
-    content: String,
-    timestamp: NaiveDateTime,
-}
-
-impl From<CommentRow> for Comment {
-    fn from(row: CommentRow) -> Self {
-        Comment {
-            event_id: row.event_id,
-            author_nickname: row.author_nickname,
-            author_fingerprint: row.author_fingerprint,
-            content: row.content,
-            timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
-        }
-    }
-}
-
-// An intermediate struct for reading sites from the database.
-struct SiteRow {
-    id: String,
-    matrix_space_id: String,
-    display_name: Option<String>,
-    created_at: NaiveDateTime,
-}
-
-impl From<SiteRow> for Site {
-    fn from(row: SiteRow) -> Self {
-        Site {
-            id: row.id,
-            matrix_space_id: row.matrix_space_id,
-            display_name: row.display_name,
-            created_at: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
-        }
+    async fn mark_update_intent_completed(&self, event_id: &str) -> Result<()> {
+        sqlx::query!(
+            "UPDATE intent_queue_update_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE event_id = ?",
+            event_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 
@@ -193,10 +194,11 @@ impl CommentStore for SqliteStore {
 impl SiteStore for SqliteStore {
     async fn get_site(&self, id: &SiteId) -> Result<Option<Site>> {
         let id_str = id.as_str();
-        let site_row = sqlx::query_as!(
+
+        let row = sqlx::query_as!(
             SiteRow,
             r#"
-            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!: NaiveDateTime"
+            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!"
             FROM sites
             WHERE id = ?
             "#,
@@ -205,7 +207,7 @@ impl SiteStore for SqliteStore {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(site_row.map(Site::from))
+        Ok(row.map(Site::from))
     }
 
     async fn save_site(&self, site: &Site) -> Result<()> {
@@ -226,5 +228,47 @@ impl SiteStore for SqliteStore {
         .await?;
 
         Ok(())
+    }
+}
+
+// An intermediate struct for reading from the database, to handle the
+// NaiveDateTime -> DateTime<Utc> conversion.
+#[derive(sqlx::FromRow)]
+struct CommentRow {
+    event_id: String,
+    author_nickname: Option<String>,
+    author_fingerprint: Option<String>,
+    content: String,
+    timestamp: NaiveDateTime,
+}
+
+impl From<CommentRow> for Comment {
+    fn from(row: CommentRow) -> Self {
+        Comment {
+            event_id: row.event_id,
+            author_nickname: row.author_nickname,
+            author_fingerprint: row.author_fingerprint,
+            content: row.content,
+            timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SiteRow {
+    id: String,
+    matrix_space_id: String,
+    display_name: Option<String>,
+    created_at: NaiveDateTime,
+}
+
+impl From<SiteRow> for Site {
+    fn from(row: SiteRow) -> Self {
+        Site {
+            id: row.id,
+            matrix_space_id: row.matrix_space_id,
+            display_name: row.display_name,
+            created_at: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+        }
     }
 }

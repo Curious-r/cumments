@@ -42,3 +42,19 @@ pub struct DeleteCommentIntent {
     /// The fingerprint of the user attempting to delete the comment, for verification.
     pub author_fingerprint: String,
 }
+
+/// Represents the user's desire to edit/update a comment.
+/// This is a command to be processed asynchronously by the reconciler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCommentIntent {
+    /// The site this comment belongs to.
+    pub site_id: SiteId,
+    /// The post/page this comment belongs to.
+    pub post_slug: PostSlug,
+    /// The Matrix event ID of the comment to be updated.
+    pub event_id: String,
+    /// The new content for the comment.
+    pub content: String,
+    /// The fingerprint of the user attempting to edit the comment, for verification.
+    pub author_fingerprint: String,
+}

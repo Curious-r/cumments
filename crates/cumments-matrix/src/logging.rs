@@ -48,6 +48,21 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok("log_event_id".to_string())
     }
 
+    async fn update_message(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        new_content: &str,
+        nickname: &str,
+        fingerprint: &str,
+    ) -> Result<String> {
+        info!(
+            "LOGGING: Update message {} in room={}. Author={} (fp={}): {}",
+            event_id, room_id, nickname, fingerprint, new_content
+        );
+        Ok(format!("log_update_{}", event_id))
+    }
+
     async fn redact_message(
         &self,
         site_id: &SiteId,

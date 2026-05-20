@@ -7,7 +7,7 @@ use cumments_core::{
 use matrix_sdk::{
     Client, RoomState,
     ruma::{
-        EventId, Int, OwnedRoomAliasId, OwnedRoomId, OwnedServerName, OwnedUserId,
+        Int, OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedServerName, OwnedUserId,
         api::client::room::create_room::v3::{self, RoomPreset},
         events::{
             EmptyStateKey, InitialStateEvent,
@@ -48,7 +48,10 @@ impl BotMatrixDriver {
     /// Internal helper to get server name.
     fn server_name(&self) -> Result<OwnedServerName> {
         let homeserver = self.client.homeserver();
-        OwnedServerName::from_str(&homeserver.host().unwrap().to_string())
+        let host = homeserver
+            .host()
+            .ok_or_else(|| anyhow!("Homeserver has no host"))?;
+        OwnedServerName::from_str(&host.to_string())
             .map_err(|e| anyhow!("Invalid server name: {:?}", e))
     }
 
@@ -112,7 +115,7 @@ impl MatrixDriver for BotMatrixDriver {
 
             let mut request = v3::Request::new();
             request.name = Some(format!("Comments: {}", site_id_str));
-            request.room_alias_name = Some(alias_localpart);
+            request.room_alias_name = Some(alias_localpart.try_into()?);
 
             let mut creation_content = v3::CreationContent::new();
             creation_content.room_type = Some(RoomType::Space);
@@ -225,7 +228,7 @@ impl MatrixDriver for BotMatrixDriver {
                 site_id.as_str(),
                 post_slug.as_str()
             ));
-            request.room_alias_name = Some(alias_localpart);
+            request.room_alias_name = Some(alias_localpart.try_into()?);
             request.preset = Some(RoomPreset::PublicChat);
             request.invite = vec![self.owner_id.clone()];
 
@@ -302,21 +305,65 @@ impl MatrixDriver for BotMatrixDriver {
     }
 
     #[instrument(skip(self))]
+    async fn update_message(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        new_content: &str,
+        nickname: &str,
+        fingerprint: &str,
+    ) -> Result<String> {
+        let room_id_owned: OwnedRoomId = room_id.try_into()?;
+        let room = self
+            .client
+            .get_room(&room_id_owned)
+            .ok_or_else(|| anyhow!("Room {} not found", room_id))?;
+
+        let formatted_content = format!("**{}**: {}", nickname, new_content);
+        let event_id_owned: OwnedEventId = event_id.try_into()?;
+
+        // Construct m.replace relation
+        let message_json = serde_json::json!({
+            "msgtype": "m.text",
+            "body": format!(" * {}", formatted_content),
+            "m.new_content": {
+                "msgtype": "m.text",
+                "body": formatted_content,
+                "format": "org.matrix.custom.html",
+                "formatted_body": format!("<strong>{}</strong>: {}", nickname, new_content),
+                "cumments_author_fingerprint": fingerprint,
+            },
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": event_id_owned,
+            }
+        });
+
+        let content: RoomMessageEventContent = serde_json::from_value(message_json)?;
+        let response = room.send(content).await?;
+        Ok(response.response.event_id.to_string())
+    }
+
+    #[instrument(skip(self))]
     async fn redact_message(
         &self,
-        _site_id: &SiteId,
-        _post_slug: &PostSlug,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
         event_id: &str,
     ) -> Result<()> {
-        let room_id_str = "placeholder"; // We should probably pass room_id here too
+        let space_id = self.create_site_space(site_id).await?;
+        let room_id_str = self
+            .ensure_comment_room(site_id, post_slug, &space_id)
+            .await?;
+
         let room_id: OwnedRoomId = room_id_str.try_into()?;
         let room = self
             .client
             .get_room(&room_id)
             .ok_or_else(|| anyhow!("Room {} not found in state", room_id))?;
 
-        let event_id_owned: &EventId = event_id.try_into()?;
-        room.redact(event_id_owned, None, None).await?;
+        let event_id_owned: OwnedEventId = event_id.try_into()?;
+        room.redact(&event_id_owned, None, None).await?;
 
         Ok(())
     }
