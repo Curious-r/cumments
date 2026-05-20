@@ -3,15 +3,19 @@ use matrix_sdk::{
     RoomState,
     room::Room,
     ruma::{
-        events::room::{
-            member::StrippedRoomMemberEvent,
-            message::{MessageType, Relation, SyncRoomMessageEvent},
-            redaction::SyncRoomRedactionEvent,
+        events::{
+            room::{
+                member::StrippedRoomMemberEvent,
+                message::{MessageType, Relation, SyncRoomMessageEvent},
+                redaction::SyncRoomRedactionEvent,
+            },
+            space::child::SyncSpaceChildEvent,
         },
         serde::Raw,
     },
 };
 use serde::Deserialize;
+
 use sqlx::SqlitePool;
 use sqlx::types::chrono::NaiveDateTime;
 use std::sync::Arc;
@@ -77,7 +81,6 @@ impl Projector {
                     }
                 }
             });
-        // ... (rest of the file)
 
         let pool = self.pool.clone();
         let bus = self.event_bus.clone();
@@ -92,10 +95,110 @@ impl Projector {
                 }
             });
 
+        // Registry Handler: Watch for Space children changes
+        let pool = self.pool.clone();
+        self.client.add_event_handler(
+            move |event: Raw<matrix_sdk::ruma::events::room::topic::SyncRoomTopicEvent>,
+                  room: Room| {
+                // Topic is just a placeholder here, we actually want any state event in a space
+                // But matrix-sdk allows us to add generic state handlers
+                let _ = (event, room, pool.clone());
+                async move {}
+            },
+        );
+
+        // Better way: use a generic state event handler if possible, or specifically SpaceChild
+        let pool = self.pool.clone();
+        self.client.add_event_handler(
+            move |event: Raw<matrix_sdk::ruma::events::AnySyncStateEvent>, room: Room| {
+                let pool = pool.clone();
+                async move {
+                    if let Ok(ev) = event.deserialize() {
+                        use matrix_sdk::ruma::events::AnySyncStateEvent;
+                        if let AnySyncStateEvent::SpaceChild(child_ev) = ev {
+                            on_space_child(child_ev, room, pool).await;
+                        }
+                    }
+                }
+            },
+        );
+
         self.client
             .add_event_handler(|_event: StrippedRoomMemberEvent, room: Room| async move {
                 on_invited_room(room).await;
             });
+    }
+}
+
+// ...
+
+/// The event handler for Space children changes (Registry).
+#[instrument(skip_all)]
+async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool) {
+    // 1. Identify which site this Space belongs to
+    // Space metadata only has site_id, post_slug is None
+    let site_id = if let Ok(Some(meta_ev)) = room
+        .get_state_event("im.cumments.metadata".into(), "")
+        .await
+    {
+        if let Ok(json_str) = serde_json::to_string(&meta_ev) {
+            serde_json::from_str::<RoomMetadata>(&json_str)
+                .ok()
+                .map(|m| m.site_id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let site_id = match site_id {
+        Some(id) => id,
+        None => return, // Not a managed Space
+    };
+
+    let child_room_id_str = event.state_key().to_string();
+
+    // Determine if it was added or removed
+    if let SyncSpaceChildEvent::Original(msg) = event {
+        let is_active = !msg.content.via.is_empty();
+
+        if is_active {
+            // Register/Update the room in registry
+            if let Ok(child_room_id) =
+                matrix_sdk::ruma::OwnedRoomId::try_from(child_room_id_str.clone())
+            {
+                if let Some(child_room) = room.client().get_room(&child_room_id) {
+                    if let Some((_, post_slug)) = get_room_identity(&child_room).await {
+                        let _ = sqlx::query!(
+                            r#"
+                            INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
+                            VALUES (?, ?, ?, 1)
+                            ON CONFLICT(room_id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+                            "#,
+                            child_room_id_str,
+                            site_id,
+                            post_slug
+                        )
+                        .execute(&pool)
+                        .await;
+                        info!(
+                            "Registered active room {} for site {}",
+                            child_room_id_str, site_id
+                        );
+                    }
+                }
+            }
+        } else {
+            // Mark as inactive
+            let _ = sqlx::query!(
+                "UPDATE room_registry SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
+                child_room_id_str
+            )
+            .execute(&pool)
+            .await;
+            info!("Unregistered room {} from registry", child_room_id_str);
+        }
     }
 }
 
@@ -156,6 +259,42 @@ async fn on_room_message(
     intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomMessageEvent::Original(msg) = event {
+        // --- PRINCIPLE B: REGISTRY ENFORCEMENT ---
+        let room_id_str = room.room_id().to_string();
+        let is_active = sqlx::query_scalar!(
+            "SELECT is_active FROM room_registry WHERE room_id = ?",
+            room_id_str
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or(Some(false))
+        .unwrap_or(false);
+
+        if !is_active {
+            // If not in registry, maybe it's a new room we haven't registered yet?
+            // Let's attempt a just-in-time registration if it has metadata.
+            if let Some((site_id, post_slug)) = get_room_identity(&room).await {
+                // If it's a managed room, we check if it belongs to a valid Space (later)
+                // For now, if it has metadata, we assume it's legit but might have missed the Space event.
+                // In Phase 2, we should ideally verify against the Space.
+                let _ = sqlx::query!(
+                    r#"
+                    INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
+                    VALUES (?, ?, ?, 1)
+                    ON CONFLICT(room_id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+                    "#,
+                    room_id_str,
+                    site_id,
+                    post_slug
+                )
+                .execute(&pool)
+                .await;
+            } else {
+                debug!("Ignoring message from unregistered room {}", room_id_str);
+                return;
+            }
+        }
+
         // 0. Identify the room context
         let (site_id, post_slug) = match get_room_identity(&room).await {
             Some(id) => id,
