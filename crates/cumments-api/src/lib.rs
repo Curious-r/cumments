@@ -16,7 +16,7 @@ use cumments_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use validator::Validate;
@@ -90,6 +90,7 @@ pub struct ApiState {
     pub store: Arc<dyn ApiStore>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
+    pub reconciler_notify: Arc<Notify>,
 }
 
 /// The query parameters for pagination.
@@ -265,16 +266,17 @@ async fn post_comment_handler(
         author_fingerprint: req.author_fingerprint,
         reply_to: req.reply_to,
     };
-
     // 3. Save the intent for the reconciler
     match state.store.save_post_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
+            state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
                 "Comment received and queued for processing.",
             ))
         }
+
         Err(e) => {
             tracing::error!("Failed to save comment intent: {:?}", e);
             Err(AppError::Internal("Failed to queue comment.".to_string()))
@@ -334,6 +336,7 @@ async fn delete_comment_handler(
     match state.store.save_delete_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a delete comment intent.");
+            state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
                 "Delete request received and queued for processing.",
@@ -401,6 +404,7 @@ async fn update_comment_handler(
     match state.store.save_update_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved an update comment intent.");
+            state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
                 "Update request received and queued for processing.",

@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
+use tokio::sync::Notify;
+
 /// The Reconciler acts as the Orchestrator of the background process.
 /// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
 pub struct Reconciler {
@@ -16,6 +18,7 @@ pub struct Reconciler {
     intent_store: Arc<dyn IntentStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
+    notify: Arc<Notify>,
 }
 
 impl Reconciler {
@@ -24,23 +27,32 @@ impl Reconciler {
         intent_store: Arc<dyn IntentStore>,
         driver: Arc<dyn MatrixDriver>,
         site_service: Arc<SiteService>,
+        notify: Arc<Notify>,
     ) -> Self {
         Self {
             pool,
             intent_store,
             driver,
             site_service,
+            notify,
         }
     }
 
     /// Runs the main reconciliation loop.
     pub async fn run(&self) {
-        info!("Starting reconciler loop...");
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        info!("Starting reactive reconciler loop...");
+        // Fallback interval for retries and periodic cleanup
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
 
         loop {
-            interval.tick().await;
-            tracing::debug!("Reconciler tick: Checking for new intents...");
+            tokio::select! {
+                _ = interval.tick() => {
+                    tracing::debug!("Reconciler: Periodic scan triggered.");
+                }
+                _ = self.notify.notified() => {
+                    tracing::debug!("Reconciler: Instant wake-up triggered by notification.");
+                }
+            }
 
             match self.reconcile().await {
                 Ok(count) => {
