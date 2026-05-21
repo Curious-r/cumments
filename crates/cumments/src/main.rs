@@ -102,7 +102,9 @@ async fn main() -> Result<()> {
                 .clone()
                 .expect("Matrix client should be initialized");
             let owner_id = settings.matrix.owner_id.clone().try_into()?;
-            Arc::new(cumments_matrix::bot::BotMatrixDriver::new(client, owner_id))
+            Arc::new(cumments_matrix::bot::BotMatrixDriver::new(
+                client, owner_id,
+            )?)
         }
         _ => {
             tracing::info!("Using 'logging' mode driver.");
