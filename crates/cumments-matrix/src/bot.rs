@@ -7,7 +7,7 @@ use cumments_core::{
 use matrix_sdk::{
     Client, RoomState,
     ruma::{
-        Int, OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedServerName, OwnedUserId,
+        Int, OwnedEventId, OwnedRoomId, OwnedServerName, OwnedUserId,
         api::client::room::create_room::v3::{self, RoomPreset},
         events::{
             EmptyStateKey, InitialStateEvent,
