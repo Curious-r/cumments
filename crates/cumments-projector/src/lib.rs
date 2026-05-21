@@ -124,9 +124,10 @@ async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool
         .get_state_event("im.cumments.metadata".into(), "")
         .await
     {
-        serde_json::to_string(&meta_ev)
+        serde_json::to_value(&meta_ev)
             .ok()
-            .and_then(|json| serde_json::from_str::<RoomMetadata>(&json).ok())
+            .and_then(|v| v.get("content").cloned())
+            .and_then(|c| serde_json::from_value::<RoomMetadata>(c).ok())
             .map(|m| m.site_id)
     } else {
         None
@@ -136,6 +137,23 @@ async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool
         Some(id) => id,
         None => return, // Not a managed Space
     };
+
+    // AUTO-DISCOVERY: Ensure the site itself exists in the store
+    // This handles the case where the space exists on Matrix but not in local DB
+    let room_id_owned = room.room_id().to_string();
+    let _ = sqlx::query!(
+        r#"
+        INSERT INTO sites (id, matrix_space_id, display_name, created_at)
+        SELECT ?, ?, ?, CURRENT_TIMESTAMP
+        WHERE NOT EXISTS (SELECT 1 FROM sites WHERE id = ?)
+        "#,
+        site_id,
+        room_id_owned,
+        site_id,
+        site_id
+    )
+    .execute(&pool)
+    .await;
 
     let child_room_id_str = event.state_key().to_string();
 
@@ -200,10 +218,12 @@ async fn get_room_identity(room: &Room) -> Option<(String, String)> {
     {
         // Since the Enum is private, we'll use the JSON representation
         // to bypass the type system safely.
-        if let Ok(json_str) = serde_json::to_string(&ev) {
-            if let Ok(m) = serde_json::from_str::<RoomMetadata>(&json_str) {
-                if let Some(slug) = m.post_slug {
-                    return Some((m.site_id, slug));
+        if let Ok(v) = serde_json::to_value(&ev) {
+            if let Some(content) = v.get("content") {
+                if let Ok(m) = serde_json::from_value::<RoomMetadata>(content.clone()) {
+                    if let Some(slug) = m.post_slug {
+                        return Some((m.site_id, slug));
+                    }
                 }
             }
         }
@@ -239,34 +259,63 @@ async fn on_room_message(
     if let SyncRoomMessageEvent::Original(msg) = event {
         // --- PRINCIPLE B: REGISTRY ENFORCEMENT ---
         let room_id_str = room.room_id().to_string();
-        let is_active = sqlx::query_scalar!(
+        let registry_status = sqlx::query!(
             "SELECT is_active FROM room_registry WHERE room_id = ?",
             room_id_str
         )
         .fetch_optional(&pool)
         .await
-        .unwrap_or(Some(false))
-        .unwrap_or(false);
+        .unwrap_or(None);
 
-        if !is_active {
-            // If not in registry, maybe it's a new room we haven't registered yet?
-            // Let's attempt a just-in-time registration if it has metadata.
-            if let Some((site_id, post_slug)) = get_room_identity(&room).await {
-                let _ = sqlx::query!(
-                    r#"
-                    INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
-                    VALUES (?, ?, ?, 1)
-                    ON CONFLICT(room_id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
-                    "#,
-                    room_id_str,
-                    site_id,
-                    post_slug
-                )
-                .execute(&pool)
-                .await;
-            } else {
-                debug!("Ignoring message from unregistered room {}", room_id_str);
+        match registry_status {
+            Some(row) if row.is_active => {
+                // Room is active, proceed normally
+            }
+            Some(_) => {
+                // Room exists but is explicitly INACTIVE (tombstoned).
+                // We MUST respect this to prevent zombie rooms from resurrecting.
+                debug!("Ignoring message from deactivated room {}", room_id_str);
                 return;
+            }
+            None => {
+                // Room is completely UNKNOWN to us.
+                // Attempt just-in-time registration if it has valid metadata.
+                if let Some((site_id, post_slug)) = get_room_identity(&room).await {
+                    // AUTO-DISCOVERY: Ensure the site itself exists in the store
+                    let room_id_owned = room.room_id().to_string();
+                    let _ = sqlx::query!(
+                        r#"
+                        INSERT INTO sites (id, matrix_space_id, display_name, created_at)
+                        SELECT ?, ?, ?, CURRENT_TIMESTAMP
+                        WHERE NOT EXISTS (SELECT 1 FROM sites WHERE id = ?)
+                        "#,
+                        site_id,
+                        room_id_owned,
+                        site_id,
+                        site_id
+                    )
+                    .execute(&pool)
+                    .await;
+
+                    let _ = sqlx::query!(
+                        r#"
+                        INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
+                        VALUES (?, ?, ?, 1)
+                        "#,
+                        room_id_str,
+                        site_id,
+                        post_slug
+                    )
+                    .execute(&pool)
+                    .await;
+                    info!(
+                        "Just-in-time registered new room {} for site {}",
+                        room_id_str, site_id
+                    );
+                } else {
+                    debug!("Ignoring message from unregistered room {}", room_id_str);
+                    return;
+                }
             }
         }
 

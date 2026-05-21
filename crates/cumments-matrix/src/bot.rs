@@ -7,7 +7,7 @@ use cumments_core::{
 use matrix_sdk::{
     Client, RoomState,
     ruma::{
-        Int, OwnedEventId, OwnedRoomAliasId, OwnedRoomId, OwnedServerName, OwnedUserId,
+        Int, OwnedEventId, OwnedRoomId, OwnedServerName, OwnedUserId,
         api::client::room::create_room::v3::{self, RoomPreset},
         events::{
             EmptyStateKey, InitialStateEvent,
@@ -22,7 +22,7 @@ use matrix_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize, EventContent)]
 #[ruma_event(type = "im.cumments.metadata", kind = State, state_key_type = EmptyStateKey)]
@@ -37,22 +37,24 @@ struct RoomMetadataContent {
 pub struct BotMatrixDriver {
     client: Client,
     owner_id: OwnedUserId,
+    server_name: OwnedServerName,
 }
 
 impl BotMatrixDriver {
     /// Creates a new BotMatrixDriver using an existing Matrix client and owner ID.
-    pub fn new(client: Client, owner_id: OwnedUserId) -> Self {
-        Self { client, owner_id }
-    }
-
-    /// Internal helper to get server name.
-    fn server_name(&self) -> Result<OwnedServerName> {
-        let homeserver = self.client.homeserver();
+    pub fn new(client: Client, owner_id: OwnedUserId) -> Result<Self> {
+        let homeserver = client.homeserver();
         let host = homeserver
             .host()
             .ok_or_else(|| anyhow!("Homeserver has no host"))?;
-        OwnedServerName::from_str(&host.to_string())
-            .map_err(|e| anyhow!("Invalid server name: {:?}", e))
+        let server_name = OwnedServerName::from_str(&host.to_string())
+            .map_err(|e| anyhow!("Invalid server name: {:?}", e))?;
+
+        Ok(Self {
+            client,
+            owner_id,
+            server_name,
+        })
     }
 
     // ... helper for sending metadata
@@ -74,7 +76,13 @@ impl BotMatrixDriver {
         };
 
         // For EventContent with EmptyStateKey, we use send_state_event
-        room.send_state_event(content).await?;
+        // Use a timeout to prevent hanging the reconciler
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            room.send_state_event(content),
+        )
+        .await
+        .map_err(|_| anyhow!("Timeout setting room metadata"))??;
         Ok(())
     }
 }
@@ -84,62 +92,61 @@ impl MatrixDriver for BotMatrixDriver {
     #[instrument(skip(self), fields(site_id = %site_id.as_str()))]
     async fn create_site_space(&self, site_id: &SiteId) -> Result<String> {
         let site_id_str = site_id.as_str();
-        let homeserver_domain = self.server_name()?;
         let alias_localpart = format!("cumments_{}", site_id_str);
-        let room_alias_string = format!("#cumments_{}:{}", site_id_str, homeserver_domain);
-        let room_alias: OwnedRoomAliasId = room_alias_string.as_str().try_into()?;
 
-        // 1. Try to resolve the alias first (Idempotency)
-        let room_id = if let Some(room_id) = self
-            .client
-            .resolve_room_alias(&room_alias)
-            .await
-            .ok()
-            .map(|r| r.room_id)
-        {
-            info!(
-                "Space for site {} already exists, resolving to {}",
-                site_id_str, room_id
-            );
-            if let Some(room) = self.client.get_room(&room_id) {
-                if room.state() != RoomState::Joined {
-                    room.join().await?;
-                }
-            } else {
-                self.client.join_room_by_id(&room_id).await?;
+        // OPTIMISTIC STRATEGY:
+        // We skip resolve_room_alias entirely because it often deadlocks with Sync.
+        // We directly try to create the room. If it fails with 'alias in use',
+        // we assume the Projector will discover it via Sync and populate the DB.
+
+        info!("Creating new space for site {}", site_id_str);
+
+        let mut request = v3::Request::new();
+        request.name = Some(format!("Comments: {}", site_id_str));
+        request.room_alias_name = Some(alias_localpart.try_into()?);
+
+        let mut creation_content = v3::CreationContent::new();
+        creation_content.room_type = Some(RoomType::Space);
+        request.creation_content = Some(Raw::new(&creation_content)?);
+
+        request.invite = vec![self.owner_id.clone()];
+        let mut power_levels = RoomPowerLevelsEventContent::new(&AuthorizationRules::V1);
+        power_levels
+            .users
+            .insert(self.owner_id.clone(), Int::from(100));
+        if let Some(bot_id) = self.client.user_id() {
+            power_levels.users.insert(bot_id.to_owned(), Int::from(100));
+        }
+        let pl_event = InitialStateEvent::with_empty_state_key(power_levels);
+        request.initial_state = vec![pl_event.to_raw_any()];
+
+        let create_result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.client.create_room(request),
+        )
+        .await;
+
+        match create_result {
+            Ok(Ok(response)) => {
+                let room_id = response.room_id().to_string();
+                // Ensure metadata is set
+                let _ = self.set_room_metadata(&room_id, site_id, None).await;
+                Ok(room_id)
             }
-            room_id.to_string()
-        } else {
-            // 2. Create new space if not found
-            info!("Creating new space for site {}", site_id_str);
-
-            let mut request = v3::Request::new();
-            request.name = Some(format!("Comments: {}", site_id_str));
-            request.room_alias_name = Some(alias_localpart.try_into()?);
-
-            let mut creation_content = v3::CreationContent::new();
-            creation_content.room_type = Some(RoomType::Space);
-            request.creation_content = Some(Raw::new(&creation_content)?);
-
-            request.invite = vec![self.owner_id.clone()];
-            let mut power_levels = RoomPowerLevelsEventContent::new(&AuthorizationRules::V1);
-            power_levels
-                .users
-                .insert(self.owner_id.clone(), Int::from(100));
-            if let Some(bot_id) = self.client.user_id() {
-                power_levels.users.insert(bot_id.to_owned(), Int::from(100));
+            Ok(Err(e)) => {
+                // If the error is 'Room alias already exists', it's actually "fine" for our flow.
+                // We return an error so the Reconciler retries, but meanwhile the Projector
+                // will see this space during Sync and register it in the local DB.
+                warn!(
+                    "Matrix create_room failed: {}. This may be normal if the alias is already taken.",
+                    e
+                );
+                Err(anyhow!(
+                    "Site space exists on Matrix but not in local DB. Waiting for Sync discovery..."
+                ))
             }
-            let pl_event = InitialStateEvent::with_empty_state_key(power_levels);
-            request.initial_state = vec![pl_event.to_raw_any()];
-
-            let response = self.client.create_room(request).await?;
-            response.room_id().to_string()
-        };
-
-        // Ensure metadata is set (even for existing rooms, to backfill)
-        let _ = self.set_room_metadata(&room_id, site_id, None).await;
-
-        Ok(room_id)
+            Err(_) => Err(anyhow!("Timeout creating site space")),
+        }
     }
 
     #[instrument(skip(self), fields(site_id = %site_id.as_str(), post_slug = %post_slug.as_str()))]
@@ -166,23 +173,15 @@ impl MatrixDriver for BotMatrixDriver {
                     if let Ok(Some(meta_ev)) =
                         room.get_state_event_static::<RoomMetadataContent>().await
                     {
-                        if let Ok(json_str) = serde_json::to_string(&meta_ev) {
-                            if let Ok(full_json) =
-                                serde_json::from_str::<serde_json::Value>(&json_str)
-                            {
-                                if let Some(content_val) = full_json.get("content") {
-                                    if let Ok(m) = serde_json::from_value::<RoomMetadataContent>(
-                                        content_val.clone(),
-                                    ) {
-                                        if m.site_id == site_id.as_str()
-                                            && m.post_slug.as_deref() == Some(post_slug.as_str())
-                                        {
-                                            info!(
-                                                "Validated candidate room {} via metadata",
-                                                candidate
-                                            );
-                                            target_room_id = Some(id);
-                                        }
+                        if let Ok(v) = serde_json::to_value(&meta_ev) {
+                            if let Some(content_val) = v.get("content") {
+                                if let Ok(m) = serde_json::from_value::<RoomMetadataContent>(
+                                    content_val.clone(),
+                                ) {
+                                    if m.site_id == site_id.as_str()
+                                        && m.post_slug.as_deref() == Some(post_slug.as_str())
+                                    {
+                                        target_room_id = Some(id);
                                     }
                                 }
                             }
@@ -192,70 +191,19 @@ impl MatrixDriver for BotMatrixDriver {
             }
         }
 
-        // --- PHASE 1: DISCOVERY (Traverse Space Children) ---
-        if target_room_id.is_none() {
-            info!("Searching for existing room in space {}", space_id);
-            let child_events = space.get_state_events("m.space.child".into()).await?;
-
-            for event in child_events {
-                // Since RawAnySyncOrStrippedState is private, we use the JSON representation
-                if let Ok(json_val) = serde_json::to_value(&event) {
-                    let state_key = json_val.get("state_key").and_then(|v| v.as_str());
-                    if let Some(sk) = state_key {
-                        if let Ok(child_room_id) = OwnedRoomId::try_from(sk) {
-                            // Check if this room has the correct metadata
-                            if let Some(child_room) = self.client.get_room(&child_room_id) {
-                                if let Ok(Some(meta_ev)) = child_room
-                                    .get_state_event_static::<RoomMetadataContent>()
-                                    .await
-                                {
-                                    if let Ok(json_str) = serde_json::to_string(&meta_ev) {
-                                        if let Ok(full_json) =
-                                            serde_json::from_str::<serde_json::Value>(&json_str)
-                                        {
-                                            if let Some(content_val) = full_json.get("content") {
-                                                if let Ok(m) =
-                                                    serde_json::from_value::<RoomMetadataContent>(
-                                                        content_val.clone(),
-                                                    )
-                                                {
-                                                    if m.site_id == site_id.as_str()
-                                                        && m.post_slug.as_deref()
-                                                            == Some(post_slug.as_str())
-                                                    {
-                                                        info!(
-                                                            "Found matching room {} via metadata",
-                                                            child_room_id
-                                                        );
-                                                        target_room_id = Some(child_room_id);
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- PHASE 2: CREATION OR RESOLUTION ---
+        // --- PHASE 1: CREATION OR RESOLUTION ---
         let room_id = if let Some(id) = target_room_id {
             // Found existing room via metadata
             if let Some(room) = self.client.get_room(&id) {
                 if room.state() != RoomState::Joined {
-                    room.join().await?;
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(10), room.join()).await;
                 }
-            } else {
-                self.client.join_room_by_id(&id).await?;
             }
             id
         } else {
             // No room found in space metadata, create a new one
-            info!("No matching room found in space. Creating new comment room.");
+            info!("No matching room found in candidate. Creating new comment room.");
             let alias_localpart = format!("cumments_{}_{}", site_id.as_str(), post_slug.as_str());
 
             let mut request = v3::Request::new();
@@ -278,26 +226,35 @@ impl MatrixDriver for BotMatrixDriver {
             let pl_event = InitialStateEvent::with_empty_state_key(power_levels);
             request.initial_state = vec![pl_event.to_raw_any()];
 
-            let response = self.client.create_room(request).await?;
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.client.create_room(request),
+            )
+            .await
+            .map_err(|_| anyhow!("Timeout creating comment room"))??;
+
             let new_room_id = response.room_id().to_owned();
 
             // Link to Space (Registry Update)
-            let server_name = self.server_name()?;
-            let child_content = SpaceChildEventContent::new(vec![server_name.clone()]);
-            let _ = space
-                .send_state_event_for_key(&new_room_id, child_content)
-                .await;
+            let child_content = SpaceChildEventContent::new(vec![self.server_name.clone()]);
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                space.send_state_event_for_key(&new_room_id, child_content),
+            )
+            .await;
 
             if let Some(child_room) = self.client.get_room(&new_room_id) {
-                let parent_content = SpaceParentEventContent::new(vec![server_name]);
-                let _ = child_room
-                    .send_state_event_for_key(&space_room_id, parent_content)
-                    .await;
+                let parent_content = SpaceParentEventContent::new(vec![self.server_name.clone()]);
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    child_room.send_state_event_for_key(&space_room_id, parent_content),
+                )
+                .await;
             }
             new_room_id
         };
 
-        // --- PHASE 3: METADATA ENFORCEMENT ---
+        // --- PHASE 2: METADATA ENFORCEMENT ---
         let room_id_str = room_id.to_string();
 
         // Ensure metadata is set (Source of Truth)
@@ -336,7 +293,9 @@ impl MatrixDriver for BotMatrixDriver {
 
         let content: RoomMessageEventContent = serde_json::from_value(message_json)?;
 
-        let response = room.send(content).await?;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(20), room.send(content))
+            .await
+            .map_err(|_| anyhow!("Timeout posting message"))??;
         Ok(response.response.event_id.to_string())
     }
 
@@ -376,7 +335,9 @@ impl MatrixDriver for BotMatrixDriver {
         });
 
         let content: RoomMessageEventContent = serde_json::from_value(message_json)?;
-        let response = room.send(content).await?;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(20), room.send(content))
+            .await
+            .map_err(|_| anyhow!("Timeout updating message"))??;
         Ok(response.response.event_id.to_string())
     }
 
@@ -389,7 +350,12 @@ impl MatrixDriver for BotMatrixDriver {
             .ok_or_else(|| anyhow!("Room {} not found in state", room_id))?;
 
         let event_id_owned: OwnedEventId = event_id.try_into()?;
-        room.redact(&event_id_owned, None, None).await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            room.redact(&event_id_owned, None, None),
+        )
+        .await
+        .map_err(|_| anyhow!("Timeout redacting message"))??;
 
         Ok(())
     }
