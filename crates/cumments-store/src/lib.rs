@@ -9,6 +9,7 @@ use sea_orm::{
 };
 
 pub mod entities;
+pub mod migration;
 
 /// A database-backed implementation of the storage ports.
 #[derive(Clone)]
@@ -19,7 +20,9 @@ pub struct DbStore {
 impl DbStore {
     /// Creates a new DbStore by connecting to the database at the given URL.
     pub async fn connect(url: &str) -> Result<Self> {
+        use migration::MigratorTrait;
         let db = sea_orm::Database::connect(url).await?;
+        migration::Migrator::up(&db, None).await?;
         Ok(Self { db })
     }
 }
