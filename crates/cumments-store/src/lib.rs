@@ -5,30 +5,29 @@ use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, SqlxSqliteConnector,
+    QueryOrder, QuerySelect, Set,
 };
-use sqlx::SqlitePool;
 
 pub mod entities;
 
-/// A SqliteStore implementation of the storage ports.
+/// A database-backed implementation of the storage ports.
 #[derive(Clone)]
-pub struct SqliteStore {
+pub struct DbStore {
     db: DatabaseConnection,
 }
 
-impl SqliteStore {
-    /// Creates a new SqliteStore using an existing SqlitePool.
-    pub fn new(pool: SqlitePool) -> Self {
-        let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
-        Self { db }
+impl DbStore {
+    /// Creates a new DbStore by connecting to the database at the given URL.
+    pub async fn connect(url: &str) -> Result<Self> {
+        let db = sea_orm::Database::connect(url).await?;
+        Ok(Self { db })
     }
 }
 
 use crate::entities::*;
 
 #[async_trait]
-impl IntentStore for SqliteStore {
+impl IntentStore for DbStore {
     async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
         let payload = serde_json::to_string(intent)?;
 
@@ -276,7 +275,7 @@ impl IntentStore for SqliteStore {
 }
 
 #[async_trait]
-impl CommentStore for SqliteStore {
+impl CommentStore for DbStore {
     async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>> {
         let model = comments::Entity::find()
             .filter(comments::Column::EventId.eq(event_id))
@@ -389,7 +388,7 @@ impl CommentStore for SqliteStore {
 }
 
 #[async_trait]
-impl RegistryStore for SqliteStore {
+impl RegistryStore for DbStore {
     async fn get_registered_room(
         &self,
         site_id: &SiteId,
@@ -457,7 +456,7 @@ impl RegistryStore for SqliteStore {
 }
 
 #[async_trait]
-impl SiteStore for SqliteStore {
+impl SiteStore for DbStore {
     async fn get_site(&self, id: &SiteId) -> Result<Option<Site>> {
         let model = sites::Entity::find_by_id(id.as_str().to_owned())
             .one(&self.db)

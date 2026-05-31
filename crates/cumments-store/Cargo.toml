@@ -11,6 +11,6 @@ anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
 sea-orm.workspace = true
 tokio.workspace = true

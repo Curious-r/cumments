@@ -870,7 +870,6 @@ dependencies = [
  "dotenvy",
  "matrix-sdk",
  "serde",
- "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
