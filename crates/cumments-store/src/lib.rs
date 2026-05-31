@@ -6,6 +6,8 @@ use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
 use sqlx::SqlitePool;
 
+pub mod entities;
+
 /// A SqliteStore implementation of the storage ports.
 #[derive(Clone)]
 pub struct SqliteStore {
