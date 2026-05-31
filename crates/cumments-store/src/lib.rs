@@ -4,6 +4,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
+use sea_orm::{DatabaseConnection, SqlxSqliteConnector};
 use sqlx::SqlitePool;
 
 pub mod entities;
@@ -12,12 +13,14 @@ pub mod entities;
 #[derive(Clone)]
 pub struct SqliteStore {
     pool: SqlitePool,
+    db: DatabaseConnection,
 }
 
 impl SqliteStore {
     /// Creates a new SqliteStore using an existing SqlitePool.
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
+        Self { pool, db }
     }
 }
 
