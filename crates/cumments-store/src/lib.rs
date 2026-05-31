@@ -133,7 +133,7 @@ impl CommentStore for SqliteStore {
         let row = sqlx::query_as!(
             CommentRow,
             r#"
-            SELECT event_id, author_nickname, author_fingerprint, content, timestamp
+            SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime"
             FROM comments
             WHERE event_id = ?
             "#,
@@ -166,13 +166,16 @@ impl CommentStore for SqliteStore {
         )
         .fetch_one(&self.pool);
 
+        let site_id_str = site_id.as_str();
+        let post_slug_str = post_slug.as_str();
+
         let comments_query = sqlx::query_as!(
             CommentRow,
             r#"
-            SELECT event_id, author_nickname, author_fingerprint, content, timestamp
+            SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime"
             FROM comments
             WHERE site_id = ? AND post_slug = ?
-            ORDER BY timestamp ASC
+            ORDER BY timestamp DESC
             LIMIT ? OFFSET ?
             "#,
             site_id_str,
@@ -230,7 +233,7 @@ impl SiteStore for SqliteStore {
         let row = sqlx::query_as!(
             SiteRow,
             r#"
-            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!"
+            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!: NaiveDateTime"
             FROM sites
             WHERE id = ?
             "#,
