@@ -39,16 +39,16 @@ async fn main() -> Result<()> {
     tracing::info!("Configuration loaded successfully.");
     tracing::debug!("Loaded settings: {:?}", settings);
 
-    // 2. Initialize database pool and Store
-    let db_pool = sqlx::SqlitePool::connect(&settings.database.url)
-        .await
-        .expect("Failed to connect to database.");
-    tracing::info!("Database pool initialized.");
-
-    let sqlite_store = Arc::new(cumments_store::SqliteStore::new(db_pool.clone()));
+    // 2. Initialize database Store
+    let db_store = Arc::new(
+        cumments_store::DbStore::connect(&settings.database.url)
+            .await
+            .expect("Failed to connect to database."),
+    );
+    tracing::info!("Database initialized.");
 
     // 3. Initialize Domain Services (Brain)
-    let site_service = Arc::new(SiteService::new(sqlite_store.clone()));
+    let site_service = Arc::new(SiteService::new(db_store.clone()));
 
     // 4. Initialize Event Bus for real-time updates (SSE)
     let (event_bus, _) = broadcast::channel(100);
@@ -117,9 +117,9 @@ async fn main() -> Result<()> {
 
     // 7. Initialize and run Reconciler (Orchestrator) in the background
     let reconciler = cumments_reconciler::Reconciler::new(
-        db_pool.clone(),
-        sqlite_store.clone(),
-        sqlite_store.clone(), // RegistryStore
+        db_store.clone(), // IntentStore
+        db_store.clone(), // RegistryStore
+        db_store.clone(), // CommentStore
         driver.clone(),
         site_service.clone(),
         reconciler_notify.clone(),
@@ -133,8 +133,10 @@ async fn main() -> Result<()> {
     if let Some(client) = matrix_client.clone() {
         let projector = cumments_projector::Projector::new(
             client,
-            db_pool.clone(),
-            sqlite_store.clone(),
+            db_store.clone(), // SiteStore
+            db_store.clone(), // RegistryStore
+            db_store.clone(), // CommentStore
+            db_store.clone(), // IntentStore
             event_bus.clone(),
         );
         projector.register_handlers();
@@ -147,7 +149,7 @@ async fn main() -> Result<()> {
         settings.security.pow_difficulty,
     );
     let api_state = cumments_api::ApiState {
-        store: sqlite_store,
+        store: db_store,
         pow: Arc::new(pow),
         event_bus,
         reconciler_notify,

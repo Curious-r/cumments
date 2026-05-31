@@ -1,38 +1,47 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
-use sqlx::SqlitePool;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set,
+};
 
-/// A SqliteStore implementation of the storage ports.
+pub mod entities;
+pub mod migration;
+
+/// A database-backed implementation of the storage ports.
 #[derive(Clone)]
-pub struct SqliteStore {
-    pool: SqlitePool,
+pub struct DbStore {
+    db: DatabaseConnection,
 }
 
-impl SqliteStore {
-    /// Creates a new SqliteStore using an existing SqlitePool.
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+impl DbStore {
+    /// Creates a new DbStore by connecting to the database at the given URL.
+    pub async fn connect(url: &str) -> Result<Self> {
+        use migration::MigratorTrait;
+        let db = sea_orm::Database::connect(url).await?;
+        migration::Migrator::up(&db, None).await?;
+        Ok(Self { db })
     }
 }
 
+use crate::entities::*;
+
 #[async_trait]
-impl IntentStore for SqliteStore {
+impl IntentStore for DbStore {
     async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
         let payload = serde_json::to_string(intent)?;
 
-        sqlx::query!(
-            r#"
-            INSERT INTO intent_queue_post_comment (payload)
-            VALUES (?)
-            "#,
-            payload
-        )
-        .execute(&self.pool)
-        .await?;
+        let active_model = intent_queue_post_comment::ActiveModel {
+            payload: Set(payload),
+            status: Set("pending".to_owned()),
+            retry_count: Set(0),
+            ..Default::default()
+        };
+
+        active_model.insert(&self.db).await?;
 
         Ok(())
     }
@@ -40,109 +49,243 @@ impl IntentStore for SqliteStore {
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()> {
         let payload = serde_json::to_string(intent)?;
 
-        sqlx::query!(
-            r#"
-            INSERT INTO intent_queue_delete_comment (payload, target_event_id)
-            VALUES (?, ?)
-            "#,
-            payload,
-            intent.event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        let active_model = intent_queue_delete_comment::ActiveModel {
+            payload: Set(payload),
+            status: Set("pending".to_owned()),
+            target_event_id: Set(Some(intent.event_id.clone())),
+            ..Default::default()
+        };
+
+        active_model.insert(&self.db).await?;
 
         Ok(())
     }
 
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()> {
-        let site_id = intent.site_id.as_str();
-        let post_slug = intent.post_slug.as_str();
+        let active_model = intent_queue_update_comment::ActiveModel {
+            site_id: Set(intent.site_id.as_str().to_owned()),
+            post_slug: Set(intent.post_slug.as_str().to_owned()),
+            event_id: Set(intent.event_id.clone()),
+            content: Set(intent.content.clone()),
+            author_fingerprint: Set(intent.author_fingerprint.clone()),
+            status: Set("pending".to_owned()),
+            ..Default::default()
+        };
 
-        sqlx::query!(
-            r#"
-            INSERT INTO intent_queue_update_comment (site_id, post_slug, event_id, content, author_fingerprint)
-            VALUES (?, ?, ?, ?, ?)
-            "#,
-            site_id,
-            post_slug,
-            intent.event_id,
-            intent.content,
-            intent.author_fingerprint
-        )
-        .execute(&self.pool)
-        .await?;
+        active_model.insert(&self.db).await?;
 
         Ok(())
     }
 
+    async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>> {
+        let models = intent_queue_post_comment::Entity::find()
+            .filter(intent_queue_post_comment::Column::Status.eq("pending"))
+            .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
+            .all(&self.db)
+            .await?;
+
+        let mut intents = Vec::new();
+        for m in models {
+            let intent: PostCommentIntent = serde_json::from_str(&m.payload)?;
+            intents.push((m.id as i64, intent));
+        }
+        Ok(intents)
+    }
+
+    async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>> {
+        let models = intent_queue_delete_comment::Entity::find()
+            .filter(intent_queue_delete_comment::Column::Status.eq("pending"))
+            .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
+            .all(&self.db)
+            .await?;
+
+        let mut intents = Vec::new();
+        for m in models {
+            let intent: DeleteCommentIntent = serde_json::from_str(&m.payload)?;
+            intents.push((m.id as i64, intent));
+        }
+        Ok(intents)
+    }
+
+    async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>> {
+        let models = intent_queue_update_comment::Entity::find()
+            .filter(intent_queue_update_comment::Column::Status.eq("pending"))
+            .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
+            .all(&self.db)
+            .await?;
+
+        let mut intents = Vec::new();
+        for m in models {
+            let intent = UpdateCommentIntent {
+                site_id: m.site_id.into(),
+                post_slug: m.post_slug.into(),
+                event_id: m.event_id,
+                content: m.content,
+                author_fingerprint: m.author_fingerprint,
+            };
+            intents.push((m.id as i64, intent));
+        }
+        Ok(intents)
+    }
+
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_post_comment SET status = 'waiting_for_sync', matrix_event_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            event_id,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::MatrixEventId,
+                sea_orm::sea_query::Expr::value(event_id),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_post_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_update_comment SET status = 'waiting_for_sync', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_update_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_update_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_update_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_update_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_delete_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
+        intent_queue_delete_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_delete_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_delete_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_delete_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_post_intent_failed(&self, id: i64) -> Result<()> {
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("failed"),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_post_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_delete_intent_failed(&self, id: i64) -> Result<()> {
+        intent_queue_delete_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_delete_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("failed"),
+            )
+            .col_expr(
+                intent_queue_delete_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_delete_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_update_intent_failed(&self, id: i64) -> Result<()> {
+        intent_queue_update_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_update_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("failed"),
+            )
+            .col_expr(
+                intent_queue_update_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_update_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE matrix_event_id = ?",
-            event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("completed"),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_post_comment::Column::MatrixEventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE target_event_id = ?",
-            target_event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_delete_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_delete_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("completed"),
+            )
+            .col_expr(
+                intent_queue_delete_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_delete_comment::Column::TargetEventId.eq(target_event_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_update_intent_completed(&self, event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_update_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE event_id = ?",
-            event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_update_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_update_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("completed"),
+            )
+            .col_expr(
+                intent_queue_update_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_update_comment::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl CommentStore for SqliteStore {
+impl CommentStore for DbStore {
     async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>> {
-        let row = sqlx::query_as!(
-            CommentRow,
-            r#"
-            SELECT event_id, author_nickname, author_fingerprint, content, timestamp
-            FROM comments
-            WHERE event_id = ?
-            "#,
-            event_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let model = comments::Entity::find()
+            .filter(comments::Column::EventId.eq(event_id))
+            .one(&self.db)
+            .await?;
 
-        Ok(row.map(Comment::from))
+        Ok(model.map(Comment::from))
     }
 
     async fn get_comments(
@@ -155,152 +298,238 @@ impl CommentStore for SqliteStore {
         let site_id_str = site_id.as_str();
         let post_slug_str = post_slug.as_str();
 
-        let count_query = sqlx::query_scalar!(
-            r#"
-            SELECT COUNT(*) as "count: i64"
-            FROM comments
-            WHERE site_id = ? AND post_slug = ?
-            "#,
-            site_id_str,
-            post_slug_str
-        )
-        .fetch_one(&self.pool);
+        let count = comments::Entity::find()
+            .filter(comments::Column::SiteId.eq(site_id_str))
+            .filter(comments::Column::PostSlug.eq(post_slug_str))
+            .count(&self.db)
+            .await?;
 
-        let comments_query = sqlx::query_as!(
-            CommentRow,
-            r#"
-            SELECT event_id, author_nickname, author_fingerprint, content, timestamp
-            FROM comments
-            WHERE site_id = ? AND post_slug = ?
-            ORDER BY timestamp ASC
-            LIMIT ? OFFSET ?
-            "#,
-            site_id_str,
-            post_slug_str,
-            limit,
-            offset
-        )
-        .fetch_all(&self.pool);
+        let models = comments::Entity::find()
+            .filter(comments::Column::SiteId.eq(site_id_str))
+            .filter(comments::Column::PostSlug.eq(post_slug_str))
+            .order_by_desc(comments::Column::Timestamp)
+            .limit(limit as u64)
+            .offset(offset as u64)
+            .all(&self.db)
+            .await?;
 
-        let (total, comment_rows) = tokio::try_join!(count_query, comments_query)?;
+        let comments = models.into_iter().map(Comment::from).collect();
 
-        let comments = comment_rows.into_iter().map(Comment::from).collect();
+        Ok((comments, count as i64))
+    }
 
-        Ok((comments, total))
+    async fn save_comment(
+        &self,
+        comment: &Comment,
+        room_id: &str,
+        _site_id: &SiteId,
+        _post_slug: &PostSlug,
+    ) -> Result<()> {
+        let active_model = comments::ActiveModel {
+            event_id: Set(comment.event_id.clone()),
+            room_id: Set(room_id.to_owned()),
+            site_id: Set(comment.site_id.clone()),
+            post_slug: Set(comment.post_slug.clone()),
+            author_mxid: Set("".to_string()), // Default value if not provided
+            author_nickname: Set(comment.author_nickname.clone()),
+            author_fingerprint: Set(comment.author_fingerprint.clone()),
+            content: Set(comment.content.clone()),
+            timestamp: Set(comment.timestamp),
+            ..Default::default()
+        };
+
+        comments::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(comments::Column::EventId)
+                    .update_columns([
+                        comments::Column::AuthorNickname,
+                        comments::Column::Content,
+                        comments::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn update_comment_content(&self, event_id: &str, content: &str) -> Result<bool> {
+        let result = comments::Entity::update_many()
+            .col_expr(
+                comments::Column::Content,
+                sea_orm::sea_query::Expr::value(content),
+            )
+            .col_expr(
+                comments::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(comments::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
+
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn delete_comment(&self, event_id: &str) -> Result<bool> {
+        let result = comments::Entity::delete_many()
+            .filter(comments::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
+
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>> {
+        let model = comments::Entity::find()
+            .filter(comments::Column::EventId.eq(event_id))
+            .one(&self.db)
+            .await?;
+
+        Ok(model.and_then(|m| m.author_nickname))
     }
 }
 
 #[async_trait]
-impl RegistryStore for SqliteStore {
+impl RegistryStore for DbStore {
     async fn get_registered_room(
         &self,
         site_id: &SiteId,
         post_slug: &PostSlug,
     ) -> Result<Option<String>> {
-        let s_id = site_id.as_str();
-        let p_slug = post_slug.as_str();
-        let room_id = sqlx::query_scalar!(
-            "SELECT room_id FROM room_registry WHERE site_id = ? AND post_slug = ? AND is_active = 1",
-            s_id,
-            p_slug
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        .flatten();
+        let room = room_registry::Entity::find()
+            .filter(room_registry::Column::SiteId.eq(site_id.as_str()))
+            .filter(room_registry::Column::PostSlug.eq(post_slug.as_str()))
+            .filter(room_registry::Column::IsActive.eq(true))
+            .one(&self.db)
+            .await?;
 
-        Ok(room_id)
+        Ok(room.map(|r| r.room_id))
+    }
+
+    async fn is_room_active(&self, room_id: &str) -> Result<Option<bool>> {
+        let room = room_registry::Entity::find_by_id(room_id.to_owned())
+            .one(&self.db)
+            .await?;
+
+        Ok(room.map(|r| r.is_active))
+    }
+
+    async fn register_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<()> {
+        let active_model = room_registry::ActiveModel {
+            room_id: Set(room_id.to_owned()),
+            site_id: Set(site_id.as_str().to_owned()),
+            post_slug: Set(post_slug.as_str().to_owned()),
+            is_active: Set(true),
+            ..Default::default()
+        };
+
+        room_registry::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(room_registry::Column::RoomId)
+                    .update_column(room_registry::Column::IsActive)
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
     }
 
     async fn invalidate_room_registry(&self, room_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE room_registry SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
-            room_id
-        )
-        .execute(&self.pool)
-        .await?;
+        room_registry::Entity::update_many()
+            .col_expr(
+                room_registry::Column::IsActive,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                room_registry::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(room_registry::Column::RoomId.eq(room_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl SiteStore for SqliteStore {
+impl SiteStore for DbStore {
     async fn get_site(&self, id: &SiteId) -> Result<Option<Site>> {
-        let id_str = id.as_str();
+        let model = sites::Entity::find_by_id(id.as_str().to_owned())
+            .one(&self.db)
+            .await?;
 
-        let row = sqlx::query_as!(
-            SiteRow,
-            r#"
-            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!"
-            FROM sites
-            WHERE id = ?
-            "#,
-            id_str
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(Site::from))
+        Ok(model.map(Site::from))
     }
 
     async fn save_site(&self, site: &Site) -> Result<()> {
-        sqlx::query!(
-            r#"
-            INSERT INTO sites (id, matrix_space_id, display_name, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                matrix_space_id = excluded.matrix_space_id,
-                display_name = excluded.display_name
-            "#,
-            site.id,
-            site.matrix_space_id,
-            site.display_name,
-            site.created_at
-        )
-        .execute(&self.pool)
-        .await?;
+        let active_model = sites::ActiveModel {
+            id: Set(site.id.clone()),
+            matrix_space_id: Set(site.matrix_space_id.clone()),
+            display_name: Set(site.display_name.clone()),
+            created_at: Set(site.created_at),
+        };
+
+        sites::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(sites::Column::Id)
+                    .update_columns([sites::Column::MatrixSpaceId, sites::Column::DisplayName])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_site_exists(&self, site_id: &str, matrix_space_id: &str) -> Result<()> {
+        let active_model = sites::ActiveModel {
+            id: Set(site_id.to_owned()),
+            matrix_space_id: Set(matrix_space_id.to_owned()),
+            display_name: Set(Some(site_id.to_owned())),
+            ..Default::default()
+        };
+
+        sites::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(sites::Column::Id)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
 
         Ok(())
     }
 }
 
-// An intermediate struct for reading from the database, to handle the
-// NaiveDateTime -> DateTime<Utc> conversion.
-#[derive(sqlx::FromRow)]
-struct CommentRow {
-    event_id: String,
-    author_nickname: Option<String>,
-    author_fingerprint: Option<String>,
-    content: String,
-    timestamp: NaiveDateTime,
-}
-
-impl From<CommentRow> for Comment {
-    fn from(row: CommentRow) -> Self {
+impl From<comments::Model> for Comment {
+    fn from(model: comments::Model) -> Self {
         Comment {
-            event_id: row.event_id,
-            author_nickname: row.author_nickname,
-            author_fingerprint: row.author_fingerprint,
-            content: row.content,
-            timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+            event_id: model.event_id,
+            site_id: model.site_id,
+            post_slug: model.post_slug,
+            author_nickname: model.author_nickname,
+            author_fingerprint: model.author_fingerprint,
+            content: model.content,
+            timestamp: model.timestamp,
         }
     }
 }
 
-#[derive(sqlx::FromRow)]
-struct SiteRow {
-    id: String,
-    matrix_space_id: String,
-    display_name: Option<String>,
-    created_at: NaiveDateTime,
-}
-
-impl From<SiteRow> for Site {
-    fn from(row: SiteRow) -> Self {
+impl From<sites::Model> for Site {
+    fn from(model: sites::Model) -> Self {
         Site {
-            id: row.id,
-            matrix_space_id: row.matrix_space_id,
-            display_name: row.display_name,
-            created_at: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+            id: model.id,
+            matrix_space_id: model.matrix_space_id,
+            display_name: model.display_name,
+            created_at: model.created_at,
         }
     }
 }

@@ -10,11 +10,23 @@ pub trait IntentStore: Send + Sync {
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()>;
 
+    async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>>;
+    async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>>;
+    async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>>;
+
     /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()>;
 
     /// Transitions an update intent to 'waiting_for_sync'.
     async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()>;
+
+    /// Transitions a delete intent to 'waiting_for_sync'.
+    async fn mark_delete_intent_waiting_for_sync(&self, id: i64) -> Result<()>;
+
+    /// Transitions an intent to 'failed' status.
+    async fn mark_post_intent_failed(&self, id: i64) -> Result<()>;
+    async fn mark_delete_intent_failed(&self, id: i64) -> Result<()>;
+    async fn mark_update_intent_failed(&self, id: i64) -> Result<()>;
 
     /// Transitions a post intent to 'completed' when the projector sees the event.
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
@@ -41,6 +53,24 @@ pub trait CommentStore: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<Comment>, i64)>;
+
+    /// Saves a new comment or updates an existing one (on conflict).
+    async fn save_comment(
+        &self,
+        comment: &Comment,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<()>;
+
+    /// Updates only the content of a comment.
+    async fn update_comment_content(&self, event_id: &str, content: &str) -> Result<bool>;
+
+    /// Deletes a comment by its event ID.
+    async fn delete_comment(&self, event_id: &str) -> Result<bool>;
+
+    /// Gets the author nickname for a specific event.
+    async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>>;
 }
 
 /// Port for managing the local room registry cache (Mirror of Space relationships).
@@ -53,6 +83,17 @@ pub trait RegistryStore: Send + Sync {
         post_slug: &PostSlug,
     ) -> Result<Option<String>>;
 
+    /// Checks if a room is active in the registry.
+    async fn is_room_active(&self, room_id: &str) -> Result<Option<bool>>;
+
+    /// Registers or reactivates a room in the registry.
+    async fn register_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<()>;
+
     /// Invalidates a room in the local registry (e.g. if metadata verification failed).
     async fn invalidate_room_registry(&self, room_id: &str) -> Result<()>;
 }
@@ -62,6 +103,9 @@ pub trait RegistryStore: Send + Sync {
 pub trait SiteStore: Send + Sync {
     async fn get_site(&self, id: &SiteId) -> Result<Option<crate::models::Site>>;
     async fn save_site(&self, site: &crate::models::Site) -> Result<()>;
+
+    /// Ensures a site exists in the database, creating it with default values if not.
+    async fn ensure_site_exists(&self, site_id: &str, matrix_space_id: &str) -> Result<()>;
 }
 
 /// Defines the atomic actions that can be performed on the Matrix network.
