@@ -68,6 +68,8 @@ impl From<&str> for PostSlug {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comment {
     pub event_id: String,
+    pub site_id: String,
+    pub post_slug: String,
     pub author_nickname: Option<String>,
     pub author_fingerprint: Option<String>,
     pub content: String,

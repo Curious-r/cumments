@@ -1,10 +1,8 @@
 use anyhow::Result;
 use cumments_core::{
-    intents::{DeleteCommentIntent, PostCommentIntent},
-    ports::{IntentStore, MatrixDriver, RegistryStore},
+    ports::{CommentStore, IntentStore, MatrixDriver, RegistryStore},
     site_service::SiteService,
 };
-use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -14,9 +12,9 @@ use tokio::sync::Notify;
 /// The Reconciler acts as the Orchestrator of the background process.
 /// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
 pub struct Reconciler {
-    pool: SqlitePool,
     intent_store: Arc<dyn IntentStore>,
     registry_store: Arc<dyn RegistryStore>,
+    comment_store: Arc<dyn CommentStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
     notify: Arc<Notify>,
@@ -24,17 +22,17 @@ pub struct Reconciler {
 
 impl Reconciler {
     pub fn new(
-        pool: SqlitePool,
         intent_store: Arc<dyn IntentStore>,
         registry_store: Arc<dyn RegistryStore>,
+        comment_store: Arc<dyn CommentStore>,
         driver: Arc<dyn MatrixDriver>,
         site_service: Arc<SiteService>,
         notify: Arc<Notify>,
     ) -> Self {
         Self {
-            pool,
             intent_store,
             registry_store,
+            comment_store,
             driver,
             site_service,
             notify,
@@ -79,26 +77,15 @@ impl Reconciler {
     }
 
     async fn reconcile_posts(&self) -> Result<u64> {
-        let rows = sqlx::query!(
-            r#"
-            SELECT id, payload
-            FROM intent_queue_post_comment
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
-            "#
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let intents = self.intent_store.get_pending_post_intents().await?;
 
-        if rows.is_empty() {
+        if intents.is_empty() {
             return Ok(0);
         }
-        let num_rows = rows.len() as u64;
+        let num_intents = intents.len() as u64;
 
-        for row in rows {
+        for (id, intent) in intents {
             let process_result: Result<()> = (async {
-                let intent: PostCommentIntent = serde_json::from_str(&row.payload)?;
-
                 // ORCHESTRATION START
                 // 1. Brain: Ensure the site space is ready
                 let space_id = self
@@ -136,7 +123,7 @@ impl Reconciler {
 
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.intent_store
-                    .mark_post_intent_waiting_for_sync(row.id, &event_id)
+                    .mark_post_intent_waiting_for_sync(id, &event_id)
                     .await?;
                 // ORCHESTRATION END
 
@@ -147,40 +134,24 @@ impl Reconciler {
             if let Err(e) = process_result {
                 warn!(
                     "Failed to reconcile post intent [{}]: {:?}. Setting status to 'failed'.",
-                    row.id, e
+                    id, e
                 );
-                sqlx::query!(
-                    "UPDATE intent_queue_post_comment SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    row.id
-                )
-                .execute(&self.pool)
-                .await?;
+                self.intent_store.mark_post_intent_failed(id).await?;
             }
         }
-        Ok(num_rows)
+        Ok(num_intents)
     }
 
     async fn reconcile_deletions(&self) -> Result<u64> {
-        let rows = sqlx::query!(
-            r#"
-            SELECT id, payload
-            FROM intent_queue_delete_comment
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
-            "#
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let intents = self.intent_store.get_pending_delete_intents().await?;
 
-        if rows.is_empty() {
+        if intents.is_empty() {
             return Ok(0);
         }
-        let num_rows = rows.len() as u64;
+        let num_intents = intents.len() as u64;
 
-        for row in rows {
+        for (id, intent) in intents {
             let process_result: Result<()> = (async {
-                let intent: DeleteCommentIntent = serde_json::from_str(&row.payload)?;
-
                 // 1. Registry: Locate the room ID for this deletion
                 let room_id = self
                     .registry_store
@@ -196,104 +167,13 @@ impl Reconciler {
                 })?;
 
                 // 2. Hands: Perform the redaction
-                self.driver.redact_message(&room_id, &intent.event_id).await?;
+                self.driver
+                    .redact_message(&room_id, &intent.event_id)
+                    .await?;
 
                 // 3. Concepts: Move to waiting_for_sync
-                sqlx::query!(
-                    "UPDATE intent_queue_delete_comment SET status = 'waiting_for_sync', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    row.id
-                )
-                .execute(&self.pool)
-                .await?;
-
-                Ok(())
-            }).await;
-
-            if let Err(e) = process_result {
-                warn!(
-                    "Failed to reconcile delete intent [{}]: {:?}. Setting status to 'failed'.",
-                    row.id, e
-                );
-                sqlx::query!(
-                    "UPDATE intent_queue_delete_comment SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    row.id
-                )
-                .execute(&self.pool)
-                .await?;
-            }
-        }
-        Ok(num_rows)
-    }
-
-    async fn reconcile_updates(&self) -> Result<u64> {
-        let rows = sqlx::query!(
-            r#"
-            SELECT id, site_id, post_slug, event_id, content, author_fingerprint
-            FROM intent_queue_update_comment
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
-            "#
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        if rows.is_empty() {
-            return Ok(0);
-        }
-        let num_rows = rows.len() as u64;
-
-        for row in rows {
-            let process_result: Result<()> = (async {
-                let site_id = row.site_id.clone().into();
-                let post_slug = row.post_slug.clone().into();
-
-                // 1. Brain: Ensure site space
-                let space_id = self
-                    .site_service
-                    .ensure_space(&site_id, self.driver.as_ref())
-                    .await?;
-
-                // 2. Registry: Check for existing room in local cache (O(1) hint)
-                let candidate_room_id = self
-                    .registry_store
-                    .get_registered_room(&site_id, &post_slug)
-                    .await?;
-
-                // 3. Hands: Ensure room
-                let room_id = self
-                    .driver
-                    .ensure_comment_room(
-                        &site_id,
-                        &post_slug,
-                        &space_id,
-                        candidate_room_id.as_deref(),
-                    )
-                    .await?;
-
-                // 4. Hands: Fetch original nickname to maintain it
-                let nickname = sqlx::query_scalar!(
-                    "SELECT author_nickname FROM comments WHERE event_id = ?",
-                    row.event_id
-                )
-                .fetch_optional(&self.pool)
-                .await?
-                .flatten()
-                .unwrap_or_else(|| "Guest".to_string());
-
-                // 5. Hands: Perform the update (m.replace)
-                self.driver
-                    .update_message(
-                        &room_id,
-                        &row.event_id,
-                        &row.content,
-                        &nickname,
-                        &row.author_fingerprint,
-                    )
-                    .await?;
-
-                // 6. Closed-loop: Mark as waiting for sync
                 self.intent_store
-                    .mark_update_intent_waiting_for_sync(row.id.unwrap())
+                    .mark_delete_intent_waiting_for_sync(id)
                     .await?;
 
                 Ok(())
@@ -302,17 +182,83 @@ impl Reconciler {
 
             if let Err(e) = process_result {
                 warn!(
-                    "Failed to reconcile update intent [{:?}]: {:?}. Setting status to 'failed'.",
-                    row.id, e
+                    "Failed to reconcile delete intent [{}]: {:?}. Setting status to 'failed'.",
+                    id, e
                 );
-                sqlx::query!(
-                    "UPDATE intent_queue_update_comment SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    row.id
-                )
-                .execute(&self.pool)
-                .await?;
+                self.intent_store.mark_delete_intent_failed(id).await?;
             }
         }
-        Ok(num_rows)
+        Ok(num_intents)
+    }
+
+    async fn reconcile_updates(&self) -> Result<u64> {
+        let intents = self.intent_store.get_pending_update_intents().await?;
+
+        if intents.is_empty() {
+            return Ok(0);
+        }
+        let num_intents = intents.len() as u64;
+
+        for (id, intent) in intents {
+            let process_result: Result<()> = (async {
+                // 1. Brain: Ensure site space
+                let space_id = self
+                    .site_service
+                    .ensure_space(&intent.site_id, self.driver.as_ref())
+                    .await?;
+
+                // 2. Registry: Check for existing room in local cache (O(1) hint)
+                let candidate_room_id = self
+                    .registry_store
+                    .get_registered_room(&intent.site_id, &intent.post_slug)
+                    .await?;
+
+                // 3. Hands: Ensure room
+                let room_id = self
+                    .driver
+                    .ensure_comment_room(
+                        &intent.site_id,
+                        &intent.post_slug,
+                        &space_id,
+                        candidate_room_id.as_deref(),
+                    )
+                    .await?;
+
+                // 4. Hands: Fetch original nickname to maintain it
+                let nickname = self
+                    .comment_store
+                    .get_author_nickname(&intent.event_id)
+                    .await?
+                    .unwrap_or_else(|| "Guest".to_string());
+
+                // 5. Hands: Perform the update (m.replace)
+                self.driver
+                    .update_message(
+                        &room_id,
+                        &intent.event_id,
+                        &intent.content,
+                        &nickname,
+                        &intent.author_fingerprint,
+                    )
+                    .await?;
+
+                // 6. Closed-loop: Mark as waiting for sync
+                self.intent_store
+                    .mark_update_intent_waiting_for_sync(id)
+                    .await?;
+
+                Ok(())
+            })
+            .await;
+
+            if let Err(e) = process_result {
+                warn!(
+                    "Failed to reconcile update intent [{}]: {:?}. Setting status to 'failed'.",
+                    id, e
+                );
+                self.intent_store.mark_update_intent_failed(id).await?;
+            }
+        }
+        Ok(num_intents)
     }
 }

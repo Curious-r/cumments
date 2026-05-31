@@ -117,9 +117,9 @@ async fn main() -> Result<()> {
 
     // 7. Initialize and run Reconciler (Orchestrator) in the background
     let reconciler = cumments_reconciler::Reconciler::new(
-        db_pool.clone(),
-        sqlite_store.clone(),
+        sqlite_store.clone(), // IntentStore
         sqlite_store.clone(), // RegistryStore
+        sqlite_store.clone(), // CommentStore
         driver.clone(),
         site_service.clone(),
         reconciler_notify.clone(),
@@ -133,8 +133,10 @@ async fn main() -> Result<()> {
     if let Some(client) = matrix_client.clone() {
         let projector = cumments_projector::Projector::new(
             client,
-            db_pool.clone(),
-            sqlite_store.clone(),
+            sqlite_store.clone(), // SiteStore
+            sqlite_store.clone(), // RegistryStore
+            sqlite_store.clone(), // CommentStore
+            sqlite_store.clone(), // IntentStore
             event_bus.clone(),
         );
         projector.register_handlers();

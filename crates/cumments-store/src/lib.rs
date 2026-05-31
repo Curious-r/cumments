@@ -75,6 +75,57 @@ impl IntentStore for SqliteStore {
         Ok(())
     }
 
+    async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>> {
+        let models = intent_queue_post_comment::Entity::find()
+            .filter(intent_queue_post_comment::Column::Status.eq("pending"))
+            .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
+            .all(&self.db)
+            .await?;
+
+        let mut intents = Vec::new();
+        for m in models {
+            let intent: PostCommentIntent = serde_json::from_str(&m.payload)?;
+            intents.push((m.id as i64, intent));
+        }
+        Ok(intents)
+    }
+
+    async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>> {
+        let models = intent_queue_delete_comment::Entity::find()
+            .filter(intent_queue_delete_comment::Column::Status.eq("pending"))
+            .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
+            .all(&self.db)
+            .await?;
+
+        let mut intents = Vec::new();
+        for m in models {
+            let intent: DeleteCommentIntent = serde_json::from_str(&m.payload)?;
+            intents.push((m.id as i64, intent));
+        }
+        Ok(intents)
+    }
+
+    async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>> {
+        let models = intent_queue_update_comment::Entity::find()
+            .filter(intent_queue_update_comment::Column::Status.eq("pending"))
+            .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
+            .all(&self.db)
+            .await?;
+
+        let mut intents = Vec::new();
+        for m in models {
+            let intent = UpdateCommentIntent {
+                site_id: m.site_id.into(),
+                post_slug: m.post_slug.into(),
+                event_id: m.event_id,
+                content: m.content,
+                author_fingerprint: m.author_fingerprint,
+            };
+            intents.push((m.id as i64, intent));
+        }
+        Ok(intents)
+    }
+
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()> {
         intent_queue_post_comment::Entity::update_many()
             .col_expr(
@@ -100,6 +151,70 @@ impl IntentStore for SqliteStore {
             .col_expr(
                 intent_queue_update_comment::Column::Status,
                 sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_update_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_update_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_delete_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
+        intent_queue_delete_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_delete_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_delete_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_delete_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_post_intent_failed(&self, id: i64) -> Result<()> {
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("failed"),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_post_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_delete_intent_failed(&self, id: i64) -> Result<()> {
+        intent_queue_delete_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_delete_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("failed"),
+            )
+            .col_expr(
+                intent_queue_delete_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_delete_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_update_intent_failed(&self, id: i64) -> Result<()> {
+        intent_queue_update_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_update_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("failed"),
             )
             .col_expr(
                 intent_queue_update_comment::Column::UpdatedAt,
@@ -200,6 +315,77 @@ impl CommentStore for SqliteStore {
 
         Ok((comments, count as i64))
     }
+
+    async fn save_comment(
+        &self,
+        comment: &Comment,
+        room_id: &str,
+        _site_id: &SiteId,
+        _post_slug: &PostSlug,
+    ) -> Result<()> {
+        let active_model = comments::ActiveModel {
+            event_id: Set(comment.event_id.clone()),
+            room_id: Set(room_id.to_owned()),
+            site_id: Set(comment.site_id.clone()),
+            post_slug: Set(comment.post_slug.clone()),
+            author_mxid: Set("".to_string()), // Default value if not provided
+            author_nickname: Set(comment.author_nickname.clone()),
+            author_fingerprint: Set(comment.author_fingerprint.clone()),
+            content: Set(comment.content.clone()),
+            timestamp: Set(comment.timestamp),
+            ..Default::default()
+        };
+
+        comments::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(comments::Column::EventId)
+                    .update_columns([
+                        comments::Column::AuthorNickname,
+                        comments::Column::Content,
+                        comments::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn update_comment_content(&self, event_id: &str, content: &str) -> Result<bool> {
+        let result = comments::Entity::update_many()
+            .col_expr(
+                comments::Column::Content,
+                sea_orm::sea_query::Expr::value(content),
+            )
+            .col_expr(
+                comments::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(comments::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
+
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn delete_comment(&self, event_id: &str) -> Result<bool> {
+        let result = comments::Entity::delete_many()
+            .filter(comments::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
+
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>> {
+        let model = comments::Entity::find()
+            .filter(comments::Column::EventId.eq(event_id))
+            .one(&self.db)
+            .await?;
+
+        Ok(model.and_then(|m| m.author_nickname))
+    }
 }
 
 #[async_trait]
@@ -217,6 +403,40 @@ impl RegistryStore for SqliteStore {
             .await?;
 
         Ok(room.map(|r| r.room_id))
+    }
+
+    async fn is_room_active(&self, room_id: &str) -> Result<Option<bool>> {
+        let room = room_registry::Entity::find_by_id(room_id.to_owned())
+            .one(&self.db)
+            .await?;
+
+        Ok(room.map(|r| r.is_active))
+    }
+
+    async fn register_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<()> {
+        let active_model = room_registry::ActiveModel {
+            room_id: Set(room_id.to_owned()),
+            site_id: Set(site_id.as_str().to_owned()),
+            post_slug: Set(post_slug.as_str().to_owned()),
+            is_active: Set(true),
+            ..Default::default()
+        };
+
+        room_registry::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(room_registry::Column::RoomId)
+                    .update_column(room_registry::Column::IsActive)
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
     }
 
     async fn invalidate_room_registry(&self, room_id: &str) -> Result<()> {
@@ -265,12 +485,34 @@ impl SiteStore for SqliteStore {
 
         Ok(())
     }
+
+    async fn ensure_site_exists(&self, site_id: &str, matrix_space_id: &str) -> Result<()> {
+        let active_model = sites::ActiveModel {
+            id: Set(site_id.to_owned()),
+            matrix_space_id: Set(matrix_space_id.to_owned()),
+            display_name: Set(Some(site_id.to_owned())),
+            ..Default::default()
+        };
+
+        sites::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(sites::Column::Id)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
+    }
 }
 
 impl From<comments::Model> for Comment {
     fn from(model: comments::Model) -> Self {
         Comment {
             event_id: model.event_id,
+            site_id: model.site_id,
+            post_slug: model.post_slug,
             author_nickname: model.author_nickname,
             author_fingerprint: model.author_fingerprint,
             content: model.content,

@@ -1,4 +1,8 @@
-use cumments_core::{events::ProjectorEvent, models::Comment, ports::IntentStore};
+use cumments_core::{
+    events::ProjectorEvent,
+    models::Comment,
+    ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
+};
 use matrix_sdk::{
     RoomState,
     room::Room,
@@ -15,8 +19,6 @@ use matrix_sdk::{
     },
 };
 use serde::Deserialize;
-use sqlx::SqlitePool;
-use sqlx::types::chrono::NaiveDateTime;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, warn};
@@ -39,7 +41,9 @@ struct RoomMetadata {
 /// projects them into the local Read Store.
 pub struct Projector {
     client: matrix_sdk::Client,
-    pool: SqlitePool,
+    site_store: Arc<dyn SiteStore>,
+    registry_store: Arc<dyn RegistryStore>,
+    comment_store: Arc<dyn CommentStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
 }
@@ -48,13 +52,17 @@ impl Projector {
     /// Creates a new Projector using an existing Matrix client and an event bus.
     pub fn new(
         client: matrix_sdk::Client,
-        pool: SqlitePool,
+        site_store: Arc<dyn SiteStore>,
+        registry_store: Arc<dyn RegistryStore>,
+        comment_store: Arc<dyn CommentStore>,
         intent_store: Arc<dyn IntentStore>,
         event_bus: broadcast::Sender<ProjectorEvent>,
     ) -> Self {
         Self {
             client,
-            pool,
+            site_store,
+            registry_store,
+            comment_store,
             intent_store,
             event_bus,
         }
@@ -64,49 +72,76 @@ impl Projector {
     pub fn register_handlers(&self) {
         info!("Registering projectionist event handlers...");
 
-        let pool = self.pool.clone();
+        let site_store = self.site_store.clone();
+        let registry_store = self.registry_store.clone();
+        let comment_store = self.comment_store.clone();
+        let intent_store = self.intent_store.clone();
         let bus = self.event_bus.clone();
-        let intents = self.intent_store.clone();
-        self.client
-            .add_event_handler(move |event: Raw<SyncRoomMessageEvent>, room: Room| {
-                let pool = pool.clone();
-                let bus = bus.clone();
-                let intents = intents.clone();
-                async move {
-                    if let Ok(event) = event.deserialize() {
-                        on_room_message(event, room, pool, bus, intents).await;
-                    }
-                }
-            });
 
-        let pool = self.pool.clone();
-        let bus = self.event_bus.clone();
-        let intents = self.intent_store.clone();
-        self.client
-            .add_event_handler(move |event: SyncRoomRedactionEvent, room: Room| {
-                let pool = pool.clone();
-                let bus = bus.clone();
-                let intents = intents.clone();
-                async move {
-                    on_room_redaction(event, room, pool, bus, intents).await;
-                }
-            });
-
-        // Registry Handler: Watch for Space children changes
-        let pool = self.pool.clone();
-        self.client.add_event_handler(
-            move |event: Raw<matrix_sdk::ruma::events::AnySyncStateEvent>, room: Room| {
-                let pool = pool.clone();
-                async move {
-                    if let Ok(ev) = event.deserialize() {
-                        use matrix_sdk::ruma::events::AnySyncStateEvent;
-                        if let AnySyncStateEvent::SpaceChild(child_ev) = ev {
-                            on_space_child(child_ev, room, pool).await;
+        {
+            let site_store = site_store.clone();
+            let registry_store = registry_store.clone();
+            let comment_store = comment_store.clone();
+            let intent_store = intent_store.clone();
+            let bus = bus.clone();
+            self.client
+                .add_event_handler(move |event: Raw<SyncRoomMessageEvent>, room: Room| {
+                    let site_store = site_store.clone();
+                    let registry_store = registry_store.clone();
+                    let comment_store = comment_store.clone();
+                    let intent_store = intent_store.clone();
+                    let bus = bus.clone();
+                    async move {
+                        if let Ok(event) = event.deserialize() {
+                            on_room_message(
+                                event,
+                                room,
+                                site_store,
+                                registry_store,
+                                comment_store,
+                                intent_store,
+                                bus,
+                            )
+                            .await;
                         }
                     }
-                }
-            },
-        );
+                });
+        }
+
+        {
+            let intent_store = intent_store.clone();
+            let comment_store = comment_store.clone();
+            let bus = bus.clone();
+            self.client
+                .add_event_handler(move |event: SyncRoomRedactionEvent, room: Room| {
+                    let intent_store = intent_store.clone();
+                    let comment_store = comment_store.clone();
+                    let bus = bus.clone();
+                    async move {
+                        on_room_redaction(event, room, comment_store, intent_store, bus).await;
+                    }
+                });
+        }
+
+        // Registry Handler: Watch for Space children changes
+        {
+            let site_store = site_store.clone();
+            let registry_store = registry_store.clone();
+            self.client.add_event_handler(
+                move |event: Raw<matrix_sdk::ruma::events::AnySyncStateEvent>, room: Room| {
+                    let site_store = site_store.clone();
+                    let registry_store = registry_store.clone();
+                    async move {
+                        if let Ok(ev) = event.deserialize() {
+                            use matrix_sdk::ruma::events::AnySyncStateEvent;
+                            if let AnySyncStateEvent::SpaceChild(child_ev) = ev {
+                                on_space_child(child_ev, room, site_store, registry_store).await;
+                            }
+                        }
+                    }
+                },
+            );
+        }
 
         self.client
             .add_event_handler(|_event: StrippedRoomMemberEvent, room: Room| async move {
@@ -118,7 +153,12 @@ impl Projector {
 /// The event handler for Space children changes (Registry).
 #[instrument(skip_all)]
 #[allow(clippy::collapsible_if)]
-async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool) {
+async fn on_space_child(
+    event: SyncSpaceChildEvent,
+    room: Room,
+    site_store: Arc<dyn SiteStore>,
+    registry_store: Arc<dyn RegistryStore>,
+) {
     // 1. Identify which site this Space belongs to
     let site_id = if let Ok(Some(meta_ev)) = room
         .get_state_event("im.cumments.metadata".into(), "")
@@ -141,19 +181,9 @@ async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool
     // AUTO-DISCOVERY: Ensure the site itself exists in the store
     // This handles the case where the space exists on Matrix but not in local DB
     let room_id_owned = room.room_id().to_string();
-    let _ = sqlx::query!(
-        r#"
-        INSERT INTO sites (id, matrix_space_id, display_name, created_at)
-        SELECT ?, ?, ?, CURRENT_TIMESTAMP
-        WHERE NOT EXISTS (SELECT 1 FROM sites WHERE id = ?)
-        "#,
-        site_id,
-        room_id_owned,
-        site_id,
-        site_id
-    )
-    .execute(&pool)
-    .await;
+    let _ = site_store
+        .ensure_site_exists(&site_id, &room_id_owned)
+        .await;
 
     let child_room_id_str = event.state_key().to_string();
 
@@ -166,18 +196,13 @@ async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool
             {
                 if let Some(child_room) = room.client().get_room(&child_room_id) {
                     if let Some((_, post_slug)) = get_room_identity(&child_room).await {
-                        let _ = sqlx::query!(
-                            r#"
-                            INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
-                            VALUES (?, ?, ?, 1)
-                            ON CONFLICT(room_id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
-                            "#,
-                            child_room_id_str,
-                            site_id,
-                            post_slug
-                        )
-                        .execute(&pool)
-                        .await;
+                        let _ = registry_store
+                            .register_room(
+                                &child_room_id_str,
+                                &site_id.clone().into(),
+                                &post_slug.into(),
+                            )
+                            .await;
                         info!(
                             "Registered active room {} for site {}",
                             child_room_id_str, site_id
@@ -187,12 +212,9 @@ async fn on_space_child(event: SyncSpaceChildEvent, room: Room, pool: SqlitePool
             }
         } else {
             // Mark as inactive
-            let _ = sqlx::query!(
-                "UPDATE room_registry SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
-                child_room_id_str
-            )
-            .execute(&pool)
-            .await;
+            let _ = registry_store
+                .invalidate_room_registry(&child_room_id_str)
+                .await;
             info!("Unregistered room {} from registry", child_room_id_str);
         }
     }
@@ -252,26 +274,25 @@ async fn get_room_identity(room: &Room) -> Option<(String, String)> {
 async fn on_room_message(
     event: SyncRoomMessageEvent,
     room: Room,
-    pool: SqlitePool,
+    site_store: Arc<dyn SiteStore>,
+    registry_store: Arc<dyn RegistryStore>,
+    comment_store: Arc<dyn CommentStore>,
+    intent_store: Arc<dyn IntentStore>,
     bus: broadcast::Sender<ProjectorEvent>,
-    intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomMessageEvent::Original(msg) = event {
         // --- PRINCIPLE B: REGISTRY ENFORCEMENT ---
         let room_id_str = room.room_id().to_string();
-        let registry_status = sqlx::query!(
-            "SELECT is_active FROM room_registry WHERE room_id = ?",
-            room_id_str
-        )
-        .fetch_optional(&pool)
-        .await
-        .unwrap_or(None);
+        let registry_status = registry_store
+            .is_room_active(&room_id_str)
+            .await
+            .unwrap_or(None);
 
         match registry_status {
-            Some(row) if row.is_active => {
+            Some(true) => {
                 // Room is active, proceed normally
             }
-            Some(_) => {
+            Some(false) => {
                 // Room exists but is explicitly INACTIVE (tombstoned).
                 // We MUST respect this to prevent zombie rooms from resurrecting.
                 debug!("Ignoring message from deactivated room {}", room_id_str);
@@ -283,31 +304,17 @@ async fn on_room_message(
                 if let Some((site_id, post_slug)) = get_room_identity(&room).await {
                     // AUTO-DISCOVERY: Ensure the site itself exists in the store
                     let room_id_owned = room.room_id().to_string();
-                    let _ = sqlx::query!(
-                        r#"
-                        INSERT INTO sites (id, matrix_space_id, display_name, created_at)
-                        SELECT ?, ?, ?, CURRENT_TIMESTAMP
-                        WHERE NOT EXISTS (SELECT 1 FROM sites WHERE id = ?)
-                        "#,
-                        site_id,
-                        room_id_owned,
-                        site_id,
-                        site_id
-                    )
-                    .execute(&pool)
-                    .await;
+                    let _ = site_store
+                        .ensure_site_exists(&site_id, &room_id_owned)
+                        .await;
 
-                    let _ = sqlx::query!(
-                        r#"
-                        INSERT INTO room_registry (room_id, site_id, post_slug, is_active)
-                        VALUES (?, ?, ?, 1)
-                        "#,
-                        room_id_str,
-                        site_id,
-                        post_slug
-                    )
-                    .execute(&pool)
-                    .await;
+                    let _ = registry_store
+                        .register_room(
+                            &room_id_str,
+                            &site_id.clone().into(),
+                            &post_slug.clone().into(),
+                        )
+                        .await;
                     info!(
                         "Just-in-time registered new room {} for site {}",
                         room_id_str, site_id
@@ -328,7 +335,7 @@ async fn on_room_message(
         // 1. Closed-loop: Mark any waiting intent as completed
         let event_id = msg.event_id;
         let event_id_str = event_id.to_string();
-        if let Err(e) = intents.mark_post_intent_completed(&event_id_str).await {
+        if let Err(e) = intent_store.mark_post_intent_completed(&event_id_str).await {
             debug!(
                 "Failed to mark intent as completed (normal if external msg): {:?}",
                 e
@@ -343,40 +350,25 @@ async fn on_room_message(
                 let content = text.body.clone();
                 let target_event_id_str = target_event_id.to_string();
 
-                match sqlx::query!(
-                    "UPDATE comments SET content = ? WHERE event_id = ?",
-                    content,
-                    target_event_id_str
-                )
-                .execute(&pool)
-                .await
+                match comment_store
+                    .update_comment_content(&target_event_id_str, &content)
+                    .await
                 {
-                    Ok(result) if result.rows_affected() > 0 => {
+                    Ok(true) => {
                         info!("Successfully updated comment {}", target_event_id);
 
                         // Try to fetch updated comment to emit full object
-                        if let Ok(row) = sqlx::query_as!(
-                            crate::CommentRow,
-                            r#"SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime", site_id, post_slug FROM comments WHERE event_id = ?"#,
-                            target_event_id_str
-                        )
-                        .fetch_one(&pool)
-                        .await
+                        if let Ok(Some(comment)) =
+                            comment_store.get_comment(&target_event_id_str).await
                         {
                             let _ = bus.send(ProjectorEvent::CommentUpdated {
-                                site_id: row.site_id,
-                                post_slug: row.post_slug,
-                                comment: Comment {
-                                    event_id: row.event_id,
-                                    author_nickname: row.author_nickname,
-                                    author_fingerprint: row.author_fingerprint,
-                                    content: row.content,
-                                    timestamp: chrono::DateTime::from_naive_utc_and_offset(row.timestamp, chrono::Utc),
-                                },
+                                site_id,
+                                post_slug,
+                                comment,
                             });
                         }
                     }
-                    Ok(_) => debug!("Edit received for unknown comment {}", target_event_id),
+                    Ok(false) => debug!("Edit received for unknown comment {}", target_event_id),
                     Err(e) => warn!("Failed to update comment {}: {:?}", target_event_id, e),
                 }
             }
@@ -400,45 +392,37 @@ async fn on_room_message(
 
             let content = text.body.clone();
             let timestamp_dt =
-                chrono::DateTime::from_timestamp_millis(msg.origin_server_ts.0.into())
-                    .unwrap()
-                    .naive_utc();
+                chrono::DateTime::from_timestamp_millis(msg.origin_server_ts.0.into()).unwrap();
 
             let room_id_str = room.room_id().to_string();
-            let author_mxid_str = author_mxid.to_string();
 
-            match sqlx::query!(
-                r#"
-                INSERT INTO comments (event_id, room_id, site_id, post_slug, author_mxid, author_nickname, author_fingerprint, content, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
-                event_id_str,
-                room_id_str,
-                site_id,
-                post_slug,
-                author_mxid_str,
-                author,
-                fingerprint,
-                content,
-                timestamp_dt,
-            )
-            .execute(&pool)
-            .await
+            let comment = Comment {
+                event_id: event_id_str.clone(),
+                site_id: site_id.clone(),
+                post_slug: post_slug.clone(),
+                author_nickname: author.clone(),
+                author_fingerprint: fingerprint.clone(),
+                content: content.clone(),
+                timestamp: timestamp_dt,
+            };
+
+            match comment_store
+                .save_comment(
+                    &comment,
+                    &room_id_str,
+                    &site_id.clone().into(),
+                    &post_slug.clone().into(),
+                )
+                .await
             {
                 Ok(_) => {
                     info!("Successfully projected comment event {}", event_id);
                     let _ = bus.send(ProjectorEvent::NewComment {
                         site_id,
                         post_slug,
-                        comment: Comment {
-                            event_id: event_id_str,
-                            author_nickname: author,
-                            author_fingerprint: fingerprint,
-                            content,
-                            timestamp: chrono::DateTime::from_naive_utc_and_offset(timestamp_dt, chrono::Utc),
-                        },
+                        comment,
                     });
-                },
+                }
                 Err(e) => debug!("Failed to project comment event {}: {:?}", event_id, e),
             }
         }
@@ -450,9 +434,9 @@ async fn on_room_message(
 async fn on_room_redaction(
     event: SyncRoomRedactionEvent,
     room: Room,
-    pool: SqlitePool,
+    comment_store: Arc<dyn CommentStore>,
+    intent_store: Arc<dyn IntentStore>,
     bus: broadcast::Sender<ProjectorEvent>,
-    intents: Arc<dyn IntentStore>,
 ) {
     if let SyncRoomRedactionEvent::Original(msg) = event {
         // redaction event can have target event id in content or in the top level redacts field
@@ -462,7 +446,7 @@ async fn on_room_redaction(
             let target_event_id_str = target_event_id.to_string();
 
             // 0. Closed-loop: Mark delete intent as completed
-            if let Err(e) = intents
+            if let Err(e) = intent_store
                 .mark_delete_intent_completed(&target_event_id_str)
                 .await
             {
@@ -476,33 +460,24 @@ async fn on_room_redaction(
             );
 
             // Fetch site_id and post_slug before deleting to emit event
-            let meta = sqlx::query!(
-                "SELECT site_id, post_slug FROM comments WHERE event_id = ?",
-                target_event_id_str
-            )
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+            let comment = comment_store
+                .get_comment(&target_event_id_str)
+                .await
+                .ok()
+                .flatten();
 
-            match sqlx::query!(
-                "DELETE FROM comments WHERE event_id = ?",
-                target_event_id_str
-            )
-            .execute(&pool)
-            .await
-            {
-                Ok(result) if result.rows_affected() > 0 => {
+            match comment_store.delete_comment(&target_event_id_str).await {
+                Ok(true) => {
                     info!("Successfully deleted redacted comment {}", target_event_id);
-                    if let Some(meta) = meta {
+                    if let Some(c) = comment {
                         let _ = bus.send(ProjectorEvent::CommentDeleted {
-                            site_id: meta.site_id,
-                            post_slug: meta.post_slug,
+                            site_id: c.site_id,
+                            post_slug: c.post_slug,
                             event_id: target_event_id_str,
                         });
                     }
                 }
-                Ok(_) => debug!(
+                Ok(false) => debug!(
                     "Redaction received for unknown or already deleted comment {}",
                     target_event_id
                 ),
@@ -513,16 +488,4 @@ async fn on_room_redaction(
             }
         }
     }
-}
-
-// Internal helper for fetching updated comments
-#[derive(sqlx::FromRow)]
-struct CommentRow {
-    event_id: String,
-    author_nickname: Option<String>,
-    author_fingerprint: Option<String>,
-    content: String,
-    timestamp: NaiveDateTime,
-    site_id: String,
-    post_slug: String,
 }
