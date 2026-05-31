@@ -1,10 +1,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
-use sea_orm::{DatabaseConnection, SqlxSqliteConnector};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, SqlxSqliteConnector,
+};
 use sqlx::SqlitePool;
 
 pub mod entities;
@@ -25,7 +27,6 @@ impl SqliteStore {
 }
 
 use crate::entities::*;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[async_trait]
 impl IntentStore for SqliteStore {
@@ -163,19 +164,12 @@ impl IntentStore for SqliteStore {
 #[async_trait]
 impl CommentStore for SqliteStore {
     async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>> {
-        let row = sqlx::query_as!(
-            CommentRow,
-            r#"
-            SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime"
-            FROM comments
-            WHERE event_id = ?
-            "#,
-            event_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let model = comments::Entity::find()
+            .filter(comments::Column::EventId.eq(event_id))
+            .one(&self.db)
+            .await?;
 
-        Ok(row.map(Comment::from))
+        Ok(model.map(Comment::from))
     }
 
     async fn get_comments(
@@ -188,41 +182,24 @@ impl CommentStore for SqliteStore {
         let site_id_str = site_id.as_str();
         let post_slug_str = post_slug.as_str();
 
-        let count_query = sqlx::query_scalar!(
-            r#"
-            SELECT COUNT(*) as "count: i64"
-            FROM comments
-            WHERE site_id = ? AND post_slug = ?
-            "#,
-            site_id_str,
-            post_slug_str
-        )
-        .fetch_one(&self.pool);
+        let count = comments::Entity::find()
+            .filter(comments::Column::SiteId.eq(site_id_str))
+            .filter(comments::Column::PostSlug.eq(post_slug_str))
+            .count(&self.db)
+            .await?;
 
-        let site_id_str = site_id.as_str();
-        let post_slug_str = post_slug.as_str();
+        let models = comments::Entity::find()
+            .filter(comments::Column::SiteId.eq(site_id_str))
+            .filter(comments::Column::PostSlug.eq(post_slug_str))
+            .order_by_desc(comments::Column::Timestamp)
+            .limit(limit as u64)
+            .offset(offset as u64)
+            .all(&self.db)
+            .await?;
 
-        let comments_query = sqlx::query_as!(
-            CommentRow,
-            r#"
-            SELECT event_id, author_nickname, author_fingerprint, content, timestamp as "timestamp: NaiveDateTime"
-            FROM comments
-            WHERE site_id = ? AND post_slug = ?
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-            "#,
-            site_id_str,
-            post_slug_str,
-            limit,
-            offset
-        )
-        .fetch_all(&self.pool);
+        let comments = models.into_iter().map(Comment::from).collect();
 
-        let (total, comment_rows) = tokio::try_join!(count_query, comments_query)?;
-
-        let comments = comment_rows.into_iter().map(Comment::from).collect();
-
-        Ok((comments, total))
+        Ok((comments, count as i64))
     }
 }
 
@@ -233,27 +210,29 @@ impl RegistryStore for SqliteStore {
         site_id: &SiteId,
         post_slug: &PostSlug,
     ) -> Result<Option<String>> {
-        let s_id = site_id.as_str();
-        let p_slug = post_slug.as_str();
-        let room_id = sqlx::query_scalar!(
-            "SELECT room_id FROM room_registry WHERE site_id = ? AND post_slug = ? AND is_active = 1",
-            s_id,
-            p_slug
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        .flatten();
+        let room = room_registry::Entity::find()
+            .filter(room_registry::Column::SiteId.eq(site_id.as_str()))
+            .filter(room_registry::Column::PostSlug.eq(post_slug.as_str()))
+            .filter(room_registry::Column::IsActive.eq(true))
+            .one(&self.db)
+            .await?;
 
-        Ok(room_id)
+        Ok(room.map(|r| r.room_id))
     }
 
     async fn invalidate_room_registry(&self, room_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE room_registry SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
-            room_id
-        )
-        .execute(&self.pool)
-        .await?;
+        room_registry::Entity::update_many()
+            .col_expr(
+                room_registry::Column::IsActive,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                room_registry::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(room_registry::Column::RoomId.eq(room_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 }
@@ -261,82 +240,53 @@ impl RegistryStore for SqliteStore {
 #[async_trait]
 impl SiteStore for SqliteStore {
     async fn get_site(&self, id: &SiteId) -> Result<Option<Site>> {
-        let id_str = id.as_str();
+        let model = sites::Entity::find_by_id(id.as_str().to_owned())
+            .one(&self.db)
+            .await?;
 
-        let row = sqlx::query_as!(
-            SiteRow,
-            r#"
-            SELECT id as "id!", matrix_space_id as "matrix_space_id!", display_name, created_at as "created_at!: NaiveDateTime"
-            FROM sites
-            WHERE id = ?
-            "#,
-            id_str
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(Site::from))
+        Ok(model.map(Site::from))
     }
 
     async fn save_site(&self, site: &Site) -> Result<()> {
-        sqlx::query!(
-            r#"
-            INSERT INTO sites (id, matrix_space_id, display_name, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                matrix_space_id = excluded.matrix_space_id,
-                display_name = excluded.display_name
-            "#,
-            site.id,
-            site.matrix_space_id,
-            site.display_name,
-            site.created_at
-        )
-        .execute(&self.pool)
-        .await?;
+        let active_model = sites::ActiveModel {
+            id: Set(site.id.clone()),
+            matrix_space_id: Set(site.matrix_space_id.clone()),
+            display_name: Set(site.display_name.clone()),
+            created_at: Set(site.created_at),
+        };
+
+        sites::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(sites::Column::Id)
+                    .update_columns([sites::Column::MatrixSpaceId, sites::Column::DisplayName])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
 
         Ok(())
     }
 }
 
-// An intermediate struct for reading from the database, to handle the
-// NaiveDateTime -> DateTime<Utc> conversion.
-#[derive(sqlx::FromRow)]
-struct CommentRow {
-    event_id: String,
-    author_nickname: Option<String>,
-    author_fingerprint: Option<String>,
-    content: String,
-    timestamp: NaiveDateTime,
-}
-
-impl From<CommentRow> for Comment {
-    fn from(row: CommentRow) -> Self {
+impl From<comments::Model> for Comment {
+    fn from(model: comments::Model) -> Self {
         Comment {
-            event_id: row.event_id,
-            author_nickname: row.author_nickname,
-            author_fingerprint: row.author_fingerprint,
-            content: row.content,
-            timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+            event_id: model.event_id,
+            author_nickname: model.author_nickname,
+            author_fingerprint: model.author_fingerprint,
+            content: model.content,
+            timestamp: model.timestamp,
         }
     }
 }
 
-#[derive(sqlx::FromRow)]
-struct SiteRow {
-    id: String,
-    matrix_space_id: String,
-    display_name: Option<String>,
-    created_at: NaiveDateTime,
-}
-
-impl From<SiteRow> for Site {
-    fn from(row: SiteRow) -> Self {
+impl From<sites::Model> for Site {
+    fn from(model: sites::Model) -> Self {
         Site {
-            id: row.id,
-            matrix_space_id: row.matrix_space_id,
-            display_name: row.display_name,
-            created_at: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+            id: model.id,
+            matrix_space_id: model.matrix_space_id,
+            display_name: model.display_name,
+            created_at: model.created_at,
         }
     }
 }
