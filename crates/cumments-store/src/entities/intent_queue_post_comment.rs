@@ -4,11 +4,11 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "intent_queue_post_comment")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: i32,
+    pub id: i64,
     #[sea_orm(column_type = "Text")]
     pub payload: String,
     pub status: String,
-    pub retry_count: i32,
+    pub retry_count: i64,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub matrix_event_id: Option<String>,

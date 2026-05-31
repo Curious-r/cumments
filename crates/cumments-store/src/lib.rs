@@ -142,7 +142,7 @@ impl IntentStore for DbStore {
                 intent_queue_post_comment::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp().into(),
             )
-            .filter(intent_queue_post_comment::Column::Id.eq(id as i32))
+            .filter(intent_queue_post_comment::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -158,7 +158,7 @@ impl IntentStore for DbStore {
                 intent_queue_update_comment::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp().into(),
             )
-            .filter(intent_queue_update_comment::Column::Id.eq(id as i32))
+            .filter(intent_queue_update_comment::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -174,7 +174,7 @@ impl IntentStore for DbStore {
                 intent_queue_delete_comment::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp().into(),
             )
-            .filter(intent_queue_delete_comment::Column::Id.eq(id as i32))
+            .filter(intent_queue_delete_comment::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -190,7 +190,7 @@ impl IntentStore for DbStore {
                 intent_queue_post_comment::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp().into(),
             )
-            .filter(intent_queue_post_comment::Column::Id.eq(id as i32))
+            .filter(intent_queue_post_comment::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -206,7 +206,7 @@ impl IntentStore for DbStore {
                 intent_queue_delete_comment::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp().into(),
             )
-            .filter(intent_queue_delete_comment::Column::Id.eq(id as i32))
+            .filter(intent_queue_delete_comment::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -222,7 +222,7 @@ impl IntentStore for DbStore {
                 intent_queue_update_comment::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp().into(),
             )
-            .filter(intent_queue_update_comment::Column::Id.eq(id as i32))
+            .filter(intent_queue_update_comment::Column::Id.eq(id))
             .exec(&self.db)
             .await?;
         Ok(())
