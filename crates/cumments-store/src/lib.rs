@@ -14,15 +14,14 @@ pub mod entities;
 /// A SqliteStore implementation of the storage ports.
 #[derive(Clone)]
 pub struct SqliteStore {
-    pool: SqlitePool,
     db: DatabaseConnection,
 }
 
 impl SqliteStore {
     /// Creates a new SqliteStore using an existing SqlitePool.
     pub fn new(pool: SqlitePool) -> Self {
-        let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone());
-        Self { pool, db }
+        let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
+        Self { db }
     }
 }
 
