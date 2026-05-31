@@ -24,20 +24,22 @@ impl SqliteStore {
     }
 }
 
+use crate::entities::*;
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+
 #[async_trait]
 impl IntentStore for SqliteStore {
     async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
         let payload = serde_json::to_string(intent)?;
 
-        sqlx::query!(
-            r#"
-            INSERT INTO intent_queue_post_comment (payload)
-            VALUES (?)
-            "#,
-            payload
-        )
-        .execute(&self.pool)
-        .await?;
+        let active_model = intent_queue_post_comment::ActiveModel {
+            payload: Set(payload),
+            status: Set("pending".to_owned()),
+            retry_count: Set(0),
+            ..Default::default()
+        };
+
+        active_model.insert(&self.db).await?;
 
         Ok(())
     }
@@ -45,89 +47,115 @@ impl IntentStore for SqliteStore {
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()> {
         let payload = serde_json::to_string(intent)?;
 
-        sqlx::query!(
-            r#"
-            INSERT INTO intent_queue_delete_comment (payload, target_event_id)
-            VALUES (?, ?)
-            "#,
-            payload,
-            intent.event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        let active_model = intent_queue_delete_comment::ActiveModel {
+            payload: Set(payload),
+            status: Set("pending".to_owned()),
+            target_event_id: Set(Some(intent.event_id.clone())),
+            ..Default::default()
+        };
+
+        active_model.insert(&self.db).await?;
 
         Ok(())
     }
 
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()> {
-        let site_id = intent.site_id.as_str();
-        let post_slug = intent.post_slug.as_str();
+        let active_model = intent_queue_update_comment::ActiveModel {
+            site_id: Set(intent.site_id.as_str().to_owned()),
+            post_slug: Set(intent.post_slug.as_str().to_owned()),
+            event_id: Set(intent.event_id.clone()),
+            content: Set(intent.content.clone()),
+            author_fingerprint: Set(intent.author_fingerprint.clone()),
+            status: Set("pending".to_owned()),
+            ..Default::default()
+        };
 
-        sqlx::query!(
-            r#"
-            INSERT INTO intent_queue_update_comment (site_id, post_slug, event_id, content, author_fingerprint)
-            VALUES (?, ?, ?, ?, ?)
-            "#,
-            site_id,
-            post_slug,
-            intent.event_id,
-            intent.content,
-            intent.author_fingerprint
-        )
-        .execute(&self.pool)
-        .await?;
+        active_model.insert(&self.db).await?;
 
         Ok(())
     }
 
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_post_comment SET status = 'waiting_for_sync', matrix_event_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            event_id,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::MatrixEventId,
+                sea_orm::sea_query::Expr::value(event_id),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_post_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_update_comment SET status = 'waiting_for_sync', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_update_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_update_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("waiting_for_sync"),
+            )
+            .col_expr(
+                intent_queue_update_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_update_comment::Column::Id.eq(id as i32))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_post_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE matrix_event_id = ?",
-            event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("completed"),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_post_comment::Column::MatrixEventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_delete_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE target_event_id = ?",
-            target_event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_delete_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_delete_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("completed"),
+            )
+            .col_expr(
+                intent_queue_delete_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_delete_comment::Column::TargetEventId.eq(target_event_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 
     async fn mark_update_intent_completed(&self, event_id: &str) -> Result<()> {
-        sqlx::query!(
-            "UPDATE intent_queue_update_comment SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE event_id = ?",
-            event_id
-        )
-        .execute(&self.pool)
-        .await?;
+        intent_queue_update_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_update_comment::Column::Status,
+                sea_orm::sea_query::Expr::value("completed"),
+            )
+            .col_expr(
+                intent_queue_update_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::current_timestamp().into(),
+            )
+            .filter(intent_queue_update_comment::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 }
