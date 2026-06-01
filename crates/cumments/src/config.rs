@@ -59,6 +59,8 @@ pub fn get_configuration(config_path: Option<&str>) -> Result<Settings, config::
     }
 
     let settings = builder
+        .set_default("server.port", 7931)?
+        .set_default("server.host", "localhost")?
         // Add in environment variables with a prefix of CUMMENTS and separator __
         // e.g. `CUMMENTS_SERVER__PORT=5000` would override `port` in `[server]`
         .add_source(config::Environment::with_prefix("CUMMENTS").separator("__"))

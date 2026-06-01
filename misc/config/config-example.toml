@@ -7,7 +7,7 @@
 host = "0.0.0.0"
 
 # Port number for the HTTP server
-port = 3000
+port = 7931
 
 # Public Matrix server name used for generating deep links
 # For self-hosted Matrix server, use your domain (e.g., "example.com")

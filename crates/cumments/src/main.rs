@@ -167,10 +167,15 @@ async fn main() -> Result<()> {
     }
 
     // 11. Launch the web server
-    let address = format!("{}:{}", settings.server.host, settings.server.port);
-    let listener = tokio::net::TcpListener::bind(&address)
-        .await
-        .unwrap_or_else(|_| panic!("Failed to bind to address {}", &address));
+    let listener =
+        tokio::net::TcpListener::bind((settings.server.host.as_str(), settings.server.port))
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Failed to bind to {}:{}",
+                    settings.server.host, settings.server.port
+                )
+            });
     tracing::info!("Server listening on {}", listener.local_addr().unwrap());
     axum::serve(
         listener,

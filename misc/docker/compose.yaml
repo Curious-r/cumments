@@ -6,7 +6,7 @@ services:
       context: ../..
       dockerfile: misc/docker/Dockerfile
     ports:
-      - "3000:3000"
+      - "7931:7931"
     volumes:
       - cumments_data:/app/data
       # Mount configuration file (copy config-example.toml and customize)
@@ -22,7 +22,7 @@ services:
           "--quiet",
           "--tries=1",
           "--spider",
-          "http://localhost:3000/health",
+          "http://localhost:7931/health",
         ]
       interval: 30s
       timeout: 10s

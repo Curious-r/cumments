@@ -38,7 +38,7 @@ COPY --from=builder /usr/src/app/target/release/cumments ./cumments
 # Create data directory for SQLite database
 RUN mkdir -p /app/data
 
-EXPOSE 3000
+EXPOSE 7931
 
 # Set default log level
 ENV RUST_LOG=info

@@ -36,14 +36,14 @@ The system is built with a decoupled architecture for eventual consistency:
 ## 3. Configuration Details
 
 Configuration is loaded in order: **Environment Variables** > **`config.toml`** > **Defaults**.
-Use `CUMMENTS__` prefix for env vars (e.g., `CUMMENTS_SERVER__PORT=3000`).
+Use `CUMMENTS__` prefix for env vars (e.g., `CUMMENTS_SERVER__PORT=7931`).
 
 ### `config.toml` Example
 
 ```toml
 [server]
 host = "0.0.0.0"
-port = 3000
+port = 7931
 cors_origins = "*"
 public_server_name = "matrix.org"
 
@@ -85,7 +85,7 @@ devenv shell cargo build --release -p cumments
 
 # Docker Deployment
 docker build -t cumments -f misc/docker/Dockerfile .
-docker run -p 3000:3000 -v $(pwd)/data:/app/data cumments
+docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
 
 ---
@@ -165,7 +165,7 @@ Cumments 是一个基于 Matrix 协议的去中心化评论系统后端，采用
 ## 3. 配置说明
 
 优先级：**环境变量** > **`config.toml`** > **默认值**。
-环境变量前缀为 `CUMMENTS__`（例如 `CUMMENTS_SERVER__PORT=3000`）。
+环境变量前缀为 `CUMMENTS__`（例如 `CUMMENTS_SERVER__PORT=7931`）。
 
 ---
 
