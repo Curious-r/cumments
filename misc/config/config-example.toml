@@ -78,17 +78,20 @@ device_id = "CUMMENTS_BOT"
 # [matrix]
 # mode = "appservice"
 # homeserver_url = "http://localhost:8008"
+#
+# # The server name (domain) used to generate virtual user IDs
+# # e.g., "@_cumments_myblog_a1b2c3d4:your_server.tld"
 # server_name = "your_server.tld"
 #
 # # The following tokens must match those in registration.yaml
 # as_token = "${YOUR_AS_TOKEN_HERE}"
 # hs_token = "${YOUR_HS_TOKEN_HERE}"
 #
-# # Bot's username prefix (localpart)
+# # Bot's username prefix (localpart), used as the AppService's sender user
 # bot_localpart = "cumments_bot"
 #
 # # Port for AppService to receive Matrix pushes (avoid conflicts with server.port)
-# listen_port = 3001
+# push_listen_port = 3001
 #
 # # Also supports dyarchy
 # owner_id = "@admin:your_server.tld"
