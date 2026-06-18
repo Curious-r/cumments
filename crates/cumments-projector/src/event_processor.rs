@@ -3,7 +3,7 @@
 //! This module defines the core "projection" functions that transform
 //! Matrix events into local read-model updates. It does **not** depend
 //! on `matrix_sdk` or any transport-specific types. Both the
-//! sync-based Projector (matrix-sdk event handlers) and the upcoming
+//! SyncAdapter (matrix-sdk event handlers) and the upcoming
 //! AppService PushReceiver call into these same functions.
 
 use cumments_core::{

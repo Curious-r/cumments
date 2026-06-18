@@ -37,22 +37,22 @@ struct CustomMessageContent {
     author_fingerprint: Option<String>,
 }
 
-/// The sync-based Projector – observes Matrix events via matrix-sdk's sync
+/// SyncAdapter – observes Matrix events via matrix-sdk's sync
 /// and feeds them into the [`EventProcessor`].
-pub struct Projector {
+pub struct SyncAdapter {
     client: matrix_sdk::Client,
     processor: Arc<EventProcessor>,
 }
 
-impl Projector {
-    /// Creates a new Projector using an existing Matrix client and pre-built EventProcessor.
+impl SyncAdapter {
+    /// Creates a new SyncAdapter using an existing Matrix client and pre-built EventProcessor.
     pub fn new(client: matrix_sdk::Client, processor: Arc<EventProcessor>) -> Self {
         Self { client, processor }
     }
 
     /// Registers the event handlers on the Matrix client.
     pub fn register_handlers(&self) {
-        info!("Registering sync event handlers (SyncAdapter)...");
+        info!("Registering SyncAdapter event handlers...");
 
         let processor = self.processor.clone();
 

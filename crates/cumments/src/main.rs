@@ -218,12 +218,12 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     match mode {
         "bot" => {
-            // SyncAdapter (Projector) – uses matrix-sdk event handlers
+            // SyncAdapter – uses matrix-sdk event handlers
             if let Some(ref client) = matrix_client {
-                let projector =
-                    cumments_projector::Projector::new(client.clone(), event_processor.clone());
-                projector.register_handlers();
-                tracing::info!("SyncAdapter (Projector) handlers registered.");
+                let adapter =
+                    cumments_projector::SyncAdapter::new(client.clone(), event_processor.clone());
+                adapter.register_handlers();
+                tracing::info!("SyncAdapter handlers registered.");
             }
         }
         "appservice" => {
