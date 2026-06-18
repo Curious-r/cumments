@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
-use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore};
+use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
@@ -26,6 +26,8 @@ impl DbStore {
         Ok(Self { db })
     }
 }
+
+use sha2::{Digest, Sha256};
 
 use crate::entities::*;
 
@@ -531,5 +533,45 @@ impl From<sites::Model> for Site {
             display_name: model.display_name,
             created_at: model.created_at,
         }
+    }
+}
+
+#[async_trait]
+impl VirtualUserStore for DbStore {
+    async fn get_or_create_virtual_user(
+        &self,
+        fingerprint: &str,
+        site_id: &SiteId,
+        server_name: &str,
+    ) -> Result<String> {
+        // 1. Compute the deterministic virtual user ID
+        let mut hasher = Sha256::new();
+        hasher.update(fingerprint.as_bytes());
+        let hash = hex::encode(&hasher.finalize()[..4]); // first 4 bytes → 8 hex chars
+
+        let virtual_user_id = format!("@_cumments_{}_{}:{}", site_id.as_str(), hash, server_name);
+
+        // 2. Try to insert – on conflict (fingerprint + site_id already exists), do nothing
+        let active_model = virtual_users::ActiveModel {
+            fingerprint: Set(fingerprint.to_owned()),
+            site_id: Set(site_id.as_str().to_owned()),
+            virtual_user_id: Set(virtual_user_id.clone()),
+            server_name: Set(server_name.to_owned()),
+            ..Default::default()
+        };
+
+        virtual_users::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::columns([
+                    virtual_users::Column::Fingerprint,
+                    virtual_users::Column::SiteId,
+                ])
+                .do_nothing()
+                .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(virtual_user_id)
     }
 }

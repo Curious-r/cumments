@@ -134,6 +134,7 @@ pub trait MatrixDriver: Send + Sync {
         content: &str,
         nickname: &str,
         fingerprint: &str,
+        site_id: &SiteId,
     ) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.
@@ -144,8 +145,25 @@ pub trait MatrixDriver: Send + Sync {
         new_content: &str,
         nickname: &str,
         fingerprint: &str,
+        site_id: &SiteId,
     ) -> Result<String>;
 
     /// Redacts a message in a specific room.
     async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()>;
+}
+
+/// Port for virtual user identity management (AppService mode).
+/// Maps Cumments visitor fingerprints to stable Matrix virtual user IDs.
+#[async_trait]
+pub trait VirtualUserStore: Send + Sync {
+    /// Returns the virtual Matrix user ID for the given fingerprint and site.
+    /// Creates one deterministically if it doesn't exist yet.
+    ///
+    /// Format: `@_cumments_{site_id}_{sha256_trunc8(fingerprint)}:{server_name}`
+    async fn get_or_create_virtual_user(
+        &self,
+        fingerprint: &str,
+        site_id: &SiteId,
+        server_name: &str,
+    ) -> Result<String>;
 }
