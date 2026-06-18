@@ -94,6 +94,20 @@ async fn main() -> Result<()> {
     // 6. Initialize Matrix Client (bot mode only)
     // ─────────────────────────────────────────────────────────────
     let mode = settings.matrix.mode.as_str();
+
+    // Extract hs_token for AppService mode (used later by PushReceiver)
+    let hs_token: Option<String> = if mode == "appservice" {
+        Some(
+            settings
+                .matrix
+                .hs_token
+                .clone()
+                .ok_or_else(|| anyhow!("`hs_token` is required for appservice mode"))?,
+        )
+    } else {
+        None
+    };
+
     let matrix_client = if mode == "bot" {
         tracing::info!("Initializing Matrix client for 'bot' mode.");
         let client = Client::builder()
@@ -154,11 +168,6 @@ async fn main() -> Result<()> {
                 .as_token
                 .as_deref()
                 .ok_or_else(|| anyhow!("`as_token` is required for appservice mode"))?;
-            let _hs_token = settings
-                .matrix
-                .hs_token
-                .as_deref()
-                .ok_or_else(|| anyhow!("`hs_token` is required for appservice mode"))?;
             let server_name = settings
                 .matrix
                 .server_name
@@ -230,7 +239,9 @@ async fn main() -> Result<()> {
             // PushReceiver – listens for HS push events
             let push_port = settings.matrix.push_listen_port.unwrap_or(3001);
 
-            let push_app = cumments_projector::push_receiver::push_router(event_processor.clone());
+            let hs_token = hs_token.clone().unwrap_or_default();
+            let push_app =
+                cumments_projector::push_receiver::push_router(event_processor.clone(), hs_token);
 
             if push_port == settings.server.port {
                 tracing::info!(
@@ -284,7 +295,8 @@ async fn main() -> Result<()> {
         && settings.matrix.push_listen_port.unwrap_or(3001) == settings.server.port
     {
         // Merge push routes into the API server
-        let push_router = cumments_projector::push_receiver::push_router(event_processor);
+        let hs_token = hs_token.unwrap_or_default();
+        let push_router = cumments_projector::push_receiver::push_router(event_processor, hs_token);
         api_router.merge(push_router)
     } else {
         api_router

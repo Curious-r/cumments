@@ -1,16 +1,32 @@
 //! PushReceiver – AppService push event endpoint.
 //!
 //! Receives events pushed by the Matrix homeserver via
-//! `PUT /_matrix/app/v1/transactions/{txnId}` and feeds them into
-//! the transport-agnostic [`EventProcessor`].
+//! `PUT /_matrix/app/v1/transactions/{txnId}?hs_token={hs_token}`
+//! and feeds them into the transport-agnostic [`EventProcessor`].
+//! The `hs_token` query parameter is verified against the configured
+//! value before any events are processed.
 
 use crate::event_processor::{
     EventProcessor, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
     parse_room_identity,
 };
-use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse, routing::put};
+use axum::{
+    Json,
+    extract::{Path, Query},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::put,
+};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
+
+// ── Shared state ──────────────────────────────────────────────────
+
+/// Shared state for the push receiver endpoints.
+pub struct PushState {
+    processor: Arc<EventProcessor>,
+    hs_token: String,
+}
 
 // ── Matrix AppService push event types ────────────────────────────
 
@@ -46,23 +62,47 @@ struct UnsignedData {
 // ── Axum router ──────────────────────────────────────────────────
 
 /// Build the axum router for the AppService push endpoint.
-pub fn push_router(processor: Arc<EventProcessor>) -> axum::Router {
+///
+/// # Panics
+/// The `hs_token` is compared against the `hs_token` query parameter
+/// sent by the homeserver. Requests without a valid token are rejected
+/// with 401 UNAUTHORIZED.
+pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Router {
+    let state = Arc::new(PushState {
+        processor,
+        hs_token,
+    });
+
     axum::Router::new()
         .route(
             "/_matrix/app/v1/transactions/{txnId}",
             put(handle_transaction),
         )
-        .with_state(processor)
+        .with_state(state)
 }
 
 /// Handle `PUT /_matrix/app/v1/transactions/{txnId}`.
 async fn handle_transaction(
     Path(_txn_id): Path<String>,
-    processor: axum::extract::State<Arc<EventProcessor>>,
+    Query(query): Query<HashMap<String, String>>,
+    state: axum::extract::State<Arc<PushState>>,
     Json(txn): Json<Transaction>,
 ) -> impl IntoResponse {
+    // ── hs_token verification ──
+    let received = query.get("hs_token").map(|s| s.as_str());
+    if received != Some(state.hs_token.as_str()) {
+        tracing::warn!(
+            "Push transaction rejected: invalid hs_token (received: {:?})",
+            received.map(|s| &s[..8.min(s.len())])
+        );
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"errcode": "M_FORBIDDEN", "error": "Invalid hs_token"})),
+        );
+    }
+
     for event in txn.events {
-        if let Err(e) = process_single_event(&event, &processor).await {
+        if let Err(e) = process_single_event(&event, &state.processor).await {
             tracing::warn!("Failed to process push event: {:?}", e);
         }
     }
@@ -138,13 +178,6 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         })
     });
 
-    // Check if it's an edit (skip original content if edit)
-    if relates_to.is_some() {
-        // For edits, use the body from m.new_content
-        // but the processor will use relates_to.new_content
-        // so body here is just a placeholder
-    }
-
     // Resolve room identity from metadata if available
     let metadata_json = content.get("im.cumments.metadata").and_then(|v| v.as_str());
     let room_identity = parse_room_identity(metadata_json, None);
@@ -192,7 +225,6 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
 }
 
 /// Parse a push space child event into a `ParsedSpaceChild`.
-// The processor parameter is reserved for future use (resolving child room identity).
 #[allow(dead_code)]
 async fn parse_push_space_child(
     event: &PushEvent,
@@ -213,16 +245,7 @@ async fn parse_push_space_child(
         .map(|arr| !arr.is_empty())
         .unwrap_or(false);
 
-    // Attempt to resolve site_id from the Space's metadata.
-    // In push mode, the event itself doesn't carry the Space's
-    // metadata. We need to either:
-    //   (a) Query the HS API for the Space's state, or
-    //   (b) Look up the space in our local registry.
-    // For now, we rely on the local database or leave it None.
     let site_id = None; // Future: query HS via appservice API
-
-    // For the child room identity, push events don't include
-    // room state. We'd need to make an additional API call.
     let child_room_identity = None; // Future: query HS via appservice API
 
     Some(ParsedSpaceChild {
