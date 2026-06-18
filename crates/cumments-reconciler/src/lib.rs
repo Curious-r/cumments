@@ -118,6 +118,7 @@ impl Reconciler {
                         &intent.content,
                         &intent.nickname,
                         &intent.author_fingerprint,
+                        &intent.site_id,
                     )
                     .await?;
 
@@ -239,6 +240,7 @@ impl Reconciler {
                         &intent.content,
                         &nickname,
                         &intent.author_fingerprint,
+                        &intent.site_id,
                     )
                     .await?;
 
