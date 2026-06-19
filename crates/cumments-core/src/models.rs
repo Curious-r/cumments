@@ -34,6 +34,8 @@ impl SiteId {
     }
 }
 
+// Internal use only – data must already be validated.
+// For untrusted input, use `SiteId::new()` which runs validation.
 impl From<String> for SiteId {
     fn from(id: String) -> Self {
         Self { id }
@@ -68,6 +70,8 @@ impl PostSlug {
     }
 }
 
+// Internal use only – data must already be validated.
+// For untrusted input, use `PostSlug::new()` which runs validation.
 impl From<String> for PostSlug {
     fn from(slug: String) -> Self {
         Self { slug }
