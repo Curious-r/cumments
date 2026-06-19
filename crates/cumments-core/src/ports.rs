@@ -102,6 +102,10 @@ pub trait RegistryStore: Send + Sync {
 #[async_trait]
 pub trait SiteStore: Send + Sync {
     async fn get_site(&self, id: &SiteId) -> Result<Option<crate::models::Site>>;
+
+    /// Looks up a site by its Matrix Space room ID.
+    async fn get_site_by_space_id(&self, space_id: &str) -> Result<Option<crate::models::Site>>;
+
     async fn save_site(&self, site: &crate::models::Site) -> Result<()>;
 
     /// Ensures a site exists in the database, creating it with default values if not.

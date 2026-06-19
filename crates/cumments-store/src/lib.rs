@@ -470,6 +470,15 @@ impl SiteStore for DbStore {
         Ok(model.map(Site::from))
     }
 
+    async fn get_site_by_space_id(&self, space_id: &str) -> Result<Option<Site>> {
+        let model = sites::Entity::find()
+            .filter(sites::Column::MatrixSpaceId.eq(space_id))
+            .one(&self.db)
+            .await?;
+
+        Ok(model.map(Site::from))
+    }
+
     async fn save_site(&self, site: &Site) -> Result<()> {
         let active_model = sites::ActiveModel {
             id: Set(site.id.clone()),

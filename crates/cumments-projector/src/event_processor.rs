@@ -161,6 +161,17 @@ impl EventProcessor {
         }
     }
 
+    /// Look up the site ID associated with a Matrix Space room ID.
+    /// Returns `None` if the space is not in our local database.
+    pub async fn get_site_id_by_space_id(&self, space_id: &str) -> Option<String> {
+        self.site_store
+            .get_site_by_space_id(space_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|s| s.id)
+    }
+
     /// Process a room message (new comment or edit).
     #[instrument(skip(self))]
     pub async fn process_room_message(&self, event: ParsedRoomMessage) {
