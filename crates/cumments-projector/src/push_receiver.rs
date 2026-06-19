@@ -132,8 +132,12 @@ async fn process_single_event(
             }
         }
         "m.space.child" => {
-            if let Some(parsed) = parse_push_space_child(event, processor).await {
-                processor.process_space_child(parsed).await;
+            // Resolve the site_id from the space's room_id in local DB
+            if let Some(ref space_room_id) = event.room_id {
+                let site_id = processor.get_site_id_by_space_id(space_room_id).await;
+                if let Some(parsed) = parse_push_space_child(event, site_id).await {
+                    processor.process_space_child(parsed).await;
+                }
             }
         }
         _ => {
@@ -241,16 +245,15 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
 }
 
 /// Parse a push space child event into a `ParsedSpaceChild`.
-#[allow(dead_code)]
+/// `site_id` is resolved from the local database before calling this.
 async fn parse_push_space_child(
     event: &PushEvent,
-    _processor: &EventProcessor,
+    site_id: Option<String>,
 ) -> Option<ParsedSpaceChild> {
     let room_id = event.room_id.as_ref()?;
     let state_key = event.state_key.as_ref()?;
     let content = event.content.as_ref()?;
 
-    // The room_id in the push event is the Space's ID.
     let space_room_id = room_id.clone();
     let child_room_id = state_key.clone();
 
@@ -261,8 +264,9 @@ async fn parse_push_space_child(
         .map(|arr| !arr.is_empty())
         .unwrap_or(false);
 
-    let site_id = None; // Future: query HS via appservice API
-    let child_room_identity = None; // Future: query HS via appservice API
+    // Child room identity requires an additional HS API call;
+    // left as None for now (Future improvement).
+    let child_room_identity = None;
 
     Some(ParsedSpaceChild {
         space_room_id,
