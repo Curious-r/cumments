@@ -207,8 +207,8 @@ async fn get_comments_handler(
     let limit = per_page;
     let offset = (page - 1) * per_page;
 
-    let site_id_val: SiteId = site_id.into();
-    let post_slug_val: PostSlug = post_slug.into();
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
 
     match state
         .store
@@ -257,9 +257,11 @@ async fn post_comment_handler(
     }
 
     // 3. Create the business intent
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
     let intent = PostCommentIntent {
-        site_id: site_id.into(),
-        post_slug: post_slug.into(),
+        site_id: site_id_val,
+        post_slug: post_slug_val,
         content: req.content,
         nickname: req.nickname,
         email: req.email,
@@ -325,9 +327,11 @@ async fn delete_comment_handler(
     }
 
     // 3. Create the business intent
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
     let intent = DeleteCommentIntent {
-        site_id: site_id.into(),
-        post_slug: post_slug.into(),
+        site_id: site_id_val,
+        post_slug: post_slug_val,
         event_id: comment_id,
         author_fingerprint: req.author_fingerprint,
     };
@@ -392,9 +396,11 @@ async fn update_comment_handler(
     }
 
     // 4. Create the business intent
+    let site_id_val = SiteId::new(_site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(_post_slug).map_err(AppError::Validation)?;
     let intent = UpdateCommentIntent {
-        site_id: _site_id.into(),
-        post_slug: _post_slug.into(),
+        site_id: site_id_val,
+        post_slug: post_slug_val,
         event_id: comment_id,
         content: req.content,
         author_fingerprint: req.author_fingerprint,
