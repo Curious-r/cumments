@@ -144,6 +144,22 @@ async fn process_single_event(
     Ok(())
 }
 
+// ── Push event helpers ────────────────────────────────────────────
+
+/// Extract the display name from a Cumments message body.
+///
+/// Both BotMatrixDriver and AppServiceMatrixDriver format the body as:
+///   `**nickname**: comment content`
+///
+/// In push mode we don't have access to the room member list, so we
+/// parse the nickname back out of the body.
+fn extract_author_display_name(body: &str) -> Option<String> {
+    body.strip_prefix("**")
+        .and_then(|s| s.split_once("**: "))
+        .map(|(nick, _)| nick.to_string())
+        .filter(|n| !n.is_empty())
+}
+
 // ── Push event parsers ────────────────────────────────────────────
 
 /// Parse a push message event into a `ParsedRoomMessage`.
@@ -189,7 +205,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         event_id: event_id.clone(),
         sender: sender.clone(),
         content: body.to_string(),
-        author_display_name: None, // Push events don't include member info
+        author_display_name: extract_author_display_name(body),
         fingerprint,
         origin_server_ts,
         relates_to,
