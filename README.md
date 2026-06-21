@@ -189,9 +189,14 @@ Returns a signed challenge string and difficulty.
 
 ### Comment Operations
 
-**`GET /api/sites/{site_id}/posts/{post_slug}/comments`**
+**`QUERY /api/sites/{site_id}/posts/{post_slug}/comments`**
+- **Method**: HTTP QUERY (RFC 10008) — safe, idempotent, with JSON body
 - **Path Params**: `site_id` (1-64 chars, `[a-zA-Z0-9_-]`), `post_slug` (same rules)
-- **Query Params**: `page`, `per_page`.
+- **Body** (JSON):
+  ```json
+  { "page": 1, "per_page": 20 }
+  ```
+  Both fields are optional (defaults: page=1, per_page=20).
 
 **`POST /api/sites/{site_id}/posts/{post_slug}/comments`**
 - **Body**: `content`, `nickname`, `email`, `author_fingerprint`, `challenge_response`.
@@ -330,7 +335,7 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ## 6. 关键 API
 
 - `GET /api/challenge`: 获取 PoW 挑战签名和难度。
-- `GET /api/sites/{site_id}/posts/{post_slug}/comments`: 获取评论列表（支持分页）。
+- `QUERY /api/sites/{site_id}/posts/{post_slug}/comments`: 查询评论列表（RFC 10008 QUERY method，JSON body 传分页参数）。
 - `POST /api/sites/{site_id}/posts/{post_slug}/comments`: 提交发布评论意图。
 - `PATCH /api/sites/{site_id}/posts/{post_slug}/comments/{id}`: 提交编辑评论意图。
 - `DELETE /api/sites/{site_id}/posts/{post_slug}/comments/{id}`: 提交删除评论意图。

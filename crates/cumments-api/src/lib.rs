@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{Path, State},
+    http::{HeaderName, Method, StatusCode},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -37,6 +37,7 @@ pub enum AppError {
     InvalidPoW,
     Validation(validator::ValidationErrors),
     NotFound(String),
+    MethodNotAllowed,
     Unauthorized(String),
     BadRequest(String),
     Internal(String),
@@ -59,6 +60,12 @@ impl IntoResponse for AppError {
             ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "NOT_FOUND", None),
             AppError::Unauthorized(msg) => (StatusCode::FORBIDDEN, msg, "UNAUTHORIZED", None),
+            AppError::MethodNotAllowed => (
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Method not allowed. Use QUERY for queries, POST for submissions.".to_string(),
+                "METHOD_NOT_ALLOWED",
+                None,
+            ),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST", None),
             AppError::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -93,7 +100,7 @@ pub struct ApiState {
     pub reconciler_notify: Arc<Notify>,
 }
 
-/// The query parameters for pagination.
+/// The query parameters for pagination (sent as JSON body for QUERY method).
 #[derive(Debug, Deserialize, Validate)]
 pub struct PaginationQuery {
     #[validate(range(min = 1))]
@@ -156,12 +163,21 @@ pub struct UpdateCommentRequest {
     pub challenge_response: String,
 }
 
+/// The QUERY method for HTTP.
+static QUERY_METHOD: std::sync::LazyLock<Method> =
+    std::sync::LazyLock::new(|| Method::from_bytes(b"QUERY").unwrap());
+
+/// The Accept-Query response header (RFC 10008, Section 3).
+static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
+    std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
+
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState) -> Router {
     Router::new()
         .route(
             "/api/sites/{site_id}/posts/{post_slug}/comments",
-            post(post_comment_handler).get(get_comments_handler),
+            // POST for writing intents, fallback handles QUERY for reading.
+            post(post_comment_handler).fallback(query_comments_handler),
         )
         .route(
             "/api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
@@ -187,28 +203,52 @@ async fn get_challenge_handler(State(state): State<ApiState>) -> impl IntoRespon
     (StatusCode::OK, Json(response))
 }
 
-/// The handler for fetching all comments for a given page.
-async fn get_comments_handler(
+/// The handler for querying comments via the QUERY method (RFC 10008).
+///
+/// Pagination parameters are passed as JSON request body instead of
+/// URL query string, allowing for future extension to complex filters.
+///
+/// This handler is registered as the fallback for non-POST requests.
+/// It validates the method and rejects non-QUERY requests with 405.
+async fn query_comments_handler(
+    method: Method,
     State(state): State<ApiState>,
     Path((site_id, post_slug)): Path<(String, String)>,
-    Query(query): Query<PaginationQuery>,
+    body: String,
 ) -> Result<impl IntoResponse, AppError> {
-    // 1. Validate input
+    // 1. Only QUERY method is accepted here
+    if method != *QUERY_METHOD {
+        return Err(AppError::MethodNotAllowed);
+    }
+
+    // 2. Validate path params
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+
+    // 3. Parse pagination from JSON body (empty body → defaults)
+    let query: PaginationQuery = if body.is_empty() {
+        PaginationQuery {
+            page: None,
+            per_page: None,
+        }
+    } else {
+        serde_json::from_str(&body)
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?
+    };
     query.validate().map_err(AppError::Validation)?;
 
     tracing::info!(
-        "Fetching comments for site: {}, post: {}",
-        site_id,
-        post_slug
+        "QUERY comments for site: {}, post: {} (page: {:?}, per_page: {:?})",
+        site_id_val.as_str(),
+        post_slug_val.as_str(),
+        query.page,
+        query.per_page,
     );
 
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let limit = per_page;
     let offset = (page - 1) * per_page;
-
-    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
 
     match state
         .store
@@ -231,10 +271,13 @@ async fn get_comments_handler(
                     total_pages,
                 },
             };
-            Ok((StatusCode::OK, Json(response)))
+
+            // Advertise QUERY support and accepted media type per RFC 10008.
+            let headers = [(ACCEPT_QUERY.clone(), "application/json")];
+            Ok((headers, (StatusCode::OK, Json(response))))
         }
         Err(e) => {
-            tracing::error!("Failed to get comments: {:?}", e);
+            tracing::error!("Failed to query comments: {:?}", e);
             Err(AppError::Internal(
                 "Failed to retrieve comments.".to_string(),
             ))
@@ -268,7 +311,7 @@ async fn post_comment_handler(
         author_fingerprint: req.author_fingerprint,
         reply_to: req.reply_to,
     };
-    // 3. Save the intent for the reconciler
+    // 4. Save the intent for the reconciler
     match state.store.save_post_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
