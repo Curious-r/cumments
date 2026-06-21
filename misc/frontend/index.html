@@ -536,7 +536,12 @@
 
                 try {
                     const res = await fetch(
-                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments?page=${page}&per_page=${perPage}`,
+                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                        {
+                            method: "QUERY",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ page, per_page: perPage }),
+                        },
                     );
                     if (!res.ok) throw new Error(await res.text());
                     const json = await res.json();
