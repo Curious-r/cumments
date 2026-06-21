@@ -272,6 +272,7 @@ impl MatrixDriver for BotMatrixDriver {
         content: &str,
         nickname: &str,
         fingerprint: &str,
+        _site_id: &SiteId,
     ) -> Result<String> {
         let room_id_owned: OwnedRoomId = room_id.try_into()?;
         let room = self
@@ -307,6 +308,7 @@ impl MatrixDriver for BotMatrixDriver {
         new_content: &str,
         nickname: &str,
         fingerprint: &str,
+        _site_id: &SiteId,
     ) -> Result<String> {
         let room_id_owned: OwnedRoomId = room_id.try_into()?;
         let room = self

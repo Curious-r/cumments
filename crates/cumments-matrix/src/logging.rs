@@ -40,6 +40,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         content: &str,
         nickname: &str,
         fingerprint: &str,
+        _site_id: &SiteId,
     ) -> Result<String> {
         info!(
             "LOGGING: Post message to room={}. Author={} (fp={}): {}",
@@ -55,6 +56,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         new_content: &str,
         nickname: &str,
         fingerprint: &str,
+        _site_id: &SiteId,
     ) -> Result<String> {
         info!(
             "LOGGING: Update message {} in room={}. Author={} (fp={}): {}",

@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 lazy_static::lazy_static! {
-    pub static ref ID_REGEX: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
+    /// Allowed chars: a-z, A-Z, 0-9, underscore, hyphen.
+    /// Length: 1–64 characters.
+    pub static ref ID_REGEX: regex::Regex =
+        regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").unwrap();
 }
 
 // A validated, owned representation of a Site ID.
@@ -18,11 +21,21 @@ pub struct SiteId {
 }
 
 impl SiteId {
+    /// Creates a new `SiteId` with validation.
+    /// Returns `ValidationErrors` if the input doesn't match the expected format.
+    pub fn new(id: String) -> Result<Self, validator::ValidationErrors> {
+        let this = Self { id };
+        this.validate()?;
+        Ok(this)
+    }
+
     pub fn as_str(&self) -> &str {
         &self.id
     }
 }
 
+// Internal use only – data must already be validated.
+// For untrusted input, use `SiteId::new()` which runs validation.
 impl From<String> for SiteId {
     fn from(id: String) -> Self {
         Self { id }
@@ -44,11 +57,21 @@ pub struct PostSlug {
 }
 
 impl PostSlug {
+    /// Creates a new `PostSlug` with validation.
+    /// Returns `ValidationErrors` if the input doesn't match the expected format.
+    pub fn new(slug: String) -> Result<Self, validator::ValidationErrors> {
+        let this = Self { slug };
+        this.validate()?;
+        Ok(this)
+    }
+
     pub fn as_str(&self) -> &str {
         &self.slug
     }
 }
 
+// Internal use only – data must already be validated.
+// For untrusted input, use `PostSlug::new()` which runs validation.
 impl From<String> for PostSlug {
     fn from(slug: String) -> Self {
         Self { slug }

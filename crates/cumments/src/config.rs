@@ -33,15 +33,29 @@ pub struct Security {
 /// Fields will be present or not depending on the `mode`.
 #[derive(Debug, Deserialize)]
 pub struct Matrix {
-    pub mode: String, // "bot" or "appservice"
+    /// Operation mode: "bot" | "appservice" | "logging"
+    pub mode: String,
     pub homeserver_url: String,
     pub owner_id: String,
 
-    // Bot mode fields
+    // ── Bot mode fields ──
+    /// Bot user ID (e.g., "@cumments_bot:server.tld")
     pub user: Option<String>,
     pub token: Option<String>,
     pub device_id: Option<String>,
-    // AppService mode fields are ignored for now
+
+    // ── AppService mode fields ──
+    /// AppService token for authenticating with the homeserver
+    pub as_token: Option<String>,
+    /// Homeserver token for verifying incoming push requests
+    pub hs_token: Option<String>,
+    /// The server name (domain) part of Matrix IDs
+    pub server_name: Option<String>,
+    /// Localpart for the AppService's sender user (default: "cumments")
+    pub bot_localpart: Option<String>,
+    /// Port for the push receiver endpoint (default: 3001)
+    /// Set to the same value as server.port to share the main listener
+    pub push_listen_port: Option<u16>,
 }
 
 /// Reads configuration from a file and environment variables.
@@ -61,6 +75,8 @@ pub fn get_configuration(config_path: Option<&str>) -> Result<Settings, config::
     let settings = builder
         .set_default("server.port", 7931)?
         .set_default("server.host", "localhost")?
+        .set_default("matrix.push_listen_port", 3001)?
+        .set_default("matrix.bot_localpart", "cumments")?
         // Add in environment variables with a prefix of CUMMENTS and separator __
         // e.g. `CUMMENTS_SERVER__PORT=5000` would override `port` in `[server]`
         .add_source(config::Environment::with_prefix("CUMMENTS").separator("__"))

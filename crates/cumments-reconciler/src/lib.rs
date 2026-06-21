@@ -110,6 +110,12 @@ impl Reconciler {
                     )
                     .await?;
 
+                // 3b. Registry: Write back the room mapping immediately
+                // This is critical for AS mode where no sync loop backs us up.
+                self.registry_store
+                    .register_room(&room_id, &intent.site_id, &intent.post_slug)
+                    .await?;
+
                 // 4. Hands: Post the actual message
                 let event_id = self
                     .driver
@@ -118,6 +124,7 @@ impl Reconciler {
                         &intent.content,
                         &intent.nickname,
                         &intent.author_fingerprint,
+                        &intent.site_id,
                     )
                     .await?;
 
@@ -224,6 +231,11 @@ impl Reconciler {
                     )
                     .await?;
 
+                // 3b. Registry: Write back the room mapping immediately
+                self.registry_store
+                    .register_room(&room_id, &intent.site_id, &intent.post_slug)
+                    .await?;
+
                 // 4. Hands: Fetch original nickname to maintain it
                 let nickname = self
                     .comment_store
@@ -239,6 +251,7 @@ impl Reconciler {
                         &intent.content,
                         &nickname,
                         &intent.author_fingerprint,
+                        &intent.site_id,
                     )
                     .await?;
 
