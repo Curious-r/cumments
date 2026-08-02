@@ -1286,6 +1286,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive-where"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d08b3a0bcc0d079199cd476b2cae8435016ec11d1c0986c6901c5ac223041534"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3908,14 +3919,15 @@ dependencies = [
 
 [[package]]
 name = "sea-orm"
-version = "2.0.0-rc.40"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "628c3b6acb53ca9942f7f151431ed49db92dafa14d15976a1b9db9d4bd06431c"
+checksum = "549c6d29a2e7a84e35c5dfbc06370a62c4d35f2328c31005267bec586b34f682"
 dependencies = [
  "async-stream",
  "async-trait",
  "bigdecimal",
  "chrono",
+ "derive-where",
  "derive_more",
  "futures-util",
  "itertools 0.14.0",
@@ -3955,9 +3967,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-cli"
-version = "2.0.0-rc.40"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8353fb3cf1baef735e273d0342ae75f69d0723d1715cfbc5f16ff3875166e0d"
+checksum = "3ec4b7c39c90efa92b8bb0b91ac7159684b9fa0d6371ce39bfab0a9793ce7394"
 dependencies = [
  "chrono",
  "clap",
@@ -3975,9 +3987,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-macros"
-version = "2.0.0-rc.40"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68a91def07bceb98aab308f7dd16c27496b76a6b7b92b94a61b309b5043d93d5"
+checksum = "b4cbb7ae053b9b37c919ea944a3bc52f7830a90c223f8a765c908293bca8f22d"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
@@ -3991,9 +4003,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-migration"
-version = "2.0.0-rc.40"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e932517f74c4fd73c629998861602e261ef024242577a44c1fc4c7dc315186f"
+checksum = "ef3576c5301b67ea7d2ce4515858d700066e51911c7d228a439c00ff258695c8"
 dependencies = [
  "async-trait",
  "clap",
@@ -4046,9 +4058,9 @@ dependencies = [
 
 [[package]]
 name = "sea-schema"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f88267b43c127956a079895d864fc8318ee37c7f280a7aa33805b714c31995f0"
+checksum = "3553c77dceed56e95bece9ea876c4dd67ca879ef51055a0b97a7bb89a8ae4fed"
 dependencies = [
  "async-trait",
  "sea-query",

@@ -41,8 +41,8 @@ sha2 = "0.10.9"
 thiserror = "2.0.18"
 validator = { version = "0.20", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
-sea-orm = { version = "2.0.0-rc.40", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
-sea-orm-migration = { version = "2.0.0-rc.40", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+sea-orm = { version = "2.0.0", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
+sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 tower-http = { version = "0.6.8", features = ["cors", "trace"] }
