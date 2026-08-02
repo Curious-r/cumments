@@ -5,7 +5,7 @@ use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, UpdateMany,
+    QueryOrder, Set, UpdateMany,
 };
 
 use crate::entities::active_enums::IntentStatus;
@@ -112,7 +112,7 @@ impl IntentStore for DbStore {
 
     async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>> {
         let models = intent_queue_post_comment::Entity::find()
-            .filter(intent_queue_post_comment::Column::Status.eq(IntentStatus::Pending))
+            .filter(intent_queue_post_comment::COLUMN.status.eq(IntentStatus::Pending))
             .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -127,7 +127,7 @@ impl IntentStore for DbStore {
 
     async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>> {
         let models = intent_queue_delete_comment::Entity::find()
-            .filter(intent_queue_delete_comment::Column::Status.eq(IntentStatus::Pending))
+            .filter(intent_queue_delete_comment::COLUMN.status.eq(IntentStatus::Pending))
             .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -142,7 +142,7 @@ impl IntentStore for DbStore {
 
     async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>> {
         let models = intent_queue_update_comment::Entity::find()
-            .filter(intent_queue_update_comment::Column::Status.eq(IntentStatus::Pending))
+            .filter(intent_queue_update_comment::COLUMN.status.eq(IntentStatus::Pending))
             .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -169,10 +169,10 @@ impl IntentStore for DbStore {
             |query: UpdateMany<intent_queue_post_comment::Entity>| {
                 query
                     .col_expr(
-                        intent_queue_post_comment::Column::MatrixEventId,
+                        intent_queue_post_comment::COLUMN.matrix_event_id,
                         sea_orm::sea_query::Expr::value(event_id),
                     )
-                    .filter(intent_queue_post_comment::Column::Id.eq(id))
+                    .filter(intent_queue_post_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -184,7 +184,7 @@ impl IntentStore for DbStore {
             intent_queue_update_comment::Column::Status,
             intent_queue_update_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                query.filter(intent_queue_update_comment::Column::Id.eq(id))
+                query.filter(intent_queue_update_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -196,7 +196,7 @@ impl IntentStore for DbStore {
             intent_queue_delete_comment::Column::Status,
             intent_queue_delete_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(intent_queue_delete_comment::Column::Id.eq(id))
+                query.filter(intent_queue_delete_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -208,7 +208,7 @@ impl IntentStore for DbStore {
             intent_queue_post_comment::Column::Status,
             intent_queue_post_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_post_comment::Entity>| {
-                query.filter(intent_queue_post_comment::Column::Id.eq(id))
+                query.filter(intent_queue_post_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -220,7 +220,7 @@ impl IntentStore for DbStore {
             intent_queue_delete_comment::Column::Status,
             intent_queue_delete_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(intent_queue_delete_comment::Column::Id.eq(id))
+                query.filter(intent_queue_delete_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -232,7 +232,7 @@ impl IntentStore for DbStore {
             intent_queue_update_comment::Column::Status,
             intent_queue_update_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                query.filter(intent_queue_update_comment::Column::Id.eq(id))
+                query.filter(intent_queue_update_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -244,7 +244,7 @@ impl IntentStore for DbStore {
             intent_queue_post_comment::Column::Status,
             intent_queue_post_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_post_comment::Entity>| {
-                query.filter(intent_queue_post_comment::Column::MatrixEventId.eq(event_id))
+                query.filter(intent_queue_post_comment::COLUMN.matrix_event_id.eq(event_id))
             },
         )
         .await
@@ -256,7 +256,7 @@ impl IntentStore for DbStore {
             intent_queue_delete_comment::Column::Status,
             intent_queue_delete_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(intent_queue_delete_comment::Column::TargetEventId.eq(target_event_id))
+                query.filter(intent_queue_delete_comment::COLUMN.target_event_id.eq(target_event_id))
             },
         )
         .await
@@ -268,7 +268,7 @@ impl IntentStore for DbStore {
             intent_queue_update_comment::Column::Status,
             intent_queue_update_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                query.filter(intent_queue_update_comment::Column::EventId.eq(event_id))
+                query.filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id))
             },
         )
         .await
@@ -279,7 +279,7 @@ impl IntentStore for DbStore {
 impl CommentStore for DbStore {
     async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>> {
         let model = comments::Entity::find()
-            .filter(comments::Column::EventId.eq(event_id))
+            .filter(comments::COLUMN.event_id.eq(event_id))
             .one(&self.db)
             .await?;
 
@@ -296,19 +296,19 @@ impl CommentStore for DbStore {
         let site_id_str = site_id.as_str();
         let post_slug_str = post_slug.as_str();
 
-        let count = comments::Entity::find()
-            .filter(comments::Column::SiteId.eq(site_id_str))
-            .filter(comments::Column::PostSlug.eq(post_slug_str))
-            .count(&self.db)
-            .await?;
+        let query = comments::Entity::find()
+            .filter(comments::COLUMN.site_id.eq(site_id_str))
+            .filter(comments::COLUMN.post_slug.eq(post_slug_str))
+            .order_by_desc(comments::Column::Timestamp);
 
-        let models = comments::Entity::find()
-            .filter(comments::Column::SiteId.eq(site_id_str))
-            .filter(comments::Column::PostSlug.eq(post_slug_str))
-            .order_by_desc(comments::Column::Timestamp)
-            .limit(limit as u64)
-            .offset(offset as u64)
-            .all(&self.db)
+        let count = query.clone().count(&self.db).await?;
+        if limit <= 0 {
+            return Ok((Vec::new(), count as i64));
+        }
+
+        let models = query
+            .paginate(&self.db, limit as u64)
+            .fetch_page((offset / limit) as u64)
             .await?;
 
         let comments = models.into_iter().map(Comment::from).collect();
@@ -362,7 +362,7 @@ impl CommentStore for DbStore {
                 comments::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp(),
             )
-            .filter(comments::Column::EventId.eq(event_id))
+            .filter(comments::COLUMN.event_id.eq(event_id))
             .exec(&self.db)
             .await?;
 
@@ -371,7 +371,7 @@ impl CommentStore for DbStore {
 
     async fn delete_comment(&self, event_id: &str) -> Result<bool> {
         let result = comments::Entity::delete_many()
-            .filter(comments::Column::EventId.eq(event_id))
+            .filter(comments::COLUMN.event_id.eq(event_id))
             .exec(&self.db)
             .await?;
 
@@ -380,7 +380,7 @@ impl CommentStore for DbStore {
 
     async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>> {
         let model = comments::Entity::find()
-            .filter(comments::Column::EventId.eq(event_id))
+            .filter(comments::COLUMN.event_id.eq(event_id))
             .one(&self.db)
             .await?;
 
@@ -396,9 +396,9 @@ impl RegistryStore for DbStore {
         post_slug: &PostSlug,
     ) -> Result<Option<String>> {
         let room = room_registry::Entity::find()
-            .filter(room_registry::Column::SiteId.eq(site_id.as_str()))
-            .filter(room_registry::Column::PostSlug.eq(post_slug.as_str()))
-            .filter(room_registry::Column::IsActive.eq(true))
+            .filter(room_registry::COLUMN.site_id.eq(site_id.as_str()))
+            .filter(room_registry::COLUMN.post_slug.eq(post_slug.as_str()))
+            .filter(room_registry::COLUMN.is_active.eq(true))
             .one(&self.db)
             .await?;
 
@@ -449,7 +449,7 @@ impl RegistryStore for DbStore {
                 room_registry::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::current_timestamp(),
             )
-            .filter(room_registry::Column::RoomId.eq(room_id))
+            .filter(room_registry::COLUMN.room_id.eq(room_id))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -468,7 +468,7 @@ impl SiteStore for DbStore {
 
     async fn get_site_by_space_id(&self, space_id: &str) -> Result<Option<Site>> {
         let model = sites::Entity::find()
-            .filter(sites::Column::MatrixSpaceId.eq(space_id))
+            .filter(sites::COLUMN.matrix_space_id.eq(space_id))
             .one(&self.db)
             .await?;
 
