@@ -1,5 +1,7 @@
 use sea_orm::entity::prelude::*;
 
+use super::active_enums::IntentStatus;
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "intent_queue_update_comment")]
 pub struct Model {
@@ -10,7 +12,7 @@ pub struct Model {
     pub event_id: String,
     pub content: String,
     pub author_fingerprint: String,
-    pub status: String,
+    pub status: IntentStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

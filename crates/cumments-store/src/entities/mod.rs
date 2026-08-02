@@ -1,3 +1,5 @@
+pub mod active_enums;
+
 pub mod prelude;
 
 pub mod comments;
