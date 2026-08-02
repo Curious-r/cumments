@@ -2,6 +2,7 @@ use sea_orm::entity::prelude::*;
 
 use super::active_enums::IntentStatus;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "intent_queue_update_comment")]
 pub struct Model {
@@ -16,8 +17,5 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
