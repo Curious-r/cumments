@@ -6,3 +6,8 @@ inputs:
     inputs:
       nixpkgs:
         follows: nixpkgs
+
+secretspec:
+  enable: true
+  provider: keyring  # keyring, dotenv, env, 1password, lastpass
+  profile: development  # profile from secretspec.toml

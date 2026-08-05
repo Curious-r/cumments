@@ -9,9 +9,13 @@
   # https://devenv.sh/basics/
   env.GREET = "devenv";
 
+  # Injected from SecretSpec (see secretspec.toml)
+  env.DATABASE_URL = config.secretspec.secrets.DATABASE_URL or "";
+
   # https://devenv.sh/packages/
   packages = with pkgs; [
     nixfmt
+    sqlx-cli
     yaml-language-server
   ];
 
