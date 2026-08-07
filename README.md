@@ -10,42 +10,69 @@
 
 # Cumments
 
-Cumments is a decentralized comment system backend based on the **Matrix protocol**, utilizing an **Event-Sourced Coordinator Pattern**. It uses Matrix as an immutable event store and SQLite as a local high-speed read view.
+Cumments is a decentralized comment system backend based on the **Matrix protocol**.
+Matrix is the **source of truth**: every comment, edit, and deletion is an immutable
+Matrix event. SQLite is a disposable local read model that can be rebuilt from
+Matrix history with `cumments backfill`; it is never the system of record.
 
 ## 1. Architecture
 
 ```
-                        ┌──────────────────┐
-                        │  User Request    │
-                        │  (Browser/API)   │
-                        └────────┬─────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │      cumments-api       │
-                    │  (HTTP, PoW, Intents)   │
-                    └────────────┬────────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              │                  │                  │
-     ┌────────▼────────┐ ┌──────▼──────┐  ┌────────▼────────┐
-     │   Reconciler    │ │ EventStore  │  │   EventProcessor│
-     │  (协调器/写入)  │ │ (Matrix)    │  │  (投影/读模型)  │
-     └────────┬────────┘ └─────────────┘  └────────┬────────┘
-              │                                    │
-     ┌────────▼────────┐                  ┌────────▼────────┐
-     │  MatrixDriver   │                  │  PushReceiver   │
-     │  (发送到Matrix) │                  │  (AS模式接收)   │
-     └────────┬────────┘                  └─────────────────┘
-              │
-    ┌─────────┼─────────┐
-    │         │         │
-    ▼         ▼         ▼
- AppService  Logging
- (reqwest)   (调试)
+                    ┌──────────────────┐
+                    │  User Request    │
+                    │  (Browser/API)   │
+                    └────────┬─────────┘
+                             │
+                ┌────────────▼────────────┐
+                │      cumments-api       │
+                │ (HTTP, PoW, Ed25519)    │
+                └────────────┬────────────┘
+                             │ intent
+                ┌────────────▼────────────┐
+                │      Intent Queue       │
+                │         (SQLite)        │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │       Reconciler        │
+                │     (writer path)       │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │      MatrixDriver       │
+                │ (AppService / Logging)  │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │  Matrix homeserver      │
+                │   (source of truth)     │
+                └────────────┬────────────┘
+                             │ push (AppService)
+                ┌────────────▼────────────┐
+                │      PushReceiver       │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │     EventProcessor      │
+                │ (idempotent projection) │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │  SQLite read model      │
+                │ (disposable, rebuildable)│
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │ API queries / SSE       │
+                └─────────────────────────┘
 ```
 
-The core projection logic lives in **EventProcessor**. In AppService mode,
-`PushReceiver` receives events via HS HTTP Push and feeds them into it.
+The write path is intent-driven: the API validates PoW and an Ed25519 signature,
+enqueues an intent, and the **Reconciler** sends the corresponding event to Matrix.
+The read path is projection-based: in AppService mode, `PushReceiver` receives
+events via HS HTTP Push and feeds them into **EventProcessor**, which updates the
+SQLite read model and emits SSE. `cumments backfill` reuses the same idempotent
+projection, so the read model can be rebuilt from Matrix history alone.
 
 ### Crates
 
@@ -54,7 +81,7 @@ The core projection logic lives in **EventProcessor**. In AppService mode,
 | `cumments-core` | Domain models, ports (traits), intents, events |
 | `cumments-api` | HTTP API, PoW verification, validation |
 | `cumments-store` | SQLite persistence (SeaORM), migrations |
-| `cumments-reconciler` | Background orchestration — reads intents, calls MatrixDriver |
+| `cumments-reconciler` | Background writer — reads intents, calls MatrixDriver, waits for projection to close the loop |
 | `cumments-matrix` | MatrixDriver implementations (AppService, Logging) |
 | `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver) |
 | `cumments` | CLI entry point, configuration, assembly |
@@ -80,6 +107,19 @@ Registers as a Matrix **Application Service** with the homeserver. Each commente
 
 No Matrix side effects: drivers log their actions instead of talking to a
 homeserver. Useful for testing the API and the local read model.
+
+### Backfill / Read-model rebuild
+
+`cumments backfill` reconstructs the SQLite read model from Matrix history:
+
+1. discovers Cumments rooms via `joined_rooms` + `im.cumments.metadata`
+   (restores sites and the room registry after a local DB reset),
+2. paginates each comment room's history via the CS API `/messages`,
+3. replays events in `(origin_server_ts, event_id)` order through the same
+   idempotent projection used for live pushes.
+
+Interrupted runs resume from persisted per-room cursors. This is the recovery
+half of the architecture: the database can be deleted and rebuilt at any time.
 
 ---
 
@@ -236,7 +276,10 @@ Both `site_id` and `post_slug` follow the same format:
 
 # Cumments (中文)
 
-Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端，采用**事件溯源协调器模式 (Event-Sourced Coordinator Pattern)**。它利用 Matrix 作为不可变事件存储，使用 SQLite 作为本地高速读视图。
+Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Matrix 是**唯一事实源
+（不可变事件日志）**：每条评论、编辑和删除都是 Matrix 房间中的不可变事件。SQLite
+是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 Matrix 历史整体重建，永不作为
+系统记录本身。
 
 ## 1. 架构设计
 
@@ -253,7 +296,10 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端，�
 | `cumments` | CLI 入口、配置加载、依赖装配 |
 
 核心投影逻辑位于 **EventProcessor**。AppService 模式下由 `PushReceiver`
-通过 HS HTTP Push 接收事件并送入投影。
+通过 HS HTTP Push 接收事件并送入投影。写路径为意图驱动：API 校验 PoW 与
+Ed25519 签名后落意图队列，reconciler 调用 MatrixDriver 写入 Matrix；读路径为
+投影驱动：EventProcessor 以幂等方式更新 SQLite 读模型并广播 SSE。`cumments backfill`
+复用同一投影核心，因此读模型可以从 Matrix 历史单独重建。
 
 ## 2. 运行模式
 
@@ -269,6 +315,17 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端，�
 ### Logging 模式（本地开发）
 
 不产生任何 Matrix 副作用：driver 仅记录日志，适合调试 API 与本地读模型。
+
+### Backfill / 读模型重建
+
+`cumments backfill` 从 Matrix 历史重建 SQLite 读模型：
+
+1. 通过 `joined_rooms` + `im.cumments.metadata` 发现 Cumments 房间（本地库清空后
+   也能重建 sites 与房间注册表）；
+2. 通过 CS API `/messages` 分页拉取每个评论房间的历史；
+3. 按 `(origin_server_ts, event_id)` 顺序回放，复用与实时 push 完全相同的幂等投影。
+
+中断的跑批会从持久化的游标处续跑。这是恢复体系的一半：数据库可以随时删除并重建。
 
 ## 3. 环境准备
 
