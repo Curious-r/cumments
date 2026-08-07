@@ -179,9 +179,9 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     // Extract message body
     let body = content.get("body").and_then(|v| v.as_str())?;
 
-    // Extract fingerprint
+    // Extract the public visitor id (never the raw token).
     let fingerprint = content
-        .get("cumments_author_fingerprint")
+        .get("cumments_visitor_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 

@@ -10,6 +10,7 @@ use axum::{
 };
 use cumments_core::{
     events::ProjectorEvent,
+    identity::derive_token_hash,
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
     models::{Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
@@ -98,6 +99,8 @@ pub struct ApiState {
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub reconciler_notify: Arc<Notify>,
+    /// Server-side secret salt used to derive owner verifiers from visitor tokens.
+    pub identity_salt: String,
 }
 
 /// The query parameters for pagination (sent as JSON body for QUERY method).
@@ -302,6 +305,11 @@ async fn post_comment_handler(
     // 3. Create the business intent
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+
+    // 3b. Derive the owner verifier from the visitor token. The raw token is
+    // never stored or exposed; only this salt-keyed hash is persisted.
+    let author_token_hash = derive_token_hash(&state.identity_salt, &req.author_fingerprint);
+
     let intent = PostCommentIntent {
         site_id: site_id_val,
         post_slug: post_slug_val,
@@ -311,8 +319,13 @@ async fn post_comment_handler(
         author_fingerprint: req.author_fingerprint,
         reply_to: req.reply_to,
     };
+
     // 4. Save the intent for the reconciler
-    match state.store.save_post_intent(&intent).await {
+    match state
+        .store
+        .save_post_intent(&intent, Some(&author_token_hash))
+        .await
+    {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
             state.reconciler_notify.notify_one();
@@ -343,19 +356,34 @@ async fn delete_comment_handler(
         return Err(AppError::InvalidPoW);
     }
 
-    // 2. Authorization: Verify that the fingerprint matches the original author
+    // 2. Authorization: verify the visitor token against the stored owner hash
     match state.store.get_comment(&comment_id).await {
         Ok(Some(comment)) => {
-            if let Some(original_fp) = comment.author_fingerprint {
-                if original_fp != req.author_fingerprint {
+            if comment.site_id != site_id || comment.post_slug != post_slug {
+                return Err(AppError::NotFound("Comment not found.".to_string()));
+            }
+            let presented = derive_token_hash(&state.identity_salt, &req.author_fingerprint);
+            match state.store.get_comment_author_token_hash(&comment_id).await {
+                Ok(Some(expected)) if expected == presented => {}
+                Ok(Some(_)) => {
                     return Err(AppError::Unauthorized(
                         "You are not authorized to delete this comment.".to_string(),
                     ));
                 }
-            } else {
-                return Err(AppError::Unauthorized(
-                    "Cannot verify ownership for this comment.".to_string(),
-                ));
+                Ok(None) => {
+                    return Err(AppError::Unauthorized(
+                        "Cannot verify ownership for this comment.".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to fetch comment owner verifier for authorization: {:?}",
+                        e
+                    );
+                    return Err(AppError::Internal(
+                        "Internal server error during authorization.".to_string(),
+                    ));
+                }
             }
         }
         Ok(None) => {
@@ -401,7 +429,7 @@ async fn delete_comment_handler(
 /// The handler for receiving a new update comment request.
 async fn update_comment_handler(
     State(state): State<ApiState>,
-    Path((_site_id, _post_slug, comment_id)): Path<(String, String, String)>,
+    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
     Json(req): Json<UpdateCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     // 1. Validate input
@@ -412,19 +440,35 @@ async fn update_comment_handler(
         return Err(AppError::InvalidPoW);
     }
 
-    // 3. Authorization: Verify that the fingerprint matches the original author
+    // 3. Authorization: verify the visitor token against the stored owner hash,
+    // and confirm the comment actually belongs to the site/post in the path.
     match state.store.get_comment(&comment_id).await {
         Ok(Some(comment)) => {
-            if let Some(original_fp) = comment.author_fingerprint {
-                if original_fp != req.author_fingerprint {
+            if comment.site_id != site_id || comment.post_slug != post_slug {
+                return Err(AppError::NotFound("Comment not found.".to_string()));
+            }
+            let presented = derive_token_hash(&state.identity_salt, &req.author_fingerprint);
+            match state.store.get_comment_author_token_hash(&comment_id).await {
+                Ok(Some(expected)) if expected == presented => {}
+                Ok(Some(_)) => {
                     return Err(AppError::Unauthorized(
                         "You are not authorized to edit this comment.".to_string(),
                     ));
                 }
-            } else {
-                return Err(AppError::Unauthorized(
-                    "Cannot verify ownership for this comment.".to_string(),
-                ));
+                Ok(None) => {
+                    return Err(AppError::Unauthorized(
+                        "Cannot verify ownership for this comment.".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to fetch comment owner verifier for authorization: {:?}",
+                        e
+                    );
+                    return Err(AppError::Internal(
+                        "Internal server error during authorization.".to_string(),
+                    ));
+                }
             }
         }
         Ok(None) => {
@@ -439,8 +483,8 @@ async fn update_comment_handler(
     }
 
     // 4. Create the business intent
-    let site_id_val = SiteId::new(_site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(_post_slug).map_err(AppError::Validation)?;
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
     let intent = UpdateCommentIntent {
         site_id: site_id_val,
         post_slug: post_slug_val,

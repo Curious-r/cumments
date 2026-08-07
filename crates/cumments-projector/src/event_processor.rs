@@ -299,6 +299,17 @@ impl EventProcessor {
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts).unwrap(),
         };
 
+        // Closed-loop ownership: if this event was sent by Cumments itself,
+        // carry the token hash recorded with the intent into the read model.
+        // External Matrix messages have no token hash (their owners cannot
+        // be verified via the API until an ownership mechanism exists).
+        let author_token_hash = self
+            .intent_store
+            .get_post_intent_token_hash_by_event_id(&event.event_id)
+            .await
+            .ok()
+            .flatten();
+
         match self
             .comment_store
             .save_comment(
@@ -306,6 +317,7 @@ impl EventProcessor {
                 &event.room_id,
                 &site_id.clone().into(),
                 &post_slug.clone().into(),
+                author_token_hash.as_deref(),
             )
             .await
         {

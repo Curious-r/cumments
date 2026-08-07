@@ -205,7 +205,11 @@ Server-Sent Events for real-time updates.
 ## 7. Frontend Integration Guide
 
 ### 1. Identity (Fingerprint)
-Backend calculates fingerprint to identify guest users. Frontend should generate and store a random string (e.g., `guest_token`) and derive/send a stable identifier.
+The frontend generates and stores a random secret token (e.g. `guest_token`) and
+sends it as `author_fingerprint`. The backend **never stores or returns the raw
+token**: it derives a public `visitor_id` (returned in API responses and visible
+in Matrix events) and persists a salt-keyed hash used to authorize edit/delete
+requests.
 
 ### 2. PoW Calculation
 1. Call `GET /api/challenge` to get `prefix` (the signed challenge) and `difficulty`.

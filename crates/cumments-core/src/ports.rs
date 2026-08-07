@@ -6,7 +6,11 @@ use async_trait::async_trait;
 /// The port for all intent storage operations.
 #[async_trait]
 pub trait IntentStore: Send + Sync {
-    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()>;
+    async fn save_post_intent(
+        &self,
+        intent: &PostCommentIntent,
+        author_token_hash: Option<&str>,
+    ) -> Result<()>;
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()>;
 
@@ -30,6 +34,13 @@ pub trait IntentStore: Send + Sync {
 
     /// Transitions a post intent to 'completed' when the projector sees the event.
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
+
+    /// Returns the stored author token hash for a post intent, if any,
+    /// looked up by the Matrix event ID recorded at send time.
+    async fn get_post_intent_token_hash_by_event_id(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<String>>;
 
     /// Transitions a delete intent to 'completed' when the projector sees the redaction.
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()>;
@@ -61,6 +72,7 @@ pub trait CommentStore: Send + Sync {
         room_id: &str,
         site_id: &SiteId,
         post_slug: &PostSlug,
+        author_token_hash: Option<&str>,
     ) -> Result<()>;
 
     /// Updates only the content of a comment.
@@ -71,6 +83,11 @@ pub trait CommentStore: Send + Sync {
 
     /// Gets the author nickname for a specific event.
     async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>>;
+
+    /// Returns the stored owner verifier (salt-keyed token hash) for a comment,
+    /// if any. Used to authorize edit/delete requests without exposing the
+    /// raw visitor token.
+    async fn get_comment_author_token_hash(&self, event_id: &str) -> Result<Option<String>>;
 }
 
 /// Port for managing the local room registry cache (Mirror of Space relationships).

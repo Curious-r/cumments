@@ -230,6 +230,7 @@ async fn main() -> Result<()> {
         pow: Arc::new(pow),
         event_bus,
         reconciler_notify,
+        identity_salt: settings.security.identity_salt.clone(),
     };
     let api_router = cumments_api::build_router(api_state);
 

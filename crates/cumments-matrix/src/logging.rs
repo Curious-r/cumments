@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
+    identity::derive_visitor_id,
     models::{PostSlug, SiteId},
     ports::MatrixDriver,
 };
@@ -43,8 +44,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         _site_id: &SiteId,
     ) -> Result<String> {
         info!(
-            "LOGGING: Post message to room={}. Author={} (fp={}): {}",
-            room_id, nickname, fingerprint, content
+            "LOGGING: Post message to room={}. Author={} (visitor={}): {}",
+            room_id,
+            nickname,
+            derive_visitor_id(fingerprint),
+            content
         );
         Ok("log_event_id".to_string())
     }
@@ -59,8 +63,12 @@ impl MatrixDriver for LoggingMatrixDriver {
         _site_id: &SiteId,
     ) -> Result<String> {
         info!(
-            "LOGGING: Update message {} in room={}. Author={} (fp={}): {}",
-            event_id, room_id, nickname, fingerprint, new_content
+            "LOGGING: Update message {} in room={}. Author={} (visitor={}): {}",
+            event_id,
+            room_id,
+            nickname,
+            derive_visitor_id(fingerprint),
+            new_content
         );
         Ok(format!("log_update_{}", event_id))
     }

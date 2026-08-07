@@ -4,6 +4,7 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::{
+    identity::derive_visitor_id,
     models::{PostSlug, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
 };
@@ -379,6 +380,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
         room_id: &str,
         content: &str,
         nickname: &str,
+        // `fingerprint` is the visitor's private token. It is used only to
+        // derive the public visitor_id published in the event; the token
+        // itself is never sent to Matrix.
         fingerprint: &str,
         site_id: &SiteId,
     ) -> Result<String> {
@@ -395,7 +399,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             "body": format!("**{}**: {}", nickname, content),
             "format": "org.matrix.custom.html",
             "formatted_body": formatted_body,
-            "cumments_author_fingerprint": fingerprint,
+            "cumments_visitor_id": derive_visitor_id(fingerprint),
         });
 
         let txn_id = self.txn_id();
@@ -431,6 +435,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         event_id: &str,
         new_content: &str,
         nickname: &str,
+        // `fingerprint` is the visitor's private token; only the derived
+        // visitor_id is published in the event content.
         fingerprint: &str,
         site_id: &SiteId,
     ) -> Result<String> {
@@ -450,7 +456,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "body": formatted_content,
                 "format": "org.matrix.custom.html",
                 "formatted_body": format!("<strong>{}</strong>: {}", nickname, new_content),
-                "cumments_author_fingerprint": fingerprint,
+                "cumments_visitor_id": derive_visitor_id(fingerprint),
             },
             "m.relates_to": {
                 "rel_type": "m.replace",
