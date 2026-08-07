@@ -43,6 +43,9 @@ async fn main() -> Result<()> {
                 cli::handle_generate_registration(args)?;
                 return Ok(());
             }
+            cli::Commands::Backfill(_) => {
+                // Handled later, after the driver and processor are wired up.
+            }
         }
     }
 
@@ -153,6 +156,31 @@ async fn main() -> Result<()> {
         }
         _ => unreachable!("mode was validated above"),
     };
+
+    // ─────────────────────────────────────────────────────────────
+    // 7b. Handle the backfill subcommand (needs driver + processor)
+    // ─────────────────────────────────────────────────────────────
+    if let Some(cmd) = &args.command {
+        match cmd {
+            cli::Commands::GenerateRegistration(_) => unreachable!("handled earlier"),
+            cli::Commands::Backfill(_) => {
+                let backfiller = cumments_projector::backfill::Backfiller::new(
+                    driver.clone(),
+                    event_processor.clone(),
+                    db_store.clone(),
+                    db_store.clone(),
+                    db_store.clone(),
+                );
+                let summary = backfiller.run().await?;
+                tracing::info!(
+                    "Backfill complete: {} rooms, {} events",
+                    summary.rooms,
+                    summary.events
+                );
+                return Ok(());
+            }
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────
     // 8. Initialize Shared Coordination Signals

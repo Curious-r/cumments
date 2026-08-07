@@ -25,12 +25,19 @@ pub struct GenerateRegistrationArgs {
     pub quiet: bool,
 }
 
+/// Backfill the read model from Matrix room history.
+#[derive(clap::Args, Debug)]
+pub struct BackfillArgs {}
+
 /// All CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Generate an AppService registration file
     #[command(name = "generate-registration")]
     GenerateRegistration(GenerateRegistrationArgs),
+    /// Rebuild the read model from Matrix room history
+    #[command(name = "backfill")]
+    Backfill(BackfillArgs),
 }
 
 /// The registration data model (serialised to YAML).
