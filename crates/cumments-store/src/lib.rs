@@ -189,6 +189,26 @@ impl IntentStore for DbStore {
                         sea_orm::sea_query::Expr::value(event_id),
                     )
                     .filter(intent_queue_post_comment::COLUMN.id.eq(id))
+                    // Never regress an already-completed intent: if the
+                    // projector closed the loop before this write-back
+                    // (push arrived first), keep the completed status.
+                    .filter(
+                        intent_queue_post_comment::COLUMN
+                            .status
+                            .eq(IntentStatus::Pending),
+                    )
+            },
+        )
+        .await
+    }
+
+    async fn mark_post_intent_completed_by_id(&self, id: i64) -> Result<()> {
+        self.transition_status(
+            IntentStatus::Completed,
+            intent_queue_post_comment::Column::Status,
+            intent_queue_post_comment::Column::UpdatedAt,
+            |query: UpdateMany<intent_queue_post_comment::Entity>| {
+                query.filter(intent_queue_post_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -268,6 +288,14 @@ impl IntentStore for DbStore {
             },
         )
         .await
+    }
+
+    async fn get_post_intent_token_hash_by_id(&self, id: i64) -> Result<Option<String>> {
+        let model = intent_queue_post_comment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?;
+
+        Ok(model.and_then(|m| m.author_token_hash))
     }
 
     async fn get_post_intent_token_hash_by_event_id(

@@ -167,6 +167,21 @@ fn extract_author_display_name(body: &str) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+/// Structured `cumments_content` takes precedence. Otherwise, for
+/// Cumments-generated (legacy) messages, strip the `**nickname**: ` prefix
+/// from the body; external Matrix messages are treated as plain content.
+fn extract_message_content(body: &str, is_cumments: bool, structured: Option<&str>) -> String {
+    if let Some(c) = structured {
+        return c.to_string();
+    }
+    if is_cumments
+        && let Some((_, rest)) = body.strip_prefix("**").and_then(|s| s.split_once("**: "))
+    {
+        return rest.to_string();
+    }
+    body.to_string()
+}
+
 // ── Push event parsers ────────────────────────────────────────────
 
 /// Parse a push message event into a `ParsedRoomMessage`.
@@ -179,11 +194,11 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     // Extract message body
     let body = content.get("body").and_then(|v| v.as_str())?;
 
-    // Extract the public visitor id (never the raw token).
-    let fingerprint = content
-        .get("cumments_visitor_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    // Extract the public visitor id (never the raw token). Its presence also
+    // marks this as a Cumments-generated message for legacy body parsing.
+    let visitor_id = content.get("cumments_visitor_id").and_then(|v| v.as_str());
+    let structured_content = content.get("cumments_content").and_then(|v| v.as_str());
+    let structured_nickname = content.get("cumments_nickname").and_then(|v| v.as_str());
 
     // Extract relation (edit)
     let relates_to = content.get("m.relates_to").and_then(|rel| {
@@ -192,9 +207,16 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             return None;
         }
         let target_event_id = rel.get("event_id").and_then(|v| v.as_str())?;
-        let new_content = rel
-            .get("m.new_content")
-            .and_then(|nc| nc.get("body").and_then(|v| v.as_str()))?;
+        let new_content = rel.get("m.new_content").and_then(|nc| {
+            let nc_body = nc.get("body").and_then(|v| v.as_str())?;
+            let nc_structured = nc.get("cumments_content").and_then(|v| v.as_str());
+            let nc_is_cumments = nc.get("cumments_visitor_id").is_some();
+            Some(extract_message_content(
+                nc_body,
+                nc_is_cumments,
+                nc_structured,
+            ))
+        })?;
         Some(ParsedRelation {
             target_event_id: target_event_id.to_string(),
             new_content: new_content.to_string(),
@@ -211,9 +233,12 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
         sender: sender.clone(),
-        content: body.to_string(),
-        author_display_name: extract_author_display_name(body),
-        fingerprint,
+        content: extract_message_content(body, visitor_id.is_some(), structured_content),
+        author_display_name: structured_nickname
+            .map(|s| s.to_string())
+            .or_else(|| extract_author_display_name(body)),
+        fingerprint: visitor_id.map(|s| s.to_string()),
+        intent_id: content.get("cumments_intent_id").and_then(|v| v.as_i64()),
         origin_server_ts,
         relates_to,
         room_identity,
@@ -274,4 +299,48 @@ async fn parse_push_space_child(
         is_attached,
         child_room_identity,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_content_takes_precedence() {
+        assert_eq!(
+            extract_message_content("**Alice**: old body", true, Some("pure markdown content")),
+            "pure markdown content"
+        );
+    }
+
+    #[test]
+    fn legacy_cumments_body_strips_nickname_prefix() {
+        assert_eq!(
+            extract_message_content("**Alice**: hello world", true, None),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn external_message_body_is_plain_content() {
+        assert_eq!(
+            extract_message_content("just a comment", false, None),
+            "just a comment"
+        );
+        // An external message that happens to start with bold markup must not
+        // be treated as a Cumments legacy body.
+        assert_eq!(
+            extract_message_content("**bold** start", false, None),
+            "**bold** start"
+        );
+    }
+
+    #[test]
+    fn author_display_name_from_structured_or_legacy_body() {
+        assert_eq!(
+            extract_author_display_name("**Alice**: hi"),
+            Some("Alice".into())
+        );
+        assert_eq!(extract_author_display_name("plain body"), None);
+    }
 }

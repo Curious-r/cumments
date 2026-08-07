@@ -38,6 +38,9 @@ pub struct ParsedRoomMessage {
     pub author_display_name: Option<String>,
     /// The Cumments fingerprint embedded in the event, if any.
     pub fingerprint: Option<String>,
+    /// Correlation hint: the intent queue row ID that produced this event,
+    /// if the message was sent by Cumments.
+    pub intent_id: Option<i64>,
     pub origin_server_ts: i64,
     /// If this is an edit (m.replace), the relation details.
     pub relates_to: Option<ParsedRelation>,
@@ -103,15 +106,14 @@ pub fn parse_room_identity(
     canonical_alias: Option<&str>,
 ) -> Option<RoomIdentity> {
     // Phase 1 – Try metadata first (source of truth)
-    if let Some(json) = metadata_json {
-        if let Ok(m) = serde_json::from_str::<RoomMetadata>(json) {
-            if let Some(slug) = m.post_slug {
-                return Some(RoomIdentity {
-                    site_id: m.site_id,
-                    post_slug: slug,
-                });
-            }
-        }
+    if let Some(json) = metadata_json
+        && let Ok(m) = serde_json::from_str::<RoomMetadata>(json)
+        && let Some(slug) = m.post_slug
+    {
+        return Some(RoomIdentity {
+            site_id: m.site_id,
+            post_slug: slug,
+        });
     }
 
     // Phase 2 – Fallback to alias parsing for legacy rooms
@@ -239,12 +241,19 @@ impl EventProcessor {
             None => return, // Not a cumments room
         };
 
-        // 1. Closed-loop: Mark any waiting intent as completed
-        if let Err(e) = self
-            .intent_store
-            .mark_post_intent_completed(&event.event_id)
-            .await
-        {
+        // 1. Closed-loop: mark the originating intent as completed. Prefer the
+        // correlation ID when present – the push may arrive before the
+        // reconciler's write-back, so the event_id is not yet stored on the
+        // intent row. Fall back to event_id matching for external messages.
+        let close_loop = match event.intent_id {
+            Some(id) => self.intent_store.mark_post_intent_completed_by_id(id).await,
+            None => {
+                self.intent_store
+                    .mark_post_intent_completed(&event.event_id)
+                    .await
+            }
+        };
+        if let Err(e) = close_loop {
             debug!(
                 "Failed to mark intent as completed (normal if external msg): {:?}",
                 e
@@ -303,12 +312,22 @@ impl EventProcessor {
         // carry the token hash recorded with the intent into the read model.
         // External Matrix messages have no token hash (their owners cannot
         // be verified via the API until an ownership mechanism exists).
-        let author_token_hash = self
-            .intent_store
-            .get_post_intent_token_hash_by_event_id(&event.event_id)
-            .await
-            .ok()
-            .flatten();
+        // Same ordering concern: resolve the owner verifier by correlation ID
+        // when available, otherwise by event ID.
+        let author_token_hash = match event.intent_id {
+            Some(id) => self
+                .intent_store
+                .get_post_intent_token_hash_by_id(id)
+                .await
+                .ok()
+                .flatten(),
+            None => self
+                .intent_store
+                .get_post_intent_token_hash_by_event_id(&event.event_id)
+                .await
+                .ok()
+                .flatten(),
+        };
 
         match self
             .comment_store

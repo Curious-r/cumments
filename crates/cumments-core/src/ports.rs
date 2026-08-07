@@ -21,6 +21,10 @@ pub trait IntentStore: Send + Sync {
     /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
     async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()>;
 
+    /// Completes a post intent by its queue ID (used when the projector sees
+    /// the event before the reconciler has written back the Matrix event ID).
+    async fn mark_post_intent_completed_by_id(&self, id: i64) -> Result<()>;
+
     /// Transitions an update intent to 'waiting_for_sync'.
     async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()>;
 
@@ -34,6 +38,9 @@ pub trait IntentStore: Send + Sync {
 
     /// Transitions a post intent to 'completed' when the projector sees the event.
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
+
+    /// Returns the stored author token hash for a post intent by its queue ID.
+    async fn get_post_intent_token_hash_by_id(&self, id: i64) -> Result<Option<String>>;
 
     /// Returns the stored author token hash for a post intent, if any,
     /// looked up by the Matrix event ID recorded at send time.
