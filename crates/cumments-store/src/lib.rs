@@ -906,7 +906,6 @@ impl RegistryStore for DbStore {
             is_active: Set(true),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
-            ..Default::default()
         };
 
         room_registry::Entity::insert(active_model)
@@ -983,7 +982,6 @@ impl SiteStore for DbStore {
             matrix_space_id: Set(matrix_space_id.to_owned()),
             display_name: Set(Some(site_id.to_owned())),
             created_at: Set(chrono::Utc::now()),
-            ..Default::default()
         };
 
         sites::Entity::insert(active_model)
@@ -1049,7 +1047,6 @@ impl VirtualUserStore for DbStore {
             virtual_user_id: Set(virtual_user_id.clone()),
             server_name: Set(server_name.to_owned()),
             created_at: Set(chrono::Utc::now()),
-            ..Default::default()
         };
 
         virtual_users::Entity::insert(active_model)
