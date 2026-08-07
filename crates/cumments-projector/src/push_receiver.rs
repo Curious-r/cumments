@@ -37,7 +37,7 @@ struct Transaction {
 
 /// A single event from the AppService push transaction.
 #[derive(Deserialize)]
-struct PushEvent {
+pub(crate) struct PushEvent {
     #[serde(rename = "type")]
     event_type: String,
     event_id: Option<String>,
@@ -113,10 +113,10 @@ async fn handle_transaction(
 // ── Event dispatch ────────────────────────────────────────────────
 
 /// Route a single push event to the appropriate processor method.
-async fn process_single_event(
+pub(crate) async fn process_single_event(
     event: &PushEvent,
     processor: &EventProcessor,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     let event_type = event.event_type.as_str();
 
     match event_type {
