@@ -17,6 +17,7 @@ pub struct Model {
     pub timestamp: DateTimeUtc,
     pub created_at: DateTimeUtc,
     pub author_fingerprint: Option<String>,
+    pub author_token_hash: Option<String>,
     pub updated_at: DateTimeUtc,
 }
 

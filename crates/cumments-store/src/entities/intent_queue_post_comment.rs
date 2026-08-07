@@ -15,6 +15,7 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub matrix_event_id: Option<String>,
+    pub author_token_hash: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

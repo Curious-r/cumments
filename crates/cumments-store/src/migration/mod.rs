@@ -4,6 +4,7 @@ pub use sea_orm_migration::MigratorTrait;
 
 pub mod m20260531_000001_initial_schema;
 pub mod m20260619_000002_virtual_users;
+pub mod m20260808_000003_comment_owner_hash;
 
 pub struct Migrator;
 
@@ -13,6 +14,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260531_000001_initial_schema::Migration),
             Box::new(m20260619_000002_virtual_users::Migration),
+            Box::new(m20260808_000003_comment_owner_hash::Migration),
         ]
     }
 }
