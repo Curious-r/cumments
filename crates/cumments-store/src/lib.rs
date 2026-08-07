@@ -67,9 +67,60 @@ impl DbStore {
     /// Creates a new DbStore by connecting to the database at the given URL.
     pub async fn connect(url: &str) -> Result<Self> {
         use migration::MigratorTrait;
+        // SQLite (via sqlx) does not create missing database files by default
+        // (create_if_missing=false); the README promises auto-creation, so
+        // pre-create an empty file for plain sqlite paths.
+        ensure_sqlite_file_exists(url)?;
         let db = sea_orm::Database::connect(url).await?;
         migration::Migrator::up(&db, None).await?;
         Ok(Self { db })
+    }
+}
+
+/// Pre-create the SQLite database file when the URL points at a plain file
+/// path that does not exist yet. In-memory databases are left untouched.
+fn ensure_sqlite_file_exists(url: &str) -> Result<()> {
+    if !url.starts_with("sqlite:") {
+        return Ok(());
+    }
+
+    let rest = url
+        .trim_start_matches("sqlite://")
+        .trim_start_matches("sqlite:");
+    let path = rest.split('?').next().unwrap_or(rest);
+    if path.is_empty() || path == ":memory:" || path.starts_with("file:") {
+        return Ok(());
+    }
+
+    let file = std::path::Path::new(path);
+    if !file.exists() {
+        std::fs::File::create(file)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_file_is_precreated() {
+        let dir = std::path::Path::new("/tmp");
+        let db = dir.join(format!("cumments-connect-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&db);
+
+        let url = format!("sqlite://{}", db.display());
+        ensure_sqlite_file_exists(&url).expect("precreate");
+        assert!(db.exists(), "database file should be created");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn memory_and_other_schemes_are_untouched() {
+        ensure_sqlite_file_exists("sqlite::memory:").expect("memory ok");
+        ensure_sqlite_file_exists("sqlite:///tmp/does-not-exist.db?mode=memory").expect("query ok");
+        ensure_sqlite_file_exists("postgres://localhost/db").expect("non-sqlite ok");
     }
 }
 
@@ -95,7 +146,7 @@ impl DbStore {
                 .col_expr(status_column, sea_orm::sea_query::Expr::value(status))
                 .col_expr(
                     updated_at_column,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 ),
         )
         .exec(&self.db)
@@ -118,6 +169,8 @@ impl IntentStore for DbStore {
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
             author_token_hash: Set(author_token_hash.map(|s| s.to_owned())),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -134,6 +187,8 @@ impl IntentStore for DbStore {
             status: Set(IntentStatus::Pending),
             target_event_id: Set(Some(intent.event_id.clone())),
             retry_count: Set(0),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -151,6 +206,8 @@ impl IntentStore for DbStore {
             author_fingerprint: Set(intent.author_fingerprint.clone()),
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -308,7 +365,7 @@ impl IntentStore for DbStore {
                 )
                 .col_expr(
                     intent_queue_post_comment::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .col_expr(
                     intent_queue_post_comment::Column::LastError,
@@ -339,7 +396,7 @@ impl IntentStore for DbStore {
                 )
                 .col_expr(
                     intent_queue_post_comment::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .filter(intent_queue_post_comment::Column::Id.eq(id))
                 .exec(&self.db)
@@ -364,7 +421,7 @@ impl IntentStore for DbStore {
                 )
                 .col_expr(
                     intent_queue_delete_comment::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .col_expr(
                     intent_queue_delete_comment::Column::LastError,
@@ -395,7 +452,7 @@ impl IntentStore for DbStore {
                 )
                 .col_expr(
                     intent_queue_delete_comment::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .filter(intent_queue_delete_comment::Column::Id.eq(id))
                 .exec(&self.db)
@@ -420,7 +477,7 @@ impl IntentStore for DbStore {
                 )
                 .col_expr(
                     intent_queue_update_comment::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .col_expr(
                     intent_queue_update_comment::Column::LastError,
@@ -451,7 +508,7 @@ impl IntentStore for DbStore {
                 )
                 .col_expr(
                     intent_queue_update_comment::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::current_timestamp(),
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .filter(intent_queue_update_comment::Column::Id.eq(id))
                 .exec(&self.db)
@@ -589,6 +646,8 @@ impl CommentStore for DbStore {
             author_token_hash: Set(author_token_hash.map(|s| s.to_owned())),
             content: Set(comment.content.clone()),
             timestamp: Set(comment.timestamp),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -616,7 +675,7 @@ impl CommentStore for DbStore {
             )
             .col_expr(
                 comments::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::current_timestamp(),
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .filter(comments::COLUMN.event_id.eq(event_id))
             .exec(&self.db)
@@ -700,6 +759,8 @@ impl RegistryStore for DbStore {
             site_id: Set(site_id.as_str().to_owned()),
             post_slug: Set(post_slug.as_str().to_owned()),
             is_active: Set(true),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -723,7 +784,7 @@ impl RegistryStore for DbStore {
             )
             .col_expr(
                 room_registry::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::current_timestamp(),
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .filter(room_registry::COLUMN.room_id.eq(room_id))
             .exec(&self.db)
@@ -776,6 +837,7 @@ impl SiteStore for DbStore {
             id: Set(site_id.to_owned()),
             matrix_space_id: Set(matrix_space_id.to_owned()),
             display_name: Set(Some(site_id.to_owned())),
+            created_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -840,6 +902,7 @@ impl VirtualUserStore for DbStore {
             site_id: Set(site_id.as_str().to_owned()),
             virtual_user_id: Set(virtual_user_id.clone()),
             server_name: Set(server_name.to_owned()),
+            created_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
