@@ -3,7 +3,9 @@ use async_trait::async_trait;
 use cumments_core::identity::derive_visitor_id_from_public_key;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
-use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore};
+use cumments_core::ports::{
+    BackfillCursorStore, CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore,
+};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, Set, UpdateMany,
@@ -988,5 +990,36 @@ impl VirtualUserStore for DbStore {
             .await?;
 
         Ok(virtual_user_id)
+    }
+}
+
+#[async_trait]
+impl BackfillCursorStore for DbStore {
+    async fn get_cursor(&self, room_id: &str) -> Result<Option<String>> {
+        let model = backfill_cursors::Entity::find_by_id(room_id.to_owned())
+            .one(&self.db)
+            .await?;
+        Ok(model.and_then(|m| m.next_batch))
+    }
+
+    async fn save_cursor(&self, room_id: &str, next_batch: &str) -> Result<()> {
+        let active_model = backfill_cursors::ActiveModel {
+            room_id: Set(room_id.to_owned()),
+            next_batch: Set(Some(next_batch.to_owned())),
+            updated_at: Set(chrono::Utc::now()),
+        };
+
+        backfill_cursors::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(backfill_cursors::Column::RoomId)
+                    .update_columns([
+                        backfill_cursors::Column::NextBatch,
+                        backfill_cursors::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 }
