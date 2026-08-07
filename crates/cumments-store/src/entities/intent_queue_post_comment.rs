@@ -15,6 +15,7 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub matrix_event_id: Option<String>,
+    pub room_id: Option<String>,
     pub author_token_hash: Option<String>,
     pub next_attempt_at: Option<DateTimeUtc>,
     pub last_error: Option<String>,

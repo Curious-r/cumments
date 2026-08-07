@@ -79,4 +79,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         info!("LOGGING: Redact message {} in room={}", event_id, room_id);
         Ok(())
     }
+
+    async fn event_exists(&self, _room_id: &str, event_id: &str) -> Result<bool> {
+        info!("LOGGING: Event exists? {} (no real homeserver)", event_id);
+        // No real homeserver: the projector can never close the loop, so treat
+        // timed-out events as absent and let the retry budget drain visibly.
+        Ok(false)
+    }
 }

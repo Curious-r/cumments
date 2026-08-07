@@ -658,6 +658,35 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         Ok(())
     }
+
+    #[instrument(skip(self))]
+    async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/event/{}",
+            urlencode(room_id),
+            urlencode(event_id)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to query event {}: {}", event_id, e))?;
+
+        if resp.status().is_success() {
+            Ok(true)
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(false)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Event lookup {} failed ({}): {}",
+                event_id,
+                status,
+                body
+            ))
+        }
+    }
 }
 
 /// Percent-encode a string for safe use in URL path segments.

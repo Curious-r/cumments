@@ -19,17 +19,22 @@ pub trait IntentStore: Send + Sync {
     async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>>;
 
     /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
-    async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()>;
+    async fn mark_post_intent_waiting_for_sync(
+        &self,
+        id: i64,
+        event_id: &str,
+        room_id: &str,
+    ) -> Result<()>;
 
     /// Completes a post intent by its queue ID (used when the projector sees
     /// the event before the reconciler has written back the Matrix event ID).
     async fn mark_post_intent_completed_by_id(&self, id: i64) -> Result<()>;
 
     /// Transitions an update intent to 'waiting_for_sync'.
-    async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()>;
+    async fn mark_update_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
     /// Transitions a delete intent to 'waiting_for_sync'.
-    async fn mark_delete_intent_waiting_for_sync(&self, id: i64) -> Result<()>;
+    async fn mark_delete_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
     /// Records a processing failure. Returns `true` if the intent was
     /// scheduled for another attempt (pending + backoff), `false` if the
@@ -50,6 +55,30 @@ pub trait IntentStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> Result<Option<String>>;
+
+    /// Post intents stuck in `waiting_for_sync` since before `cutoff`,
+    /// as `(id, matrix_event_id, room_id)`.
+    async fn get_stuck_post_intents(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<(i64, String, Option<String>)>>;
+
+    /// IDs of delete intents stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_delete_intent_ids(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<i64>>;
+
+    /// IDs of update intents stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_update_intent_ids(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<i64>>;
+
+    /// Moves a post intent to 'failed' without further retries. Used when the
+    /// event exists on the homeserver but was never projected – resending
+    /// would create a duplicate comment.
+    async fn dead_letter_post_intent(&self, id: i64, error: &str) -> Result<()>;
 
     /// Transitions a delete intent to 'completed' when the projector sees the redaction.
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()>;
@@ -192,6 +221,10 @@ pub trait MatrixDriver: Send + Sync {
 
     /// Redacts a message in a specific room.
     async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()>;
+
+    /// Checks whether an event exists on the homeserver. Used to decide if a
+    /// timed-out `waiting_for_sync` intent can be safely resent.
+    async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
 }
 
 /// Port for virtual user identity management (AppService mode).

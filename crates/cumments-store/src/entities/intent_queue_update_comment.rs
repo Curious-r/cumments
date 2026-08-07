@@ -11,6 +11,7 @@ pub struct Model {
     pub site_id: String,
     pub post_slug: String,
     pub event_id: String,
+    pub room_id: Option<String>,
     pub content: String,
     pub author_fingerprint: String,
     pub status: IntentStatus,

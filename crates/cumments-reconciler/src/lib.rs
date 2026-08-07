@@ -9,6 +9,10 @@ use tracing::{error, info, warn};
 
 use tokio::sync::Notify;
 
+/// How long an intent may sit in `waiting_for_sync` (event sent, projection
+/// not observed) before the timeout reconciliation pass intervenes.
+const WAITING_FOR_SYNC_TIMEOUT_MINUTES: i64 = 10;
+
 /// The Reconciler acts as the Orchestrator of the background process.
 /// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
 pub struct Reconciler {
@@ -73,7 +77,8 @@ impl Reconciler {
         let post_count = self.reconcile_posts().await?;
         let delete_count = self.reconcile_deletions().await?;
         let update_count = self.reconcile_updates().await?;
-        Ok(post_count + delete_count + update_count)
+        let timeout_count = self.reconcile_timeouts().await?;
+        Ok(post_count + delete_count + update_count + timeout_count)
     }
 
     async fn reconcile_posts(&self) -> Result<u64> {
@@ -131,7 +136,7 @@ impl Reconciler {
 
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.intent_store
-                    .mark_post_intent_waiting_for_sync(id, &event_id)
+                    .mark_post_intent_waiting_for_sync(id, &event_id, &room_id)
                     .await?;
                 // ORCHESTRATION END
 
@@ -191,7 +196,7 @@ impl Reconciler {
 
                 // 3. Concepts: Move to waiting_for_sync
                 self.intent_store
-                    .mark_delete_intent_waiting_for_sync(id)
+                    .mark_delete_intent_waiting_for_sync(id, &room_id)
                     .await?;
 
                 Ok(())
@@ -278,7 +283,7 @@ impl Reconciler {
 
                 // 6. Closed-loop: Mark as waiting for sync
                 self.intent_store
-                    .mark_update_intent_waiting_for_sync(id)
+                    .mark_update_intent_waiting_for_sync(id, &room_id)
                     .await?;
 
                 Ok(())
@@ -304,5 +309,110 @@ impl Reconciler {
             }
         }
         Ok(num_intents)
+    }
+
+    /// Handles intents stuck in `waiting_for_sync`: the event was sent but the
+    /// projector never observed it (lost push, misconfigured AS, ...).
+    ///
+    /// - Post intents are only rescheduled when the event is confirmed absent
+    ///   on the homeserver; if the event exists, resending would duplicate the
+    ///   comment, so the intent is dead-lettered for inspection.
+    /// - Delete/update intents are rescheduled directly: redaction and
+    ///   replacement are idempotent operations.
+    async fn reconcile_timeouts(&self) -> Result<u64> {
+        let cutoff =
+            chrono::Utc::now() - chrono::Duration::minutes(WAITING_FOR_SYNC_TIMEOUT_MINUTES);
+        let mut handled = 0u64;
+
+        for (id, event_id, room_id) in self.intent_store.get_stuck_post_intents(cutoff).await? {
+            handled += 1;
+
+            let Some(room_id) = room_id else {
+                error!(
+                    "Post intent [{}] timed out with no room recorded; dead-lettering",
+                    id
+                );
+                self.intent_store
+                    .dead_letter_post_intent(
+                        id,
+                        "waiting_for_sync timed out; room_id was not recorded, cannot verify the event safely",
+                    )
+                    .await?;
+                continue;
+            };
+
+            match self.driver.event_exists(&room_id, &event_id).await {
+                Ok(true) => {
+                    error!(
+                        "Post intent [{}] timed out but event {} exists on the homeserver; dead-lettering",
+                        id, event_id
+                    );
+                    self.intent_store
+                        .dead_letter_post_intent(
+                            id,
+                            &format!(
+                                "waiting_for_sync timed out; event {} exists on the homeserver but was never projected",
+                                event_id
+                            ),
+                        )
+                        .await?;
+                }
+                Ok(false) => {
+                    warn!(
+                        "Post intent [{}] timed out and event {} is absent; rescheduling",
+                        id, event_id
+                    );
+                    let retrying = self
+                        .intent_store
+                        .record_post_intent_failure(
+                            id,
+                            "waiting_for_sync timed out; event absent, resending",
+                        )
+                        .await?;
+                    if !retrying {
+                        error!("Post intent [{}] exhausted retries after timeout", id);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Post intent [{}] timeout check failed: {:?}; leaving for next pass",
+                        id, e
+                    );
+                }
+            }
+        }
+
+        // Redaction and replacement are idempotent, so rescheduling is safe.
+        for id in self
+            .intent_store
+            .get_stuck_delete_intent_ids(cutoff)
+            .await?
+        {
+            handled += 1;
+            let retrying = self
+                .intent_store
+                .record_delete_intent_failure(id, "waiting_for_sync timed out; rescheduling")
+                .await?;
+            if !retrying {
+                error!("Delete intent [{}] exhausted retries after timeout", id);
+            }
+        }
+
+        for id in self
+            .intent_store
+            .get_stuck_update_intent_ids(cutoff)
+            .await?
+        {
+            handled += 1;
+            let retrying = self
+                .intent_store
+                .record_update_intent_failure(id, "waiting_for_sync timed out; rescheduling")
+                .await?;
+            if !retrying {
+                error!("Update intent [{}] exhausted retries after timeout", id);
+            }
+        }
+
+        Ok(handled)
     }
 }

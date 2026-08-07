@@ -288,7 +288,12 @@ impl IntentStore for DbStore {
         Ok(intents)
     }
 
-    async fn mark_post_intent_waiting_for_sync(&self, id: i64, event_id: &str) -> Result<()> {
+    async fn mark_post_intent_waiting_for_sync(
+        &self,
+        id: i64,
+        event_id: &str,
+        room_id: &str,
+    ) -> Result<()> {
         self.transition_status(
             IntentStatus::WaitingForSync,
             intent_queue_post_comment::Column::Status,
@@ -298,6 +303,10 @@ impl IntentStore for DbStore {
                     .col_expr(
                         intent_queue_post_comment::COLUMN.matrix_event_id,
                         sea_orm::sea_query::Expr::value(event_id),
+                    )
+                    .col_expr(
+                        intent_queue_post_comment::COLUMN.room_id,
+                        sea_orm::sea_query::Expr::value(room_id),
                     )
                     .filter(intent_queue_post_comment::COLUMN.id.eq(id))
                     // Never regress an already-completed intent: if the
@@ -325,25 +334,35 @@ impl IntentStore for DbStore {
         .await
     }
 
-    async fn mark_update_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
+    async fn mark_update_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
         self.transition_status(
             IntentStatus::WaitingForSync,
             intent_queue_update_comment::Column::Status,
             intent_queue_update_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                query.filter(intent_queue_update_comment::COLUMN.id.eq(id))
+                query
+                    .col_expr(
+                        intent_queue_update_comment::COLUMN.room_id,
+                        sea_orm::sea_query::Expr::value(room_id),
+                    )
+                    .filter(intent_queue_update_comment::COLUMN.id.eq(id))
             },
         )
         .await
     }
 
-    async fn mark_delete_intent_waiting_for_sync(&self, id: i64) -> Result<()> {
+    async fn mark_delete_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
         self.transition_status(
             IntentStatus::WaitingForSync,
             intent_queue_delete_comment::Column::Status,
             intent_queue_delete_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(intent_queue_delete_comment::COLUMN.id.eq(id))
+                query
+                    .col_expr(
+                        intent_queue_delete_comment::COLUMN.room_id,
+                        sea_orm::sea_query::Expr::value(room_id),
+                    )
+                    .filter(intent_queue_delete_comment::COLUMN.id.eq(id))
             },
         )
         .await
@@ -555,6 +574,83 @@ impl IntentStore for DbStore {
             .await?;
 
         Ok(model.and_then(|m| m.author_token_hash))
+    }
+
+    async fn get_stuck_post_intents(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<(i64, String, Option<String>)>> {
+        let models = intent_queue_post_comment::Entity::find()
+            .filter(
+                intent_queue_post_comment::COLUMN
+                    .status
+                    .eq(IntentStatus::WaitingForSync),
+            )
+            .filter(intent_queue_post_comment::Column::UpdatedAt.lte(cutoff))
+            .all(&self.db)
+            .await?;
+
+        Ok(models
+            .into_iter()
+            .filter_map(|m| {
+                m.matrix_event_id
+                    .map(|event_id| (m.id, event_id, m.room_id))
+            })
+            .collect())
+    }
+
+    async fn get_stuck_delete_intent_ids(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<i64>> {
+        let models = intent_queue_delete_comment::Entity::find()
+            .filter(
+                intent_queue_delete_comment::COLUMN
+                    .status
+                    .eq(IntentStatus::WaitingForSync),
+            )
+            .filter(intent_queue_delete_comment::Column::UpdatedAt.lte(cutoff))
+            .all(&self.db)
+            .await?;
+
+        Ok(models.into_iter().map(|m| m.id).collect())
+    }
+
+    async fn get_stuck_update_intent_ids(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<i64>> {
+        let models = intent_queue_update_comment::Entity::find()
+            .filter(
+                intent_queue_update_comment::COLUMN
+                    .status
+                    .eq(IntentStatus::WaitingForSync),
+            )
+            .filter(intent_queue_update_comment::Column::UpdatedAt.lte(cutoff))
+            .all(&self.db)
+            .await?;
+
+        Ok(models.into_iter().map(|m| m.id).collect())
+    }
+
+    async fn dead_letter_post_intent(&self, id: i64, error: &str) -> Result<()> {
+        intent_queue_post_comment::Entity::update_many()
+            .col_expr(
+                intent_queue_post_comment::Column::Status,
+                sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .col_expr(
+                intent_queue_post_comment::Column::LastError,
+                sea_orm::sea_query::Expr::value(error),
+            )
+            .filter(intent_queue_post_comment::Column::Id.eq(id))
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
