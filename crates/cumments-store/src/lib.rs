@@ -5,14 +5,57 @@ use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateComme
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set, UpdateMany,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, Set, UpdateMany,
 };
 
 use crate::entities::active_enums::IntentStatus;
 
 pub mod entities;
 pub mod migration;
+
+/// Maximum failed attempts before an intent is marked `failed` (dead-lettered).
+const MAX_RETRIES: i64 = 5;
+/// Base exponential-backoff delay after the first failure.
+const BASE_BACKOFF_SECS: i64 = 30;
+/// Upper bound for the backoff delay.
+const MAX_BACKOFF_SECS: i64 = 1800;
+
+/// Exponential backoff delay for the *next* attempt, based on the number of
+/// failures already recorded.
+fn backoff_after(retry_count: i64) -> chrono::Duration {
+    let shift = retry_count.clamp(0, 6) as u32;
+    let secs = BASE_BACKOFF_SECS
+        .saturating_mul(1i64 << shift)
+        .min(MAX_BACKOFF_SECS);
+    chrono::Duration::seconds(secs)
+}
+
+/// Filter for rows whose backoff window has passed (never attempted yet, or
+/// `next_attempt_at` in the past).
+fn attempt_due<C>(column: C) -> Condition
+where
+    C: ColumnTrait,
+{
+    Condition::any()
+        .add(column.is_null())
+        .add(column.lte(chrono::Utc::now()))
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn backoff_grows_exponentially_and_caps() {
+        assert_eq!(backoff_after(0).num_seconds(), 30);
+        assert_eq!(backoff_after(1).num_seconds(), 60);
+        assert_eq!(backoff_after(2).num_seconds(), 120);
+        assert_eq!(backoff_after(5).num_seconds(), 960);
+        assert_eq!(backoff_after(6).num_seconds(), 1800);
+        assert_eq!(backoff_after(100).num_seconds(), 1800);
+    }
+}
 
 /// A database-backed implementation of the storage ports.
 #[derive(Clone)]
@@ -90,6 +133,7 @@ impl IntentStore for DbStore {
             payload: Set(payload),
             status: Set(IntentStatus::Pending),
             target_event_id: Set(Some(intent.event_id.clone())),
+            retry_count: Set(0),
             ..Default::default()
         };
 
@@ -106,6 +150,7 @@ impl IntentStore for DbStore {
             content: Set(intent.content.clone()),
             author_fingerprint: Set(intent.author_fingerprint.clone()),
             status: Set(IntentStatus::Pending),
+            retry_count: Set(0),
             ..Default::default()
         };
 
@@ -121,6 +166,9 @@ impl IntentStore for DbStore {
                     .status
                     .eq(IntentStatus::Pending),
             )
+            .filter(attempt_due(
+                intent_queue_post_comment::Column::NextAttemptAt,
+            ))
             .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -140,6 +188,9 @@ impl IntentStore for DbStore {
                     .status
                     .eq(IntentStatus::Pending),
             )
+            .filter(attempt_due(
+                intent_queue_delete_comment::Column::NextAttemptAt,
+            ))
             .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -159,6 +210,9 @@ impl IntentStore for DbStore {
                     .status
                     .eq(IntentStatus::Pending),
             )
+            .filter(attempt_due(
+                intent_queue_update_comment::Column::NextAttemptAt,
+            ))
             .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -238,40 +292,172 @@ impl IntentStore for DbStore {
         .await
     }
 
-    async fn mark_post_intent_failed(&self, id: i64) -> Result<()> {
-        self.transition_status(
-            IntentStatus::Failed,
-            intent_queue_post_comment::Column::Status,
-            intent_queue_post_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_post_comment::Entity>| {
-                query.filter(intent_queue_post_comment::COLUMN.id.eq(id))
-            },
-        )
-        .await
+    async fn record_post_intent_failure(&self, id: i64, error: &str) -> Result<bool> {
+        let Some(model) = intent_queue_post_comment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if model.retry_count >= MAX_RETRIES {
+            intent_queue_post_comment::Entity::update_many()
+                .col_expr(
+                    intent_queue_post_comment::Column::Status,
+                    sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                )
+                .col_expr(
+                    intent_queue_post_comment::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::current_timestamp(),
+                )
+                .col_expr(
+                    intent_queue_post_comment::Column::LastError,
+                    sea_orm::sea_query::Expr::value(error),
+                )
+                .filter(intent_queue_post_comment::Column::Id.eq(id))
+                .exec(&self.db)
+                .await?;
+            Ok(false)
+        } else {
+            let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
+            intent_queue_post_comment::Entity::update_many()
+                .col_expr(
+                    intent_queue_post_comment::Column::Status,
+                    sea_orm::sea_query::Expr::value(IntentStatus::Pending),
+                )
+                .col_expr(
+                    intent_queue_post_comment::Column::RetryCount,
+                    sea_orm::sea_query::Expr::value(model.retry_count + 1),
+                )
+                .col_expr(
+                    intent_queue_post_comment::Column::NextAttemptAt,
+                    sea_orm::sea_query::Expr::value(next_attempt),
+                )
+                .col_expr(
+                    intent_queue_post_comment::Column::LastError,
+                    sea_orm::sea_query::Expr::value(error),
+                )
+                .col_expr(
+                    intent_queue_post_comment::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::current_timestamp(),
+                )
+                .filter(intent_queue_post_comment::Column::Id.eq(id))
+                .exec(&self.db)
+                .await?;
+            Ok(true)
+        }
     }
 
-    async fn mark_delete_intent_failed(&self, id: i64) -> Result<()> {
-        self.transition_status(
-            IntentStatus::Failed,
-            intent_queue_delete_comment::Column::Status,
-            intent_queue_delete_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(intent_queue_delete_comment::COLUMN.id.eq(id))
-            },
-        )
-        .await
+    async fn record_delete_intent_failure(&self, id: i64, error: &str) -> Result<bool> {
+        let Some(model) = intent_queue_delete_comment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if model.retry_count >= MAX_RETRIES {
+            intent_queue_delete_comment::Entity::update_many()
+                .col_expr(
+                    intent_queue_delete_comment::Column::Status,
+                    sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                )
+                .col_expr(
+                    intent_queue_delete_comment::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::current_timestamp(),
+                )
+                .col_expr(
+                    intent_queue_delete_comment::Column::LastError,
+                    sea_orm::sea_query::Expr::value(error),
+                )
+                .filter(intent_queue_delete_comment::Column::Id.eq(id))
+                .exec(&self.db)
+                .await?;
+            Ok(false)
+        } else {
+            let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
+            intent_queue_delete_comment::Entity::update_many()
+                .col_expr(
+                    intent_queue_delete_comment::Column::Status,
+                    sea_orm::sea_query::Expr::value(IntentStatus::Pending),
+                )
+                .col_expr(
+                    intent_queue_delete_comment::Column::RetryCount,
+                    sea_orm::sea_query::Expr::value(model.retry_count + 1),
+                )
+                .col_expr(
+                    intent_queue_delete_comment::Column::NextAttemptAt,
+                    sea_orm::sea_query::Expr::value(next_attempt),
+                )
+                .col_expr(
+                    intent_queue_delete_comment::Column::LastError,
+                    sea_orm::sea_query::Expr::value(error),
+                )
+                .col_expr(
+                    intent_queue_delete_comment::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::current_timestamp(),
+                )
+                .filter(intent_queue_delete_comment::Column::Id.eq(id))
+                .exec(&self.db)
+                .await?;
+            Ok(true)
+        }
     }
 
-    async fn mark_update_intent_failed(&self, id: i64) -> Result<()> {
-        self.transition_status(
-            IntentStatus::Failed,
-            intent_queue_update_comment::Column::Status,
-            intent_queue_update_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                query.filter(intent_queue_update_comment::COLUMN.id.eq(id))
-            },
-        )
-        .await
+    async fn record_update_intent_failure(&self, id: i64, error: &str) -> Result<bool> {
+        let Some(model) = intent_queue_update_comment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if model.retry_count >= MAX_RETRIES {
+            intent_queue_update_comment::Entity::update_many()
+                .col_expr(
+                    intent_queue_update_comment::Column::Status,
+                    sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                )
+                .col_expr(
+                    intent_queue_update_comment::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::current_timestamp(),
+                )
+                .col_expr(
+                    intent_queue_update_comment::Column::LastError,
+                    sea_orm::sea_query::Expr::value(error),
+                )
+                .filter(intent_queue_update_comment::Column::Id.eq(id))
+                .exec(&self.db)
+                .await?;
+            Ok(false)
+        } else {
+            let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
+            intent_queue_update_comment::Entity::update_many()
+                .col_expr(
+                    intent_queue_update_comment::Column::Status,
+                    sea_orm::sea_query::Expr::value(IntentStatus::Pending),
+                )
+                .col_expr(
+                    intent_queue_update_comment::Column::RetryCount,
+                    sea_orm::sea_query::Expr::value(model.retry_count + 1),
+                )
+                .col_expr(
+                    intent_queue_update_comment::Column::NextAttemptAt,
+                    sea_orm::sea_query::Expr::value(next_attempt),
+                )
+                .col_expr(
+                    intent_queue_update_comment::Column::LastError,
+                    sea_orm::sea_query::Expr::value(error),
+                )
+                .col_expr(
+                    intent_queue_update_comment::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::current_timestamp(),
+                )
+                .filter(intent_queue_update_comment::Column::Id.eq(id))
+                .exec(&self.db)
+                .await?;
+            Ok(true)
+        }
     }
 
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()> {

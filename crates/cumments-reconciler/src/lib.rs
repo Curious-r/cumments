@@ -5,7 +5,7 @@ use cumments_core::{
 };
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use tokio::sync::Notify;
 
@@ -140,11 +140,21 @@ impl Reconciler {
             .await;
 
             if let Err(e) = process_result {
-                warn!(
-                    "Failed to reconcile post intent [{}]: {:?}. Setting status to 'failed'.",
-                    id, e
-                );
-                self.intent_store.mark_post_intent_failed(id).await?;
+                let retrying = self
+                    .intent_store
+                    .record_post_intent_failure(id, &e.to_string())
+                    .await?;
+                if retrying {
+                    warn!(
+                        "Post intent [{}] failed, will retry after backoff: {:?}",
+                        id, e
+                    );
+                } else {
+                    error!(
+                        "Post intent [{}] exhausted retries, moved to failed: {:?}",
+                        id, e
+                    );
+                }
             }
         }
         Ok(num_intents)
@@ -189,11 +199,21 @@ impl Reconciler {
             .await;
 
             if let Err(e) = process_result {
-                warn!(
-                    "Failed to reconcile delete intent [{}]: {:?}. Setting status to 'failed'.",
-                    id, e
-                );
-                self.intent_store.mark_delete_intent_failed(id).await?;
+                let retrying = self
+                    .intent_store
+                    .record_delete_intent_failure(id, &e.to_string())
+                    .await?;
+                if retrying {
+                    warn!(
+                        "Delete intent [{}] failed, will retry after backoff: {:?}",
+                        id, e
+                    );
+                } else {
+                    error!(
+                        "Delete intent [{}] exhausted retries, moved to failed: {:?}",
+                        id, e
+                    );
+                }
             }
         }
         Ok(num_intents)
@@ -266,11 +286,21 @@ impl Reconciler {
             .await;
 
             if let Err(e) = process_result {
-                warn!(
-                    "Failed to reconcile update intent [{}]: {:?}. Setting status to 'failed'.",
-                    id, e
-                );
-                self.intent_store.mark_update_intent_failed(id).await?;
+                let retrying = self
+                    .intent_store
+                    .record_update_intent_failure(id, &e.to_string())
+                    .await?;
+                if retrying {
+                    warn!(
+                        "Update intent [{}] failed, will retry after backoff: {:?}",
+                        id, e
+                    );
+                } else {
+                    error!(
+                        "Update intent [{}] exhausted retries, moved to failed: {:?}",
+                        id, e
+                    );
+                }
             }
         }
         Ok(num_intents)

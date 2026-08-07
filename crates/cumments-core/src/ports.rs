@@ -31,10 +31,12 @@ pub trait IntentStore: Send + Sync {
     /// Transitions a delete intent to 'waiting_for_sync'.
     async fn mark_delete_intent_waiting_for_sync(&self, id: i64) -> Result<()>;
 
-    /// Transitions an intent to 'failed' status.
-    async fn mark_post_intent_failed(&self, id: i64) -> Result<()>;
-    async fn mark_delete_intent_failed(&self, id: i64) -> Result<()>;
-    async fn mark_update_intent_failed(&self, id: i64) -> Result<()>;
+    /// Records a processing failure. Returns `true` if the intent was
+    /// scheduled for another attempt (pending + backoff), `false` if the
+    /// retry budget is exhausted and the intent moves to 'failed'.
+    async fn record_post_intent_failure(&self, id: i64, error: &str) -> Result<bool>;
+    async fn record_delete_intent_failure(&self, id: i64, error: &str) -> Result<bool>;
+    async fn record_update_intent_failure(&self, id: i64, error: &str) -> Result<bool>;
 
     /// Transitions a post intent to 'completed' when the projector sees the event.
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
