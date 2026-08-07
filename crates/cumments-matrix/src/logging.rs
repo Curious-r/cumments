@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
     identity::derive_visitor_id_from_public_key,
-    models::{PostSlug, SiteId},
+    models::{PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
 use tracing::info;
@@ -84,5 +84,31 @@ impl MatrixDriver for LoggingMatrixDriver {
         // No real homeserver: the projector can never close the loop, so treat
         // timed-out events as absent and let the retry budget drain visibly.
         Ok(false)
+    }
+
+    async fn get_room_events(
+        &self,
+        room_id: &str,
+        _from: Option<&str>,
+        _limit: u32,
+    ) -> Result<RoomEventPage> {
+        info!(
+            "LOGGING: Fetch room events for {} (no real homeserver)",
+            room_id
+        );
+        Ok(RoomEventPage::default())
+    }
+
+    async fn joined_rooms(&self) -> Result<Vec<String>> {
+        info!("LOGGING: Joined rooms (no real homeserver)");
+        Ok(Vec::new())
+    }
+
+    async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+        info!(
+            "LOGGING: Room metadata for {} (no real homeserver)",
+            room_id
+        );
+        Ok(None)
     }
 }

@@ -108,3 +108,15 @@ pub struct Site {
     pub display_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+/// One page of room history fetched from the homeserver.
+#[derive(Debug, Clone, Default)]
+pub struct RoomEventPage {
+    /// Raw Matrix room events (`m.room.message`, `m.room.redaction`, ...).
+    pub events: Vec<serde_json::Value>,
+    /// Token to continue fetching older history, if more is available.
+    pub next_batch: Option<String>,
+    /// `true` when the homeserver reported the start/end boundary (no more
+    /// history in this direction).
+    pub done: bool,
+}

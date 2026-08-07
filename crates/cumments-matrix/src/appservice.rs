@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::{
     identity::derive_visitor_id_from_public_key,
-    models::{PostSlug, SiteId},
+    models::{PostSlug, RoomEventPage, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
 };
 use serde::Deserialize;
@@ -28,6 +28,18 @@ struct SendEventResponse {
 #[derive(Deserialize)]
 struct ResolveAliasResponse {
     room_id: String,
+}
+
+#[derive(Deserialize)]
+struct MessagesResponse {
+    start: String,
+    end: String,
+    chunk: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct JoinedRoomsResponse {
+    joined_rooms: Vec<String>,
 }
 
 /// Whether a metadata state payload matches the expected Cumments identity.
@@ -702,6 +714,79 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 body
             ))
         }
+    }
+
+    #[instrument(skip(self))]
+    async fn get_room_events(
+        &self,
+        room_id: &str,
+        from: Option<&str>,
+        limit: u32,
+    ) -> Result<RoomEventPage> {
+        let mut path = format!(
+            "_matrix/client/v3/rooms/{}/messages?dir=b&limit={}",
+            urlencode(room_id),
+            limit
+        );
+        if let Some(from) = from {
+            path.push_str(&format!("&from={}", urlencode(from)));
+        }
+
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch room history: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to fetch room history for {} ({}): {}",
+                room_id,
+                status,
+                body
+            ));
+        }
+
+        let data: MessagesResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse messages response: {}", e))?;
+        Ok(RoomEventPage {
+            events: data.chunk,
+            next_batch: Some(data.end.clone()),
+            done: data.start == data.end,
+        })
+    }
+
+    #[instrument(skip(self))]
+    async fn joined_rooms(&self) -> Result<Vec<String>> {
+        let resp = self
+            .request(reqwest::Method::GET, "_matrix/client/v3/joined_rooms", None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to list joined rooms: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to list joined rooms ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let data: JoinedRoomsResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse joined_rooms response: {}", e))?;
+        Ok(data.joined_rooms)
+    }
+
+    async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+        self.get_room_metadata(room_id).await
     }
 }
 

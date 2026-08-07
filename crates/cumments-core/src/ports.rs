@@ -1,5 +1,5 @@
 use crate::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
-use crate::models::{Comment, PostSlug, SiteId};
+use crate::models::{Comment, PostSlug, RoomEventPage, SiteId};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -209,9 +209,35 @@ pub trait MatrixDriver: Send + Sync {
     /// Redacts a message in a specific room.
     async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()>;
 
+    /// Fetch one page of room history (CS API `/rooms/{roomId}/messages`).
+    async fn get_room_events(
+        &self,
+        room_id: &str,
+        from: Option<&str>,
+        limit: u32,
+    ) -> Result<RoomEventPage>;
+
+    /// Rooms the service account has joined. Used by backfill to discover
+    /// Cumments rooms after a local DB reset.
+    async fn joined_rooms(&self) -> Result<Vec<String>>;
+
+    /// Read a room's `im.cumments.metadata` state event, if any.
+    async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
+
     /// Checks whether an event exists on the homeserver. Used to decide if a
     /// timed-out `waiting_for_sync` intent can be safely resent.
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
+}
+
+/// Persistence for backfill cursors (per-room pagination tokens).
+#[async_trait]
+pub trait BackfillCursorStore: Send + Sync {
+    /// The stored pagination token for a room, if a previous backfill
+    /// stopped part-way.
+    async fn get_cursor(&self, room_id: &str) -> Result<Option<String>>;
+
+    /// Persist the next pagination token for a room.
+    async fn save_cursor(&self, room_id: &str, next_batch: &str) -> Result<()>;
 }
 
 /// Port for virtual user identity management (AppService mode).
