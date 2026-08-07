@@ -142,7 +142,7 @@
                         <div>
                             <label
                                 class="block text-sm font-medium text-gray-700"
-                                >Guest Token (本地生成)</label
+                                >身份公钥 (Ed25519，浏览器本地生成)</label
                             >
                             <div class="flex gap-2">
                                 <input
@@ -152,10 +152,10 @@
                                     class="mt-1 block w-full bg-gray-50 rounded-md border-gray-300 shadow-sm border p-2 text-xs font-mono text-gray-500 truncate"
                                 />
                                 <button
-                                    onclick="regenerateToken()"
+                                    onclick="regenerateIdentity()"
                                     class="mt-1 px-3 py-2 border border-gray-300 rounded text-sm hover:bg-gray-50 whitespace-nowrap"
                                 >
-                                    重置
+                                    重置身份
                                 </button>
                             </div>
                         </div>
@@ -480,23 +480,92 @@
             //  初始化逻辑
             // ==========================================
             document.addEventListener("DOMContentLoaded", () => {
-                // 恢复或生成 Token
-                let token = localStorage.getItem("cumments_guest_token");
-                if (!token) {
-                    regenerateToken();
-                } else {
-                    document.getElementById("guestToken").value = token;
-                }
+                // 恢复或生成 Ed25519 身份（私钥仅存本地，公钥即身份）
+                ensureIdentity().then((identity) => {
+                    document.getElementById("guestToken").value =
+                        identity.publicKey;
+                });
                 // 自动加载一次
                 initApp();
             });
 
-            function regenerateToken() {
-                const token =
-                    Math.random().toString(36).substring(2) +
-                    Date.now().toString(36);
-                localStorage.setItem("cumments_guest_token", token);
-                document.getElementById("guestToken").value = token;
+            function base64url(bytes) {
+                let bin = "";
+                bytes.forEach((b) => (bin += String.fromCharCode(b)));
+                return btoa(bin)
+                    .replace(/\+/g, "-")
+                    .replace(/\//g, "_")
+                    .replace(/=+$/, "");
+            }
+
+            function base64urlToBytes(s) {
+                const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+                const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+                const bin = atob(padded);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                return bytes;
+            }
+
+            async function ensureIdentity() {
+                const stored = localStorage.getItem("cumments_identity");
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed.publicKey && parsed.privateKey) return parsed;
+                }
+                return regenerateIdentity();
+            }
+
+            async function regenerateIdentity() {
+                const keyPair = await crypto.subtle.generateKey(
+                    { name: "Ed25519" },
+                    true,
+                    ["sign", "verify"],
+                );
+                const pubRaw = new Uint8Array(
+                    await crypto.subtle.exportKey("raw", keyPair.publicKey),
+                );
+                const privRaw = new Uint8Array(
+                    await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
+                );
+                const identity = {
+                    publicKey: base64url(pubRaw),
+                    privateKey: base64url(privRaw),
+                };
+                localStorage.setItem(
+                    "cumments_identity",
+                    JSON.stringify(identity),
+                );
+                const el = document.getElementById("guestToken");
+                if (el) el.value = identity.publicKey;
+                return identity;
+            }
+
+            async function importPrivateKey(privateKeyB64) {
+                return crypto.subtle.importKey(
+                    "pkcs8",
+                    base64urlToBytes(privateKeyB64),
+                    { name: "Ed25519" },
+                    false,
+                    ["sign"],
+                );
+            }
+
+            async function signMessage(privateKeyB64, message) {
+                const key = await importPrivateKey(privateKeyB64);
+                const sig = await crypto.subtle.sign(
+                    { name: "Ed25519" },
+                    key,
+                    new TextEncoder().encode(message),
+                );
+                return base64url(new Uint8Array(sig));
+            }
+
+            async function authorSignature(parts) {
+                const identity = await ensureIdentity();
+                const message = parts.join("\n");
+                const signature = await signMessage(identity.privateKey, message);
+                return { publicKey: identity.publicKey, signature };
             }
 
             function getConfig() {
@@ -508,7 +577,6 @@
                     slug: document.getElementById("slug").value,
                     nickname: document.getElementById("nickname").value,
                     email: document.getElementById("email").value,
-                    token: document.getElementById("guestToken").value,
                 };
             }
 
@@ -761,6 +829,13 @@
                     const chalRes = await fetch(`${cfg.api}/api/challenge`);
                     const chal = await chalRes.json();
                     const nonce = await solvePoW(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "DELETE",
+                        cfg.siteId,
+                        cfg.slug,
+                        commentId,
+                        chal.prefix,
+                    ]);
 
                     const res = await fetch(
                         `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
@@ -768,7 +843,8 @@
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
-                                author_fingerprint: cfg.token,
+                                author_public_key: publicKey,
+                                author_signature: signature,
                                 challenge_response: `${chal.prefix}|${nonce}`,
                             }),
                         },
@@ -780,13 +856,42 @@
                 }
             }
 
-            // 编辑 (当前 API 未实现 PUT，仅做界面保留或根据实际情况调整)
+            // 编辑 (PATCH + 签名)
             async function submitEdit(commentId, newContent, domElement) {
-                alert("当前后端暂未开放编辑接口，请使用删除并重新发布。");
-                domElement.querySelector(".edit-area").classList.add("hidden");
-                domElement
-                    .querySelector(".markdown-body")
-                    .classList.remove("hidden");
+                const cfg = getConfig();
+                try {
+                    const chalRes = await fetch(`${cfg.api}/api/challenge`);
+                    const chal = await chalRes.json();
+                    const nonce = await solvePoW(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "PATCH",
+                        cfg.siteId,
+                        cfg.slug,
+                        commentId,
+                        newContent,
+                        chal.prefix,
+                    ]);
+                    const res = await fetch(
+                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
+                        {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                content: newContent,
+                                author_public_key: publicKey,
+                                author_signature: signature,
+                                challenge_response: `${chal.prefix}|${nonce}`,
+                            }),
+                        },
+                    );
+                    if (!res.ok) throw new Error(await res.text());
+                    domElement.querySelector(".edit-area").classList.add("hidden");
+                    domElement
+                        .querySelector(".markdown-body")
+                        .classList.remove("hidden");
+                } catch (e) {
+                    alert("编辑失败: " + e.message);
+                }
             }
 
             // ==========================================
@@ -814,13 +919,25 @@
 
                     const challengeResponse = `${chal.prefix}|${nonce}`;
 
-                    // 3. 提交
+                    // 3. 对规范消息签名
+                    status.innerText = "正在签名...";
+                    const { publicKey, signature } = await authorSignature([
+                        "POST",
+                        cfg.siteId,
+                        cfg.slug,
+                        content,
+                        cfg.nickname,
+                        chal.prefix,
+                    ]);
+
+                    // 4. 提交
                     status.innerText = "正在提交...";
                     const payload = {
                         content: content,
                         nickname: cfg.nickname,
                         email: cfg.email || null,
-                        author_fingerprint: cfg.token, // 简化示例：使用 token 作为指纹
+                        author_public_key: publicKey,
+                        author_signature: signature,
                         challenge_response: challengeResponse,
                         reply_to: replyToId,
                     };

@@ -73,7 +73,7 @@ Registers as a Matrix **Application Service** with the homeserver. Each commente
 
 **Virtual user ID format**:
 ```
-@_cumments_{site_id}_{sha256_trunc8(fingerprint)}:{server_name}
+@_cumments_{site_id}_{sha256_trunc8(public_key)}:{server_name}
 ```
 
 ### Logging Mode (local development)
@@ -111,7 +111,6 @@ public_server_name = "your_server.tld"
 url = "sqlite://data/cumments.db"
 
 [security]
-identity_salt = "RANDOM_LONG_STRING"
 admin_token = "admin_secret"
 pow_secret = "pow_secret_key"
 pow_difficulty = 4
@@ -185,14 +184,19 @@ Returns a signed challenge string and difficulty.
   Both fields are optional (defaults: page=1, per_page=20).
 
 **`POST /api/sites/{site_id}/posts/{post_slug}/comments`**
-- **Body**: `content`, `nickname`, `email`, `author_fingerprint`, `challenge_response`.
+- **Body**: `content`, `nickname`, `email`, `author_public_key`, `author_signature`, `challenge_response`.
 - Note: `challenge_response` format is `challenge_string|nonce`.
+- `author_public_key` is the visitor's Ed25519 public key (base64url, 32 bytes).
+- `author_signature` signs the canonical message
+  `POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{challenge_prefix}`.
 
 **`PATCH /api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`**
-- **Body**: `content`, `author_fingerprint`, `challenge_response`.
+- **Body**: `content`, `author_public_key`, `author_signature`, `challenge_response`.
+- Signature message: `PATCH\n{site_id}\n{post_slug}\n{comment_id}\n{content}\n{challenge_prefix}`.
 
 **`DELETE /api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`**
-- **Body**: `author_fingerprint`, `challenge_response`.
+- **Body**: `author_public_key`, `author_signature`, `challenge_response`.
+- Signature message: `DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}`.
 
 ### Real-time Push (SSE)
 
@@ -206,12 +210,14 @@ Server-Sent Events for real-time updates.
 
 ## 7. Frontend Integration Guide
 
-### 1. Identity (Fingerprint)
-The frontend generates and stores a random secret token (e.g. `guest_token`) and
-sends it as `author_fingerprint`. The backend **never stores or returns the raw
-token**: it derives a public `visitor_id` (returned in API responses and visible
-in Matrix events) and persists a salt-keyed hash used to authorize edit/delete
-requests.
+### 1. Identity (Ed25519 keypair)
+The frontend generates an Ed25519 keypair with WebCrypto and stores it locally.
+The **public key is the identity**: it is sent as `author_public_key`, returned
+in API responses, and published in Matrix events (`cumments_public_key`).
+Edit/delete requests are authorized by an Ed25519 signature over the canonical
+request message (see the API section), verified against the public key stored
+with the comment. The private key never leaves the browser, so ownership can be
+rebuilt from Matrix events alone.
 
 ### 2. PoW Calculation
 1. Call `GET /api/challenge` to get `prefix` (the signed challenge) and `difficulty`.
@@ -257,7 +263,7 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端，�
 
 **虚拟用户 ID 格式**:
 ```
-@_cumments_{site_id}_{sha256_trunc8(fingerprint)}:{server_name}
+@_cumments_{site_id}_{sha256_trunc8(public_key)}:{server_name}
 ```
 
 ### Logging 模式（本地开发）

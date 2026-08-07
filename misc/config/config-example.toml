@@ -25,11 +25,6 @@ cors_origins = "*"
 url = "sqlite://data/cumments.db"
 
 [security]
-# Identity salt for generating user fingerprints
-# CRITICAL: Changing this will invalidate all existing visitor fingerprints
-# Use a random secret string in production environments
-identity_salt = "${YOUR_IDENTITY_SALT_HERE}"
-
 # Administrator token (reserved for future use)
 admin_token = "${YOUR_ADMIN_TOKEN_HERE}"
 
