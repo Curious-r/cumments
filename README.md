@@ -121,6 +121,14 @@ homeserver. Useful for testing the API and the local read model.
 Interrupted runs resume from persisted per-room cursors. This is the recovery
 half of the architecture: the database can be deleted and rebuilt at any time.
 
+### Backup / Snapshot
+
+`cumments backup --output data/cumments.backup.db` runs a WAL checkpoint and
+writes a consistent single-file SQLite snapshot via `VACUUM INTO`. The
+destination must not already exist. Because SQLite is only a disposable read
+model, snapshots are a convenience; `backfill` remains the authoritative
+recovery path if the read model is lost.
+
 ---
 
 ## 3. Environment Preparation
@@ -326,6 +334,13 @@ Ed25519 签名后落意图队列，reconciler 调用 MatrixDriver 写入 Matrix�
 3. 按 `(origin_server_ts, event_id)` 顺序回放，复用与实时 push 完全相同的幂等投影。
 
 中断的跑批会从持久化的游标处续跑。这是恢复体系的一半：数据库可以随时删除并重建。
+
+### Backup / 快照
+
+`cumments backup --output data/cumments.backup.db` 先执行 WAL checkpoint，
+再用 `VACUUM INTO` 生成一份一致的单文件 SQLite 快照。目标文件必须不存在。
+由于 SQLite 只是可丢弃的读模型，快照属于便利机制；读模型丢失时的权威恢复路径
+仍是 `cumments backfill`。
 
 ## 3. 环境准备
 

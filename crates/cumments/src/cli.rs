@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use rand::RngCore;
 use serde::Serialize;
+use std::path::PathBuf;
 
 /// Generate a complete registration.yaml for the AppService mode.
 #[derive(clap::Args, Debug)]
@@ -29,6 +30,14 @@ pub struct GenerateRegistrationArgs {
 #[derive(clap::Args, Debug)]
 pub struct BackfillArgs {}
 
+/// Create a consistent single-file SQLite backup.
+#[derive(clap::Args, Debug)]
+pub struct BackupArgs {
+    /// Destination SQLite file (must not already exist)
+    #[arg(short, long)]
+    pub output: PathBuf,
+}
+
 /// All CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -38,6 +47,9 @@ pub enum Commands {
     /// Rebuild the read model from Matrix room history
     #[command(name = "backfill")]
     Backfill(BackfillArgs),
+    /// Create a consistent single-file SQLite backup
+    #[command(name = "backup")]
+    Backup(BackupArgs),
 }
 
 /// The registration data model (serialised to YAML).

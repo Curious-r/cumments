@@ -46,6 +46,9 @@ async fn main() -> Result<()> {
             cli::Commands::Backfill(_) => {
                 // Handled later, after the driver and processor are wired up.
             }
+            cli::Commands::Backup(_) => {
+                // Handled after the database is connected.
+            }
         }
     }
 
@@ -66,6 +69,13 @@ async fn main() -> Result<()> {
             .expect("Failed to connect to database."),
     );
     tracing::info!("Database initialized.");
+
+    // Handle backup before any Matrix/driver setup: it only needs SQLite.
+    if let Some(cli::Commands::Backup(args)) = &args.command {
+        db_store.backup_to(&args.output).await?;
+        tracing::info!("Backup written to {}", args.output.display());
+        return Ok(());
+    }
 
     // ─────────────────────────────────────────────────────────────
     // 3. Initialize Domain Services (Brain)
@@ -179,6 +189,7 @@ async fn main() -> Result<()> {
                 );
                 return Ok(());
             }
+            cli::Commands::Backup(_) => unreachable!("handled earlier"),
         }
     }
 

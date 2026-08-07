@@ -10,6 +10,8 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, Set, UpdateMany,
 };
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+use std::path::Path;
 
 use crate::entities::active_enums::IntentStatus;
 
@@ -77,6 +79,44 @@ impl DbStore {
         migration::Migrator::up(&db, None).await?;
         Ok(Self { db })
     }
+
+    /// Create a consistent standalone SQLite snapshot at `destination`.
+    ///
+    /// First runs a WAL checkpoint so uncheckpointed writes are folded into the
+    /// main database file, then uses `VACUUM INTO` to write a single-file copy.
+    /// The destination must not already exist; the backup is a plain read-model
+    /// snapshot and can always be replaced by `cumments backfill`.
+    pub async fn backup_to(&self, destination: &Path) -> Result<()> {
+        if destination.exists() {
+            anyhow::bail!("destination already exists: {}", destination.display());
+        }
+
+        if let Some(parent) = destination.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Fold any WAL frames into the main database before snapshotting.
+        self.db
+            .execute_raw(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA wal_checkpoint(TRUNCATE)".to_owned(),
+            ))
+            .await?;
+
+        // `VACUUM INTO` produces a compact, consistent copy that includes the
+        // current logical contents regardless of journal mode.
+        let sql = format!(
+            "VACUUM INTO '{}'",
+            destination.to_string_lossy().replace('\'', "''")
+        );
+        self.db
+            .execute_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+            .await?;
+
+        Ok(())
+    }
 }
 
 /// Pre-create the SQLite database file when the URL points at a plain file
@@ -123,6 +163,41 @@ mod connect_tests {
         ensure_sqlite_file_exists("sqlite::memory:").expect("memory ok");
         ensure_sqlite_file_exists("sqlite:///tmp/does-not-exist.db?mode=memory").expect("query ok");
         ensure_sqlite_file_exists("postgres://localhost/db").expect("non-sqlite ok");
+    }
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn backup_creates_a_standalone_database() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir();
+        let source = dir.join(format!("cumments-backup-src-{}.db", unique));
+        let destination = dir.join(format!("cumments-backup-dst-{}.db", unique));
+
+        let store = DbStore::connect(&format!("sqlite://{}", source.display()))
+            .await
+            .expect("connect source");
+        store.backup_to(&destination).await.expect("create backup");
+
+        assert!(destination.exists(), "backup file should exist");
+        assert!(
+            destination.metadata().unwrap().len() > 0,
+            "backup should not be empty"
+        );
+
+        // The backup must be a valid Cumments database (migrations runnable).
+        DbStore::connect(&format!("sqlite://{}", destination.display()))
+            .await
+            .expect("open backup as a Cumments database");
+
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_file(&destination);
     }
 }
 
