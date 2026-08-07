@@ -245,7 +245,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 status, body
             );
             Err(anyhow!(
-                "Site space exists on Matrix but not in local DB. Waiting for Sync discovery..."
+                "Failed to create site space ({}): alias may already be in use. \
+                 Resolve the existing Space or use a different site_id.",
+                status
             ))
         }
     }

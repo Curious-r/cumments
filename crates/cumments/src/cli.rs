@@ -50,8 +50,7 @@ struct AppServiceRegistration {
 #[derive(Serialize)]
 struct Namespaces {
     users: Vec<NamespaceRule>,
-    #[serde(rename = "aliases")]
-    _aliases: Vec<NamespaceRule>,
+    aliases: Vec<NamespaceRule>,
     rooms: Vec<NamespaceRule>,
 }
 
@@ -93,7 +92,10 @@ pub fn handle_generate_registration(args: &GenerateRegistrationArgs) -> Result<(
                 exclusive: true,
                 regex: format!("@_cumments_.*:{}", regex_escape(&args.server_name)),
             }],
-            _aliases: vec![],
+            aliases: vec![NamespaceRule {
+                exclusive: true,
+                regex: format!("#cumments_.*:{}", regex_escape(&args.server_name)),
+            }],
             rooms: vec![],
         },
     };
