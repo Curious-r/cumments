@@ -433,6 +433,17 @@ impl RegistryStore for DbStore {
         Ok(room.map(|r| r.is_active))
     }
 
+    async fn get_registered_room_identity(
+        &self,
+        room_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        let room = room_registry::Entity::find_by_id(room_id.to_owned())
+            .one(&self.db)
+            .await?;
+
+        Ok(room.map(|r| (r.site_id, r.post_slug)))
+    }
+
     async fn register_room(
         &self,
         room_id: &str,

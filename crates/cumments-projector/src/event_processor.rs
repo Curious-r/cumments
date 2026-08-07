@@ -172,6 +172,21 @@ impl EventProcessor {
             .map(|s| s.id)
     }
 
+    /// Resolve the Cumments identity of a room from the local registry.
+    ///
+    /// This is the AppService-mode counterpart of reading room state metadata:
+    /// the reconciler writes the room mapping back to the registry when it
+    /// creates or adopts a room, so incoming push events can be attributed
+    /// without any extra homeserver API call.
+    pub async fn resolve_room_identity(&self, room_id: &str) -> Option<RoomIdentity> {
+        self.registry_store
+            .get_registered_room_identity(room_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|(site_id, post_slug)| RoomIdentity { site_id, post_slug })
+    }
+
     /// Process a room message (new comment or edit).
     #[instrument(skip(self))]
     pub async fn process_room_message(&self, event: ParsedRoomMessage) {
@@ -196,11 +211,6 @@ impl EventProcessor {
                 // Attempt just-in-time registration if we have its identity.
                 if let Some(ref identity) = event.room_identity {
                     let _ = self
-                        .site_store
-                        .ensure_site_exists(&identity.site_id, &event.room_id)
-                        .await;
-
-                    let _ = self
                         .registry_store
                         .register_room(
                             &event.room_id,
@@ -208,6 +218,10 @@ impl EventProcessor {
                             &identity.post_slug.clone().into(),
                         )
                         .await;
+                    // Note: we deliberately do NOT call `ensure_site_exists`
+                    // here – that would map the comment room ID as the site's
+                    // Matrix Space. Space mappings are established by the
+                    // space-child discovery flow / `SiteService::ensure_space`.
                     info!(
                         "Just-in-time registered new room {} for site {}",
                         event.room_id, identity.site_id

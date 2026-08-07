@@ -86,6 +86,14 @@ pub trait RegistryStore: Send + Sync {
     /// Checks if a room is active in the registry.
     async fn is_room_active(&self, room_id: &str) -> Result<Option<bool>>;
 
+    /// Looks up the Cumments identity (`(site_id, post_slug)`) registered for a room.
+    ///
+    /// Unlike [`Self::get_registered_room`] this is a reverse lookup by room ID,
+    /// used by the projector to resolve the context of incoming Matrix events
+    /// without depending on room state metadata.
+    async fn get_registered_room_identity(&self, room_id: &str)
+    -> Result<Option<(String, String)>>;
+
     /// Registers or reactivates a room in the registry.
     async fn register_room(
         &self,

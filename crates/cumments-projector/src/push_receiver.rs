@@ -8,7 +8,6 @@
 
 use crate::event_processor::{
     EventProcessor, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
-    parse_room_identity,
 };
 use axum::{
     Json,
@@ -122,12 +121,14 @@ async fn process_single_event(
 
     match event_type {
         "m.room.message" => {
-            if let Some(parsed) = parse_push_message(event) {
+            if let Some(mut parsed) = parse_push_message(event) {
+                parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await;
                 processor.process_room_message(parsed).await;
             }
         }
         "m.room.redaction" => {
-            if let Some(parsed) = parse_push_redaction(event) {
+            if let Some(mut parsed) = parse_push_redaction(event) {
+                parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await;
                 processor.process_room_redaction(parsed).await;
             }
         }
@@ -135,7 +136,9 @@ async fn process_single_event(
             // Resolve the site_id from the space's room_id in local DB
             if let Some(ref space_room_id) = event.room_id {
                 let site_id = processor.get_site_id_by_space_id(space_room_id).await;
-                if let Some(parsed) = parse_push_space_child(event, site_id).await {
+                if let Some(mut parsed) = parse_push_space_child(event, site_id).await {
+                    parsed.child_room_identity =
+                        processor.resolve_room_identity(&parsed.child_room_id).await;
                     processor.process_space_child(parsed).await;
                 }
             }
@@ -198,9 +201,9 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         })
     });
 
-    // Resolve room identity from metadata if available
-    let metadata_json = content.get("im.cumments.metadata").and_then(|v| v.as_str());
-    let room_identity = parse_room_identity(metadata_json, None);
+    // Room identity is resolved by the caller from the local registry:
+    // push events carry only the event content, not room state metadata.
+    let room_identity = None;
 
     let origin_server_ts = event.origin_server_ts.unwrap_or(0);
 
@@ -229,12 +232,8 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
             .and_then(|c| c.get("redacts").and_then(|v| v.as_str().map(String::from)))
     });
 
-    // Resolve room identity
-    let metadata_json = event
-        .content
-        .as_ref()
-        .and_then(|c| c.get("im.cumments.metadata").and_then(|v| v.as_str()));
-    let room_identity = parse_room_identity(metadata_json, None);
+    // Room identity is resolved by the caller from the local registry.
+    let room_identity = None;
 
     Some(ParsedRoomRedaction {
         room_id: room_id.clone(),
