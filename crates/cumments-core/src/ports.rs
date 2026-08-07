@@ -164,6 +164,10 @@ pub trait MatrixDriver: Send + Sync {
         nickname: &str,
         fingerprint: &str,
         site_id: &SiteId,
+        // Correlation hint: the intent queue row ID, published in the event so
+        // the projector can close the loop even if the push arrives before the
+        // reconciler's write-back.
+        intent_id: Option<i64>,
     ) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.

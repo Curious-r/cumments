@@ -125,6 +125,7 @@ impl Reconciler {
                         &intent.nickname,
                         &intent.author_fingerprint,
                         &intent.site_id,
+                        Some(id),
                     )
                     .await?;
 

@@ -42,12 +42,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         nickname: &str,
         fingerprint: &str,
         _site_id: &SiteId,
+        intent_id: Option<i64>,
     ) -> Result<String> {
         info!(
-            "LOGGING: Post message to room={}. Author={} (visitor={}): {}",
+            "LOGGING: Post message to room={}. Author={} (visitor={}, intent={:?}): {}",
             room_id,
             nickname,
             derive_visitor_id(fingerprint),
+            intent_id,
             content
         );
         Ok("log_event_id".to_string())

@@ -385,6 +385,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // itself is never sent to Matrix.
         fingerprint: &str,
         site_id: &SiteId,
+        intent_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user via the store (includes site_id)
         let virtual_user = self.resolve_virtual_user(fingerprint, site_id).await?;
@@ -400,6 +401,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
             "format": "org.matrix.custom.html",
             "formatted_body": formatted_body,
             "cumments_visitor_id": derive_visitor_id(fingerprint),
+            // Structured fields so the projector can store the pure content
+            // and nickname instead of parsing them back out of the body.
+            "cumments_content": content,
+            "cumments_nickname": nickname,
+            "cumments_intent_id": intent_id,
         });
 
         let txn_id = self.txn_id();
@@ -457,6 +463,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "format": "org.matrix.custom.html",
                 "formatted_body": format!("<strong>{}</strong>: {}", nickname, new_content),
                 "cumments_visitor_id": derive_visitor_id(fingerprint),
+                "cumments_content": new_content,
+                "cumments_nickname": nickname,
             },
             "m.relates_to": {
                 "rel_type": "m.replace",
