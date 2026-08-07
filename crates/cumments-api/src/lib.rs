@@ -10,7 +10,7 @@ use axum::{
 };
 use cumments_core::{
     events::ProjectorEvent,
-    identity::derive_token_hash,
+    identity::{signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
     models::{Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
@@ -36,6 +36,7 @@ pub struct ErrorResponse {
 
 pub enum AppError {
     InvalidPoW,
+    InvalidSignature,
     Validation(validator::ValidationErrors),
     NotFound(String),
     MethodNotAllowed,
@@ -51,6 +52,12 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 "Invalid Proof-of-Work response.".to_string(),
                 "INVALID_POW",
+                None,
+            ),
+            AppError::InvalidSignature => (
+                StatusCode::FORBIDDEN,
+                "Invalid author signature.".to_string(),
+                "INVALID_SIGNATURE",
                 None,
             ),
             AppError::Validation(errs) => (
@@ -99,8 +106,6 @@ pub struct ApiState {
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub reconciler_notify: Arc<Notify>,
-    /// Server-side secret salt used to derive owner verifiers from visitor tokens.
-    pub identity_salt: String,
 }
 
 /// The query parameters for pagination (sent as JSON body for QUERY method).
@@ -142,8 +147,10 @@ pub struct PostCommentRequest {
     pub nickname: String,
     #[validate(email)]
     pub email: Option<String>,
-    #[validate(length(min = 8, max = 128))]
-    pub author_fingerprint: String,
+    /// Ed25519 public key of the author (base64url, 32 bytes raw).
+    pub author_public_key: String,
+    /// Ed25519 signature over the canonical POST message.
+    pub author_signature: String,
     pub reply_to: Option<String>,
     pub challenge_response: String,
 }
@@ -151,8 +158,8 @@ pub struct PostCommentRequest {
 /// Request DTO for deleting a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct DeleteCommentRequest {
-    #[validate(length(min = 8, max = 128))]
-    pub author_fingerprint: String,
+    pub author_public_key: String,
+    pub author_signature: String,
     pub challenge_response: String,
 }
 
@@ -161,8 +168,8 @@ pub struct DeleteCommentRequest {
 pub struct UpdateCommentRequest {
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
-    #[validate(length(min = 8, max = 128))]
-    pub author_fingerprint: String,
+    pub author_public_key: String,
+    pub author_signature: String,
     pub challenge_response: String,
 }
 
@@ -173,6 +180,11 @@ static QUERY_METHOD: std::sync::LazyLock<Method> =
 /// The Accept-Query response header (RFC 10008, Section 3).
 static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
+
+/// Extract the signed challenge prefix from a `challenge|nonce` response.
+fn challenge_prefix(challenge_response: &str) -> &str {
+    challenge_response.split('|').next().unwrap_or("")
+}
 
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState) -> Router {
@@ -302,13 +314,23 @@ async fn post_comment_handler(
         return Err(AppError::InvalidPoW);
     }
 
+    // 2b. Verify the author's Ed25519 signature over the canonical message.
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&[
+        "POST",
+        &site_id,
+        &post_slug,
+        &req.content,
+        &req.nickname,
+        challenge,
+    ]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
     // 3. Create the business intent
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-
-    // 3b. Derive the owner verifier from the visitor token. The raw token is
-    // never stored or exposed; only this salt-keyed hash is persisted.
-    let author_token_hash = derive_token_hash(&state.identity_salt, &req.author_fingerprint);
 
     let intent = PostCommentIntent {
         site_id: site_id_val,
@@ -316,16 +338,13 @@ async fn post_comment_handler(
         content: req.content,
         nickname: req.nickname,
         email: req.email,
-        author_fingerprint: req.author_fingerprint,
+        author_public_key: req.author_public_key,
+        author_signature: req.author_signature,
         reply_to: req.reply_to,
     };
 
     // 4. Save the intent for the reconciler
-    match state
-        .store
-        .save_post_intent(&intent, Some(&author_token_hash))
-        .await
-    {
+    match state.store.save_post_intent(&intent).await {
         Ok(_) => {
             tracing::info!("Successfully saved a new comment intent.");
             state.reconciler_notify.notify_one();
@@ -356,15 +375,21 @@ async fn delete_comment_handler(
         return Err(AppError::InvalidPoW);
     }
 
-    // 2. Authorization: verify the visitor token against the stored owner hash
+    // 2b. Verify the author's Ed25519 signature.
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&["DELETE", &site_id, &post_slug, &comment_id, challenge]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    // 2c. Authorization: the presented public key must be the comment's owner.
     match state.store.get_comment(&comment_id).await {
         Ok(Some(comment)) => {
             if comment.site_id != site_id || comment.post_slug != post_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
-            let presented = derive_token_hash(&state.identity_salt, &req.author_fingerprint);
-            match state.store.get_comment_author_token_hash(&comment_id).await {
-                Ok(Some(expected)) if expected == presented => {}
+            match state.store.get_comment_author_public_key(&comment_id).await {
+                Ok(Some(expected)) if expected == req.author_public_key => {}
                 Ok(Some(_)) => {
                     return Err(AppError::Unauthorized(
                         "You are not authorized to delete this comment.".to_string(),
@@ -404,7 +429,8 @@ async fn delete_comment_handler(
         site_id: site_id_val,
         post_slug: post_slug_val,
         event_id: comment_id,
-        author_fingerprint: req.author_fingerprint,
+        author_public_key: req.author_public_key,
+        author_signature: req.author_signature,
     };
 
     // 4. Save the intent for the reconciler
@@ -440,16 +466,29 @@ async fn update_comment_handler(
         return Err(AppError::InvalidPoW);
     }
 
-    // 3. Authorization: verify the visitor token against the stored owner hash,
-    // and confirm the comment actually belongs to the site/post in the path.
+    // 3b. Verify the author's Ed25519 signature.
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&[
+        "PATCH",
+        &site_id,
+        &post_slug,
+        &comment_id,
+        &req.content,
+        challenge,
+    ]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    // 3c. Authorization: the presented public key must be the comment's owner,
+    // and the comment must belong to the site/post in the path.
     match state.store.get_comment(&comment_id).await {
         Ok(Some(comment)) => {
             if comment.site_id != site_id || comment.post_slug != post_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
-            let presented = derive_token_hash(&state.identity_salt, &req.author_fingerprint);
-            match state.store.get_comment_author_token_hash(&comment_id).await {
-                Ok(Some(expected)) if expected == presented => {}
+            match state.store.get_comment_author_public_key(&comment_id).await {
+                Ok(Some(expected)) if expected == req.author_public_key => {}
                 Ok(Some(_)) => {
                     return Err(AppError::Unauthorized(
                         "You are not authorized to edit this comment.".to_string(),
@@ -490,7 +529,8 @@ async fn update_comment_handler(
         post_slug: post_slug_val,
         event_id: comment_id,
         content: req.content,
-        author_fingerprint: req.author_fingerprint,
+        author_public_key: req.author_public_key,
+        author_signature: req.author_signature,
     };
 
     // 5. Save the intent for the reconciler

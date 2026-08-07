@@ -194,9 +194,20 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     // Extract message body
     let body = content.get("body").and_then(|v| v.as_str())?;
 
-    // Extract the public visitor id (never the raw token). Its presence also
-    // marks this as a Cumments-generated message for legacy body parsing.
-    let visitor_id = content.get("cumments_visitor_id").and_then(|v| v.as_str());
+    // Extract the public identity fields. The visitor id's presence marks this
+    // as a Cumments-generated message for legacy body parsing.
+    let visitor_id = content
+        .get("cumments_visitor_id")
+        .or_else(|| content.get("cumments_public_key"))
+        .and_then(|v| v.as_str());
+    let author_public_key = content
+        .get("cumments_public_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let author_signature = content
+        .get("cumments_signature")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let structured_content = content.get("cumments_content").and_then(|v| v.as_str());
     let structured_nickname = content.get("cumments_nickname").and_then(|v| v.as_str());
 
@@ -237,7 +248,8 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         author_display_name: structured_nickname
             .map(|s| s.to_string())
             .or_else(|| extract_author_display_name(body)),
-        fingerprint: visitor_id.map(|s| s.to_string()),
+        author_public_key,
+        author_signature,
         intent_id: content.get("cumments_intent_id").and_then(|v| v.as_i64()),
         origin_server_ts,
         relates_to,

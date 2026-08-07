@@ -94,7 +94,8 @@ pub struct Comment {
     pub site_id: String,
     pub post_slug: String,
     pub author_nickname: Option<String>,
-    pub author_fingerprint: Option<String>,
+    /// Public Ed25519 key of the author (base64url); safe to expose.
+    pub author_public_key: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
 }

@@ -36,8 +36,10 @@ pub struct ParsedRoomMessage {
     pub content: String,
     /// The resolved display name of the author, if available.
     pub author_display_name: Option<String>,
-    /// The Cumments fingerprint embedded in the event, if any.
-    pub fingerprint: Option<String>,
+    /// The author's Ed25519 public key embedded in the event, if any.
+    pub author_public_key: Option<String>,
+    /// The author's Ed25519 signature embedded in the event, if any.
+    pub author_signature: Option<String>,
     /// Correlation hint: the intent queue row ID that produced this event,
     /// if the message was sent by Cumments.
     pub intent_id: Option<i64>,
@@ -303,30 +305,9 @@ impl EventProcessor {
             site_id: site_id.clone(),
             post_slug: post_slug.clone(),
             author_nickname: event.author_display_name.clone(),
-            author_fingerprint: event.fingerprint.clone(),
+            author_public_key: event.author_public_key.clone(),
             content: event.content.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts).unwrap(),
-        };
-
-        // Closed-loop ownership: if this event was sent by Cumments itself,
-        // carry the token hash recorded with the intent into the read model.
-        // External Matrix messages have no token hash (their owners cannot
-        // be verified via the API until an ownership mechanism exists).
-        // Same ordering concern: resolve the owner verifier by correlation ID
-        // when available, otherwise by event ID.
-        let author_token_hash = match event.intent_id {
-            Some(id) => self
-                .intent_store
-                .get_post_intent_token_hash_by_id(id)
-                .await
-                .ok()
-                .flatten(),
-            None => self
-                .intent_store
-                .get_post_intent_token_hash_by_event_id(&event.event_id)
-                .await
-                .ok()
-                .flatten(),
         };
 
         match self
@@ -336,7 +317,6 @@ impl EventProcessor {
                 &event.room_id,
                 &site_id.clone().into(),
                 &post_slug.clone().into(),
-                author_token_hash.as_deref(),
             )
             .await
         {

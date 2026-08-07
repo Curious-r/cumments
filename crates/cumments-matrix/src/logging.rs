@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
-    identity::derive_visitor_id,
+    identity::derive_visitor_id_from_public_key,
     models::{PostSlug, SiteId},
     ports::MatrixDriver,
 };
@@ -35,22 +35,22 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(format!("log_space_{}", site_id.as_str()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn post_message(
         &self,
         room_id: &str,
         content: &str,
         nickname: &str,
-        fingerprint: &str,
+        author_public_key: &str,
+        _author_signature: &str,
         _site_id: &SiteId,
         intent_id: Option<i64>,
     ) -> Result<String> {
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+            .unwrap_or_else(|| "invalid".to_string());
         info!(
             "LOGGING: Post message to room={}. Author={} (visitor={}, intent={:?}): {}",
-            room_id,
-            nickname,
-            derive_visitor_id(fingerprint),
-            intent_id,
-            content
+            room_id, nickname, visitor_id, intent_id, content
         );
         Ok("log_event_id".to_string())
     }
@@ -61,16 +61,15 @@ impl MatrixDriver for LoggingMatrixDriver {
         event_id: &str,
         new_content: &str,
         nickname: &str,
-        fingerprint: &str,
+        author_public_key: &str,
+        _author_signature: &str,
         _site_id: &SiteId,
     ) -> Result<String> {
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+            .unwrap_or_else(|| "invalid".to_string());
         info!(
             "LOGGING: Update message {} in room={}. Author={} (visitor={}): {}",
-            event_id,
-            room_id,
-            nickname,
-            derive_visitor_id(fingerprint),
-            new_content
+            event_id, room_id, nickname, visitor_id, new_content
         );
         Ok(format!("log_update_{}", event_id))
     }

@@ -6,11 +6,7 @@ use async_trait::async_trait;
 /// The port for all intent storage operations.
 #[async_trait]
 pub trait IntentStore: Send + Sync {
-    async fn save_post_intent(
-        &self,
-        intent: &PostCommentIntent,
-        author_token_hash: Option<&str>,
-    ) -> Result<()>;
+    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()>;
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()>;
 
@@ -45,16 +41,6 @@ pub trait IntentStore: Send + Sync {
 
     /// Transitions a post intent to 'completed' when the projector sees the event.
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
-
-    /// Returns the stored author token hash for a post intent by its queue ID.
-    async fn get_post_intent_token_hash_by_id(&self, id: i64) -> Result<Option<String>>;
-
-    /// Returns the stored author token hash for a post intent, if any,
-    /// looked up by the Matrix event ID recorded at send time.
-    async fn get_post_intent_token_hash_by_event_id(
-        &self,
-        event_id: &str,
-    ) -> Result<Option<String>>;
 
     /// Post intents stuck in `waiting_for_sync` since before `cutoff`,
     /// as `(id, matrix_event_id, room_id)`.
@@ -110,7 +96,6 @@ pub trait CommentStore: Send + Sync {
         room_id: &str,
         site_id: &SiteId,
         post_slug: &PostSlug,
-        author_token_hash: Option<&str>,
     ) -> Result<()>;
 
     /// Updates only the content of a comment.
@@ -122,10 +107,9 @@ pub trait CommentStore: Send + Sync {
     /// Gets the author nickname for a specific event.
     async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>>;
 
-    /// Returns the stored owner verifier (salt-keyed token hash) for a comment,
-    /// if any. Used to authorize edit/delete requests without exposing the
-    /// raw visitor token.
-    async fn get_comment_author_token_hash(&self, event_id: &str) -> Result<Option<String>>;
+    /// Returns the stored author public key for a comment, if any. Used to
+    /// authorize edit/delete requests by comparing the presented key.
+    async fn get_comment_author_public_key(&self, event_id: &str) -> Result<Option<String>>;
 }
 
 /// Port for managing the local room registry cache (Mirror of Space relationships).
@@ -178,6 +162,7 @@ pub trait SiteStore: Send + Sync {
 /// Defines the atomic actions that can be performed on the Matrix network.
 /// This is the "Hands" of the system.
 #[async_trait]
+#[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
 pub trait MatrixDriver: Send + Sync {
     /// Ensures a room exists for a specific post and is linked to a space.
     /// Uses candidate_room_id as a hint for O(1) discovery if provided.
@@ -200,7 +185,8 @@ pub trait MatrixDriver: Send + Sync {
         room_id: &str,
         content: &str,
         nickname: &str,
-        fingerprint: &str,
+        author_public_key: &str,
+        author_signature: &str,
         site_id: &SiteId,
         // Correlation hint: the intent queue row ID, published in the event so
         // the projector can close the loop even if the push arrives before the
@@ -215,7 +201,8 @@ pub trait MatrixDriver: Send + Sync {
         event_id: &str,
         new_content: &str,
         nickname: &str,
-        fingerprint: &str,
+        author_public_key: &str,
+        author_signature: &str,
         site_id: &SiteId,
     ) -> Result<String>;
 
@@ -231,13 +218,13 @@ pub trait MatrixDriver: Send + Sync {
 /// Maps Cumments visitor fingerprints to stable Matrix virtual user IDs.
 #[async_trait]
 pub trait VirtualUserStore: Send + Sync {
-    /// Returns the virtual Matrix user ID for the given fingerprint and site.
+    /// Returns the virtual Matrix user ID for the given author public key and site.
     /// Creates one deterministically if it doesn't exist yet.
     ///
-    /// Format: `@_cumments_{site_id}_{sha256_trunc8(fingerprint)}:{server_name}`
+    /// Format: `@_cumments_{site_id}_{sha256_trunc8(public_key)}:{server_name}`
     async fn get_or_create_virtual_user(
         &self,
-        fingerprint: &str,
+        author_public_key: &str,
         site_id: &SiteId,
         server_name: &str,
     ) -> Result<String>;

@@ -26,6 +26,7 @@ chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.57", features = ["derive"] }
 config = { version = "0.15.19", features = ["toml"] }
 dotenvy = "0.15.7"
+ed25519-dalek = "2"
 futures = "0.3.31"
 hex = "0.4.3"
 hmac = "0.12.1"

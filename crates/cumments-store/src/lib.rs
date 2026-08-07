@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::identity::derive_visitor_id;
+use cumments_core::identity::derive_visitor_id_from_public_key;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{Comment, PostSlug, Site, SiteId};
 use cumments_core::ports::{CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore};
@@ -157,18 +157,14 @@ impl DbStore {
 
 #[async_trait]
 impl IntentStore for DbStore {
-    async fn save_post_intent(
-        &self,
-        intent: &PostCommentIntent,
-        author_token_hash: Option<&str>,
-    ) -> Result<()> {
+    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
         let payload = serde_json::to_string(intent)?;
 
         let active_model = intent_queue_post_comment::ActiveModel {
             payload: Set(payload),
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
-            author_token_hash: Set(author_token_hash.map(|s| s.to_owned())),
+            author_public_key: Set(Some(intent.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
@@ -203,7 +199,8 @@ impl IntentStore for DbStore {
             post_slug: Set(intent.post_slug.as_str().to_owned()),
             event_id: Set(intent.event_id.clone()),
             content: Set(intent.content.clone()),
-            author_fingerprint: Set(intent.author_fingerprint.clone()),
+            author_public_key: Set(Some(intent.author_public_key.clone())),
+            author_signature: Set(Some(intent.author_signature.clone())),
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
@@ -281,7 +278,8 @@ impl IntentStore for DbStore {
                 post_slug: m.post_slug.into(),
                 event_id: m.event_id,
                 content: m.content,
-                author_fingerprint: m.author_fingerprint,
+                author_public_key: m.author_public_key.unwrap_or_default(),
+                author_signature: m.author_signature.unwrap_or_default(),
             };
             intents.push((m.id, intent));
         }
@@ -552,30 +550,6 @@ impl IntentStore for DbStore {
         .await
     }
 
-    async fn get_post_intent_token_hash_by_id(&self, id: i64) -> Result<Option<String>> {
-        let model = intent_queue_post_comment::Entity::find_by_id(id)
-            .one(&self.db)
-            .await?;
-
-        Ok(model.and_then(|m| m.author_token_hash))
-    }
-
-    async fn get_post_intent_token_hash_by_event_id(
-        &self,
-        event_id: &str,
-    ) -> Result<Option<String>> {
-        let model = intent_queue_post_comment::Entity::find()
-            .filter(
-                intent_queue_post_comment::COLUMN
-                    .matrix_event_id
-                    .eq(event_id),
-            )
-            .one(&self.db)
-            .await?;
-
-        Ok(model.and_then(|m| m.author_token_hash))
-    }
-
     async fn get_stuck_post_intents(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
@@ -729,7 +703,6 @@ impl CommentStore for DbStore {
         room_id: &str,
         _site_id: &SiteId,
         _post_slug: &PostSlug,
-        author_token_hash: Option<&str>,
     ) -> Result<()> {
         let active_model = comments::ActiveModel {
             event_id: Set(comment.event_id.clone()),
@@ -738,8 +711,7 @@ impl CommentStore for DbStore {
             post_slug: Set(comment.post_slug.clone()),
             author_mxid: Set("".to_string()), // Default value if not provided
             author_nickname: Set(comment.author_nickname.clone()),
-            author_fingerprint: Set(comment.author_fingerprint.clone()),
-            author_token_hash: Set(author_token_hash.map(|s| s.to_owned())),
+            author_public_key: Set(comment.author_public_key.clone()),
             content: Set(comment.content.clone()),
             timestamp: Set(comment.timestamp),
             created_at: Set(chrono::Utc::now()),
@@ -798,13 +770,13 @@ impl CommentStore for DbStore {
         Ok(model.and_then(|m| m.author_nickname))
     }
 
-    async fn get_comment_author_token_hash(&self, event_id: &str) -> Result<Option<String>> {
+    async fn get_comment_author_public_key(&self, event_id: &str) -> Result<Option<String>> {
         let model = comments::Entity::find()
             .filter(comments::COLUMN.event_id.eq(event_id))
             .one(&self.db)
             .await?;
 
-        Ok(model.and_then(|m| m.author_token_hash))
+        Ok(model.and_then(|m| m.author_public_key))
     }
 }
 
@@ -957,7 +929,7 @@ impl From<comments::Model> for Comment {
             site_id: model.site_id,
             post_slug: model.post_slug,
             author_nickname: model.author_nickname,
-            author_fingerprint: model.author_fingerprint,
+            author_public_key: model.author_public_key,
             content: model.content,
             timestamp: model.timestamp,
         }
@@ -979,12 +951,13 @@ impl From<sites::Model> for Site {
 impl VirtualUserStore for DbStore {
     async fn get_or_create_virtual_user(
         &self,
-        fingerprint: &str,
+        author_public_key: &str,
         site_id: &SiteId,
         server_name: &str,
     ) -> Result<String> {
         // 1. Compute the deterministic virtual user ID
-        let visitor_id = derive_visitor_id(fingerprint);
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+            .ok_or_else(|| anyhow::anyhow!("invalid author public key"))?;
         let virtual_user_id = format!(
             "@_cumments_{}_{}:{}",
             site_id.as_str(),
@@ -994,7 +967,7 @@ impl VirtualUserStore for DbStore {
 
         // 2. Try to insert – on conflict (fingerprint + site_id already exists), do nothing
         let active_model = virtual_users::ActiveModel {
-            fingerprint: Set(fingerprint.to_owned()),
+            fingerprint: Set(author_public_key.to_owned()),
             site_id: Set(site_id.as_str().to_owned()),
             virtual_user_id: Set(virtual_user_id.clone()),
             server_name: Set(server_name.to_owned()),

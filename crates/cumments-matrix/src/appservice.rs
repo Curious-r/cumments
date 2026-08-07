@@ -4,7 +4,7 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::{
-    identity::derive_visitor_id,
+    identity::derive_visitor_id_from_public_key,
     models::{PostSlug, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
 };
@@ -115,10 +115,14 @@ impl AppServiceMatrixDriver {
         req
     }
 
-    /// Resolve the virtual user ID for a given fingerprint.
-    async fn resolve_virtual_user(&self, fingerprint: &str, site_id: &SiteId) -> Result<String> {
+    /// Resolve the virtual user ID for a given author public key.
+    async fn resolve_virtual_user(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<String> {
         self.virtual_user_store
-            .get_or_create_virtual_user(fingerprint, site_id, &self.server_name)
+            .get_or_create_virtual_user(author_public_key, site_id, &self.server_name)
             .await
     }
 
@@ -509,20 +513,25 @@ impl MatrixDriver for AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
+    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
     async fn post_message(
         &self,
         room_id: &str,
         content: &str,
         nickname: &str,
-        // `fingerprint` is the visitor's private token. It is used only to
-        // derive the public visitor_id published in the event; the token
-        // itself is never sent to Matrix.
-        fingerprint: &str,
+        // Public key and signature are published in the event so ownership
+        // stays verifiable from Matrix alone.
+        author_public_key: &str,
+        author_signature: &str,
         site_id: &SiteId,
         intent_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user via the store (includes site_id)
-        let virtual_user = self.resolve_virtual_user(fingerprint, site_id).await?;
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+            .ok_or_else(|| anyhow!("invalid author public key"))?;
 
         // 2. Ensure the virtual user is in the room (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
@@ -534,7 +543,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
             "body": format!("**{}**: {}", nickname, content),
             "format": "org.matrix.custom.html",
             "formatted_body": formatted_body,
-            "cumments_visitor_id": derive_visitor_id(fingerprint),
+            "cumments_visitor_id": visitor_id,
+            "cumments_public_key": author_public_key,
+            "cumments_signature": author_signature,
             // Structured fields so the projector can store the pure content
             // and nickname instead of parsing them back out of the body.
             "cumments_content": content,
@@ -575,13 +586,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
         event_id: &str,
         new_content: &str,
         nickname: &str,
-        // `fingerprint` is the visitor's private token; only the derived
-        // visitor_id is published in the event content.
-        fingerprint: &str,
+        author_public_key: &str,
+        author_signature: &str,
         site_id: &SiteId,
     ) -> Result<String> {
         // 1. Resolve virtual user (includes site_id)
-        let virtual_user = self.resolve_virtual_user(fingerprint, site_id).await?;
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+            .ok_or_else(|| anyhow!("invalid author public key"))?;
 
         // 2. Ensure joined (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
@@ -596,7 +610,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "body": formatted_content,
                 "format": "org.matrix.custom.html",
                 "formatted_body": format!("<strong>{}</strong>: {}", nickname, new_content),
-                "cumments_visitor_id": derive_visitor_id(fingerprint),
+                "cumments_visitor_id": visitor_id,
+                "cumments_public_key": author_public_key,
+                "cumments_signature": author_signature,
                 "cumments_content": new_content,
                 "cumments_nickname": nickname,
             },

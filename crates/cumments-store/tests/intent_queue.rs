@@ -13,7 +13,8 @@ fn post_intent() -> PostCommentIntent {
         content: "hello".to_string(),
         nickname: "Alice".to_string(),
         email: None,
-        author_fingerprint: "token123456".to_string(),
+        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
+        author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
         reply_to: None,
     }
 }
@@ -38,7 +39,7 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
         .expect("connect in-memory db");
 
     store
-        .save_post_intent(&post_intent(), Some("hash"))
+        .save_post_intent(&post_intent())
         .await
         .expect("save intent");
     let pending = store.get_pending_post_intents().await.expect("pending");
@@ -93,7 +94,7 @@ async fn failure_records_schedule_retry_then_dead_letters() {
         .expect("connect in-memory db");
 
     store
-        .save_post_intent(&post_intent(), Some("hash"))
+        .save_post_intent(&post_intent())
         .await
         .expect("save intent");
     let pending = store.get_pending_post_intents().await.expect("pending");

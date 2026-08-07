@@ -23,7 +23,6 @@ pub struct Database {
 
 #[derive(Debug, Deserialize)]
 pub struct Security {
-    pub identity_salt: String,
     pub admin_token: String,
     pub pow_secret: String,
     pub pow_difficulty: u32,

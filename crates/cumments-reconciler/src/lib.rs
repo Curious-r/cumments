@@ -128,7 +128,8 @@ impl Reconciler {
                         &room_id,
                         &intent.content,
                         &intent.nickname,
-                        &intent.author_fingerprint,
+                        &intent.author_public_key,
+                        &intent.author_signature,
                         &intent.site_id,
                         Some(id),
                     )
@@ -276,7 +277,8 @@ impl Reconciler {
                         &intent.event_id,
                         &intent.content,
                         &nickname,
-                        &intent.author_fingerprint,
+                        &intent.author_public_key,
+                        &intent.author_signature,
                         &intent.site_id,
                     )
                     .await?;

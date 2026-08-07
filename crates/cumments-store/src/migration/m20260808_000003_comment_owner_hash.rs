@@ -15,7 +15,7 @@ impl MigrationTrait for Migration {
                     Table::alter()
                         .table(comments::Entity)
                         .add_column(
-                            ColumnDef::new(comments::Column::AuthorTokenHash)
+                            ColumnDef::new(Alias::new("author_token_hash"))
                                 .string()
                                 .null(),
                         )
@@ -30,7 +30,7 @@ impl MigrationTrait for Migration {
                     Table::alter()
                         .table(intent_queue_post_comment::Entity)
                         .add_column(
-                            ColumnDef::new(intent_queue_post_comment::Column::AuthorTokenHash)
+                            ColumnDef::new(Alias::new("author_token_hash"))
                                 .string()
                                 .null(),
                         )
@@ -48,7 +48,7 @@ impl MigrationTrait for Migration {
                 .alter_table(
                     Table::alter()
                         .table(comments::Entity)
-                        .drop_column(comments::Column::AuthorTokenHash)
+                        .drop_column(Alias::new("author_token_hash"))
                         .to_owned(),
                 )
                 .await?;
@@ -59,7 +59,7 @@ impl MigrationTrait for Migration {
                 .alter_table(
                     Table::alter()
                         .table(intent_queue_post_comment::Entity)
-                        .drop_column(intent_queue_post_comment::Column::AuthorTokenHash)
+                        .drop_column(Alias::new("author_token_hash"))
                         .to_owned(),
                 )
                 .await?;

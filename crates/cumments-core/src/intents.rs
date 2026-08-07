@@ -22,8 +22,11 @@ pub struct PostCommentIntent {
     pub nickname: String,
     pub email: Option<String>, // Optional, maybe for gravatar-like features later
 
-    /// A stable fingerprint identifying the guest user, derived from the `guest_token`.
-    pub author_fingerprint: String,
+    /// Ed25519 public key identifying the author (base64url).
+    /// Ownership is publicly verifiable from Matrix events.
+    pub author_public_key: String,
+    /// Ed25519 signature over the canonical request message.
+    pub author_signature: String,
 
     /// If this comment is a reply, this field holds the ID of the parent comment.
     pub reply_to: Option<String>,
@@ -39,8 +42,10 @@ pub struct DeleteCommentIntent {
     pub post_slug: PostSlug,
     /// The Matrix event ID of the comment to be deleted.
     pub event_id: String,
-    /// The fingerprint of the user attempting to delete the comment, for verification.
-    pub author_fingerprint: String,
+    /// The author's Ed25519 public key (base64url).
+    pub author_public_key: String,
+    /// Ed25519 signature authorizing this deletion.
+    pub author_signature: String,
 }
 
 /// Represents the user's desire to edit/update a comment.
@@ -55,6 +60,8 @@ pub struct UpdateCommentIntent {
     pub event_id: String,
     /// The new content for the comment.
     pub content: String,
-    /// The fingerprint of the user attempting to edit the comment, for verification.
-    pub author_fingerprint: String,
+    /// The author's Ed25519 public key (base64url).
+    pub author_public_key: String,
+    /// Ed25519 signature authorizing this edit.
+    pub author_signature: String,
 }
