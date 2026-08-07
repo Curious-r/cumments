@@ -198,7 +198,9 @@ Returns a signed challenge string and difficulty.
 
 **`GET /api/sites/{site_id}/posts/{post_slug}/sse`**
 Server-Sent Events for real-time updates.
-- Events: `new_comment`, `update_comment`, `delete_comment`.
+- Events: `new_comment`, `comment_updated`, `comment_deleted`.
+- Each event is JSON with `{"type": "<event_name>", "payload": { ... }}`,
+  where `payload` is the `Comment` object (or `{ event_id }` for deletions).
 
 ---
 
