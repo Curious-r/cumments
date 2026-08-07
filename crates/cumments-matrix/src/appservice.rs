@@ -25,6 +25,22 @@ struct SendEventResponse {
     event_id: String,
 }
 
+#[derive(Deserialize)]
+struct ResolveAliasResponse {
+    room_id: String,
+}
+
+/// Whether a metadata state payload matches the expected Cumments identity.
+/// Spaces carry `post_slug: null`; comment rooms carry the post slug.
+fn metadata_matches(meta: &serde_json::Value, site_id: &str, post_slug: Option<&str>) -> bool {
+    let site_ok = meta.get("site_id").and_then(|v| v.as_str()) == Some(site_id);
+    let slug_ok = match post_slug {
+        Some(slug) => meta.get("post_slug").and_then(|v| v.as_str()) == Some(slug),
+        None => matches!(meta.get("post_slug"), None | Some(serde_json::Value::Null)),
+    };
+    site_ok && slug_ok
+}
+
 /// The AppService-based Matrix driver.
 ///
 /// Instead of using a logged-in client session, this driver
@@ -129,7 +145,6 @@ impl AppServiceMatrixDriver {
     }
 
     /// Set cumments metadata on a room (state event `im.cumments.metadata`).
-    #[allow(dead_code)]
     async fn set_room_metadata(
         &self,
         room_id: &str,
@@ -178,6 +193,79 @@ impl AppServiceMatrixDriver {
         } else {
             Ok(None)
         }
+    }
+
+    /// Resolve a room ID from its alias via the homeserver directory.
+    async fn resolve_room_by_alias(&self, alias: &str) -> Result<Option<String>> {
+        let path = format!("_matrix/client/v3/directory/room/{}", urlencode(alias));
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to resolve room alias {}: {}", alias, e))?;
+
+        if resp.status().is_success() {
+            let data: ResolveAliasResponse = resp
+                .json()
+                .await
+                .map_err(|e| anyhow!("Failed to parse alias response: {}", e))?;
+            Ok(Some(data.room_id))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(None)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Alias lookup {} failed ({}): {}",
+                alias,
+                status,
+                body
+            ))
+        }
+    }
+
+    /// Whether a room's metadata matches the expected identity.
+    async fn room_metadata_matches(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+    ) -> Result<bool> {
+        Ok(match self.get_room_metadata(room_id).await? {
+            Some(meta) => metadata_matches(&meta, site_id.as_str(), post_slug.map(|s| s.as_str())),
+            None => false,
+        })
+    }
+
+    /// Best-effort, idempotent: link a comment room into its site Space
+    /// (`m.space.child` on the Space, `m.space.parent` on the room).
+    async fn link_room_to_space(&self, space_id: &str, room_id: &str) {
+        let child_content = serde_json::json!({ "via": [self.server_name] });
+        let space_path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.space.child/{}",
+            urlencode(space_id),
+            urlencode(room_id)
+        );
+        let _ = self
+            .request(reqwest::Method::PUT, &space_path, None)
+            .json(&child_content)
+            .send()
+            .await;
+
+        let parent_path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.space.parent/{}",
+            urlencode(room_id),
+            urlencode(space_id)
+        );
+        let parent_content = serde_json::json!({
+            "via": [self.server_name],
+            "canonical": true
+        });
+        let _ = self
+            .request(reqwest::Method::PUT, &parent_path, None)
+            .json(&parent_content)
+            .send()
+            .await;
     }
 }
 
@@ -242,14 +330,35 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             warn!(
-                "createRoom failed ({}): {}. Assuming alias collision; will retry.",
+                "createRoom failed ({}): {}. Trying alias recovery.",
                 status, body
             );
-            Err(anyhow!(
-                "Failed to create site space ({}): alias may already be in use. \
-                 Resolve the existing Space or use a different site_id.",
-                status
-            ))
+
+            // Recovery: after a local DB reset (or a partial previous run) the
+            // space may already exist under our exclusive alias. Adopt it.
+            let alias = format!("#cumments_{}:{}", site_id_str, self.server_name);
+            match self.resolve_room_by_alias(&alias).await? {
+                Some(room_id) => {
+                    if self.room_metadata_matches(&room_id, site_id, None).await? {
+                        info!(
+                            "Recovered existing site space {} via alias {}",
+                            room_id, alias
+                        );
+                    } else {
+                        warn!(
+                            "Adopting room {} under alias {} with repaired metadata",
+                            room_id, alias
+                        );
+                        let _ = self.set_room_metadata(&room_id, site_id, None).await;
+                    }
+                    Ok(room_id)
+                }
+                None => Err(anyhow!(
+                    "Failed to create site space ({}): {}",
+                    status,
+                    body
+                )),
+            }
         }
     }
 
@@ -266,11 +375,41 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // ── PHASE 0: O(1) DISCOVERY (Check Candidate) ──
         if let Some(candidate) = candidate_room_id {
             if let Ok(Some(meta)) = self.get_room_metadata(candidate).await {
-                if meta.get("site_id").and_then(|v| v.as_str()) == Some(site_id.as_str())
-                    && meta.get("post_slug").and_then(|v| v.as_str()) == Some(post_slug.as_str())
-                {
+                if metadata_matches(&meta, site_id.as_str(), Some(post_slug.as_str())) {
                     target_room_id = Some(candidate.to_string());
                 }
+            }
+        }
+
+        // ── PHASE 0.5: ALIAS RECOVERY (cold local registry) ──
+        if target_room_id.is_none() {
+            let alias = format!(
+                "#cumments_{}_{}:{}",
+                site_id.as_str(),
+                post_slug.as_str(),
+                self.server_name
+            );
+            if let Some(room_id) = self.resolve_room_by_alias(&alias).await? {
+                if self
+                    .room_metadata_matches(&room_id, site_id, Some(post_slug))
+                    .await?
+                {
+                    info!(
+                        "Recovered existing comment room {} via alias {}",
+                        room_id, alias
+                    );
+                } else {
+                    // The alias namespace is exclusive to us, so this is a room
+                    // we created before metadata was written; repair it.
+                    warn!(
+                        "Adopting room {} under alias {} with repaired metadata",
+                        room_id, alias
+                    );
+                    let _ = self
+                        .set_room_metadata(&room_id, site_id, Some(post_slug))
+                        .await;
+                }
+                target_room_id = Some(room_id);
             }
         }
 
@@ -323,53 +462,48 @@ impl MatrixDriver for AppServiceMatrixDriver {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                return Err(anyhow!(
-                    "Failed to create comment room ({}): {}",
-                    status,
-                    body
-                ));
+                warn!(
+                    "createRoom failed ({}): {}. Trying alias recovery.",
+                    status, body
+                );
+
+                // Recovery: another attempt may have won the race, or the room
+                // already exists after a DB reset.
+                let alias = format!(
+                    "#cumments_{}_{}:{}",
+                    site_id.as_str(),
+                    post_slug.as_str(),
+                    self.server_name
+                );
+                return match self.resolve_room_by_alias(&alias).await? {
+                    Some(room_id) => {
+                        info!(
+                            "Recovered comment room {} after createRoom failure",
+                            room_id
+                        );
+                        let _ = self
+                            .set_room_metadata(&room_id, site_id, Some(post_slug))
+                            .await;
+                        self.link_room_to_space(space_id, &room_id).await;
+                        Ok(room_id)
+                    }
+                    None => Err(anyhow!(
+                        "Failed to create comment room ({}): {}",
+                        status,
+                        body
+                    )),
+                };
             }
 
             let data: CreateRoomResponse = resp
                 .json()
                 .await
                 .map_err(|e| anyhow!("Failed to parse createRoom response: {}", e))?;
-            let new_room_id = data.room_id;
-
-            // Link to Space via m.space.child
-            let child_content = serde_json::json!({
-                "via": [self.server_name]
-            });
-            let space_path = format!(
-                "_matrix/client/v3/rooms/{}/state/m.space.child/{}",
-                urlencode(space_id),
-                urlencode(&new_room_id)
-            );
-            // Best-effort: don't fail if linking fails
-            let _ = self
-                .request(reqwest::Method::PUT, &space_path, None)
-                .json(&child_content)
-                .send()
-                .await;
-
-            // Link Space to room via m.space.parent
-            let parent_path = format!(
-                "_matrix/client/v3/rooms/{}/state/m.space.parent/{}",
-                urlencode(&new_room_id),
-                urlencode(space_id)
-            );
-            let parent_content = serde_json::json!({
-                "via": [self.server_name],
-                "canonical": true
-            });
-            let _ = self
-                .request(reqwest::Method::PUT, &parent_path, None)
-                .json(&parent_content)
-                .send()
-                .await;
-
-            new_room_id
+            data.room_id
         };
+
+        // Keep the room linked to its Space (idempotent, best-effort).
+        self.link_room_to_space(space_id, &room_id).await;
 
         Ok(room_id)
     }
@@ -542,4 +676,41 @@ fn urlencode(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn metadata_matches_space() {
+        let meta = json!({"site_id": "my-blog", "post_slug": null});
+        assert!(metadata_matches(&meta, "my-blog", None));
+        assert!(!metadata_matches(&meta, "other", None));
+        assert!(!metadata_matches(&meta, "my-blog", Some("hello")));
+    }
+
+    #[test]
+    fn metadata_matches_space_without_slug_key() {
+        let meta = json!({"site_id": "my-blog"});
+        assert!(metadata_matches(&meta, "my-blog", None));
+    }
+
+    #[test]
+    fn metadata_matches_comment_room() {
+        let meta = json!({"site_id": "my-blog", "post_slug": "hello-world"});
+        assert!(metadata_matches(&meta, "my-blog", Some("hello-world")));
+        assert!(!metadata_matches(&meta, "my-blog", None));
+        assert!(!metadata_matches(&meta, "my-blog", Some("other")));
+    }
+
+    #[test]
+    fn urlencode_encodes_alias_hash_and_colon() {
+        assert_eq!(
+            urlencode("#cumments_my-blog:example.com"),
+            "%23cumments_my-blog%3Aexample.com"
+        );
+        assert_eq!(urlencode("!abc:example.com"), "%21abc%3Aexample.com");
+    }
 }
