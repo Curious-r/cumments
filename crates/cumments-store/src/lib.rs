@@ -112,7 +112,11 @@ impl IntentStore for DbStore {
 
     async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>> {
         let models = intent_queue_post_comment::Entity::find()
-            .filter(intent_queue_post_comment::COLUMN.status.eq(IntentStatus::Pending))
+            .filter(
+                intent_queue_post_comment::COLUMN
+                    .status
+                    .eq(IntentStatus::Pending),
+            )
             .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -127,7 +131,11 @@ impl IntentStore for DbStore {
 
     async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>> {
         let models = intent_queue_delete_comment::Entity::find()
-            .filter(intent_queue_delete_comment::COLUMN.status.eq(IntentStatus::Pending))
+            .filter(
+                intent_queue_delete_comment::COLUMN
+                    .status
+                    .eq(IntentStatus::Pending),
+            )
             .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -142,7 +150,11 @@ impl IntentStore for DbStore {
 
     async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>> {
         let models = intent_queue_update_comment::Entity::find()
-            .filter(intent_queue_update_comment::COLUMN.status.eq(IntentStatus::Pending))
+            .filter(
+                intent_queue_update_comment::COLUMN
+                    .status
+                    .eq(IntentStatus::Pending),
+            )
             .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
             .all(&self.db)
             .await?;
@@ -244,7 +256,11 @@ impl IntentStore for DbStore {
             intent_queue_post_comment::Column::Status,
             intent_queue_post_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_post_comment::Entity>| {
-                query.filter(intent_queue_post_comment::COLUMN.matrix_event_id.eq(event_id))
+                query.filter(
+                    intent_queue_post_comment::COLUMN
+                        .matrix_event_id
+                        .eq(event_id),
+                )
             },
         )
         .await
@@ -256,7 +272,11 @@ impl IntentStore for DbStore {
             intent_queue_delete_comment::Column::Status,
             intent_queue_delete_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(intent_queue_delete_comment::COLUMN.target_event_id.eq(target_event_id))
+                query.filter(
+                    intent_queue_delete_comment::COLUMN
+                        .target_event_id
+                        .eq(target_event_id),
+                )
             },
         )
         .await

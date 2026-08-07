@@ -26,7 +26,7 @@ struct SendEventResponse {
 
 /// The AppService-based Matrix driver.
 ///
-/// Instead of using a logged-in matrix-sdk Client, this driver
+/// Instead of using a logged-in client session, this driver
 /// authenticates with the AppService `as_token` and can impersonate
 /// any virtual user in the AppService namespace.
 pub struct AppServiceMatrixDriver {

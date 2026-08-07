@@ -152,7 +152,7 @@ async fn process_single_event(
 
 /// Extract the display name from a Cumments message body.
 ///
-/// Both BotMatrixDriver and AppServiceMatrixDriver format the body as:
+/// The AppServiceMatrixDriver formats the body as:
 ///   `**nickname**: comment content`
 ///
 /// In push mode we don't have access to the room member list, so we

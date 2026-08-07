@@ -33,22 +33,19 @@ Cumments is a decentralized comment system backend based on the **Matrix protoco
      └────────┬────────┘ └─────────────┘  └────────┬────────┘
               │                                    │
      ┌────────▼────────┐                  ┌────────▼────────┐
-     │  MatrixDriver   │                  │  SyncAdapter    │
-     │  (发送到Matrix) │                  │  (Bot模式接收)  │
-     └────────┬────────┘                  │  PushReceiver   │
-              │                           │  (AS模式接收)   │
-              │                           └─────────────────┘
+     │  MatrixDriver   │                  │  PushReceiver   │
+     │  (发送到Matrix) │                  │  (AS模式接收)   │
+     └────────┬────────┘                  └─────────────────┘
               │
-    ┌─────────┼──────────┐
-    │         │          │
-    ▼         ▼          ▼
- BotDriver  AppService  Logging
- (matrix-sdk) (reqwest)  (调试)
+    ┌─────────┼─────────┐
+    │         │         │
+    ▼         ▼         ▼
+ AppService  Logging
+ (reqwest)   (调试)
 ```
 
-The core projection logic lives in **EventProcessor**, shared by both reception paths:
-- **Bot mode**: `SyncAdapter` receives events via matrix-sdk Sync
-- **AppService mode**: `PushReceiver` receives events via HS HTTP Push
+The core projection logic lives in **EventProcessor**. In AppService mode,
+`PushReceiver` receives events via HS HTTP Push and feeds them into it.
 
 ### Crates
 
@@ -58,21 +55,15 @@ The core projection logic lives in **EventProcessor**, shared by both reception 
 | `cumments-api` | HTTP API, PoW verification, validation |
 | `cumments-store` | SQLite persistence (SeaORM), migrations |
 | `cumments-reconciler` | Background orchestration — reads intents, calls MatrixDriver |
-| `cumments-matrix` | MatrixDriver implementations (Bot, AppService, Logging) |
-| `cumments-projector` | Event reception and projection (EventProcessor, SyncAdapter, PushReceiver) |
+| `cumments-matrix` | MatrixDriver implementations (AppService, Logging) |
+| `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver) |
 | `cumments` | CLI entry point, configuration, assembly |
 
 ---
 
 ## 2. Operation Modes
 
-### Mode A: Bot Mode (recommended for testing)
-
-Uses a single Matrix bot account. The bot creates rooms/spaces, posts messages as itself, and receives events via matrix-sdk's sync loop.
-
-**Prerequisites**: A regular Matrix account and its `access_token`.
-
-### Mode B: AppService Mode (recommended for production)
+### AppService Mode (recommended for production)
 
 Registers as a Matrix **Application Service** with the homeserver. Each commenter gets an independent virtual Matrix user (`@_cumments_{site}_{hash}:domain`). Events are **pushed** by the HS via HTTP, no sync loop needed.
 
@@ -85,6 +76,11 @@ Registers as a Matrix **Application Service** with the homeserver. Each commente
 @_cumments_{site_id}_{sha256_trunc8(fingerprint)}:{server_name}
 ```
 
+### Logging Mode (local development)
+
+No Matrix side effects: drivers log their actions instead of talking to a
+homeserver. Useful for testing the API and the local read model.
+
 ---
 
 ## 3. Environment Preparation
@@ -92,9 +88,8 @@ Registers as a Matrix **Application Service** with the homeserver. Each commente
 - **Operating System**: Linux / Windows / macOS
 - **Build Environment**: Rust (latest stable version)
 - **Database**: SQLite (the program automatically creates files, no service installation required)
-- **Matrix Account**:
-    - **Bot Mode**: Need a dedicated Matrix account + access token.
-    - **AppService Mode**: Need server-side access to the homeserver.
+- **AppService Mode**: Need server-side access to the homeserver configuration.
+- **Logging Mode**: Nothing extra required.
 
 ---
 
@@ -103,14 +98,14 @@ Registers as a Matrix **Application Service** with the homeserver. Each commente
 Configuration is loaded in order: **Environment Variables** > **`config.toml`** > **Defaults**.
 Use `CUMMENTS__` prefix for env vars (e.g., `CUMMENTS_SERVER__PORT=7931`).
 
-### Bot Mode (config.toml)
+### AppService Mode (config.toml)
 
 ```toml
 [server]
 host = "0.0.0.0"
 port = 7931
 cors_origins = "*"
-public_server_name = "matrix.org"
+public_server_name = "your_server.tld"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -122,18 +117,6 @@ pow_secret = "pow_secret_key"
 pow_difficulty = 4
 
 [matrix]
-mode = "bot"
-homeserver_url = "https://matrix.org"
-user = "@cumments_bot:matrix.org"
-token = "syt_..."
-device_id = "CUMMENTS_BOT"
-owner_id = "@your_account:matrix.org"
-```
-
-### AppService Mode (config.toml)
-
-```toml
-[matrix]
 mode = "appservice"
 homeserver_url = "http://localhost:8008"
 server_name = "your_server.tld"
@@ -143,6 +126,9 @@ bot_localpart = "cumments"
 push_listen_port = 3001
 owner_id = "@admin:your_server.tld"
 ```
+
+For local development without a homeserver, set `mode = "logging"`; the
+`matrix` section then only requires `homeserver_url` and `owner_id`.
 
 Generate the registration file:
 
@@ -250,21 +236,16 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端，�
 | `cumments-api` | HTTP API、PoW 验证、输入校验 |
 | `cumments-store` | SQLite 持久化 (SeaORM)、数据库迁移 |
 | `cumments-reconciler` | 后台协调器——处理意图队列，调用 MatrixDriver |
-| `cumments-matrix` | Matrix 驱动实现（Bot / AppService / Logging 三种） |
-| `cumments-projector` | 事件接收与投影核心（EventProcessor + SyncAdapter + PushReceiver） |
+| `cumments-matrix` | Matrix 驱动实现（AppService / Logging） |
+| `cumments-projector` | 事件接收与投影核心（EventProcessor + PushReceiver） |
 | `cumments` | CLI 入口、配置加载、依赖装配 |
 
-核心投影逻辑位于 **EventProcessor**，两种接收路径共享：
-- **Bot 模式**: `SyncAdapter` 通过 matrix-sdk Sync 接收事件
-- **AppService 模式**: `PushReceiver` 通过 HS HTTP Push 接收事件
+核心投影逻辑位于 **EventProcessor**。AppService 模式下由 `PushReceiver`
+通过 HS HTTP Push 接收事件并送入投影。
 
 ## 2. 运行模式
 
-### A: Bot 模式（推荐测试使用）
-
-使用一个 Matrix 机器人账号。机器人创建房间/空间、以自身身份发消息，通过 Sync 循环接收事件。
-
-### B: AppService 模式（推荐生产使用）
+### AppService 模式（推荐生产使用）
 
 以 Matrix Application Service 身份注册到 homeserver。每个评论者拥有独立的虚拟 Matrix 用户（`@_cumments_{站点}_{hash}:域名`）。事件由 HS 通过 HTTP 推送，无需 Sync 循环。
 
@@ -273,30 +254,22 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端，�
 @_cumments_{site_id}_{sha256_trunc8(fingerprint)}:{server_name}
 ```
 
+### Logging 模式（本地开发）
+
+不产生任何 Matrix 副作用：driver 仅记录日志，适合调试 API 与本地读模型。
+
 ## 3. 环境准备
 
 - **操作系统**: Linux / Windows / macOS
 - **编译环境**: Rust (最新 stable 版本)
 - **数据库**: SQLite（自动创建，无需单独安装）
-- **Bot 模式**: 需要一个 Matrix 账号 + access_token
 - **AppService 模式**: 需要服务器端访问 homeserver 配置权限
+- **Logging 模式**: 无需额外环境
 
 ## 4. 配置说明
 
 优先级：**环境变量** > **`config.toml`** > **默认值**。
 环境变量前缀为 `CUMMENTS__`（例如 `CUMMENTS_SERVER__PORT=7931`）。
-
-### Bot 模式
-
-```toml
-[matrix]
-mode = "bot"
-homeserver_url = "https://matrix.org"
-user = "@cumments_bot:matrix.org"
-token = "syt_..."
-device_id = "CUMMENTS_BOT"
-owner_id = "@your_account:matrix.org"
-```
 
 ### AppService 模式
 
@@ -317,6 +290,9 @@ owner_id = "@admin:your_server.tld"
 ```bash
 cumments generate-registration --server-name your_server.tld
 ```
+
+本地开发不想连接 homeserver 时，把 `mode` 设为 `"logging"` 即可；
+此时 `matrix` 段只需 `homeserver_url` 与 `owner_id`。
 
 ## 5. 编译与运行
 

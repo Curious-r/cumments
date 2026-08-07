@@ -10,7 +10,6 @@ cumments-core.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-matrix-sdk.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -38,12 +38,6 @@ pub struct Matrix {
     pub homeserver_url: String,
     pub owner_id: String,
 
-    // ── Bot mode fields ──
-    /// Bot user ID (e.g., "@cumments_bot:server.tld")
-    pub user: Option<String>,
-    pub token: Option<String>,
-    pub device_id: Option<String>,
-
     // ── AppService mode fields ──
     /// AppService token for authenticating with the homeserver
     pub as_token: Option<String>,
