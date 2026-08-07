@@ -111,7 +111,7 @@ impl Backfiller {
         let mut from = self.cursor_store.get_cursor(room_id).await?;
         let mut collected: Vec<serde_json::Value> = Vec::new();
         let mut last_batch: Option<String> = None;
-        let mut done = false;
+        let mut done;
 
         loop {
             let page = self
