@@ -21,6 +21,8 @@ Matrix history with `cumments backfill`.
   Service, uses virtual users, and receives events via HTTP push.
 - **PoW anti-spam** — comments require solving a signed proof-of-work challenge;
   no login or account system.
+- **Reply trees** — replies use Matrix rich replies (`m.in_reply_to`), so any
+  Matrix client can render them, and the demo page shows nested threads.
 - **Real-time SSE updates** — `new_comment`, `comment_updated`, and
   `comment_deleted` events.
 
@@ -484,10 +486,10 @@ CI runs the same commands on GitHub Actions.
 
 ## Known Limitations
 
-- `reply_to` is accepted by the API but is not yet written to Matrix events or
-  the read model. Email is deliberately not collected.
-- Rate limiting, reply trees, multi-instance/Postgres support, and operational
-  monitoring are not implemented yet.
+- Reply trees use Matrix rich replies (`m.in_reply_to`); the demo UI limits
+  nesting to 8 levels. Email is deliberately not collected.
+- Rate limiting, multi-instance/Postgres support, and operational monitoring
+  are not implemented yet.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse
   deployment is still pending.
 

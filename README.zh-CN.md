@@ -18,6 +18,8 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 - **AppService-first** —— 生产模式以 Matrix Application Service 注册，使用虚拟用户，
   通过 HTTP push 接收事件。
 - **PoW 防刷** —— 发评论需要解决带签名的 proof-of-work 挑战，无需登录/账号体系。
+- **回复树** —— 回复使用 Matrix rich replies（`m.in_reply_to`），Matrix
+  客户端可直接渲染，验证页也提供嵌套树状展示。
 - **SSE 实时更新** —— 提供 `new_comment` / `comment_updated` / `comment_deleted` 事件。
 
 ## 架构
@@ -455,9 +457,9 @@ GitHub Actions 会执行同样的命令。
 
 ## 已知限制
 
-- `reply_to` 会被 API 接收，但尚未写入 Matrix 事件或读模型。项目有意不收集
-  邮箱。
-- 速率限制、回复树、多实例/Postgres、运维监控尚未实现。
+- 回复树使用 Matrix rich replies（`m.in_reply_to`），验证页限制嵌套深度为
+  8 层。项目有意不收集邮箱。
+- 速率限制、多实例/Postgres、运维监控尚未实现。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 
 ## License
