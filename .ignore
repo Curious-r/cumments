@@ -12,5 +12,7 @@ devenv.local.nix
 /target
 /data/*
 !/data/.keep
+**/cumments.toml
+# Legacy name kept ignored so old local files are never committed by accident
 **/config.toml
 **/registration.yaml

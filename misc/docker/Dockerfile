@@ -61,7 +61,7 @@ RUN apk --no-cache add ca-certificates sqlite-libs && \
 # Copy the binary from builder stage
 COPY --from=builder /usr/src/app/target/release/cumments /usr/local/bin/cumments
 # Copy the runnable example configuration as the default config
-COPY --from=builder /usr/src/app/misc/config/config-example.toml /etc/cumments/config.toml
+COPY --from=builder /usr/src/app/misc/config/config-example.toml /etc/cumments/cumments.toml
 
 # Create the service data directory
 RUN mkdir -p /srv/cumments && chown -R cumments:cumments /srv/cumments

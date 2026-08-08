@@ -2,6 +2,9 @@
 # Cumments Configuration Example
 # ==========================================
 #
+# Copy this file to `cumments.toml` (the default discovered name), or in the
+# Docker image mount it at /etc/cumments/cumments.toml.
+#
 # This file is intentionally runnable as-is: it starts in `logging` mode,
 # which needs no Matrix homeserver. The AppService production settings are
 # shown commented out below.

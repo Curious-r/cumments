@@ -174,9 +174,9 @@ The configuration file is discovered in this order:
 
 1. `--config <path>`
 2. `CUMMENTS_CONFIG` environment variable
-3. `$XDG_CONFIG_HOME/cumments/config.toml` (or `~/.config/cumments/config.toml`)
-4. `/etc/cumments/config.toml`
-5. `./config.toml` (local development fallback)
+3. `$XDG_CONFIG_HOME/cumments/cumments.toml` (or `~/.config/cumments/cumments.toml`)
+4. `/etc/cumments/cumments.toml`
+5. `./cumments.toml` (local development fallback)
 
 Once a file is selected, effective value precedence is:
 
@@ -267,7 +267,7 @@ cargo run -p cumments -- generate-registration \
 ```
 
 `--url` must be reachable by the homeserver (this is the push callback, not
-your local address). If `config.toml` already contains
+your local address). If a `cumments.toml` already contains
 `matrix.homeserver.domain` and `matrix.appservice.url`, both flags can be
 omitted. Place the generated `registration.yaml` on the homeserver, put the
 printed `as_token` / `hs_token` into `[matrix.appservice]` (or set them as
@@ -305,7 +305,7 @@ To use your own config file, mount it over the bundled one:
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
   ghcr.io/curious-r/cumments:0.17.0
 ```
@@ -314,9 +314,9 @@ Alternatively, mount it anywhere and point `--config` at it:
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/srv/cumments/config.toml:ro \
+  -v $(pwd)/cumments.toml:/srv/cumments/cumments.toml:ro \
   ghcr.io/curious-r/cumments:0.17.0 \
-  --config /srv/cumments/config.toml
+  --config /srv/cumments/cumments.toml
 ```
 
 The container runs as a non-root user, so the mounted file must be readable by

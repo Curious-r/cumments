@@ -10,7 +10,7 @@ services:
     volumes:
       - cumments_data:/srv/cumments
       # Mount your configuration file over the default:
-      # - ./config.toml:/etc/cumments/config.toml:ro
+      # - ./cumments.toml:/etc/cumments/cumments.toml:ro
     environment:
       - RUST_LOG=info
     restart: unless-stopped

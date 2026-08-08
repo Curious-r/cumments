@@ -161,9 +161,9 @@ cumments backup --output data/cumments.backup.db
 
 1. `--config <path>`
 2. 环境变量 `CUMMENTS_CONFIG`
-3. `$XDG_CONFIG_HOME/cumments/config.toml`（或 `~/.config/cumments/config.toml`）
-4. `/etc/cumments/config.toml`
-5. `./config.toml`（本地开发回退）
+3. `$XDG_CONFIG_HOME/cumments/cumments.toml`（或 `~/.config/cumments/cumments.toml`）
+4. `/etc/cumments/cumments.toml`
+5. `./cumments.toml`（本地开发回退）
 
 选定文件后，最终值的优先级为：
 
@@ -250,7 +250,7 @@ cargo run -p cumments -- generate-registration \
 ```
 
 `--url` 必须能被 homeserver 访问（这是推送回调地址，不是本机地址）。如果
-`config.toml` 里已经有 `matrix.homeserver.domain` 和
+`cumments.toml` 里已经有 `matrix.homeserver.domain` 和
 `matrix.appservice.url`，这两个参数都可以省略。把生成的 `registration.yaml`
 放到 homeserver，将打印的 `as_token` / `hs_token` 写入
 `[matrix.appservice]`（或用 `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN` /
@@ -287,7 +287,7 @@ docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
   ghcr.io/curious-r/cumments:0.17.0
 ```
@@ -296,9 +296,9 @@ docker run -p 7931:7931 \
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/srv/cumments/config.toml:ro \
+  -v $(pwd)/cumments.toml:/srv/cumments/cumments.toml:ro \
   ghcr.io/curious-r/cumments:0.17.0 \
-  --config /srv/cumments/config.toml
+  --config /srv/cumments/cumments.toml
 ```
 
 容器以非 root 用户运行，挂载的配置文件需要对该用户可读。
