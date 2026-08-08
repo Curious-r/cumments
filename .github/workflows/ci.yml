@@ -97,7 +97,12 @@ jobs:
           tool: cargo-audit
 
       - name: Audit dependencies
-        run: cargo audit
+        # RUSTSEC-2026-0235 (rkyv 0.7.46): rkyv is an *unactivated* optional
+        # dependency of rust_decimal, pulled into Cargo.lock by sea-orm's
+        # default `with-rust_decimal` feature. It is never compiled (cargo tree
+        # shows no path to it), and rust_decimal has no release using rkyv 0.8
+        # yet. Revisit this ignore when rust_decimal or sea-orm updates.
+        run: cargo audit --ignore RUSTSEC-2026-0235
 
   frontend:
     name: Frontend syntax
