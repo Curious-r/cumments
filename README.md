@@ -301,6 +301,27 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17
 `latest` follows the newest `v*` tag. `main` and pull requests build the image
 for validation but do not publish it.
 
+To use your own config file, mount it over the bundled one:
+
+```bash
+docker run -p 7931:7931 \
+  -v $(pwd)/config.toml:/app/config.toml:ro \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/curious-r/cumments:0.17.0
+```
+
+Alternatively, mount it anywhere and point `--config` at it:
+
+```bash
+docker run -p 7931:7931 \
+  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  ghcr.io/curious-r/cumments:0.17.0 \
+  --config /etc/cumments/config.toml
+```
+
+The container runs as a non-root user, so the mounted file must be readable by
+that user.
+
 The image starts in `logging` mode by default. Override it for production with
 environment variables, e.g.:
 

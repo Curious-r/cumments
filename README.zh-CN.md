@@ -283,6 +283,26 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17
 
 `latest` 跟随最新的 `v*` tag；`main` 分支和 PR 只构建验证，不推送镜像。
 
+使用自己的配置文件时，可以直接覆盖镜像内置的配置：
+
+```bash
+docker run -p 7931:7931 \
+  -v $(pwd)/config.toml:/app/config.toml:ro \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/curious-r/cumments:0.17.0
+```
+
+也可以挂载到任意位置，再用 `--config` 指定：
+
+```bash
+docker run -p 7931:7931 \
+  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  ghcr.io/curious-r/cumments:0.17.0 \
+  --config /etc/cumments/config.toml
+```
+
+容器以非 root 用户运行，挂载的配置文件需要对该用户可读。
+
 镜像默认以 `logging` 模式启动；生产环境用环境变量覆盖，例如：
 
 ```bash
