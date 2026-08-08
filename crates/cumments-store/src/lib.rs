@@ -278,6 +278,7 @@ impl IntentStore for DbStore {
             content: Set(intent.content.clone()),
             author_public_key: Set(Some(intent.author_public_key.clone())),
             author_signature: Set(Some(intent.author_signature.clone())),
+            author_challenge: Set(Some(intent.author_challenge.clone())),
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
@@ -357,6 +358,7 @@ impl IntentStore for DbStore {
                 content: m.content,
                 author_public_key: m.author_public_key.unwrap_or_default(),
                 author_signature: m.author_signature.unwrap_or_default(),
+                author_challenge: m.author_challenge.unwrap_or_default(),
             };
             intents.push((m.id, intent));
         }
@@ -403,7 +405,14 @@ impl IntentStore for DbStore {
             intent_queue_post_comment::Column::Status,
             intent_queue_post_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_post_comment::Entity>| {
-                query.filter(intent_queue_post_comment::COLUMN.id.eq(id))
+                query
+                    .filter(intent_queue_post_comment::COLUMN.id.eq(id))
+                    // Never resurrect a failed or already-completed intent.
+                    .filter(
+                        intent_queue_post_comment::COLUMN
+                            .status
+                            .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+                    )
             },
         )
         .await
@@ -758,11 +767,18 @@ impl IntentStore for DbStore {
             intent_queue_delete_comment::Column::Status,
             intent_queue_delete_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_delete_comment::Entity>| {
-                query.filter(
-                    intent_queue_delete_comment::COLUMN
-                        .target_event_id
-                        .eq(target_event_id),
-                )
+                query
+                    .filter(
+                        intent_queue_delete_comment::COLUMN
+                            .target_event_id
+                            .eq(target_event_id),
+                    )
+                    // Never resurrect a failed or already-completed intent.
+                    .filter(
+                        intent_queue_delete_comment::COLUMN
+                            .status
+                            .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+                    )
             },
         )
         .await
@@ -858,8 +874,14 @@ impl CommentStore for DbStore {
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(comments::Column::EventId)
                     .update_columns([
+                        comments::Column::RoomId,
+                        comments::Column::SiteId,
+                        comments::Column::PostSlug,
+                        comments::Column::AuthorMxid,
                         comments::Column::AuthorNickname,
+                        comments::Column::AuthorPublicKey,
                         comments::Column::Content,
+                        comments::Column::Timestamp,
                         comments::Column::UpdatedAt,
                     ])
                     .to_owned(),
@@ -1065,6 +1087,7 @@ impl From<comments::Model> for Comment {
             author_public_key: model.author_public_key,
             content: model.content,
             timestamp: model.timestamp,
+            room_id: model.room_id,
             author_mxid: model.author_mxid,
         }
     }

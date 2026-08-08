@@ -609,6 +609,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // stays verifiable from Matrix alone.
         author_public_key: &str,
         author_signature: &str,
+        author_challenge: &str,
         site_id: &SiteId,
         intent_id: Option<i64>,
     ) -> Result<String> {
@@ -636,6 +637,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             "cumments_visitor_id": visitor_id,
             "cumments_public_key": author_public_key,
             "cumments_signature": author_signature,
+            "cumments_challenge": author_challenge,
             // Structured fields so the projector can store the pure content
             // and nickname instead of parsing them back out of the body.
             "cumments_content": content,
@@ -678,6 +680,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         nickname: &str,
         author_public_key: &str,
         author_signature: &str,
+        author_challenge: &str,
         site_id: &SiteId,
         intent_id: Option<i64>,
     ) -> Result<String> {
@@ -708,6 +711,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "cumments_visitor_id": visitor_id,
                 "cumments_public_key": author_public_key,
                 "cumments_signature": author_signature,
+                "cumments_challenge": author_challenge,
                 "cumments_content": new_content,
                 "cumments_nickname": nickname,
                 "cumments_intent_id": intent_id,

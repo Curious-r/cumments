@@ -12,6 +12,11 @@ data/
 
 .env
 
+.devenv*
+.direnv
+.pijul
+misc/frontend/
+
 Dockerfile
 docker-compose.yml
 README.md

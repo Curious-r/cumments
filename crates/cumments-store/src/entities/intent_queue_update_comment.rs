@@ -15,6 +15,7 @@ pub struct Model {
     pub content: String,
     pub author_public_key: Option<String>,
     pub author_signature: Option<String>,
+    pub author_challenge: Option<String>,
     pub status: IntentStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,

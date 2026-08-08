@@ -150,6 +150,7 @@ impl Reconciler {
                         &intent.nickname,
                         &intent.author_public_key,
                         &intent.author_signature,
+                        &intent.author_challenge,
                         &intent.site_id,
                         Some(id),
                     )
@@ -299,6 +300,7 @@ impl Reconciler {
                         &nickname,
                         &intent.author_public_key,
                         &intent.author_signature,
+                        &intent.author_challenge,
                         &intent.site_id,
                         Some(id),
                     )

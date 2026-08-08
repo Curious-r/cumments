@@ -174,12 +174,6 @@
                                     oninput="updateComposerAvatar()"
                                     class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                                 />
-                                <input
-                                    id="composerEmail"
-                                    type="email"
-                                    placeholder="邮箱（可选）"
-                                    class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
-                                />
                             </div>
                             <textarea
                                 id="composerContent"
@@ -308,7 +302,7 @@
                     </div>
 
                     <div class="grid grid-cols-2 gap-3">
-                        <div>
+                        <div class="col-span-2">
                             <label
                                 class="block text-sm font-medium text-slate-700 mb-1"
                             >
@@ -317,18 +311,6 @@
                             <input
                                 id="settingNickname"
                                 type="text"
-                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
-                            />
-                        </div>
-                        <div>
-                            <label
-                                class="block text-sm font-medium text-slate-700 mb-1"
-                            >
-                                邮箱（可选）
-                            </label>
-                            <input
-                                id="settingEmail"
-                                type="email"
                                 class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                             />
                         </div>
@@ -502,7 +484,6 @@
                 siteId: "my-blog",
                 slug: "hello-world",
                 nickname: "访客",
-                email: "",
             };
 
             const state = {
@@ -552,7 +533,6 @@
                 document.getElementById("siteId").value = s.siteId;
                 document.getElementById("slug").value = s.slug;
                 document.getElementById("settingNickname").value = s.nickname;
-                document.getElementById("settingEmail").value = s.email;
                 syncComposer(s);
             }
 
@@ -564,13 +544,11 @@
                     nickname:
                         document.getElementById("settingNickname").value.trim() ||
                         "访客",
-                    email: document.getElementById("settingEmail").value.trim(),
                 };
             }
 
             function syncComposer(s) {
                 document.getElementById("composerNickname").value = s.nickname;
-                document.getElementById("composerEmail").value = s.email;
                 updateComposerAvatar();
             }
 
@@ -590,13 +568,8 @@
                 const composerNickname = document
                     .getElementById("composerNickname")
                     .value.trim();
-                const composerEmail = document
-                    .getElementById("composerEmail")
-                    .value.trim();
                 document.getElementById("settingNickname").value =
                     composerNickname || s.nickname;
-                document.getElementById("settingEmail").value =
-                    composerEmail || s.email;
                 renderIdentity();
                 document.getElementById("settingsModal").classList.remove("hidden");
             }
@@ -1465,8 +1438,6 @@
                 const nickname =
                     document.getElementById("composerNickname").value.trim() ||
                     "访客";
-                const email =
-                    document.getElementById("composerEmail").value.trim() || null;
                 const content = document
                     .getElementById("composerContent")
                     .value.trim();
@@ -1503,7 +1474,6 @@
                             body: JSON.stringify({
                                 content,
                                 nickname,
-                                email,
                                 author_public_key: publicKey,
                                 author_signature: signature,
                                 challenge_response: `${chal.prefix}|${nonce}`,
@@ -1674,9 +1644,11 @@
                     return `<p>${escapeHtml(text || "")}</p>`;
                 }
                 const html = marked.parse(text || "");
-                return typeof DOMPurify !== "undefined"
-                    ? DOMPurify.sanitize(html)
-                    : html;
+                if (typeof DOMPurify === "undefined") {
+                    // Fail closed: never render unsanitized Markdown HTML.
+                    return `<p>${escapeHtml(text || "")}</p>`;
+                }
+                return DOMPurify.sanitize(html);
             }
 
             function escapeHtml(value) {

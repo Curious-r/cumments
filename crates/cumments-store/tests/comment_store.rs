@@ -30,6 +30,7 @@ async fn save_comment_records_original_sender() {
         author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
         content: "hello".to_string(),
         timestamp: Utc::now(),
+        room_id: "!room:hs".to_string(),
         author_mxid: String::new(),
     };
 
@@ -49,6 +50,7 @@ async fn save_comment_records_original_sender() {
         .await
         .expect("get comment")
         .expect("comment exists");
+    assert_eq!(stored.room_id, "!room:hs");
     assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
 }
 
@@ -70,6 +72,7 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             content: content.to_string(),
             timestamp: ts,
+            room_id: "!room:hs".to_string(),
             author_mxid: String::new(),
         };
         store

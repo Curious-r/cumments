@@ -147,8 +147,6 @@ pub struct PostCommentRequest {
     pub content: String,
     #[validate(length(min = 1, max = 50))]
     pub nickname: String,
-    #[validate(email)]
-    pub email: Option<String>,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
     pub author_public_key: String,
     /// Ed25519 signature over the canonical POST message.
@@ -185,35 +183,41 @@ static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
 
 /// Build the CORS layer from a comma-separated origin list.
 ///
-/// `"*"` (or an empty list) keeps the previous permissive behavior; any other
-/// value restricts `Access-Control-Allow-Origin` to the listed origins and
-/// explicitly allows the methods and headers used by the API (including the
-/// custom `QUERY` method).
-fn cors_layer(cors_origins: &str) -> CorsLayer {
+/// `"*"` keeps permissive behavior; an empty list disables cross-origin
+/// support (no CORS headers are sent); any other value restricts
+/// `Access-Control-Allow-Origin` to the listed origins and explicitly allows
+/// the methods and headers used by the API (including the custom `QUERY`
+/// method).
+fn cors_layer(cors_origins: &str) -> Option<CorsLayer> {
     let origins: Vec<&str> = cors_origins
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
 
-    if origins.is_empty() || origins.contains(&"*") {
-        return CorsLayer::permissive();
+    if origins.is_empty() {
+        return None;
+    }
+    if origins.contains(&"*") {
+        return Some(CorsLayer::permissive());
     }
 
     let allowed: Vec<HeaderValue> = origins
         .iter()
         .filter_map(|o| HeaderValue::from_str(o).ok())
         .collect();
-    CorsLayer::new()
-        .allow_origin(allowed)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PATCH,
-            Method::DELETE,
-            (*QUERY_METHOD).clone(),
-        ])
-        .allow_headers([HeaderName::from_static("content-type")])
+    Some(
+        CorsLayer::new()
+            .allow_origin(allowed)
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PATCH,
+                Method::DELETE,
+                (*QUERY_METHOD).clone(),
+            ])
+            .allow_headers([HeaderName::from_static("content-type")]),
+    )
 }
 
 /// Extract the signed challenge prefix from a `challenge|nonce` response.
@@ -223,7 +227,7 @@ fn challenge_prefix(challenge_response: &str) -> &str {
 
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
-    Router::new()
+    let router = Router::new()
         .route(
             "/api/sites/{site_id}/posts/{post_slug}/comments",
             // POST for writing intents, fallback handles QUERY for reading.
@@ -240,8 +244,12 @@ pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
         .route("/api/challenge", get(get_challenge_handler))
         .route("/health", get(health_handler))
         .layer(TraceLayer::new_for_http())
-        .layer(cors_layer(cors_origins))
-        .with_state(state)
+        .with_state(state);
+
+    match cors_layer(cors_origins) {
+        Some(cors) => router.layer(cors),
+        None => router,
+    }
 }
 
 /// Simple liveness endpoint used by container healthchecks.
@@ -378,9 +386,9 @@ async fn post_comment_handler(
         post_slug: post_slug_val,
         content: req.content,
         nickname: req.nickname,
-        email: req.email,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
+        author_challenge: challenge.to_string(),
         reply_to: req.reply_to,
     };
 
@@ -572,6 +580,7 @@ async fn update_comment_handler(
         content: req.content,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
+        author_challenge: challenge.to_string(),
     };
 
     // 5. Save the intent for the reconciler
@@ -647,5 +656,13 @@ mod tests {
             per_page: None,
         };
         assert!(zero.validate().is_err());
+    }
+
+    #[test]
+    fn empty_cors_list_disables_cross_origin_layer() {
+        assert!(cors_layer("").is_none());
+        assert!(cors_layer("  , , ").is_none());
+        assert!(cors_layer("*").is_some());
+        assert!(cors_layer("https://blog.example.com").is_some());
     }
 }

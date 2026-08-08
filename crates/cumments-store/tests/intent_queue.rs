@@ -12,9 +12,9 @@ fn post_intent() -> PostCommentIntent {
         post_slug: PostSlug::from("hello-world"),
         content: "hello".to_string(),
         nickname: "Alice".to_string(),
-        email: None,
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        author_challenge: "1728000000.deadbeef.sig".to_string(),
         reply_to: None,
     }
 }
@@ -27,6 +27,7 @@ fn update_intent() -> UpdateCommentIntent {
         content: "edited".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        author_challenge: "1728000000.deadbeef.sig".to_string(),
     }
 }
 

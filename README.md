@@ -12,7 +12,8 @@ Matrix history with `cumments backfill`.
 - **Matrix as the event log** — comments are `m.room.message` events, edits are
   `m.replace`, and deletions are `m.redaction`.
 - **Publicly verifiable ownership** — each event carries the author's Ed25519
-  public key and signature (`cumments_public_key` / `cumments_signature`), so
+  public key, signature, and the signed PoW challenge
+  (`cumments_public_key` / `cumments_signature` / `cumments_challenge`), so
   ownership survives a complete read-model rebuild.
 - **Disposable read model** — SQLite is only a projection; `cumments backfill`
   rebuilds sites, the room registry, and comments from Matrix history.
@@ -373,7 +374,6 @@ Body:
 {
   "content": "...",
   "nickname": "Alice",
-  "email": null,
   "author_public_key": "...",
   "author_signature": "...",
   "challenge_response": "challenge|nonce"
@@ -478,10 +478,8 @@ CI runs the same commands on GitHub Actions.
 
 ## Known Limitations
 
-- `reply_to` and `email` are accepted by the API but are not yet written to
-  Matrix events or the read model. `email` lives only in the local intent
-  queue payload; terminal rows are kept as an audit log, so add retention
-  cleanup before production.
+- `reply_to` is accepted by the API but is not yet written to Matrix events or
+  the read model. Email is deliberately not collected.
 - Rate limiting, reply trees, and multi-instance/Postgres support are not
   implemented yet.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse

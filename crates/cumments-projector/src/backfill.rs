@@ -11,6 +11,7 @@
 //!    replayed in order, then feeds them through the same transport-agnostic
 //!    projection as live push events (idempotent upserts).
 
+use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{BackfillCursorStore, MatrixDriver, RegistryStore, SiteStore};
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,22 +80,45 @@ impl Backfiller {
 
             match meta.get("post_slug").and_then(|v| v.as_str()) {
                 // Space room: restores the site -> space mapping.
-                None => {
-                    self.site_store
-                        .ensure_site_exists(site_id, &room_id)
-                        .await?;
-                    info!("Backfill: registered site {} (space {})", site_id, room_id);
-                }
+                None => match SiteId::new(site_id.to_owned()) {
+                    Ok(site_id_val) => {
+                        self.site_store
+                            .ensure_site_exists(site_id_val.as_str(), &room_id)
+                            .await?;
+                        info!(
+                            "Backfill: registered site {} (space {})",
+                            site_id_val.as_str(),
+                            room_id
+                        );
+                    }
+                    Err(_) => warn!(
+                        "Backfill: skipping space {} with invalid site id {}",
+                        room_id, site_id
+                    ),
+                },
                 // Comment room: restore registry entry and backfill it.
                 Some(post_slug) => {
-                    self.registry_store
-                        .register_room(&room_id, &site_id.into(), &post_slug.into())
-                        .await?;
-                    rooms.push(room_id.clone());
-                    info!(
-                        "Backfill: discovered comment room {} for {}/{}",
-                        room_id, site_id, post_slug
-                    );
+                    match (
+                        SiteId::new(site_id.to_owned()),
+                        PostSlug::new(post_slug.to_owned()),
+                    ) {
+                        (Ok(site_id_val), Ok(post_slug_val)) => {
+                            self.registry_store
+                                .register_room(&room_id, &site_id_val, &post_slug_val)
+                                .await?;
+                            rooms.push(room_id.clone());
+                            info!(
+                                "Backfill: discovered comment room {} for {}/{}",
+                                room_id,
+                                site_id_val.as_str(),
+                                post_slug_val.as_str()
+                            );
+                        }
+                        _ => warn!(
+                            "Backfill: skipping room {} with invalid identity {}/{}",
+                            room_id, site_id, post_slug
+                        ),
+                    }
                 }
             }
         }

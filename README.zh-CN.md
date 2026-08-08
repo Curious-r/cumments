@@ -10,8 +10,9 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 
 - **Matrix 即事件日志** —— 评论是 `m.room.message`，编辑是 `m.replace`，
   删除是 `m.redaction`。
-- **所有权公开可验证** —— 每条事件携带作者的 Ed25519 公钥与签名
-  （`cumments_public_key` / `cumments_signature`），读模型整库丢弃后身份依然可重建。
+- **所有权公开可验证** —— 每条事件携带作者的 Ed25519 公钥、签名与被签名的 PoW
+  challenge（`cumments_public_key` / `cumments_signature` / `cumments_challenge`），
+  读模型整库丢弃后身份依然可重建。
 - **可丢弃的读模型** —— SQLite 只是投影；`cumments backfill` 可以从 Matrix 历史重建
   sites、房间注册表与全部评论。
 - **AppService-first** —— 生产模式以 Matrix Application Service 注册，使用虚拟用户，
@@ -355,7 +356,6 @@ cumments backup --output <file>
 {
   "content": "...",
   "nickname": "Alice",
-  "email": null,
   "author_public_key": "...",
   "author_signature": "...",
   "challenge_response": "challenge|nonce"
@@ -451,9 +451,8 @@ GitHub Actions 会执行同样的命令。
 
 ## 已知限制
 
-- `reply_to` 与 `email` 会被 API 接收，但尚未写入 Matrix 事件或读模型。`email`
-  只存在本地意图队列的 payload 中；终态行作为审计日志保留，生产部署前请加保留
-  期清理。
+- `reply_to` 会被 API 接收，但尚未写入 Matrix 事件或读模型。项目有意不收集
+  邮箱。
 - 速率限制、回复树、多实例/Postgres 尚未实现。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 

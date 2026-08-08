@@ -8,7 +8,7 @@
 
 use cumments_core::{
     events::ProjectorEvent,
-    models::Comment,
+    models::{Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
 };
 use serde::Deserialize;
@@ -214,22 +214,29 @@ impl EventProcessor {
                 // Room is completely UNKNOWN to us.
                 // Attempt just-in-time registration if we have its identity.
                 if let Some(ref identity) = event.room_identity {
-                    let _ = self
-                        .registry_store
-                        .register_room(
-                            &event.room_id,
-                            &identity.site_id.clone().into(),
-                            &identity.post_slug.clone().into(),
-                        )
-                        .await;
-                    // Note: we deliberately do NOT call `ensure_site_exists`
-                    // here – that would map the comment room ID as the site's
-                    // Matrix Space. Space mappings are established by the
-                    // space-child discovery flow / `SiteService::ensure_space`.
-                    info!(
-                        "Just-in-time registered new room {} for site {}",
-                        event.room_id, identity.site_id
-                    );
+                    if let (Ok(site_id), Ok(post_slug)) = (
+                        SiteId::new(identity.site_id.clone()),
+                        PostSlug::new(identity.post_slug.clone()),
+                    ) {
+                        let _ = self
+                            .registry_store
+                            .register_room(&event.room_id, &site_id, &post_slug)
+                            .await;
+                        // Note: we deliberately do NOT call `ensure_site_exists`
+                        // here – that would map the comment room ID as the site's
+                        // Matrix Space. Space mappings are established by the
+                        // space-child discovery flow / `SiteService::ensure_space`.
+                        info!(
+                            "Just-in-time registered new room {} for site {}",
+                            event.room_id, identity.site_id
+                        );
+                    } else {
+                        warn!(
+                            "Ignoring unknown room {}: invalid Cumments identity {}/{}",
+                            event.room_id, identity.site_id, identity.post_slug
+                        );
+                        return;
+                    }
                 } else {
                     debug!("Ignoring message from unregistered room {}", event.room_id);
                     return;
@@ -239,7 +246,19 @@ impl EventProcessor {
 
         // 0. Identify the room context
         let (site_id, post_slug) = match event.room_identity {
-            Some(ref id) => (id.site_id.clone(), id.post_slug.clone()),
+            Some(ref id)
+                if SiteId::new(id.site_id.clone()).is_ok()
+                    && PostSlug::new(id.post_slug.clone()).is_ok() =>
+            {
+                (id.site_id.clone(), id.post_slug.clone())
+            }
+            Some(ref id) => {
+                warn!(
+                    "Ignoring message from room {} with invalid identity {}/{}",
+                    event.room_id, id.site_id, id.post_slug
+                );
+                return;
+            }
             None => return, // Not a cumments room
         };
 
@@ -360,6 +379,7 @@ impl EventProcessor {
             content: event.content.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+            room_id: event.room_id.clone(),
             author_mxid: event.sender.clone(),
         };
 
@@ -400,6 +420,40 @@ impl EventProcessor {
             }
         };
 
+        info!(
+            "Handling redaction for event {} in room {}",
+            target_event_id, event.room_id
+        );
+
+        // Integrity: only redact a comment that actually lives in the room the
+        // redaction arrived from. Fetch before deleting so the check uses the
+        // same snapshot the deletion will operate on.
+        let comment = self
+            .comment_store
+            .get_comment(&target_event_id)
+            .await
+            .ok()
+            .flatten();
+
+        if let Some(c) = &comment {
+            if c.room_id != event.room_id {
+                warn!(
+                    "Ignoring redaction for {} in {}: comment lives in {}",
+                    target_event_id, event.room_id, c.room_id
+                );
+                return;
+            }
+            if let Some(ref identity) = event.room_identity
+                && (c.site_id != identity.site_id || c.post_slug != identity.post_slug)
+            {
+                warn!(
+                    "Ignoring redaction for {} in {}: comment belongs to {}/{}",
+                    target_event_id, event.room_id, c.site_id, c.post_slug
+                );
+                return;
+            }
+        }
+
         // Closed-loop: Mark delete intent as completed
         if let Err(e) = self
             .intent_store
@@ -408,19 +462,6 @@ impl EventProcessor {
         {
             debug!("Failed to mark delete intent as completed: {:?}", e);
         }
-
-        info!(
-            "Handling redaction for event {} in room {}",
-            target_event_id, event.room_id
-        );
-
-        // Fetch comment before deleting to emit event with context
-        let comment = self
-            .comment_store
-            .get_comment(&target_event_id)
-            .await
-            .ok()
-            .flatten();
 
         match self.comment_store.delete_comment(&target_event_id).await {
             Ok(true) => {
@@ -451,28 +492,36 @@ impl EventProcessor {
             Some(ref id) => id.clone(),
             None => return, // Not a managed Space
         };
+        let Ok(site_id_val) = SiteId::new(site_id.clone()) else {
+            warn!("Ignoring space child for invalid site id {}", site_id);
+            return;
+        };
 
         // AUTO-DISCOVERY: Ensure the site itself exists in the store
         let _ = self
             .site_store
-            .ensure_site_exists(&site_id, &event.space_room_id)
+            .ensure_site_exists(site_id_val.as_str(), &event.space_room_id)
             .await;
 
         if event.is_attached {
             // Register the child room if we know its identity
             if let Some(ref child_identity) = event.child_room_identity {
-                let _ = self
-                    .registry_store
-                    .register_room(
-                        &event.child_room_id,
-                        &site_id.clone().into(),
-                        &child_identity.post_slug.clone().into(),
-                    )
-                    .await;
-                info!(
-                    "Registered active room {} for site {}",
-                    event.child_room_id, site_id
-                );
+                match PostSlug::new(child_identity.post_slug.clone()) {
+                    Ok(post_slug) => {
+                        let _ = self
+                            .registry_store
+                            .register_room(&event.child_room_id, &site_id_val, &post_slug)
+                            .await;
+                        info!(
+                            "Registered active room {} for site {}",
+                            event.child_room_id, site_id
+                        );
+                    }
+                    Err(_) => warn!(
+                        "Ignoring space child with invalid post slug {}",
+                        child_identity.post_slug
+                    ),
+                }
             }
         } else {
             // Mark as inactive

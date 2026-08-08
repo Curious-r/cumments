@@ -43,6 +43,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         nickname: &str,
         author_public_key: &str,
         _author_signature: &str,
+        _author_challenge: &str,
         _site_id: &SiteId,
         intent_id: Option<i64>,
     ) -> Result<String> {
@@ -63,6 +64,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         nickname: &str,
         author_public_key: &str,
         _author_signature: &str,
+        _author_challenge: &str,
         _site_id: &SiteId,
         intent_id: Option<i64>,
     ) -> Result<String> {

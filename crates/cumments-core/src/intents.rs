@@ -20,18 +20,16 @@ pub struct PostCommentIntent {
 
     /// Information about the author. For guests, this is provided by them.
     pub nickname: String,
-    // Optional, maybe for gravatar-like features later. PII retention note:
-    // the email is stored only in this intent payload inside the local SQLite
-    // queue and never leaves it (not written to Matrix events or the read
-    // model). Completed rows are kept as an audit log; scrub or add retention
-    // cleanup before production deployment.
-    pub email: Option<String>,
 
     /// Ed25519 public key identifying the author (base64url).
     /// Ownership is publicly verifiable from Matrix events.
     pub author_public_key: String,
     /// Ed25519 signature over the canonical request message.
     pub author_signature: String,
+    /// PoW challenge prefix included in the signed message. Published in the
+    /// Matrix event so the signature remains independently verifiable.
+    #[serde(default)]
+    pub author_challenge: String,
 
     /// If this comment is a reply, this field holds the ID of the parent comment.
     pub reply_to: Option<String>,
@@ -69,4 +67,8 @@ pub struct UpdateCommentIntent {
     pub author_public_key: String,
     /// Ed25519 signature authorizing this edit.
     pub author_signature: String,
+    /// PoW challenge prefix included in the signed message. Published in the
+    /// replacement event so the signature remains independently verifiable.
+    #[serde(default)]
+    pub author_challenge: String,
 }

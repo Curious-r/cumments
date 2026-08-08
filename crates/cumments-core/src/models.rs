@@ -103,6 +103,10 @@ pub struct Comment {
     pub author_public_key: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
+    /// Matrix room the comment lives in. Internal integrity check for edits
+    /// and redactions; never exposed through the API/SSE.
+    #[serde(skip)]
+    pub room_id: String,
     /// Matrix sender of the original event. Internal integrity check for
     /// edits (m.replace) and never exposed through the API/SSE.
     #[serde(skip)]
