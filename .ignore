@@ -1,4 +1,6 @@
 .git
+.gitignore
+.github
 .DS_Store
 
 # Devenv
