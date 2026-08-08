@@ -56,9 +56,8 @@ fn metadata_matches(meta: &serde_json::Value, site_id: &str, post_slug: Option<&
 
 /// The AppService-based Matrix driver.
 ///
-/// Instead of using a logged-in client session, this driver
-/// authenticates with the AppService `as_token` and can impersonate
-/// any virtual user in the AppService namespace.
+/// This driver authenticates with the AppService `as_token` and can
+/// impersonate any virtual user in the AppService namespace.
 pub struct AppServiceMatrixDriver {
     http_client: reqwest::Client,
     homeserver_url: String,
@@ -100,7 +99,8 @@ impl AppServiceMatrixDriver {
         format!("@{}:{}", localpart, self.server_name)
     }
 
-    /// The sender (bot) user ID for this AppService.
+    /// The AppService sender user ID used for room creation, state events
+    /// and redactions.
     fn sender_user_id(&self) -> String {
         self.user_id(&self.sender_localpart)
     }

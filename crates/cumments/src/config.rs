@@ -30,7 +30,7 @@ pub struct Security {
 /// Fields will be present or not depending on the `mode`.
 #[derive(Debug, Deserialize)]
 pub struct Matrix {
-    /// Operation mode: "bot" | "appservice" | "logging"
+    /// Operation mode: "appservice" | "logging"
     pub mode: String,
     pub homeserver_url: String,
     pub owner_id: String,

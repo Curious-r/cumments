@@ -134,7 +134,9 @@ impl Reconciler {
                     .await?;
 
                 // 3b. Registry: Write back the room mapping immediately
-                // This is critical for AS mode where no sync loop backs us up.
+                // This is critical in AppService mode: pushes resolve room
+                // identity from this registry, so the mapping must be durable
+                // before any event can arrive.
                 self.registry_store
                     .register_room(&room_id, &intent.site_id, &intent.post_slug)
                     .await?;

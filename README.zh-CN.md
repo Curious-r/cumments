@@ -15,7 +15,7 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 - **可丢弃的读模型** —— SQLite 只是投影；`cumments backfill` 可以从 Matrix 历史重建
   sites、房间注册表与全部评论。
 - **AppService-first** —— 生产模式以 Matrix Application Service 注册，使用虚拟用户，
-  通过 HTTP push 接收事件；Bot 模式已完全移除。
+  通过 HTTP push 接收事件。
 - **PoW 防刷** —— 发评论需要解决带签名的 proof-of-work 挑战，无需登录/账号体系。
 - **SSE 实时更新** —— 提供 `new_comment` / `comment_updated` / `comment_deleted` 事件。
 
@@ -87,7 +87,7 @@ Cumments 以 Matrix Application Service 身份注册。每个访客对应一个�
 ```
 
 Homeserver 通过 `PUT /_matrix/app/v1/transactions/{txnId}` 推送事件，以
-`hs_token` 认证，无需 sync 循环。
+`hs_token` 认证。
 
 ### Logging 模式（本地开发）
 

@@ -17,7 +17,7 @@ Matrix history with `cumments backfill`.
 - **Disposable read model** — SQLite is only a projection; `cumments backfill`
   rebuilds sites, the room registry, and comments from Matrix history.
 - **AppService-first** — production mode registers as a Matrix Application
-  Service, uses virtual users, and receives events via HTTP push. No bot mode.
+  Service, uses virtual users, and receives events via HTTP push.
 - **PoW anti-spam** — comments require solving a signed proof-of-work challenge;
   no login or account system.
 - **Real-time SSE updates** — `new_comment`, `comment_updated`, and
@@ -94,7 +94,7 @@ by a deterministic virtual user:
 ```
 
 The homeserver pushes events to `PUT /_matrix/app/v1/transactions/{txnId}`,
-authenticated with `hs_token`. No sync loop is required.
+authenticated with `hs_token`.
 
 ### Logging Mode (local development)
 
