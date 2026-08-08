@@ -288,14 +288,15 @@ docker build -t cumments -f misc/docker/Dockerfile .
 docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
 
-Prebuilt images are published to GHCR on `main` and version tags:
+Prebuilt images are published to GHCR from version tags:
 
 ```bash
 docker pull ghcr.io/curious-r/cumments:0.17.0
 docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17.0
 ```
 
-`main` tracks the latest commit and `latest` follows the newest `v*` tag.
+`latest` follows the newest `v*` tag. `main` and pull requests build the image
+for validation but do not publish it.
 
 The image starts in `logging` mode by default. Override it for production with
 environment variables, e.g.:
