@@ -1,0 +1,388 @@
+# Cumments
+
+[English](README.md) | [中文](README.zh-CN.md)
+
+Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Matrix 是
+**唯一事实源（不可变事件日志）**：每条评论、编辑和删除都是 Matrix 房间中的不可变事件；
+SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 Matrix 历史整体重建。
+
+## 核心特性
+
+- **Matrix 即事件日志** —— 评论是 `m.room.message`，编辑是 `m.replace`，
+  删除是 `m.redaction`。
+- **所有权公开可验证** —— 每条事件携带作者的 Ed25519 公钥与签名
+  （`cumments_public_key` / `cumments_signature`），读模型整库丢弃后身份依然可重建。
+- **可丢弃的读模型** —— SQLite 只是投影；`cumments backfill` 可以从 Matrix 历史重建
+  sites、房间注册表与全部评论。
+- **AppService-first** —— 生产模式以 Matrix Application Service 注册，使用虚拟用户，
+  通过 HTTP push 接收事件；Bot 模式已完全移除。
+- **PoW 防刷** —— 发评论需要解决带签名的 proof-of-work 挑战，无需登录/账号体系。
+- **SSE 实时更新** —— 提供 `new_comment` / `comment_updated` / `comment_deleted` 事件。
+
+## 架构
+
+```
+                    ┌──────────────────┐
+                    │  User Request    │
+                    │  (Browser/API)   │
+                    └────────┬─────────┘
+                             │
+                ┌────────────▼────────────┐
+                │      cumments-api       │
+                │ (HTTP, PoW, Ed25519)    │
+                └────────────┬────────────┘
+                             │ intent
+                ┌────────────▼────────────┐
+                │      Intent Queue       │
+                │         (SQLite)        │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │       Reconciler        │
+                │     (writer path)       │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │      MatrixDriver       │
+                │ (AppService / Logging)  │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │  Matrix homeserver      │
+                │   (source of truth)     │
+                └────────────┬────────────┘
+                             │ push (AppService)
+                ┌────────────▼────────────┐
+                │      PushReceiver       │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │     EventProcessor      │
+                │ (idempotent projection) │
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │  SQLite read model      │
+                │ (disposable, rebuildable)│
+                └────────────┬────────────┘
+                             │
+                ┌────────────▼────────────┐
+                │ API queries / SSE       │
+                └─────────────────────────┘
+```
+
+写路径是意图驱动的：API 校验 PoW 与 Ed25519 签名后落意图队列，**Reconciler**
+调用 MatrixDriver 写入 Matrix。读路径是投影驱动的：AppService 模式下
+`PushReceiver` 通过 homeserver push 接收事件并送入 **EventProcessor**，以幂等方式
+更新 SQLite 读模型并广播 SSE。`cumments backfill` 复用同一投影核心。
+
+## 运行模式
+
+### AppService 模式（生产）
+
+Cumments 以 Matrix Application Service 身份注册。每个访客对应一个确定性虚拟用户：
+
+```text
+@_cumments_{site_id}_{sha256(public_key) 前 4 字节 hex}:{server_name}
+```
+
+Homeserver 通过 `PUT /_matrix/app/v1/transactions/{txnId}` 推送事件，以
+`hs_token` 认证，无需 sync 循环。
+
+### Logging 模式（本地开发）
+
+`LoggingMatrixDriver` 只记录日志、不连 homeserver，适合调试 API 与本地读模型。
+
+## 恢复体系
+
+### Backfill（读模型重建）
+
+```bash
+cumments backfill
+```
+
+`cumments backfill` 从 Matrix 历史重建 SQLite 读模型，需要连接真实 homeserver
+的 AppService 配置：
+
+1. 通过 `joined_rooms` + `im.cumments.metadata` 发现 Cumments 房间（本地库清空后
+   也能重建 sites 与房间注册表）；
+2. 通过 CS API `/messages` 分页拉取每个评论房间的历史；
+3. 按 `(origin_server_ts, event_id)` 顺序回放，复用与实时 push 完全相同的幂等投影。
+
+中断的跑批会从持久化的游标处续跑。
+
+### Backup（快照）
+
+```bash
+cumments backup --output data/cumments.backup.db
+```
+
+先执行 WAL checkpoint，再用 `VACUUM INTO` 生成一致的单文件 SQLite 快照。
+目标文件必须不存在。快照属于便利机制；读模型丢失时的权威恢复路径仍是
+`cumments backfill`。
+
+## Crate 结构
+
+| Crate | 职责 |
+|---|---|
+| `cumments-core` | 领域模型、端口（trait）、意图、事件 |
+| `cumments-api` | HTTP API、PoW 校验、输入校验、SSE |
+| `cumments-store` | SQLite（SeaORM）、迁移、备份 |
+| `cumments-reconciler` | 后台写入——消费意图、调用 MatrixDriver、等待投影闭环 |
+| `cumments-matrix` | MatrixDriver 实现（AppService / Logging） |
+| `cumments-projector` | 事件接收与投影（EventProcessor、PushReceiver、backfill） |
+| `cumments` | CLI 入口、配置加载、依赖装配 |
+
+## 配置
+
+加载优先级：
+
+1. 环境变量（前缀 `CUMMENTS__`，层级用 `__` 分隔）
+2. `config.toml`（或 `--config <path>`）
+3. 默认值
+
+AppService 配置示例：
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 7931
+cors_origins = "*"
+public_server_name = "your_server.tld"
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+admin_token = "admin_secret"
+pow_secret = "pow_secret_key"
+pow_difficulty = 4
+
+[matrix]
+mode = "appservice"
+homeserver_url = "http://localhost:8008"
+server_name = "your_server.tld"
+as_token = "${AS_TOKEN}"
+hs_token = "${HS_TOKEN}"
+bot_localpart = "cumments"
+push_listen_port = 3001
+owner_id = "@admin:your_server.tld"
+```
+
+本地开发把 `mode` 设为 `"logging"` 即可；此时 `matrix` 段只需
+`homeserver_url` 与 `owner_id`。
+
+配置说明：
+
+- `admin_token` / `cors_origins` / `public_server_name` 目前会被解析但尚未生效，
+  CORS 是 permissive。
+- SQLite 文件会自动创建，但父目录需要存在（仓库已有 `data/`）。
+- 所有时间戳统一以毫秒精度存为 UTC。
+
+## 快速开始
+
+前置条件：Rust 1.88+（当前 stable）；AppService 模式还需要 homeserver 的服务端配置权限。
+
+```bash
+# 生成 AppService registration 文件
+cumments generate-registration --server-name your_server.tld
+```
+
+把生成的 `registration.yaml` 放到 homeserver，将打印的 `as_token` /
+`hs_token` 写入 `config.toml`，然后运行：
+
+```bash
+mkdir -p data
+RUST_LOG=info cargo run -p cumments
+```
+
+### Docker
+
+```bash
+docker build -t cumments -f misc/docker/Dockerfile .
+docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
+```
+
+镜像默认以 `logging` 模式启动；生产环境用环境变量覆盖，例如：
+
+```bash
+docker run -p 7931:7931 \
+  -e CUMMENTS__MATRIX__MODE=appservice \
+  -e CUMMENTS__MATRIX__SERVER_NAME=your_server.tld \
+  -e CUMMENTS__MATRIX__AS_TOKEN=... \
+  -e CUMMENTS__MATRIX__HS_TOKEN=... \
+  cumments
+```
+
+容器 healthcheck 使用 `GET /health`。
+
+## CLI
+
+```text
+cumments generate-registration --server-name <domain> [--url <url>] [--quiet]
+cumments backfill
+cumments backup --output <file>
+```
+
+## API
+
+### 挑战（PoW）
+
+`GET /api/challenge`
+
+```json
+{
+  "prefix": "timestamp_hex.random_hex.signature",
+  "difficulty": 4
+}
+```
+
+挑战 5 分钟后过期。
+
+### 健康检查
+
+`GET /health`
+
+```json
+{ "status": "ok" }
+```
+
+### 评论
+
+所有写操作都需要 `author_public_key`（base64url Ed25519，32 字节）与对规范消息的
+`author_signature`。`challenge_prefix` 是 `challenge_response` 中 `|` 之前的部分。
+
+**查询评论**
+
+`QUERY /api/sites/{site_id}/posts/{post_slug}/comments`（RFC 10008）
+
+请求体：
+
+```json
+{ "page": 1, "per_page": 20 }
+```
+
+响应：
+
+```json
+{
+  "data": [
+    {
+      "event_id": "$event:server",
+      "site_id": "my-blog",
+      "post_slug": "hello-world",
+      "author_nickname": "Alice",
+      "author_public_key": "...",
+      "content": "...",
+      "timestamp": "2026-08-08T00:00:00Z"
+    }
+  ],
+  "meta": {
+    "total": 1,
+    "page": 1,
+    "per_page": 20,
+    "total_pages": 1
+  }
+}
+```
+
+**发表评论**
+
+`POST /api/sites/{site_id}/posts/{post_slug}/comments`
+
+请求体：
+
+```json
+{
+  "content": "...",
+  "nickname": "Alice",
+  "email": null,
+  "author_public_key": "...",
+  "author_signature": "...",
+  "challenge_response": "challenge|nonce"
+}
+```
+
+签名消息：
+
+```text
+POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{challenge_prefix}
+```
+
+**编辑评论**
+
+`PATCH /api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`
+
+签名消息：
+
+```text
+PATCH\n{site_id}\n{post_slug}\n{comment_id}\n{content}\n{challenge_prefix}
+```
+
+**删除评论**
+
+`DELETE /api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`
+
+签名消息：
+
+```text
+DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}
+```
+
+### 实时更新（SSE）
+
+`GET /api/sites/{site_id}/posts/{post_slug}/sse`
+
+事件格式为 `{ "type": "...", "payload": { ... } }`：
+
+```text
+type: new_comment
+type: comment_updated
+type: comment_deleted
+```
+
+`new_comment` 与 `comment_updated` 的 payload 包含完整 `Comment` 对象；
+`comment_deleted` 包含被删除的 `event_id`。
+
+## 前端集成
+
+`misc/frontend/index.html` 是可直接打开的测试页，已实现以下流程，默认 API 地址为
+`http://localhost:7931`。
+
+### 身份
+
+用 WebCrypto 生成 Ed25519 密钥对，私钥只留在浏览器。**公钥即身份**：请求时提交
+`author_public_key`，并用私钥对规范消息签名。编辑/删除通过比对评论中存储的公钥并
+验证签名来授权。
+
+### Proof of Work
+
+1. 调用 `GET /api/challenge`。
+2. 找到 `nonce`，使 `SHA256(prefix + nonce)` 以 `difficulty` 个十六进制前导零开头。
+3. 提交 `challenge_response = prefix + "|" + nonce`。
+
+### 校验规则
+
+`site_id` 与 `post_slug` 允许 `[a-zA-Z0-9_-]`，长度 1–64；非法值返回
+`400 VALIDATION_ERROR`。
+
+## 开发
+
+```bash
+cargo fmt --all -- --check
+cargo check --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+```
+
+GitHub Actions 会执行同样的命令。
+
+## 已知限制
+
+- `reply_to` 与 `email` 会被 API 接收，但尚未写入 Matrix 事件或读模型。
+- 速率限制、回复树、多实例/Postgres 尚未实现。
+- `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
+
+## License
+
+MIT
