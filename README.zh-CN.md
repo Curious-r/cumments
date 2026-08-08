@@ -86,6 +86,17 @@ Cumments 以 Matrix Application Service 身份注册。每个访客对应一个�
 @_cumments_{site_id}_{sha256(public_key) 前 8 字节 hex}:{server_name}
 ```
 
+registration 保留独占的 `users` 与 `aliases` 命名空间（`@_cumments_.*` 和
+`#_cumments_.*`）；房间 ID 不注册命名空间，因为它由 homeserver 随机生成。
+
+| 对象 | Matrix 标识 |
+|---|---|
+| 访客虚拟用户 | `@_cumments_{site_id}_{sha256(public_key) 前 8 字节 hex}:{server_name}` |
+| AppService sender | `@_cumments_bot:{server_name}`（可通过 `matrix.sender_localpart` 修改） |
+| Site 空间别名 | `#_cumments_{site_id}:{server_name}` |
+| 评论房间别名 | `#_cumments_{site_id}_{post_slug}:{server_name}` |
+| 房间 ID | 由 homeserver 生成（`!...:{server_name}`） |
+
 Homeserver 通过 `PUT /_matrix/app/v1/transactions/{txnId}` 推送事件，以
 `hs_token` 认证。
 
