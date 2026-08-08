@@ -30,15 +30,17 @@ RUN mkdir -p crates/cumments/src && \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/src/app/target \
     cargo build --release --locked --bin cumments
-RUN rm -rf target/release/deps/cumments*
 
 # Copy actual source code
 COPY . .
 
-# Build the cumments binary
+# Build the cumments binary, then copy it out of the target cache mount.
+# Cache-mount contents are discarded when the RUN finishes, so the binary
+# must be placed somewhere that persists in this stage for the runtime COPY.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/src/app/target \
-    cargo build --release --locked --bin cumments
+    cargo build --release --locked --bin cumments && \
+    install -m 0755 target/release/cumments /usr/local/bin/cumments
 
 # Runtime stage
 FROM alpine:3.22
@@ -59,7 +61,7 @@ RUN apk --no-cache add ca-certificates sqlite-libs && \
     mkdir -p /etc/cumments
 
 # Copy the binary from builder stage
-COPY --from=builder /usr/src/app/target/release/cumments /usr/local/bin/cumments
+COPY --from=builder /usr/local/bin/cumments /usr/local/bin/cumments
 # Copy the runnable example configuration as the default config
 COPY --from=builder /usr/src/app/misc/config/config-example.toml /etc/cumments/cumments.toml
 
