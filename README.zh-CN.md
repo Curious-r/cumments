@@ -92,7 +92,7 @@ registration 保留独占的 `users` 与 `aliases` 命名空间（`@_cumments_.*
 | 对象 | Matrix 标识 |
 |---|---|
 | 访客虚拟用户 | `@_cumments_{site_id}_{sha256(public_key) 前 8 字节 hex}:{server_name}` |
-| AppService sender | `@_cumments_bot:{server_name}`（可通过 `matrix.sender_localpart` 修改） |
+| AppService sender | `@_cumments_bot:{server_name}`（可通过 `matrix.appservice.sender_localpart` 修改） |
 | Site 空间别名 | `#_cumments_{site_id}:{server_name}` |
 | 评论房间别名 | `#_cumments_{site_id}_{post_slug}:{server_name}` |
 | 房间 ID | 由 homeserver 生成（`!...:{server_name}`） |
@@ -173,20 +173,49 @@ pow_difficulty = 4
 
 [matrix]
 mode = "appservice"
-homeserver_url = "http://localhost:8008"
-server_name = "your_server.tld"
-as_token = "${AS_TOKEN}"
-hs_token = "${HS_TOKEN}"
+
+[matrix.homeserver]
+# AppService 调用 homeserver 时使用的 CS API 地址
+address = "https://matrix.example.com"
+# Matrix ID 域（用户 ID 与房间别名中冒号后面的部分）
+domain = "example.com"
+
+[matrix.appservice]
+# 必须与 registration.yaml 里的 `id` 一致
+id = "cumments"
+# homeserver 用来回调本实例的地址（必须从 homeserver 侧可达）
+url = "https://cumments.example.com"
+listen_host = "0.0.0.0"
+listen_port = 3001
 sender_localpart = "_cumments_bot"
-push_listen_port = 3001
+# token 必须与 registration.yaml 一致；生产环境建议用环境变量：
+# CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=...
+# CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=...
+# as_token = ""
+# hs_token = ""
+# 可选：启动时校验本配置与 registration.yaml 是否一致
+# registration_file = "registration.yaml"
+
+[matrix.moderation]
 owner_id = "@admin:your_server.tld"
 ```
 
-本地开发把 `mode` 设为 `"logging"` 即可；此时 `matrix` 段只需
-`homeserver_url` 与 `owner_id`。
+本地开发把 `mode` 设为 `"logging"` 即可；此时不需要
+`matrix.homeserver`、`matrix.appservice` 或 `matrix.moderation` 段。
 
 配置说明：
 
+- `matrix.homeserver.address` 是 AppService 访问 homeserver 的 CS API 地址；
+  `matrix.homeserver.domain` 是 Matrix ID 域。两者刻意分开，因为反向代理和
+  well-known 委派会让它们不同。
+- `matrix.appservice.url` 是 homeserver 回调 Cumments 的地址，因此必须从
+  homeserver 侧可达，而不是从你的浏览器可达。
+- 环境变量写法为 `CUMMENTS__` 前缀加 `__` 分隔，例如
+  `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN`。除 Matrix 以外的配置段仍需提供
+  配置文件，可用 `--config <path>` 指定。
+- 配置结构是严格的：未知字段会直接报错，因此旧版扁平字段
+  （`matrix.homeserver_url`、`matrix.server_name` 等）会快速失败，而不是被
+  静默忽略。
 - `cors_origins` 已生效：`"*"` 保持 permissive；逗号分隔的精确域名列表会把
   `Access-Control-Allow-Origin` 限制为这些来源；空值则不发送 CORS 头。
 - SQLite 文件会自动创建，但父目录需要存在（仓库已有 `data/`）。
@@ -199,11 +228,17 @@ owner_id = "@admin:your_server.tld"
 ```bash
 # 生成 AppService registration 文件
 # （首次 cargo run 会先编译 Cumments，之后复用构建缓存）
-cargo run -p cumments -- generate-registration --server-name your_server.tld
+cargo run -p cumments -- generate-registration \
+  --server-name your_server.tld \
+  --url https://cumments.example.com
 ```
 
-把生成的 `registration.yaml` 放到 homeserver，将打印的 `as_token` /
-`hs_token` 写入 `config.toml`，然后运行：
+`--url` 必须能被 homeserver 访问（这是推送回调地址，不是本机地址）。如果
+`config.toml` 里已经有 `matrix.homeserver.domain` 和
+`matrix.appservice.url`，这两个参数都可以省略。把生成的 `registration.yaml`
+放到 homeserver，将打印的 `as_token` / `hs_token` 写入
+`[matrix.appservice]`（或用 `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN` /
+`...__HS_TOKEN` 环境变量），然后运行：
 
 ```bash
 mkdir -p data
@@ -225,9 +260,13 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```bash
 docker run -p 7931:7931 \
   -e CUMMENTS__MATRIX__MODE=appservice \
-  -e CUMMENTS__MATRIX__SERVER_NAME=your_server.tld \
-  -e CUMMENTS__MATRIX__AS_TOKEN=... \
-  -e CUMMENTS__MATRIX__HS_TOKEN=... \
+  -e CUMMENTS__MATRIX__HOMESERVER__ADDRESS=https://matrix.example.com \
+  -e CUMMENTS__MATRIX__HOMESERVER__DOMAIN=your_server.tld \
+  -e CUMMENTS__MATRIX__APPSERVICE__URL=https://cumments.example.com \
+  -e CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=... \
+  -e CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=... \
+  -e CUMMENTS__MATRIX__MODERATION__OWNER_ID=@admin:your_server.tld \
+  -e CUMMENTS__SECURITY__POW_SECRET=... \
   cumments
 ```
 
@@ -236,7 +275,7 @@ docker run -p 7931:7931 \
 ## CLI
 
 ```text
-cumments generate-registration --server-name <domain> [--url <url>] [--quiet]
+cumments generate-registration [--server-name <domain>] [--url <url>] [--quiet]
 cumments backfill
 cumments backup --output <file>
 ```
