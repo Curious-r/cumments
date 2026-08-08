@@ -64,18 +64,27 @@ impl MatrixDriver for LoggingMatrixDriver {
         author_public_key: &str,
         _author_signature: &str,
         _site_id: &SiteId,
+        intent_id: Option<i64>,
     ) -> Result<String> {
         let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         info!(
-            "LOGGING: Update message {} in room={}. Author={} (visitor={}): {}",
-            event_id, room_id, nickname, visitor_id, new_content
+            "LOGGING: Update message {} in room={}. Author={} (visitor={}, intent={:?}): {}",
+            event_id, room_id, nickname, visitor_id, intent_id, new_content
         );
         Ok(format!("log_update_{}", event_id))
     }
 
-    async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()> {
-        info!("LOGGING: Redact message {} in room={}", event_id, room_id);
+    async fn redact_message(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        intent_id: Option<i64>,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Redact message {} in room={} (intent={:?})",
+            event_id, room_id, intent_id
+        );
         Ok(())
     }
 

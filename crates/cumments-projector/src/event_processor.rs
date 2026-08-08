@@ -243,25 +243,6 @@ impl EventProcessor {
             None => return, // Not a cumments room
         };
 
-        // 1. Closed-loop: mark the originating intent as completed. Prefer the
-        // correlation ID when present – the push may arrive before the
-        // reconciler's write-back, so the event_id is not yet stored on the
-        // intent row. Fall back to event_id matching for external messages.
-        let close_loop = match event.intent_id {
-            Some(id) => self.intent_store.mark_post_intent_completed_by_id(id).await,
-            None => {
-                self.intent_store
-                    .mark_post_intent_completed(&event.event_id)
-                    .await
-            }
-        };
-        if let Err(e) = close_loop {
-            debug!(
-                "Failed to mark intent as completed (normal if external msg): {:?}",
-                e
-            );
-        }
-
         // Handle Edits (Replacements)
         if let Some(ref relation) = event.relates_to {
             info!("Handling edit for event {}", relation.target_event_id);
@@ -294,13 +275,23 @@ impl EventProcessor {
                 }
             }
 
-            // Closed-loop: the update was sent to Matrix; complete the intent
-            // even if the local read model has no row yet.
-            if let Err(e) = self
-                .intent_store
-                .mark_update_intent_completed(&relation.target_event_id)
-                .await
-            {
+            // Closed-loop: complete the exact update intent that produced this
+            // event. The correlation ID lets concurrent edits to the same
+            // comment close independently; legacy events without it fall back
+            // to target-event matching (waiting intents only).
+            let update_closed = match event.intent_id {
+                Some(id) => {
+                    self.intent_store
+                        .mark_update_intent_completed_by_id(id)
+                        .await
+                }
+                None => {
+                    self.intent_store
+                        .mark_update_intent_completed(&relation.target_event_id)
+                        .await
+                }
+            };
+            if let Err(e) = update_closed {
                 debug!(
                     "Failed to mark update intent as completed (normal if no intent): {:?}",
                     e
@@ -338,6 +329,25 @@ impl EventProcessor {
                 ),
             }
             return;
+        }
+
+        // Closed-loop: mark the originating post intent as completed. Prefer
+        // the correlation ID when present – the push may arrive before the
+        // reconciler's write-back, so the event_id is not yet stored on the
+        // intent row. Fall back to event_id matching for external messages.
+        let close_loop = match event.intent_id {
+            Some(id) => self.intent_store.mark_post_intent_completed_by_id(id).await,
+            None => {
+                self.intent_store
+                    .mark_post_intent_completed(&event.event_id)
+                    .await
+            }
+        };
+        if let Err(e) = close_loop {
+            debug!(
+                "Failed to mark intent as completed (normal if external msg): {:?}",
+                e
+            );
         }
 
         // Handle Original Posts

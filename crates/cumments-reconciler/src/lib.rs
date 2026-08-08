@@ -212,7 +212,7 @@ impl Reconciler {
 
                 // 2. Hands: Perform the redaction
                 self.driver
-                    .redact_message(&room_id, &intent.event_id)
+                    .redact_message(&room_id, &intent.event_id, Some(id))
                     .await?;
 
                 // 3. Concepts: Move to waiting_for_sync
@@ -300,6 +300,7 @@ impl Reconciler {
                         &intent.author_public_key,
                         &intent.author_signature,
                         &intent.site_id,
+                        Some(id),
                     )
                     .await?;
 

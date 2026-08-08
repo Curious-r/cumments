@@ -433,6 +433,25 @@ impl IntentStore for DbStore {
         .await
     }
 
+    async fn mark_update_intent_completed_by_id(&self, id: i64) -> Result<()> {
+        self.transition_status(
+            IntentStatus::Completed,
+            intent_queue_update_comment::Column::Status,
+            intent_queue_update_comment::Column::UpdatedAt,
+            |query: UpdateMany<intent_queue_update_comment::Entity>| {
+                query
+                    .filter(intent_queue_update_comment::COLUMN.id.eq(id))
+                    // Never resurrect a failed or already-completed intent.
+                    .filter(
+                        intent_queue_update_comment::COLUMN
+                            .status
+                            .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+                    )
+            },
+        )
+        .await
+    }
+
     async fn mark_delete_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
         self.transition_status(
             IntentStatus::WaitingForSync,
@@ -755,7 +774,15 @@ impl IntentStore for DbStore {
             intent_queue_update_comment::Column::Status,
             intent_queue_update_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                query.filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id))
+                query
+                    .filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id))
+                    // Only close intents that were actually sent; pending rows
+                    // must wait for their own `cumments_intent_id` correlation.
+                    .filter(
+                        intent_queue_update_comment::COLUMN
+                            .status
+                            .eq(IntentStatus::WaitingForSync),
+                    )
             },
         )
         .await

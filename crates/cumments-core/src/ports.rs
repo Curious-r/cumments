@@ -29,6 +29,11 @@ pub trait IntentStore: Send + Sync {
     /// Transitions an update intent to 'waiting_for_sync'.
     async fn mark_update_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
+    /// Completes a specific update intent by its queue ID. Used when the edit
+    /// event carries `cumments_intent_id`, so completing one edit never closes
+    /// a different queued edit targeting the same original comment.
+    async fn mark_update_intent_completed_by_id(&self, id: i64) -> Result<()>;
+
     /// Transitions a delete intent to 'waiting_for_sync'.
     async fn mark_delete_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
@@ -205,10 +210,16 @@ pub trait MatrixDriver: Send + Sync {
         author_public_key: &str,
         author_signature: &str,
         site_id: &SiteId,
+        intent_id: Option<i64>,
     ) -> Result<String>;
 
     /// Redacts a message in a specific room.
-    async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()>;
+    async fn redact_message(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        intent_id: Option<i64>,
+    ) -> Result<()>;
 
     /// Fetch one page of room history (CS API `/rooms/{roomId}/messages`).
     async fn get_room_events(

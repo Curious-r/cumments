@@ -160,7 +160,7 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
     // Simulate the projector seeing the replacement before the reconciler's
     // write-back: complete first, then attempt the write-back.
     store
-        .mark_update_intent_completed("$original:hs")
+        .mark_update_intent_completed_by_id(id)
         .await
         .expect("complete");
     store
@@ -191,6 +191,51 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
             .is_empty(),
         "completed intent must not reappear as pending"
     );
+}
+
+#[tokio::test]
+async fn update_completion_by_event_id_only_closes_waiting_intents() {
+    let store = DbStore::connect(&test_db_url("update-complete-scope"))
+        .await
+        .expect("connect in-memory db");
+
+    store
+        .save_update_intent(&update_intent())
+        .await
+        .expect("save first update");
+    store
+        .save_update_intent(&update_intent())
+        .await
+        .expect("save second update");
+
+    let pending = store.get_pending_update_intents().await.expect("pending");
+    assert_eq!(pending.len(), 2);
+    let (first_id, _) = pending[0];
+    let (second_id, _) = pending[1];
+
+    // One edit is observed after its write-back; the other is still pending.
+    store
+        .mark_update_intent_waiting_for_sync(first_id, "!room:hs")
+        .await
+        .expect("mark first waiting");
+    store
+        .mark_update_intent_completed("$original:hs")
+        .await
+        .expect("complete observed edit");
+
+    let pending = store.get_pending_update_intents().await.expect("pending");
+    assert_eq!(
+        pending.len(),
+        1,
+        "pending edit must not be closed by another edit"
+    );
+    assert_eq!(pending[0].0, second_id);
+
+    let stuck = store
+        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1))
+        .await
+        .expect("stuck query");
+    assert!(stuck.is_empty(), "observed edit must not remain waiting");
 }
 
 #[tokio::test]

@@ -679,6 +679,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         site_id: &SiteId,
+        intent_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user (includes site_id)
         let virtual_user = self
@@ -709,14 +710,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "cumments_signature": author_signature,
                 "cumments_content": new_content,
                 "cumments_nickname": nickname,
+                "cumments_intent_id": intent_id,
             },
             "m.relates_to": {
                 "rel_type": "m.replace",
                 "event_id": event_id,
             },
+            "cumments_intent_id": intent_id,
         });
 
-        let txn_id = self.txn_id(None);
+        let txn_id = self.txn_id(intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             urlencode(room_id),
@@ -743,9 +746,14 @@ impl MatrixDriver for AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()> {
+    async fn redact_message(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        intent_id: Option<i64>,
+    ) -> Result<()> {
         // Redact as the sender user (has admin power level in the room).
-        let txn_id = self.txn_id(None);
+        let txn_id = self.txn_id(intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/redact/{}/{}",
             urlencode(room_id),

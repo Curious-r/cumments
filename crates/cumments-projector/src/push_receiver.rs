@@ -355,4 +355,46 @@ mod tests {
         );
         assert_eq!(extract_author_display_name("plain body"), None);
     }
+
+    #[test]
+    fn edit_event_carries_intent_id_for_precise_closed_loop() {
+        let event = PushEvent {
+            event_type: "m.room.message".to_string(),
+            event_id: Some("$edit:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({
+                "body": " * **Alice**: edited",
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$original:hs",
+                    "m.new_content": {
+                        "body": "**Alice**: edited",
+                        "cumments_content": "edited",
+                        "cumments_nickname": "Alice",
+                        "cumments_intent_id": 42,
+                    }
+                },
+                "cumments_intent_id": 42,
+            })),
+            redacts: None,
+            unsigned: None,
+        };
+
+        let parsed = parse_push_message(&event).expect("parse edit");
+        assert_eq!(parsed.intent_id, Some(42));
+        assert_eq!(
+            parsed
+                .relates_to
+                .as_ref()
+                .map(|r| r.target_event_id.as_str()),
+            Some("$original:hs")
+        );
+        assert_eq!(
+            parsed.relates_to.as_ref().map(|r| r.new_content.as_str()),
+            Some("edited")
+        );
+    }
 }
