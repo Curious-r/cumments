@@ -157,11 +157,19 @@ cumments backup --output data/cumments.backup.db
 
 ## 配置
 
-加载优先级：
+配置文件按以下顺序发现：
+
+1. `--config <path>`
+2. 环境变量 `CUMMENTS_CONFIG`
+3. `$XDG_CONFIG_HOME/cumments/config.toml`（或 `~/.config/cumments/config.toml`）
+4. `/etc/cumments/config.toml`
+5. `./config.toml`（本地开发回退）
+
+选定文件后，最终值的优先级为：
 
 1. 环境变量（前缀 `CUMMENTS__`，层级用 `__` 分隔）
-2. `config.toml`（或 `--config <path>`）
-3. 默认值
+2. 配置文件中的值
+3. 内置默认值
 
 AppService 配置示例：
 

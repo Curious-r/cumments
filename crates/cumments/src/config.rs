@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 use std::fs;
+use std::path::PathBuf;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -208,19 +209,56 @@ impl Matrix {
     }
 }
 
-/// Reads configuration from a file and environment variables.
-/// If `config_path` is provided, it loads that specific file.
-/// Otherwise, it looks for `config.toml` in the current directory.
+/// Resolve the configuration file path.
 ///
-/// Environment variables use the `CUMMENTS__` prefix and `__` as the level
-/// separator, e.g. `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN`.
+/// Priority:
+/// 1. `--config <path>` (explicit CLI flag)
+/// 2. `CUMMENTS_CONFIG` environment variable
+/// 3. `$XDG_CONFIG_HOME/cumments/config.toml` (or `~/.config/cumments/config.toml`)
+/// 4. `/etc/cumments/config.toml`
+/// 5. `./config.toml` (local development fallback)
+pub fn resolve_config_path(explicit: Option<&str>) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        return Some(PathBuf::from(path));
+    }
+
+    if let Ok(path) = std::env::var("CUMMENTS_CONFIG") {
+        return Some(PathBuf::from(path));
+    }
+
+    default_config_paths()
+        .into_iter()
+        .find(|path| path.exists())
+}
+
+fn default_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(xdg).join("cumments").join("config.toml"));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        paths.push(
+            PathBuf::from(home)
+                .join(".config")
+                .join("cumments")
+                .join("config.toml"),
+        );
+    }
+
+    paths.push(PathBuf::from("/etc/cumments/config.toml"));
+    paths.push(PathBuf::from("config.toml"));
+    paths
+}
+
+/// Reads configuration from a file and environment variables.
+/// File discovery follows [`resolve_config_path`]; environment variables use
+/// the `CUMMENTS__` prefix and `__` as the level separator, e.g.
+/// `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN`, and override file values.
 pub fn get_configuration(config_path: Option<&str>) -> Result<Settings, ::config::ConfigError> {
     let mut builder = ::config::Config::builder();
 
-    if let Some(path) = config_path {
-        builder = builder.add_source(::config::File::with_name(path).required(true));
-    } else {
-        builder = builder.add_source(::config::File::with_name("config").required(false));
+    if let Some(path) = resolve_config_path(config_path) {
+        builder = builder.add_source(::config::File::from(path).required(true));
     }
 
     let settings = builder
@@ -541,5 +579,20 @@ namespaces:
             regex_escape(r"a+b(c).d[e]{1}|^$\\*?x"),
             r"a\+b\(c\)\.d\[e\]\{1\}\|\^\$\\\\\*\?x"
         );
+    }
+
+    #[test]
+    fn explicit_config_path_takes_precedence() {
+        assert_eq!(
+            resolve_config_path(Some("custom.toml")),
+            Some(PathBuf::from("custom.toml"))
+        );
+    }
+
+    #[test]
+    fn default_config_paths_include_system_and_local_fallbacks() {
+        let paths = default_config_paths();
+        assert!(paths.contains(&PathBuf::from("/etc/cumments/config.toml")));
+        assert!(paths.contains(&PathBuf::from("config.toml")));
     }
 }

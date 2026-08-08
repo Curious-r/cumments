@@ -58,6 +58,10 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     // 1. Read configuration
     // ─────────────────────────────────────────────────────────────
+    match config::resolve_config_path(args.config.as_deref()) {
+        Some(path) => tracing::info!("Using config file: {}", path.display()),
+        None => tracing::info!("No config file found; using defaults and environment variables."),
+    }
     let settings =
         config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
     tracing::info!("Configuration loaded successfully.");

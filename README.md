@@ -170,11 +170,19 @@ convenience; `backfill` is the authoritative recovery path.
 
 ## Configuration
 
-Configuration is loaded in this order:
+The configuration file is discovered in this order:
+
+1. `--config <path>`
+2. `CUMMENTS_CONFIG` environment variable
+3. `$XDG_CONFIG_HOME/cumments/config.toml` (or `~/.config/cumments/config.toml`)
+4. `/etc/cumments/config.toml`
+5. `./config.toml` (local development fallback)
+
+Once a file is selected, effective value precedence is:
 
 1. Environment variables (`CUMMENTS__` prefix, `__` level separator)
-2. `config.toml` (or `--config <path>`)
-3. Defaults
+2. Values from the discovered config file
+3. Built-in defaults
 
 Example AppService configuration:
 

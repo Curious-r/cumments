@@ -6,7 +6,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::config::regex_escape;
+use crate::config::{regex_escape, resolve_config_path};
 
 /// Generate a complete registration.yaml for the AppService mode.
 #[derive(clap::Args, Debug)]
@@ -107,6 +107,11 @@ pub fn handle_generate_registration(
     args: &GenerateRegistrationArgs,
     config_path: Option<&str>,
 ) -> Result<()> {
+    match resolve_config_path(config_path) {
+        Some(path) => eprintln!("Using config file: {}", path.display()),
+        None => eprintln!("No config file found; using CLI flags and defaults."),
+    }
+
     let source = RegistrationSource::load(config_path)?;
 
     let url = args
@@ -218,10 +223,8 @@ struct RegistrationAppService {
 impl RegistrationSource {
     fn load(config_path: Option<&str>) -> Result<Self> {
         let mut builder = ::config::Config::builder();
-        if let Some(path) = config_path {
-            builder = builder.add_source(::config::File::with_name(path).required(true));
-        } else {
-            builder = builder.add_source(::config::File::with_name("config").required(false));
+        if let Some(path) = resolve_config_path(config_path) {
+            builder = builder.add_source(::config::File::from(path).required(true));
         }
 
         let source = builder
