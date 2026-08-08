@@ -907,6 +907,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "cumments-core",
+ "hex",
+ "rand 0.9.4",
  "reqwest",
  "serde",
  "serde_json",

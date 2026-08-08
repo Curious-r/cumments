@@ -8,6 +8,7 @@ use cumments_core::{
     models::{PostSlug, RoomEventPage, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
 };
+use rand::RngCore;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -118,7 +119,9 @@ impl AppServiceMatrixDriver {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("cumments_{}", ts)
+        let mut random_bytes = [0u8; 4];
+        rand::rng().fill_bytes(&mut random_bytes);
+        format!("cumments_{}_{}", ts, hex::encode(random_bytes))
     }
 
     /// Make an authenticated CS API request with optional virtual user.
@@ -195,10 +198,11 @@ impl AppServiceMatrixDriver {
             .map_err(|e| anyhow!("Failed to set room metadata: {}", e))?;
 
         if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
             warn!(
-                "Setting metadata for room {} failed: {}",
-                room_id,
-                resp.status()
+                "Setting metadata for room {} failed ({}): {}",
+                room_id, status, body
             );
         }
         Ok(())
@@ -218,8 +222,16 @@ impl AppServiceMatrixDriver {
 
         if resp.status().is_success() {
             Ok(Some(resp.json().await?))
-        } else {
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
             Ok(None)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Failed to query room metadata ({}): {}",
+                status,
+                body
+            ))
         }
     }
 
@@ -274,11 +286,28 @@ impl AppServiceMatrixDriver {
             urlencode(space_id),
             urlencode(room_id)
         );
-        let _ = self
+        let child_resp = self
             .request(reqwest::Method::PUT, &space_path, None)
             .json(&child_content)
             .send()
             .await;
+        match child_resp {
+            Err(e) => {
+                warn!(
+                    "Failed to link room {} to space {}: {}",
+                    room_id, space_id, e
+                );
+            }
+            Ok(resp) if !resp.status().is_success() => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                warn!(
+                    "Failed to link room {} to space {} ({}): {}",
+                    room_id, space_id, status, body
+                );
+            }
+            _ => {}
+        }
 
         let parent_path = format!(
             "_matrix/client/v3/rooms/{}/state/m.space.parent/{}",
@@ -289,11 +318,28 @@ impl AppServiceMatrixDriver {
             "via": [self.server_name],
             "canonical": true
         });
-        let _ = self
+        let parent_resp = self
             .request(reqwest::Method::PUT, &parent_path, None)
             .json(&parent_content)
             .send()
             .await;
+        match parent_resp {
+            Err(e) => {
+                warn!(
+                    "Failed to link space {} as parent of room {}: {}",
+                    space_id, room_id, e
+                );
+            }
+            Ok(resp) if !resp.status().is_success() => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                warn!(
+                    "Failed to link space {} as parent of room {} ({}): {}",
+                    space_id, room_id, status, body
+                );
+            }
+            _ => {}
+        }
     }
 }
 
