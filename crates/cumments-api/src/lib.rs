@@ -111,7 +111,9 @@ pub struct ApiState {
 /// The query parameters for pagination (sent as JSON body for QUERY method).
 #[derive(Debug, Deserialize, Validate)]
 pub struct PaginationQuery {
-    #[validate(range(min = 1))]
+    // The upper bound keeps `(page - 1) * per_page` inside i64 even with the
+    // largest allowed per_page (100).
+    #[validate(range(min = 1, max = 1_000_000))]
     pub page: Option<i64>,
     #[validate(range(min = 1, max = 100))]
     pub per_page: Option<i64>,
@@ -581,4 +583,31 @@ async fn sse_handler(
     };
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use validator::Validate;
+
+    #[test]
+    fn pagination_page_is_bounded() {
+        let ok = PaginationQuery {
+            page: Some(1_000_000),
+            per_page: Some(100),
+        };
+        assert!(ok.validate().is_ok());
+
+        let too_large = PaginationQuery {
+            page: Some(i64::MAX),
+            per_page: Some(100),
+        };
+        assert!(too_large.validate().is_err());
+
+        let zero = PaginationQuery {
+            page: Some(0),
+            per_page: None,
+        };
+        assert!(zero.validate().is_err());
+    }
 }

@@ -2,6 +2,8 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
@@ -13,6 +15,10 @@ const CHALLENGE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
 pub struct Pow {
     secret: String,
     difficulty: u32,
+    /// Challenges already used for a successful PoW, mapped to their expiry
+    /// timestamp (seconds). Keeps a signed challenge single-use so the same
+    /// request body cannot be replayed within the expiry window.
+    used_challenges: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 #[derive(Debug)]
@@ -23,7 +29,11 @@ pub struct Challenge {
 
 impl Pow {
     pub fn new(secret: String, difficulty: u32) -> Self {
-        Self { secret, difficulty }
+        Self {
+            secret,
+            difficulty,
+            used_challenges: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Generates a new PoW challenge.
@@ -105,11 +115,35 @@ impl Pow {
         let required_prefix = "0".repeat(self.difficulty as usize);
 
         let is_valid = hash_hex.starts_with(&required_prefix);
+        if !is_valid {
+            return false;
+        }
+
+        // Mark the challenge as used (single-use within its expiry window).
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut used = self
+            .used_challenges
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if used.len() > 1024 {
+            used.retain(|_, expiry| *expiry > now);
+        }
+        if let Some(expiry) = used.get(challenge)
+            && *expiry > now
+        {
+            debug!("Rejected replayed PoW challenge");
+            return false;
+        }
+        used.insert(challenge.to_string(), now + CHALLENGE_EXPIRY_SECONDS);
+
         debug!(
             "Verifying PoW: challenge='{}', hash='{}', valid={}",
             challenge, hash_hex, is_valid
         );
-        is_valid
+        true
     }
 
     fn sign(&self, payload: &str) -> String {
@@ -118,5 +152,46 @@ impl Pow {
         mac.update(payload.as_bytes());
         let result = mac.finalize().into_bytes();
         URL_SAFE_NO_PAD.encode(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_response(pow: &Pow) -> String {
+        let challenge = pow.generate_challenge();
+        // difficulty is 0 in tests, so any nonce passes the hash check.
+        format!("{}|0", challenge.prefix)
+    }
+
+    #[test]
+    fn valid_challenge_passes() {
+        let pow = Pow::new("test-secret".into(), 0);
+        assert!(pow.verify(&valid_response(&pow)));
+    }
+
+    #[test]
+    fn replayed_challenge_is_rejected() {
+        let pow = Pow::new("test-secret".into(), 0);
+        let response = valid_response(&pow);
+        assert!(pow.verify(&response));
+        assert!(
+            !pow.verify(&response),
+            "the same challenge+nonce must not be accepted twice"
+        );
+    }
+
+    #[test]
+    fn used_challenge_with_different_nonce_is_rejected() {
+        let pow = Pow::new("test-secret".into(), 0);
+        let response = valid_response(&pow);
+        assert!(pow.verify(&response));
+        let mut parts: Vec<&str> = response.split('|').collect();
+        parts[1] = "1";
+        assert!(
+            !pow.verify(&parts.join("|")),
+            "a used challenge must stay single-use even with a different nonce"
+        );
     }
 }
