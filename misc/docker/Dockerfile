@@ -32,15 +32,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Runtime stage
 FROM alpine:3.22
 
-ARG VERSION=0.17.0
-ARG REVISION=unknown
-
-LABEL org.opencontainers.image.title="Cumments"
-LABEL org.opencontainers.image.description="Decentralized comment system backend on Matrix"
-LABEL org.opencontainers.image.source="https://github.com/Curious-r/cumments"
-LABEL org.opencontainers.image.version="${VERSION}"
-LABEL org.opencontainers.image.revision="${REVISION}"
-
 # Install runtime dependencies
 RUN apk --no-cache add ca-certificates sqlite-libs && \
     addgroup -S cumments && \

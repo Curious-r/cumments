@@ -80,8 +80,5 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || '0.17.0' }}
-            REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
