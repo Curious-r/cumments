@@ -31,6 +31,13 @@ where
     }
 }
 
+/// Whether a driver error indicates the target room itself is gone or no
+/// longer writable (as opposed to a transient homeserver failure).
+fn room_unavailable(err: &anyhow::Error) -> bool {
+    let text = err.to_string();
+    text.contains("M_NOT_FOUND") || text.contains("M_FORBIDDEN")
+}
+
 /// The Reconciler acts as the Orchestrator of the background process.
 /// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
 pub struct Reconciler {
@@ -142,7 +149,7 @@ impl Reconciler {
                     .await?;
 
                 // 4. Hands: Post the actual message
-                let event_id = self
+                let event_id = match self
                     .driver
                     .post_message(
                         &room_id,
@@ -155,7 +162,26 @@ impl Reconciler {
                         intent.reply_to.as_deref(),
                         Some(id),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(event_id) => event_id,
+                    Err(e) => {
+                        // The room may have been tombstoned or its alias moved:
+                        // drop the registry hint so the next retry goes through
+                        // alias recovery and adopts the successor room.
+                        if room_unavailable(&e) {
+                            warn!(
+                                "Post intent [{}] failed on room {}; invalidating registry entry: {:#}",
+                                id, room_id, e
+                            );
+                            let _ = self
+                                .registry_store
+                                .invalidate_room_registry(&room_id)
+                                .await;
+                        }
+                        return Err(e);
+                    }
+                };
 
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.intent_store
