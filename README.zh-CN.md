@@ -448,12 +448,13 @@ type: comment_deleted
 
 ```bash
 cargo fmt --all -- --check
-cargo check --locked
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
+cargo check --locked --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+cargo test --locked --doc --all-features
 ```
 
-GitHub Actions 会执行同样的命令。
+GitHub Actions 会执行同样的命令，另外用 `node --check` 校验验证页内联脚本。
 
 ## 已知限制
 

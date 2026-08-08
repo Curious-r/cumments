@@ -3,36 +3,92 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  ci:
-    name: fmt / clippy / test
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libsqlite3-dev cmake clang
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+          components: rustfmt
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libsqlite3-dev cmake clang
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (warnings as errors)
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --locked --all-targets
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libsqlite3-dev cmake clang
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check locked workspace
+        run: cargo check --locked --all-targets --all-features
+
+      - name: Unit and integration tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Doc tests
+        run: cargo test --locked --doc --all-features
+
+  frontend:
+    name: Frontend syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check inline scripts
+        run: |
+          set -euo pipefail
+          awk '/<script type="module">/{flag=1; next} /<\/script>/{flag=0} flag' \
+            misc/frontend/index.html > /tmp/cumments-module.mjs
+          awk '/<script>/{flag=1; next} /<\/script>/{flag=0} flag' \
+            misc/frontend/index.html > /tmp/cumments-main.js
+          node --check /tmp/cumments-module.mjs
+          node --check /tmp/cumments-main.js

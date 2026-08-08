@@ -477,12 +477,14 @@ Invalid values return `400 VALIDATION_ERROR`.
 
 ```bash
 cargo fmt --all -- --check
-cargo check --locked
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
+cargo check --locked --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+cargo test --locked --doc --all-features
 ```
 
-CI runs the same commands on GitHub Actions.
+CI runs the same commands on GitHub Actions, plus a syntax check of the
+frontend's inline scripts with `node --check`.
 
 ## Known Limitations
 
