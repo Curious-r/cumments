@@ -517,6 +517,7 @@
             };
 
             let identity = null;
+            let pendingIdentity = null;
             let mnemonicModalMode = "backup";
             let currentMnemonic = null;
 
@@ -526,11 +527,17 @@
 
             document.addEventListener("DOMContentLoaded", () => {
                 loadSettings();
-                ensureIdentity().then((id) => {
-                    identity = id;
-                    renderIdentity();
-                    initApp();
-                });
+                ensureIdentity()
+                    .then((id) => {
+                        identity = id;
+                        renderIdentity();
+                        initApp();
+                    })
+                    .catch((e) => {
+                        renderError(
+                            new Error(`身份初始化失败：${e.message || "未知错误"}`),
+                        );
+                    });
             });
 
             function loadSettings() {
@@ -621,16 +628,45 @@
             }
 
             async function ensureIdentity() {
-                const stored = localStorage.getItem(IDENTITY_KEY);
+                let stored = null;
+                try {
+                    stored = localStorage.getItem(IDENTITY_KEY);
+                } catch {
+                    // storage unavailable; fall through to creation
+                }
                 if (stored) {
                     try {
                         const parsed = JSON.parse(stored);
-                        if (parsed.publicKey && parsed.privateKey) return parsed;
+                        if (
+                            parsed.publicKey &&
+                            parsed.privateKey &&
+                            (await identityMatches(parsed))
+                        ) {
+                            identity = parsed;
+                            return parsed;
+                        }
+                        toast("本地身份数据无效，已为你生成新身份", "error");
                     } catch {
                         // fall through to createIdentity
                     }
                 }
                 return createIdentity();
+            }
+
+            async function identityMatches(id) {
+                try {
+                    const key = await crypto.subtle.importKey(
+                        "pkcs8",
+                        base64urlToBytes(id.privateKey),
+                        { name: "Ed25519" },
+                        true,
+                        ["sign"],
+                    );
+                    const jwk = await crypto.subtle.exportKey("jwk", key);
+                    return jwk.x === id.publicKey;
+                } catch {
+                    return false;
+                }
             }
 
             async function generateRandomIdentity() {
@@ -652,14 +688,35 @@
             }
 
             function saveIdentity(next) {
-                localStorage.setItem(IDENTITY_KEY, JSON.stringify(next));
+                try {
+                    localStorage.setItem(IDENTITY_KEY, JSON.stringify(next));
+                } catch {
+                    toast("身份保存失败，请检查浏览器存储权限", "error");
+                    return false;
+                }
                 identity = next;
                 renderIdentity();
-                return next;
+                return true;
             }
 
             function bip39Ready() {
                 return !!(window.bip39 && window.bip39Wordlist);
+            }
+
+            // scure-bip39 v2 的 generateMnemonic 返回 Uint8Array（底层是
+            // Uint16Array 词索引），这里统一转成空格分隔的字符串。
+            function mnemonicToString(mnemonic) {
+                if (typeof mnemonic === "string") return mnemonic;
+                const words = [];
+                const view = new DataView(
+                    mnemonic.buffer,
+                    mnemonic.byteOffset,
+                    mnemonic.byteLength,
+                );
+                for (let i = 0; i < view.byteLength; i += 2) {
+                    words.push(window.bip39Wordlist[view.getUint16(i, true)]);
+                }
+                return words.join(" ");
             }
 
             async function hmacSha512(keyBytes, dataBytes) {
@@ -749,8 +806,8 @@
 
             async function createIdentity() {
                 if (bip39Ready()) {
-                    const mnemonic = window.bip39.generateMnemonic(
-                        window.bip39Wordlist,
+                    const mnemonic = mnemonicToString(
+                        window.bip39.generateMnemonic(window.bip39Wordlist),
                     );
                     try {
                         sessionStorage.setItem(MNEMONIC_SESSION_KEY, mnemonic);
@@ -758,8 +815,7 @@
                         // 隐私模式等场景下 sessionStorage 可能不可用，不影响创建
                     }
                     const next = await mnemonicToIdentity(mnemonic);
-                    identity = next;
-                    renderIdentity();
+                    pendingIdentity = next;
                     showMnemonicModal(mnemonic, "backup");
                     return next;
                 }
@@ -813,22 +869,21 @@
                     closeMnemonicModal();
                     return;
                 }
-                if (identity) {
-                    try {
-                        localStorage.setItem(
-                            IDENTITY_KEY,
-                            JSON.stringify(identity),
-                        );
-                    } catch {
-                        toast(
-                            "身份保存失败，请检查浏览器存储权限；可先复制助记词",
-                            "error",
-                        );
-                        return;
-                    }
+                const next = pendingIdentity;
+                if (!next) {
+                    closeMnemonicModal();
+                    return;
                 }
+                const switched =
+                    !!identity && identity.publicKey !== next.publicKey;
+                if (!saveIdentity(next)) {
+                    toast("可先复制助记词，稍后再试", "error");
+                    return;
+                }
+                pendingIdentity = null;
                 closeMnemonicModal();
                 toast("身份已创建，助记词请妥善保管", "success");
+                if (switched) await loadList();
             }
 
             async function discardMnemonicBackup() {
@@ -838,9 +893,20 @@
                 } catch {
                     // ignore
                 }
-                const next = await generateRandomIdentity();
-                saveIdentity(next);
+                const previous = identity;
+                pendingIdentity = null;
+                let next;
+                try {
+                    next = await generateRandomIdentity();
+                } catch (e) {
+                    toast("创建随机身份失败：" + (e.message || e), "error");
+                    return;
+                }
+                if (!saveIdentity(next)) return;
                 toast("已改用随机私钥身份，仍可在设置中导出私钥备份", "info");
+                if (previous && previous.publicKey !== next.publicKey) {
+                    await loadList();
+                }
             }
 
             async function copyMnemonic() {
@@ -916,12 +982,12 @@
                 ) {
                     return;
                 }
+                if (!saveIdentity(next)) return;
                 try {
                     sessionStorage.setItem(MNEMONIC_SESSION_KEY, normalized);
                 } catch {
                     // ignore
                 }
-                saveIdentity(next);
                 document.getElementById("mnemonicRestoreBox").classList.add(
                     "hidden",
                 );
@@ -996,10 +1062,11 @@
                     ) {
                         return;
                     }
-                    saveIdentity({
+                    const saved = saveIdentity({
                         publicKey: parsed.publicKey,
                         privateKey: parsed.privateKey,
                     });
+                    if (!saved) return;
                     try {
                         sessionStorage.removeItem(MNEMONIC_SESSION_KEY);
                     } catch {
@@ -1020,8 +1087,18 @@
                 ) {
                     return;
                 }
+                const old = identity;
                 await createIdentity();
-                await loadList();
+                // 助记词模式：等用户确认备份后才切换身份并刷新列表；
+                // CDN 不可用降级为随机身份时立即切换，这里直接刷新。
+                if (
+                    !pendingIdentity &&
+                    old &&
+                    identity &&
+                    identity.publicKey !== old.publicKey
+                ) {
+                    await loadList();
+                }
             }
 
             function renderIdentity() {
