@@ -322,11 +322,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
         });
 
         // Inject power levels with sender and owner as admins
-        if let Some(pl) = body.pointer_mut("/initial_state/1/content/users") {
-            if let Some(obj) = pl.as_object_mut() {
-                obj.insert(self.sender_user_id(), 100.into());
-                obj.insert(self.owner_id.clone(), 100.into());
-            }
+        if let Some(pl) = body.pointer_mut("/initial_state/1/content/users")
+            && let Some(obj) = pl.as_object_mut()
+        {
+            obj.insert(self.sender_user_id(), 100.into());
+            obj.insert(self.owner_id.clone(), 100.into());
         }
 
         let resp = self
@@ -389,12 +389,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let mut target_room_id = None;
 
         // ── PHASE 0: O(1) DISCOVERY (Check Candidate) ──
-        if let Some(candidate) = candidate_room_id {
-            if let Ok(Some(meta)) = self.get_room_metadata(candidate).await {
-                if metadata_matches(&meta, site_id.as_str(), Some(post_slug.as_str())) {
-                    target_room_id = Some(candidate.to_string());
-                }
-            }
+        if let Some(candidate) = candidate_room_id
+            && let Ok(Some(meta)) = self.get_room_metadata(candidate).await
+            && metadata_matches(&meta, site_id.as_str(), Some(post_slug.as_str()))
+        {
+            target_room_id = Some(candidate.to_string());
         }
 
         // ── PHASE 0.5: ALIAS RECOVERY (cold local registry) ──
@@ -461,11 +460,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
             });
 
             // Inject power levels with sender and owner as admins
-            if let Some(pl) = body.pointer_mut("/initial_state/1/content/users") {
-                if let Some(obj) = pl.as_object_mut() {
-                    obj.insert(self.sender_user_id(), 100.into());
-                    obj.insert(self.owner_id.clone(), 100.into());
-                }
+            if let Some(pl) = body.pointer_mut("/initial_state/1/content/users")
+                && let Some(obj) = pl.as_object_mut()
+            {
+                obj.insert(self.sender_user_id(), 100.into());
+                obj.insert(self.owner_id.clone(), 100.into());
             }
 
             let resp = self
