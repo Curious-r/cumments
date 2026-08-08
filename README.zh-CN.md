@@ -271,6 +271,15 @@ docker build -t cumments -f misc/docker/Dockerfile .
 docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
 
+发布镜像会推送到 GHCR（`main` 分支与版本 tag 都会构建）：
+
+```bash
+docker pull ghcr.io/curious-r/cumments:0.17.0
+docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17.0
+```
+
+`main` 标签跟随最新提交，`latest` 跟随最新的 `v*` tag。
+
 镜像默认以 `logging` 模式启动；生产环境用环境变量覆盖，例如：
 
 ```bash
