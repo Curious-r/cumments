@@ -55,19 +55,20 @@ LABEL org.opencontainers.image.revision="${REVISION}"
 # Install runtime dependencies
 RUN apk --no-cache add ca-certificates sqlite-libs && \
     addgroup -S cumments && \
-    adduser -S -G cumments cumments
-
-WORKDIR /app
+    adduser -S -G cumments cumments && \
+    mkdir -p /etc/cumments
 
 # Copy the binary from builder stage
-COPY --from=builder /usr/src/app/target/release/cumments ./cumments
-# Copy a runnable default configuration (logging mode; override via env vars)
-COPY --from=builder /usr/src/app/misc/docker/config.toml ./config.toml
+COPY --from=builder /usr/src/app/target/release/cumments /usr/local/bin/cumments
+# Copy the runnable example configuration as the default config
+COPY --from=builder /usr/src/app/misc/config/config-example.toml /etc/cumments/config.toml
 
-# Create data directory for SQLite database
-RUN mkdir -p /app/data && chown -R cumments:cumments /app
+# Create the service data directory
+RUN mkdir -p /srv/cumments && chown -R cumments:cumments /srv/cumments
 
 USER cumments
+
+WORKDIR /srv/cumments
 
 EXPOSE 7931 3001
 
@@ -77,4 +78,4 @@ ENV RUST_LOG=info
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:7931/health || exit 1
 
-CMD ["./cumments"]
+CMD ["cumments"]

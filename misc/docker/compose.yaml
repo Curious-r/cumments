@@ -8,9 +8,9 @@ services:
     ports:
       - "7931:7931"
     volumes:
-      - cumments_data:/app/data
-      # Mount configuration file (copy config-example.toml and customize)
-      # - ./config.toml:/app/config.toml:ro
+      - cumments_data:/srv/cumments
+      # Mount your configuration file over the default:
+      # - ./config.toml:/etc/cumments/config.toml:ro
     environment:
       - RUST_LOG=info
     restart: unless-stopped

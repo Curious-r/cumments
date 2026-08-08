@@ -1,6 +1,10 @@
 # ==========================================
 # Cumments Configuration Example
 # ==========================================
+#
+# This file is intentionally runnable as-is: it starts in `logging` mode,
+# which needs no Matrix homeserver. The AppService production settings are
+# shown commented out below.
 
 [server]
 # Host address to bind to (0.0.0.0 means accessible from any network interface)
@@ -16,9 +20,10 @@ cors_origins = "*"
 
 [database]
 # Database connection URL
-# For SQLite: "sqlite://path/to/database.db"
+# For the Docker image this is /srv/cumments/cumments.db (the mounted volume).
+# For local development, change to "sqlite://data/cumments.db".
 # The file will be created automatically if it doesn't exist
-url = "sqlite://data/cumments.db"
+url = "sqlite:///srv/cumments/cumments.db"
 
 [security]
 # Proof-of-Work secret for issuing anti-spam challenges
@@ -38,58 +43,33 @@ pow_difficulty = 4
 
 [matrix]
 # "appservice" (production) or "logging" (local debugging, no Matrix side effects)
-mode = "appservice"
+mode = "logging"
 
-# ── Homeserver / Matrix identity domain ──────────────────────────
-[matrix.homeserver]
-# Base URL of the homeserver CS API, as seen by Cumments.
-# This is the API endpoint, not necessarily the user-facing server name.
-address = "https://matrix.example.com"
-
-# Matrix ID domain: the part after ':' in user IDs and room aliases.
-# Usually the well-known delegated name (e.g. "example.com" even when the
-# CS API lives at "matrix.example.com"). This is independent of `address`.
-domain = "example.com"
-
-# ── AppService registration / push receiver ──────────────────────
-[matrix.appservice]
-# Must match the `id` in registration.yaml.
-id = "cumments"
-
-# URL the homeserver uses to deliver push transactions to this Cumments
-# instance. This must be reachable FROM the homeserver; it is not the same
-# as matrix.homeserver.address.
-url = "https://cumments.example.com"
-
-# Local bind address/port for the push receiver.
-# Set listen_port equal to server.port to share the main HTTP listener.
-listen_host = "0.0.0.0"
-listen_port = 3001
-
-# Localpart of the AppService sender user. Must match registration.yaml and
-# start with `_cumments_` so it falls inside the users namespace.
-sender_localpart = "_cumments_bot"
-
-# Tokens must match registration.yaml. Prefer environment variables:
-#   CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=...
-#   CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=...
+# ── Production AppService mode ──────────────────────────────────
+# To connect to a homeserver, switch to appservice and uncomment the
+# sections below, then fill in real values:
+#
+# [matrix.homeserver]
+# # Base URL of the homeserver CS API, as seen by Cumments.
+# address = "https://matrix.example.com"
+# # Matrix ID domain: the part after ':' in user IDs and room aliases.
+# domain = "example.com"
+#
+# [matrix.appservice]
+# # Must match the `id` in registration.yaml.
+# id = "cumments"
+# # URL the homeserver uses to deliver push transactions to this instance.
+# # Must be reachable from the homeserver; it is not matrix.homeserver.address.
+# url = "https://cumments.example.com"
+# listen_host = "0.0.0.0"
+# listen_port = 3001
+# sender_localpart = "_cumments_bot"
+# # Tokens must match registration.yaml; prefer environment variables:
 # as_token = "<as_token from registration.yaml>"
 # hs_token = "<hs_token from registration.yaml>"
-
-# Optional: path to registration.yaml. When set, startup verifies that
-# id/url/tokens/sender_localpart/namespaces match this configuration.
+# # Optional: verify at startup that this config matches registration.yaml.
 # registration_file = "registration.yaml"
-
-# ── Moderation ───────────────────────────────────────────────────
-[matrix.moderation]
-# Your personal Matrix account ID. Comment rooms invite this account and
-# grant Admin (100) privileges, so comments can be moderated directly in a
-# Matrix client.
-owner_id = "@admin:example.com"
-
-# For local development without a homeserver, set mode = "logging" instead.
-# In that case no matrix.homeserver / matrix.appservice / matrix.moderation
-# sections are needed:
 #
-# [matrix]
-# mode = "logging"
+# [matrix.moderation]
+# # Your personal Matrix account ID, granted Admin in comment rooms.
+# owner_id = "@admin:example.com"

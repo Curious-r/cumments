@@ -285,7 +285,7 @@ If you prefer a standalone binary, `cargo build --release` once and use
 
 ```bash
 docker build -t cumments -f misc/docker/Dockerfile .
-docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments cumments
 ```
 
 The Dockerfile lives under `misc/docker`, so the build context must be the
@@ -295,7 +295,7 @@ Prebuilt images are published to GHCR from version tags:
 
 ```bash
 docker pull ghcr.io/curious-r/cumments:0.17.0
-docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17.0
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
 ```
 
 `latest` follows the newest `v*` tag. `main` and pull requests build the image
@@ -305,8 +305,8 @@ To use your own config file, mount it over the bundled one:
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/app/config.toml:ro \
-  -v $(pwd)/data:/app/data \
+  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  -v $(pwd)/data:/srv/cumments \
   ghcr.io/curious-r/cumments:0.17.0
 ```
 
@@ -314,9 +314,9 @@ Alternatively, mount it anywhere and point `--config` at it:
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  -v $(pwd)/config.toml:/srv/cumments/config.toml:ro \
   ghcr.io/curious-r/cumments:0.17.0 \
-  --config /etc/cumments/config.toml
+  --config /srv/cumments/config.toml
 ```
 
 The container runs as a non-root user, so the mounted file must be readable by

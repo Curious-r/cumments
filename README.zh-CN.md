@@ -268,7 +268,7 @@ RUST_LOG=info cargo run -p cumments
 
 ```bash
 docker build -t cumments -f misc/docker/Dockerfile .
-docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments cumments
 ```
 
 Dockerfile 位于 `misc/docker` 下，构建上下文必须是仓库根目录（注意命令末尾
@@ -278,7 +278,7 @@ Dockerfile 位于 `misc/docker` 下，构建上下文必须是仓库根目录（
 
 ```bash
 docker pull ghcr.io/curious-r/cumments:0.17.0
-docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17.0
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
 ```
 
 `latest` 跟随最新的 `v*` tag；`main` 分支和 PR 只构建验证，不推送镜像。
@@ -287,8 +287,8 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data ghcr.io/curious-r/cumments:0.17
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/app/config.toml:ro \
-  -v $(pwd)/data:/app/data \
+  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  -v $(pwd)/data:/srv/cumments \
   ghcr.io/curious-r/cumments:0.17.0
 ```
 
@@ -296,9 +296,9 @@ docker run -p 7931:7931 \
 
 ```bash
 docker run -p 7931:7931 \
-  -v $(pwd)/config.toml:/etc/cumments/config.toml:ro \
+  -v $(pwd)/config.toml:/srv/cumments/config.toml:ro \
   ghcr.io/curious-r/cumments:0.17.0 \
-  --config /etc/cumments/config.toml
+  --config /srv/cumments/config.toml
 ```
 
 容器以非 root 用户运行，挂载的配置文件需要对该用户可读。

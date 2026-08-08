@@ -13,7 +13,6 @@ data/
 .env
 
 **/config.toml
-!misc/docker/config.toml
 **/registration.yaml
 
 .devenv*
