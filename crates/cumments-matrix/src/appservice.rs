@@ -77,8 +77,12 @@ impl AppServiceMatrixDriver {
         owner_id: String,
         virtual_user_store: Arc<dyn VirtualUserStore>,
     ) -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
-            http_client: reqwest::Client::new(),
+            http_client,
             homeserver_url,
             as_token,
             server_name,
@@ -100,8 +104,16 @@ impl AppServiceMatrixDriver {
         self.user_id(&self.sender_localpart)
     }
 
-    /// Generate a unique transaction ID for idempotent requests.
-    fn txn_id(&self) -> String {
+    /// Generate a transaction ID for idempotent requests.
+    ///
+    /// When an intent ID is available (post intents), the txn ID is
+    /// deterministic: if the homeserver accepted the first attempt but the
+    /// response was lost, a retry with the same txn ID returns the original
+    /// event instead of creating a duplicate comment.
+    fn txn_id(&self, intent_id: Option<i64>) -> String {
+        if let Some(id) = intent_id {
+            return format!("cumments_intent_{}", id);
+        }
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -548,7 +560,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.ensure_joined(room_id, &virtual_user).await?;
 
         // 3. Send the message as the virtual user
-        let formatted_body = format!("<strong>{}</strong>: {}", nickname, content);
+        let formatted_body = format!(
+            "<strong>{}</strong>: {}",
+            html_escape(nickname),
+            html_escape(content)
+        );
         let message_body = serde_json::json!({
             "msgtype": "m.text",
             "body": format!("**{}**: {}", nickname, content),
@@ -564,7 +580,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             "cumments_intent_id": intent_id,
         });
 
-        let txn_id = self.txn_id();
+        let txn_id = self.txn_id(intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             urlencode(room_id),
@@ -620,7 +636,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "msgtype": "m.text",
                 "body": formatted_content,
                 "format": "org.matrix.custom.html",
-                "formatted_body": format!("<strong>{}</strong>: {}", nickname, new_content),
+                "formatted_body": format!(
+                    "<strong>{}</strong>: {}",
+                    html_escape(nickname),
+                    html_escape(new_content)
+                ),
                 "cumments_visitor_id": visitor_id,
                 "cumments_public_key": author_public_key,
                 "cumments_signature": author_signature,
@@ -633,7 +653,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             },
         });
 
-        let txn_id = self.txn_id();
+        let txn_id = self.txn_id(None);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             urlencode(room_id),
@@ -662,7 +682,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
     #[instrument(skip(self))]
     async fn redact_message(&self, room_id: &str, event_id: &str) -> Result<()> {
         // Redact as the sender user (has admin power level in the room).
-        let txn_id = self.txn_id();
+        let txn_id = self.txn_id(None);
         let path = format!(
             "_matrix/client/v3/rooms/{}/redact/{}/{}",
             urlencode(room_id),
@@ -807,6 +827,22 @@ fn urlencode(s: &str) -> String {
     result
 }
 
+/// Escape a string for safe inclusion in Matrix `formatted_body` HTML.
+fn html_escape(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,5 +877,14 @@ mod tests {
             "%23cumments_my-blog%3Aexample.com"
         );
         assert_eq!(urlencode("!abc:example.com"), "%21abc%3Aexample.com");
+    }
+
+    #[test]
+    fn html_escape_escapes_special_characters() {
+        assert_eq!(
+            html_escape("<b onclick=\"x\">a & b</b>"),
+            "&lt;b onclick=&quot;x&quot;&gt;a &amp; b&lt;/b&gt;"
+        );
+        assert_eq!(html_escape("plain text"), "plain text");
     }
 }
