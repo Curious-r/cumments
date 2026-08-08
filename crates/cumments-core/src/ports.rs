@@ -30,8 +30,9 @@ pub trait IntentStore: Send + Sync {
     async fn mark_update_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
     /// Completes a specific update intent by its queue ID. Used when the edit
-    /// event carries `cumments_intent_id`, so completing one edit never closes
-    /// a different queued edit targeting the same original comment.
+    /// event carries `host.curious.cumments.intent_id`, so completing one edit
+    /// never closes a different queued edit targeting the same original
+    /// comment.
     async fn mark_update_intent_completed_by_id(&self, id: i64) -> Result<()>;
 
     /// Transitions a delete intent to 'waiting_for_sync'.
@@ -235,7 +236,7 @@ pub trait MatrixDriver: Send + Sync {
     /// Cumments rooms after a local DB reset.
     async fn joined_rooms(&self) -> Result<Vec<String>>;
 
-    /// Read a room's `im.cumments.metadata` state event, if any.
+    /// Read a room's `host.curious.cumments.metadata` state event, if any.
     async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
 
     /// Checks whether an event exists on the homeserver. Used to decide if a

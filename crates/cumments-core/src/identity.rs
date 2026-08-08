@@ -9,8 +9,9 @@
 //! - `visitor_id`: a short public identifier derived from the public key,
 //!   matching the hash segment of the virtual user ID.
 //! - Public key and signature are carried in the Matrix event content
-//!   (`cumments_public_key` / `cumments_signature`), so ownership survives a
-//!   complete rebuild of the read model from the event log.
+//!   (`host.curious.cumments.public_key` / `host.curious.cumments.signature`),
+//!   so ownership survives a complete rebuild of the read model from the event
+//!   log.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, VerifyingKey};

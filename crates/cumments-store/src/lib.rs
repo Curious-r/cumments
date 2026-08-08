@@ -793,7 +793,8 @@ impl IntentStore for DbStore {
                 query
                     .filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id))
                     // Only close intents that were actually sent; pending rows
-                    // must wait for their own `cumments_intent_id` correlation.
+                    // must wait for their own `host.curious.cumments.intent_id`
+                    // correlation.
                     .filter(
                         intent_queue_update_comment::COLUMN
                             .status

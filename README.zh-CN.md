@@ -11,8 +11,8 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 - **Matrix 即事件日志** —— 评论是 `m.room.message`，编辑是 `m.replace`，
   删除是 `m.redaction`。
 - **所有权公开可验证** —— 每条事件携带作者的 Ed25519 公钥、签名与被签名的 PoW
-  challenge（`cumments_public_key` / `cumments_signature` / `cumments_challenge`），
-  读模型整库丢弃后身份依然可重建。
+  challenge（位于 `host.curious.cumments` content block），读模型整库丢弃后
+  身份依然可重建。
 - **可丢弃的读模型** —— SQLite 只是投影；`cumments backfill` 可以从 Matrix 历史重建
   sites、房间注册表与全部评论。
 - **AppService-first** —— 生产模式以 Matrix Application Service 注册，使用虚拟用户，
@@ -98,6 +98,10 @@ registration 保留独占的 `users` 与 `aliases` 命名空间（`@_cumments_.*
 | 评论房间别名 | `#_cumments_{site_id}_{post_slug}:{server_name}` |
 | 房间 ID | 由 homeserver 生成（`!...:{server_name}`） |
 
+自定义 Matrix 事件使用 reverse-DNS 命名空间 `host.curious.cumments`：房间身份
+存放在 `host.curious.cumments.metadata` state event，消息中的 Cumments 专属字段
+统一放在一个 `host.curious.cumments` content block 里。
+
 Homeserver 通过 `PUT /_matrix/app/v1/transactions/{txnId}` 推送事件，以
 `hs_token` 认证。
 
@@ -116,8 +120,8 @@ cumments backfill
 `cumments backfill` 从 Matrix 历史重建 SQLite 读模型，需要连接真实 homeserver
 的 AppService 配置：
 
-1. 通过 `joined_rooms` + `im.cumments.metadata` 发现 Cumments 房间（本地库清空后
-   也能重建 sites 与房间注册表）；
+1. 通过 `joined_rooms` + `host.curious.cumments.metadata` 发现 Cumments 房间
+   （本地库清空后也能重建 sites 与房间注册表）；
 2. 通过 CS API `/messages` 分页拉取每个评论房间的历史；
 3. 按 `(origin_server_ts, event_id)` 顺序回放，复用与实时 push 完全相同的幂等投影。
 

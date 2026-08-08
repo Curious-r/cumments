@@ -7,6 +7,7 @@ use cumments_core::{
     identity::derive_visitor_id_from_public_key,
     models::{PostSlug, RoomEventPage, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
+    protocol::{MESSAGE_CONTENT_KEY, METADATA_EVENT_TYPE},
 };
 use rand::RngCore;
 use serde::Deserialize;
@@ -200,7 +201,8 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
-    /// Set cumments metadata on a room (state event `im.cumments.metadata`).
+    /// Set Cumments metadata on a room (state event
+    /// `host.curious.cumments.metadata`).
     async fn set_room_metadata(
         &self,
         room_id: &str,
@@ -212,8 +214,9 @@ impl AppServiceMatrixDriver {
             "post_slug": post_slug.map(|s| s.as_str()),
         });
         let path = format!(
-            "_matrix/client/v3/rooms/{}/state/im.cumments.metadata",
-            urlencode(room_id)
+            "_matrix/client/v3/rooms/{}/state/{}",
+            urlencode(room_id),
+            METADATA_EVENT_TYPE
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, None)
@@ -236,8 +239,9 @@ impl AppServiceMatrixDriver {
     /// Query a room's metadata state event.
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
-            "_matrix/client/v3/rooms/{}/state/im.cumments.metadata",
-            urlencode(room_id)
+            "_matrix/client/v3/rooms/{}/state/{}",
+            urlencode(room_id),
+            METADATA_EVENT_TYPE
         );
         let resp = self
             .request(reqwest::Method::GET, &path, None)
@@ -385,7 +389,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             },
             "initial_state": [
                 {
-                    "type": "im.cumments.metadata",
+                    "type": METADATA_EVENT_TYPE,
                     "state_key": "",
                     "content": {
                         "site_id": site_id_str,
@@ -519,7 +523,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "room_alias_name": alias_localpart,
                 "initial_state": [
                     {
-                        "type": "im.cumments.metadata",
+                        "type": METADATA_EVENT_TYPE,
                         "state_key": "",
                         "content": {
                             "site_id": site_id.as_str(),
@@ -629,20 +633,22 @@ impl MatrixDriver for AppServiceMatrixDriver {
             html_escape(nickname),
             html_escape(content)
         );
-        let message_body = serde_json::json!({
+        let mut message_body = serde_json::json!({
             "msgtype": "m.text",
             "body": format!("**{}**: {}", nickname, content),
             "format": "org.matrix.custom.html",
             "formatted_body": formatted_body,
-            "cumments_visitor_id": visitor_id,
-            "cumments_public_key": author_public_key,
-            "cumments_signature": author_signature,
-            "cumments_challenge": author_challenge,
+        });
+        message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
+            "visitor_id": visitor_id,
+            "public_key": author_public_key,
+            "signature": author_signature,
+            "challenge": author_challenge,
             // Structured fields so the projector can store the pure content
             // and nickname instead of parsing them back out of the body.
-            "cumments_content": content,
-            "cumments_nickname": nickname,
-            "cumments_intent_id": intent_id,
+            "content": content,
+            "nickname": nickname,
+            "intent_id": intent_id,
         });
 
         let txn_id = self.txn_id(intent_id);
@@ -696,31 +702,33 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         // 3. Send m.replace as the virtual user
         let formatted_content = format!("**{}**: {}", nickname, new_content);
+        let mut new_content_obj = serde_json::json!({
+            "msgtype": "m.text",
+            "body": formatted_content,
+            "format": "org.matrix.custom.html",
+            "formatted_body": format!(
+                "<strong>{}</strong>: {}",
+                html_escape(nickname),
+                html_escape(new_content)
+            ),
+        });
+        new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
+            "visitor_id": visitor_id,
+            "public_key": author_public_key,
+            "signature": author_signature,
+            "challenge": author_challenge,
+            "content": new_content,
+            "nickname": nickname,
+            "intent_id": intent_id,
+        });
         let message_body = serde_json::json!({
             "msgtype": "m.text",
             "body": format!(" * {}", formatted_content),
-            "m.new_content": {
-                "msgtype": "m.text",
-                "body": formatted_content,
-                "format": "org.matrix.custom.html",
-                "formatted_body": format!(
-                    "<strong>{}</strong>: {}",
-                    html_escape(nickname),
-                    html_escape(new_content)
-                ),
-                "cumments_visitor_id": visitor_id,
-                "cumments_public_key": author_public_key,
-                "cumments_signature": author_signature,
-                "cumments_challenge": author_challenge,
-                "cumments_content": new_content,
-                "cumments_nickname": nickname,
-                "cumments_intent_id": intent_id,
-            },
+            "m.new_content": new_content_obj,
             "m.relates_to": {
                 "rel_type": "m.replace",
                 "event_id": event_id,
             },
-            "cumments_intent_id": intent_id,
         });
 
         let txn_id = self.txn_id(intent_id);

@@ -5,4 +5,5 @@ pub mod identity;
 pub mod intents;
 pub mod models;
 pub mod ports;
+pub mod protocol;
 pub mod site_service;
