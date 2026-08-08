@@ -182,6 +182,15 @@ fn extract_message_content(body: &str, is_cumments: bool, structured: Option<&st
     body.to_string()
 }
 
+/// Read a string field from an `m.room.message` content object, falling back to
+/// the same key inside the standard `m.new_content` replacement payload.
+fn content_string<'a>(content: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    content
+        .get(key)
+        .or_else(|| content.get("m.new_content").and_then(|nc| nc.get(key)))
+        .and_then(|v| v.as_str())
+}
+
 // ── Push event parsers ────────────────────────────────────────────
 
 /// Parse a push message event into a `ParsedRoomMessage`.
@@ -196,20 +205,12 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
 
     // Extract the public identity fields. The visitor id's presence marks this
     // as a Cumments-generated message for legacy body parsing.
-    let visitor_id = content
-        .get("cumments_visitor_id")
-        .or_else(|| content.get("cumments_public_key"))
-        .and_then(|v| v.as_str());
-    let author_public_key = content
-        .get("cumments_public_key")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let author_signature = content
-        .get("cumments_signature")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let structured_content = content.get("cumments_content").and_then(|v| v.as_str());
-    let structured_nickname = content.get("cumments_nickname").and_then(|v| v.as_str());
+    let visitor_id = content_string(content, "cumments_visitor_id")
+        .or_else(|| content_string(content, "cumments_public_key"));
+    let author_public_key = content_string(content, "cumments_public_key").map(|s| s.to_string());
+    let author_signature = content_string(content, "cumments_signature").map(|s| s.to_string());
+    let structured_content = content_string(content, "cumments_content");
+    let structured_nickname = content_string(content, "cumments_nickname");
 
     // Extract relation (edit)
     let relates_to = content.get("m.relates_to").and_then(|rel| {
@@ -218,10 +219,13 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             return None;
         }
         let target_event_id = rel.get("event_id").and_then(|v| v.as_str())?;
-        let new_content = rel.get("m.new_content").and_then(|nc| {
+        // `m.new_content` is a top-level content property, per the Matrix spec;
+        // it must not be read from inside `m.relates_to`.
+        let new_content = content.get("m.new_content").and_then(|nc| {
             let nc_body = nc.get("body").and_then(|v| v.as_str())?;
             let nc_structured = nc.get("cumments_content").and_then(|v| v.as_str());
-            let nc_is_cumments = nc.get("cumments_visitor_id").is_some();
+            let nc_is_cumments =
+                nc.get("cumments_visitor_id").is_some() || nc.get("cumments_public_key").is_some();
             Some(extract_message_content(
                 nc_body,
                 nc_is_cumments,
@@ -250,7 +254,14 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             .or_else(|| extract_author_display_name(body)),
         author_public_key,
         author_signature,
-        intent_id: content.get("cumments_intent_id").and_then(|v| v.as_i64()),
+        intent_id: content
+            .get("cumments_intent_id")
+            .or_else(|| {
+                content
+                    .get("m.new_content")
+                    .and_then(|nc| nc.get("cumments_intent_id"))
+            })
+            .and_then(|v| v.as_i64()),
         origin_server_ts,
         relates_to,
         room_identity,
@@ -367,15 +378,18 @@ mod tests {
             state_key: None,
             content: Some(serde_json::json!({
                 "body": " * **Alice**: edited",
+                "m.new_content": {
+                    "body": "**Alice**: edited",
+                    "cumments_visitor_id": "abcd",
+                    "cumments_public_key": "pubkey",
+                    "cumments_signature": "sig",
+                    "cumments_content": "edited",
+                    "cumments_nickname": "Alice",
+                    "cumments_intent_id": 42,
+                },
                 "m.relates_to": {
                     "rel_type": "m.replace",
                     "event_id": "$original:hs",
-                    "m.new_content": {
-                        "body": "**Alice**: edited",
-                        "cumments_content": "edited",
-                        "cumments_nickname": "Alice",
-                        "cumments_intent_id": 42,
-                    }
                 },
                 "cumments_intent_id": 42,
             })),
@@ -384,6 +398,10 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse edit");
+        assert_eq!(parsed.author_display_name.as_deref(), Some("Alice"));
+        assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
+        assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
+        assert_eq!(parsed.content, "edited");
         assert_eq!(parsed.intent_id, Some(42));
         assert_eq!(
             parsed
