@@ -4,9 +4,12 @@
 # production AppService mode, override via environment variables, e.g.:
 #
 #   CUMMENTS__MATRIX__MODE=appservice
-#   CUMMENTS__MATRIX__SERVER_NAME=your_server.tld
-#   CUMMENTS__MATRIX__AS_TOKEN=...
-#   CUMMENTS__MATRIX__HS_TOKEN=...
+#   CUMMENTS__MATRIX__HOMESERVER__ADDRESS=https://matrix.example.com
+#   CUMMENTS__MATRIX__HOMESERVER__DOMAIN=example.com
+#   CUMMENTS__MATRIX__APPSERVICE__URL=https://cumments.example.com
+#   CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=...
+#   CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=...
+#   CUMMENTS__MATRIX__MODERATION__OWNER_ID=@admin:example.com
 #   CUMMENTS__SECURITY__POW_SECRET=...
 
 [server]
@@ -23,6 +26,3 @@ pow_difficulty = 4
 
 [matrix]
 mode = "logging"
-homeserver_url = "http://localhost:8008"
-owner_id = "@admin:your_server.tld"
-push_listen_port = 7931

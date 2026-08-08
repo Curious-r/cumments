@@ -1,11 +1,14 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use clap::Parser;
+use cumments_core::ports::MatrixDriver;
 use cumments_core::site_service::SiteService;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub mod cli;
 pub mod config;
+
+use config::Mode;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -39,8 +42,8 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     if let Some(cmd) = &args.command {
         match cmd {
-            cli::Commands::GenerateRegistration(args) => {
-                cli::handle_generate_registration(args)?;
+            cli::Commands::GenerateRegistration(reg_args) => {
+                cli::handle_generate_registration(reg_args, args.config.as_deref())?;
                 return Ok(());
             }
             cli::Commands::Backfill(_) => {
@@ -58,7 +61,6 @@ async fn main() -> Result<()> {
     let settings =
         config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
     tracing::info!("Configuration loaded successfully.");
-    tracing::debug!("Loaded settings: {:?}", settings);
 
     // ─────────────────────────────────────────────────────────────
     // 2. Initialize database Store
@@ -100,71 +102,54 @@ async fn main() -> Result<()> {
     tracing::info!("EventProcessor initialized.");
 
     // ─────────────────────────────────────────────────────────────
-    // 6. Validate operation mode and extract mode-specific settings
+    // 6. Validate mode and extract validated AppService settings
     // ─────────────────────────────────────────────────────────────
-    let mode = settings.matrix.mode.as_str();
-    if !matches!(mode, "appservice" | "logging") {
-        return Err(anyhow!(
-            "Unknown matrix mode '{}'. Supported modes: appservice, logging",
-            mode
-        ));
+    if settings.matrix.mode == Mode::Appservice
+        && let Some(appservice) = &settings.matrix.appservice
+    {
+        match &appservice.registration_file {
+            Some(path) => {
+                tracing::info!(
+                    "Will validate configuration against registration file: {}",
+                    path
+                )
+            }
+            None => {
+                tracing::warn!(
+                    "`matrix.appservice.registration_file` is not set; \
+                     registration consistency check is skipped"
+                );
+            }
+        }
     }
 
-    // Extract hs_token for AppService mode (used later by PushReceiver)
-    let hs_token: Option<String> = if mode == "appservice" {
-        Some(
-            settings
-                .matrix
-                .hs_token
-                .clone()
-                .ok_or_else(|| anyhow!("`hs_token` is required for appservice mode"))?,
-        )
-    } else {
-        None
+    let appservice = match settings.matrix.mode {
+        Mode::Appservice => Some(settings.matrix.appservice_runtime()?),
+        Mode::Logging => None,
     };
+    tracing::info!("Matrix mode: {:?}", settings.matrix.mode);
 
     // ─────────────────────────────────────────────────────────────
     // 7. Initialize Matrix Driver (Hands) based on mode
     // ─────────────────────────────────────────────────────────────
-    let driver: Arc<dyn cumments_core::ports::MatrixDriver> = match mode {
-        "appservice" => {
-            let as_token = settings
-                .matrix
-                .as_token
-                .as_deref()
-                .ok_or_else(|| anyhow!("`as_token` is required for appservice mode"))?;
-            let server_name = settings
-                .matrix
-                .server_name
-                .as_deref()
-                .ok_or_else(|| anyhow!("`server_name` is required for appservice mode"))?;
-            let sender_localpart = settings
-                .matrix
-                .sender_localpart
-                .clone()
-                .unwrap_or_else(|| "_cumments_bot".to_string());
-            let owner_id = settings.matrix.owner_id.clone();
-            let virtual_user_store: Arc<dyn cumments_core::ports::VirtualUserStore> =
-                db_store.clone();
-
-            tracing::info!(
-                "Initializing AppService Matrix driver on {}",
-                settings.matrix.homeserver_url
-            );
-            Arc::new(cumments_matrix::AppServiceMatrixDriver::new(
-                settings.matrix.homeserver_url.clone(),
-                as_token.to_string(),
-                server_name.to_string(),
-                sender_localpart,
-                owner_id,
-                virtual_user_store,
-            ))
-        }
-        "logging" => {
-            tracing::info!("Using 'logging' mode driver.");
-            Arc::new(cumments_matrix::logging::LoggingMatrixDriver)
-        }
-        _ => unreachable!("mode was validated above"),
+    let driver: Arc<dyn MatrixDriver> = if let Some(as_conf) = &appservice {
+        let virtual_user_store: Arc<dyn cumments_core::ports::VirtualUserStore> = db_store.clone();
+        tracing::info!(
+            "Initializing AppService Matrix driver for {} (domain: {})",
+            as_conf.homeserver_url,
+            as_conf.server_name
+        );
+        Arc::new(cumments_matrix::AppServiceMatrixDriver::new(
+            as_conf.homeserver_url.clone(),
+            as_conf.as_token.clone(),
+            as_conf.server_name.clone(),
+            as_conf.sender_localpart.clone(),
+            as_conf.owner_id.clone(),
+            virtual_user_store,
+        ))
+    } else {
+        tracing::info!("Using 'logging' mode driver.");
+        Arc::new(cumments_matrix::logging::LoggingMatrixDriver)
     };
 
     // ─────────────────────────────────────────────────────────────
@@ -217,12 +202,11 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     // 10. Start Event Receiver based on mode
     // ─────────────────────────────────────────────────────────────
-    match mode {
-        "appservice" => {
+    match &appservice {
+        Some(as_conf) => {
             // PushReceiver – listens for HS push events
-            let push_port = settings.matrix.push_listen_port.unwrap_or(3001);
-
-            let hs_token = hs_token.clone().unwrap_or_default();
+            let push_port = as_conf.listen_port;
+            let hs_token = as_conf.hs_token.clone();
             let push_app =
                 cumments_projector::push_receiver::push_router(event_processor.clone(), hs_token);
 
@@ -234,7 +218,7 @@ async fn main() -> Result<()> {
                 // Routes will be merged in step 12
             } else {
                 tracing::info!("Starting PushReceiver on separate port {}.", push_port);
-                let host = settings.server.host.clone();
+                let host = as_conf.listen_host.clone();
                 tokio::spawn(async move {
                     let listener = tokio::net::TcpListener::bind((host.as_str(), push_port))
                         .await
@@ -251,10 +235,9 @@ async fn main() -> Result<()> {
                 });
             }
         }
-        "logging" => {
+        None => {
             // Logging mode – no event receiver needed
         }
-        _ => unreachable!("mode was validated above"),
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -275,13 +258,17 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     // 12. Assemble final router (merge push routes if shared port)
     // ─────────────────────────────────────────────────────────────
-    let final_router = if mode == "appservice"
-        && settings.matrix.push_listen_port.unwrap_or(3001) == settings.server.port
-    {
-        // Merge push routes into the API server
-        let hs_token = hs_token.unwrap_or_default();
-        let push_router = cumments_projector::push_receiver::push_router(event_processor, hs_token);
-        api_router.merge(push_router)
+    let final_router = if let Some(as_conf) = &appservice {
+        if as_conf.listen_port == settings.server.port {
+            // Merge push routes into the API server
+            let push_router = cumments_projector::push_receiver::push_router(
+                event_processor,
+                as_conf.hs_token.clone(),
+            );
+            api_router.merge(push_router)
+        } else {
+            api_router
+        }
     } else {
         api_router
     };
