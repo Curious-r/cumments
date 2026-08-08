@@ -11,7 +11,8 @@ use cumments_core::{
 };
 use rand::RngCore;
 use serde::Deserialize;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, instrument, warn};
 
@@ -179,6 +180,7 @@ pub struct AppServiceMatrixDriver {
     sender_localpart: String,
     owner_id: String,
     virtual_user_store: Arc<dyn VirtualUserStore>,
+    joined_cache: Mutex<HashSet<(String, String)>>,
 }
 
 impl AppServiceMatrixDriver {
@@ -202,6 +204,7 @@ impl AppServiceMatrixDriver {
             sender_localpart,
             owner_id,
             virtual_user_store,
+            joined_cache: Mutex::new(HashSet::new()),
         }
     }
 
@@ -268,6 +271,46 @@ impl AppServiceMatrixDriver {
 
     /// Ensure a virtual user is joined to a room.
     async fn ensure_joined(&self, room_id: &str, virtual_user: &str) -> Result<()> {
+        let cache_key = (room_id.to_owned(), virtual_user.to_owned());
+        if self
+            .joined_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&cache_key)
+        {
+            return Ok(());
+        }
+
+        // Check membership state first so we never call /join for users that
+        // are already in the room (cached after the first check).
+        let member_path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.member/{}",
+            urlencode(room_id),
+            urlencode(virtual_user)
+        );
+        match self
+            .request(reqwest::Method::GET, &member_path, Some(virtual_user))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(content) = resp.json::<serde_json::Value>().await
+                    && content.get("membership").and_then(|v| v.as_str()) == Some("join")
+                {
+                    self.joined_cache
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(cache_key);
+                    return Ok(());
+                }
+            }
+            Ok(_) => {}
+            Err(e) => warn!(
+                "Virtual user {} membership check failed for room {}: {:?}",
+                virtual_user, room_id, e
+            ),
+        }
+
         let path = format!("_matrix/client/v3/rooms/{}/join", urlencode(room_id));
         let resp = self
             .request(reqwest::Method::POST, &path, Some(virtual_user))
@@ -278,12 +321,28 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            warn!(
-                "Virtual user {} join room {} failed ({}): {}",
-                virtual_user, room_id, status, body
-            );
-            // Non-fatal – the user may already be joined (M_FORGE can happen)
-            // or the HS auto-joined via AS protocol.
+            let errcode = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("errcode").and_then(|e| e.as_str()).map(str::to_owned))
+                .unwrap_or_default();
+            if errcode == "M_FORBIDDEN" {
+                // M_FORBIDDEN commonly means "already joined"; the send below
+                // remains the authoritative check.
+                warn!(
+                    "Virtual user {} join room {} returned M_FORBIDDEN ({}): {}",
+                    virtual_user, room_id, status, body
+                );
+            } else {
+                warn!(
+                    "Virtual user {} join room {} failed ({}): {}",
+                    virtual_user, room_id, status, body
+                );
+            }
+        } else {
+            self.joined_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(cache_key);
         }
         Ok(())
     }
