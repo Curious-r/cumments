@@ -2,45 +2,32 @@
 #   docker build -f misc/docker/Dockerfile .
 
 ARG RUST_VERSION=1.97
-FROM rust:${RUST_VERSION}-alpine AS builder
-
-ARG VERSION=0.17.0
-ARG REVISION=unknown
-
-LABEL org.opencontainers.image.title="Cumments"
-LABEL org.opencontainers.image.description="Decentralized comment system backend on Matrix"
-LABEL org.opencontainers.image.source="https://github.com/Curious-r/cumments"
-LABEL org.opencontainers.image.version="${VERSION}"
-LABEL org.opencontainers.image.revision="${REVISION}"
+FROM rust:${RUST_VERSION}-alpine AS chef
 
 # Install build dependencies
 RUN apk add --no-cache build-base cmake clang musl-dev pkgconfig sqlite-dev
 
-WORKDIR /usr/src/app
+# cargo-chef keeps the dependency build in its own cached layer
+RUN cargo install cargo-chef --locked --version 0.1.77
 
-# Copy project files
+FROM chef AS planner
+WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-
-# Create a dummy main to allow cargo to download dependencies
-RUN mkdir -p crates/cumments/src && \
-    echo 'fn main() { println!("Dummy build"); }' > crates/cumments/src/main.rs
-
-# Download and compile dependencies
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/src/app/target \
-    cargo build --release --locked --bin cumments
+    cargo chef prepare --recipe-path recipe.json
 
-# Copy actual source code
+FROM chef AS builder
+WORKDIR /usr/src/app
+COPY --from=planner /usr/src/app/recipe.json recipe.json
+# Compile all dependencies once; this layer is reused as long as the recipe
+# (manifests + Cargo.lock) does not change.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo chef cook --release --recipe-path recipe.json
+# Copy the real sources and build the final binary
 COPY . .
-
-# Build the cumments binary, then copy it out of the target cache mount.
-# Cache-mount contents are discarded when the RUN finishes, so the binary
-# must be placed somewhere that persists in this stage for the runtime COPY.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/src/app/target \
-    cargo build --release --locked --bin cumments && \
-    install -m 0755 target/release/cumments /usr/local/bin/cumments
+    cargo build --release --locked --bin cumments
 
 # Runtime stage
 FROM alpine:3.22
@@ -61,7 +48,7 @@ RUN apk --no-cache add ca-certificates sqlite-libs && \
     mkdir -p /etc/cumments
 
 # Copy the binary from builder stage
-COPY --from=builder /usr/local/bin/cumments /usr/local/bin/cumments
+COPY --from=builder /usr/src/app/target/release/cumments /usr/local/bin/cumments
 # Copy the runnable example configuration as the default config
 COPY --from=builder /usr/src/app/misc/config/config-example.toml /etc/cumments/cumments.toml
 
