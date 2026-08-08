@@ -119,6 +119,10 @@ It requires an AppService configuration connected to a reachable homeserver:
 3. replays events in `(origin_server_ts, event_id)` order through the same
    idempotent projection used for live pushes.
 
+`cumments backfill --max-pages N` caps history at `N` pages (~100 events each)
+per room to bound memory on large rooms; the cursor is saved so a later run
+resumes where it stopped. `0` disables the cap (default: 500).
+
 Interrupted runs resume from persisted per-room cursors.
 
 ### Backup
@@ -158,13 +162,11 @@ Example AppService configuration:
 host = "0.0.0.0"
 port = 7931
 cors_origins = "*"
-public_server_name = "your_server.tld"
 
 [database]
 url = "sqlite://data/cumments.db"
 
 [security]
-admin_token = "admin_secret"
 pow_secret = "pow_secret_key"
 pow_difficulty = 4
 
@@ -184,8 +186,9 @@ For local development, set `mode = "logging"`; only `homeserver_url` and
 
 Configuration notes:
 
-- `admin_token`, `cors_origins`, and `public_server_name` are currently parsed
-  but not yet enforced; CORS is permissive.
+- `cors_origins` is enforced: `"*"` keeps permissive CORS, a comma-separated
+  list restricts `Access-Control-Allow-Origin` to those exact origins, and an
+  empty value sends no CORS headers.
 - SQLite files are created automatically, but the parent directory must exist
   (the repo has a `data/` directory).
 - All timestamps are stored in UTC with millisecond precision.
@@ -416,7 +419,13 @@ CI runs the same commands on GitHub Actions.
 ## Known Limitations
 
 - `reply_to` and `email` are accepted by the API but are not yet written to
-  Matrix events or the read model.
+  Matrix events or the read model. `email` lives only in the local intent
+  queue payload; terminal rows are kept as an audit log, so add retention
+  cleanup before production.
+- Virtual user IDs derive from the first 4 bytes of `SHA-256(public_key)`
+  (32 bits): collisions become likely at ~77k authors per site and would make
+  two authors share a Matrix virtual user (ownership checks still use the
+  full public key). Plan a longer suffix before large-scale deployment.
 - Rate limiting, reply trees, and multi-instance/Postgres support are not
   implemented yet.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse

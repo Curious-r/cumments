@@ -20,7 +20,12 @@ pub struct PostCommentIntent {
 
     /// Information about the author. For guests, this is provided by them.
     pub nickname: String,
-    pub email: Option<String>, // Optional, maybe for gravatar-like features later
+    // Optional, maybe for gravatar-like features later. PII retention note:
+    // the email is stored only in this intent payload inside the local SQLite
+    // queue and never leaves it (not written to Matrix events or the read
+    // model). Completed rows are kept as an audit log; scrub or add retention
+    // cleanup before production deployment.
+    pub email: Option<String>,
 
     /// Ed25519 public key identifying the author (base64url).
     /// Ownership is publicly verifiable from Matrix events.

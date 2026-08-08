@@ -111,6 +111,10 @@ cumments backfill
 
 中断的跑批会从持久化的游标处续跑。
 
+`cumments backfill --max-pages N` 将每个房间的历史限制在 `N` 页（每页约 100
+个事件），避免大房间占用过多内存；游标会保存，之后可断点续跑。`0` 表示不限
+（默认 500）。
+
 ### Backup（快照）
 
 ```bash
@@ -148,13 +152,11 @@ AppService 配置示例：
 host = "0.0.0.0"
 port = 7931
 cors_origins = "*"
-public_server_name = "your_server.tld"
 
 [database]
 url = "sqlite://data/cumments.db"
 
 [security]
-admin_token = "admin_secret"
 pow_secret = "pow_secret_key"
 pow_difficulty = 4
 
@@ -174,8 +176,8 @@ owner_id = "@admin:your_server.tld"
 
 配置说明：
 
-- `admin_token` / `cors_origins` / `public_server_name` 目前会被解析但尚未生效，
-  CORS 是 permissive。
+- `cors_origins` 已生效：`"*"` 保持 permissive；逗号分隔的精确域名列表会把
+  `Access-Control-Allow-Origin` 限制为这些来源；空值则不发送 CORS 头。
 - SQLite 文件会自动创建，但父目录需要存在（仓库已有 `data/`）。
 - 所有时间戳统一以毫秒精度存为 UTC。
 
@@ -392,7 +394,12 @@ GitHub Actions 会执行同样的命令。
 
 ## 已知限制
 
-- `reply_to` 与 `email` 会被 API 接收，但尚未写入 Matrix 事件或读模型。
+- `reply_to` 与 `email` 会被 API 接收，但尚未写入 Matrix 事件或读模型。`email`
+  只存在本地意图队列的 payload 中；终态行作为审计日志保留，生产部署前请加保留
+  期清理。
+- 虚拟用户 ID 取 `SHA-256(public_key)` 前 4 字节（32 位）：每站点约 7.7 万
+  作者时碰撞概率过半，碰撞会使两位作者共用一个 Matrix 虚拟用户（所有权校验仍
+  使用完整公钥，评论与编辑权不受影响）。大规模部署前应引入更长的后缀。
 - 速率限制、回复树、多实例/Postgres 尚未实现。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 
