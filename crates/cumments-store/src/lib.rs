@@ -807,6 +807,7 @@ impl CommentStore for DbStore {
         &self,
         comment: &Comment,
         room_id: &str,
+        sender: &str,
         _site_id: &SiteId,
         _post_slug: &PostSlug,
     ) -> Result<()> {
@@ -815,7 +816,7 @@ impl CommentStore for DbStore {
             room_id: Set(room_id.to_owned()),
             site_id: Set(comment.site_id.clone()),
             post_slug: Set(comment.post_slug.clone()),
-            author_mxid: Set("".to_string()), // Default value if not provided
+            author_mxid: Set(sender.to_owned()),
             author_nickname: Set(comment.author_nickname.clone()),
             author_public_key: Set(comment.author_public_key.clone()),
             content: Set(comment.content.clone()),
@@ -1036,6 +1037,7 @@ impl From<comments::Model> for Comment {
             author_public_key: model.author_public_key,
             content: model.content,
             timestamp: model.timestamp,
+            author_mxid: model.author_mxid,
         }
     }
 }

@@ -98,6 +98,10 @@ pub struct Comment {
     pub author_public_key: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
+    /// Matrix sender of the original event. Internal integrity check for
+    /// edits (m.replace) and never exposed through the API/SSE.
+    #[serde(skip)]
+    pub author_mxid: String,
 }
 
 /// Represents a website that uses Cumments.

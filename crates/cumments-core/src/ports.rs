@@ -94,6 +94,7 @@ pub trait CommentStore: Send + Sync {
         &self,
         comment: &Comment,
         room_id: &str,
+        sender: &str,
         site_id: &SiteId,
         post_slug: &PostSlug,
     ) -> Result<()>;

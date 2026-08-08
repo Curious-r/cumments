@@ -266,6 +266,47 @@ impl EventProcessor {
         if let Some(ref relation) = event.relates_to {
             info!("Handling edit for event {}", relation.target_event_id);
 
+            // Integrity: Matrix does not enforce same-sender on m.replace, so
+            // verify the replacement was sent by the original comment's author
+            // virtual user. Legacy rows without a recorded sender are accepted
+            // until re-projected by backfill.
+            match self
+                .comment_store
+                .get_comment(&relation.target_event_id)
+                .await
+            {
+                Ok(Some(existing))
+                    if !existing.author_mxid.is_empty() && existing.author_mxid != event.sender =>
+                {
+                    warn!(
+                        "Rejecting edit for {} from {}: sender does not match original author {}",
+                        relation.target_event_id, event.sender, existing.author_mxid
+                    );
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(
+                        "Failed to load comment {} for edit authorization: {:?}",
+                        relation.target_event_id, e
+                    );
+                    return;
+                }
+            }
+
+            // Closed-loop: the update was sent to Matrix; complete the intent
+            // even if the local read model has no row yet.
+            if let Err(e) = self
+                .intent_store
+                .mark_update_intent_completed(&relation.target_event_id)
+                .await
+            {
+                debug!(
+                    "Failed to mark update intent as completed (normal if no intent): {:?}",
+                    e
+                );
+            }
+
             match self
                 .comment_store
                 .update_comment_content(&relation.target_event_id, &relation.new_content)
@@ -307,7 +348,9 @@ impl EventProcessor {
             author_nickname: event.author_display_name.clone(),
             author_public_key: event.author_public_key.clone(),
             content: event.content.clone(),
-            timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts).unwrap(),
+            timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+            author_mxid: event.sender.clone(),
         };
 
         match self
@@ -315,6 +358,7 @@ impl EventProcessor {
             .save_comment(
                 &comment,
                 &event.room_id,
+                &event.sender,
                 &site_id.clone().into(),
                 &post_slug.clone().into(),
             )
