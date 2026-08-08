@@ -203,6 +203,9 @@ docker build -t cumments -f misc/docker/Dockerfile .
 docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
 
+The image starts in `logging` mode by default; override with `CUMMENTS__*`
+environment variables (e.g. `CUMMENTS__MATRIX__MODE=appservice`) for production.
+
 ---
 
 ## 6. API Documentation
@@ -399,6 +402,9 @@ cargo build --release -p cumments
 docker build -t cumments -f misc/docker/Dockerfile .
 docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
+
+镜像默认以 `logging` 模式启动；生产环境用 `CUMMENTS__*` 环境变量覆盖
+（例如 `CUMMENTS__MATRIX__MODE=appservice`）。
 
 ## 6. 关键 API
 
