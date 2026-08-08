@@ -457,7 +457,7 @@ GitHub Actions 会执行同样的命令。
 
 - `reply_to` 会被 API 接收，但尚未写入 Matrix 事件或读模型。项目有意不收集
   邮箱。
-- 速率限制、回复树、多实例/Postgres 尚未实现。
+- 速率限制、回复树、多实例/Postgres、运维监控尚未实现。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 
 ## License

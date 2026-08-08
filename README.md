@@ -486,8 +486,8 @@ CI runs the same commands on GitHub Actions.
 
 - `reply_to` is accepted by the API but is not yet written to Matrix events or
   the read model. Email is deliberately not collected.
-- Rate limiting, reply trees, and multi-instance/Postgres support are not
-  implemented yet.
+- Rate limiting, reply trees, multi-instance/Postgres support, and operational
+  monitoring are not implemented yet.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse
   deployment is still pending.
 
