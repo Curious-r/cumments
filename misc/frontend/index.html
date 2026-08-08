@@ -3,398 +3,492 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Cumments 完整功能测试</title>
+        <title>Cumments 评论区演示</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
         <style>
-            /* Markdown 样式微调 */
             .markdown-body p {
                 margin-bottom: 0.5rem;
             }
             .markdown-body a {
-                color: #3b82f6;
+                color: #2563eb;
                 text-decoration: underline;
-            }
-            .markdown-body strong {
-                font-weight: bold;
-            }
-            .markdown-body em {
-                font-style: italic;
             }
             .markdown-body blockquote {
                 border-left: 4px solid #e5e7eb;
                 padding-left: 1rem;
                 color: #6b7280;
             }
+            .markdown-body code {
+                background: #f1f5f9;
+                border-radius: 0.25rem;
+                padding: 0.125rem 0.375rem;
+                font-size: 0.875em;
+            }
+            .markdown-body pre {
+                background: #0f172a;
+                color: #e2e8f0;
+                border-radius: 0.5rem;
+                padding: 0.75rem;
+                overflow-x: auto;
+                margin-bottom: 0.75rem;
+            }
             .markdown-body ul {
-                list-style-type: disc;
+                list-style: disc;
                 padding-left: 1.5rem;
             }
             .markdown-body ol {
-                list-style-type: decimal;
+                list-style: decimal;
                 padding-left: 1.5rem;
+            }
+            #toasts > div {
+                transition: opacity 0.3s ease, transform 0.3s ease;
             }
         </style>
     </head>
-    <body class="bg-gray-100 min-h-screen p-4 lg:p-8 text-slate-800 font-sans">
-        <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- 左侧：配置与控制面板 -->
-            <div class="lg:col-span-1 space-y-6">
-                <!-- 1. 站点配置 -->
-                <div
-                    class="bg-white p-6 rounded-xl shadow-sm border border-gray-200"
-                >
-                    <h2
-                        class="text-lg font-bold mb-4 flex items-center text-slate-800"
+    <body class="bg-slate-50 min-h-screen text-slate-800 font-sans">
+        <!-- 顶栏 -->
+        <header
+            class="sticky top-0 z-40 bg-white/85 backdrop-blur border-b border-slate-200"
+        >
+            <div
+                class="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between"
+            >
+                <div class="flex items-center gap-2.5">
+                    <div
+                        class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center font-black text-sm shadow-sm"
                     >
+                        C
+                    </div>
+                    <div>
+                        <div class="font-bold leading-tight">Cumments</div>
+                        <div class="text-[10px] text-slate-400 leading-tight">
+                            基于 Matrix 的评论系统
+                        </div>
+                    </div>
+                </div>
+                <button
+                    onclick="openSettings()"
+                    class="text-sm text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg px-3 py-1.5 font-medium transition"
+                >
+                    设置
+                </button>
+            </div>
+        </header>
+
+        <main class="max-w-3xl mx-auto px-4 py-8">
+            <!-- 示例文章 -->
+            <article
+                class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 mb-8"
+            >
+                <p class="text-xs font-medium text-indigo-600 mb-2">
+                    Cumments Demo
+                </p>
+                <h1
+                    class="text-2xl sm:text-3xl font-black text-slate-900 leading-snug mb-4"
+                >
+                    这是一篇用来验证评论功能的示例文章
+                </h1>
+                <div class="text-sm text-slate-500 leading-relaxed space-y-3">
+                    <p>
+                        下面的评论区会连接真实的 Cumments 后端，支持发布、编辑、
+                        删除本人评论，以及通过 SSE 接收其他访客的实时更新。
+                    </p>
+                    <p>
+                        你的身份是浏览器本地生成的 Ed25519 密钥对：公钥即身份，
+                        私钥不会离开浏览器。评论会以 Matrix 事件的形式写入房间，
+                        SQLite 只是可重建的读模型。
+                    </p>
+                </div>
+            </article>
+
+            <!-- 评论区 -->
+            <section class="mb-10">
+                <!-- 评论标题 + 状态 -->
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-3">
+                        <h2 class="text-lg font-bold text-slate-900">
+                            评论
+                            <span id="commentCount" class="text-slate-400">0</span>
+                        </h2>
                         <span
-                            class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded mr-2"
-                            >设置</span
+                            class="inline-flex items-center gap-1.5 text-xs text-slate-400"
                         >
-                        环境配置
-                    </h2>
-                    <div class="space-y-3">
-                        <div>
-                            <label
-                                class="block text-sm font-medium text-gray-700"
-                                >API 地址</label
-                            >
-                            <input
-                                type="text"
-                                id="apiUrl"
-                                value="http://localhost:7931"
-                                class="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"
-                            />
-                        </div>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Site ID</label
-                                >
-                                <input
-                                    type="text"
-                                    id="siteId"
-                                    value="my-blog"
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2"
-                                />
-                            </div>
-                            <div>
-                                <label
-                                    class="block text-sm font-medium text-gray-700"
-                                    >Slug</label
-                                >
-                                <input
-                                    type="text"
-                                    id="slug"
-                                    value="hello-world"
-                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2"
-                                />
-                            </div>
-                        </div>
+                            <span
+                                id="sseIndicator"
+                                class="w-2 h-2 rounded-full bg-red-400"
+                            ></span>
+                            <span id="sseText">未连接</span>
+                        </span>
+                    </div>
+                    <div
+                        class="flex bg-slate-100 rounded-lg p-0.5 text-sm"
+                        id="tabs"
+                    >
                         <button
-                            onclick="initApp()"
-                            class="w-full bg-slate-800 text-white py-2 px-4 rounded-md hover:bg-slate-700 transition font-medium"
+                            id="tabAll"
+                            onclick="switchTab('all')"
+                            class="px-3 py-1.5 rounded-md font-medium text-slate-700 bg-white shadow-sm"
                         >
-                            加载 / 刷新评论区
+                            全部
+                        </button>
+                        <button
+                            id="tabMine"
+                            onclick="switchTab('mine')"
+                            class="px-3 py-1.5 rounded-md font-medium text-slate-500 hover:text-slate-700 transition"
+                        >
+                            我的评论
                         </button>
                     </div>
                 </div>
 
-                <!-- 2. 访客身份 -->
+                <!-- 发布框 -->
                 <div
-                    class="bg-white p-6 rounded-xl shadow-sm border border-gray-200"
+                    class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-5"
                 >
-                    <h2
-                        class="text-lg font-bold mb-4 flex items-center text-slate-800"
-                    >
-                        <span
-                            class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded mr-2"
-                            >身份</span
+                    <div class="flex items-start gap-3">
+                        <div
+                            id="composerAvatar"
+                            class="w-9 h-9 rounded-full shrink-0 bg-gradient-to-br from-slate-300 to-slate-400 text-white flex items-center justify-center text-sm font-bold"
                         >
-                        访客信息
-                    </h2>
-                    <div class="space-y-3">
-                        <div>
-                            <label
-                                class="block text-sm font-medium text-gray-700"
-                                >昵称</label
-                            >
-                            <input
-                                type="text"
-                                id="nickname"
-                                value="GuestUser"
-                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2"
-                            />
+                            ?
                         </div>
-                        <div>
-                            <label
-                                class="block text-sm font-medium text-gray-700"
-                                >Email (可选)</label
-                            >
-                            <input
-                                type="email"
-                                id="email"
-                                placeholder="可选（当前后端未使用）"
-                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2"
-                            />
-                        </div>
-                        <div>
-                            <label
-                                class="block text-sm font-medium text-gray-700"
-                                >身份公钥 (Ed25519，浏览器本地生成)</label
-                            >
-                            <div class="flex gap-2">
+                        <div class="flex-1 space-y-2">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <input
+                                    id="composerNickname"
                                     type="text"
-                                    id="guestToken"
-                                    readonly
-                                    class="mt-1 block w-full bg-gray-50 rounded-md border-gray-300 shadow-sm border p-2 text-xs font-mono text-gray-500 truncate"
+                                    maxlength="50"
+                                    placeholder="昵称"
+                                    oninput="updateComposerAvatar()"
+                                    class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                                 />
-                                <button
-                                    onclick="regenerateIdentity()"
-                                    class="mt-1 px-3 py-2 border border-gray-300 rounded text-sm hover:bg-gray-50 whitespace-nowrap"
+                                <input
+                                    id="composerEmail"
+                                    type="email"
+                                    placeholder="邮箱（可选）"
+                                    class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                                />
+                            </div>
+                            <textarea
+                                id="composerContent"
+                                rows="3"
+                                placeholder="写下你的评论，支持 Markdown…"
+                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-y focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                            ></textarea>
+                            <div
+                                class="flex items-center justify-between gap-3 pt-1"
+                            >
+                                <span
+                                    id="powStatus"
+                                    class="text-xs text-slate-400 truncate"
                                 >
-                                    重置身份
+                                    PoW 就绪
+                                </span>
+                                <button
+                                    id="submitBtn"
+                                    onclick="submitComment()"
+                                    class="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-5 py-2 rounded-lg transition shadow-sm"
+                                >
+                                    发布评论
                                 </button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 3. 发布评论 -->
+                <!-- 分页信息 -->
                 <div
-                    class="bg-white p-6 rounded-xl shadow-sm border border-gray-200"
+                    class="flex items-center justify-between text-xs text-slate-400 mb-3 px-1"
                 >
-                    <h2
-                        class="text-lg font-bold mb-4 flex items-center text-slate-800"
-                    >
-                        <span
-                            class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded mr-2"
-                            >发布</span
-                        >
-                        写评论
-                    </h2>
-                    <div class="space-y-3">
-                        <textarea
-                            id="content"
-                            rows="4"
-                            class="w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 border p-2 text-sm"
-                            placeholder="支持 Markdown 语法..."
-                        ></textarea>
-
-                        <div class="flex items-center justify-between pt-2">
-                            <span id="powStatus" class="text-xs text-gray-400"
-                                >PoW 准备就绪</span
-                            >
-                            <button
-                                onclick="submitComment()"
-                                id="submitBtn"
-                                class="bg-purple-600 text-white py-2 px-6 rounded-md hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm"
-                            >
-                                发送
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 右侧：评论列表与 SSE -->
-            <div class="lg:col-span-2 space-y-6">
-                <!-- SSE 状态条 -->
-                <div
-                    class="flex items-center justify-between bg-white px-4 py-3 rounded-lg border border-gray-200 shadow-sm"
-                >
-                    <div class="flex items-center gap-2">
-                        <span class="relative flex h-3 w-3">
-                            <span
-                                id="ssePing"
-                                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 hidden"
-                            ></span>
-                            <span
-                                id="sseIndicator"
-                                class="relative inline-flex rounded-full h-3 w-3 bg-red-500"
-                            ></span>
-                        </span>
-                        <span
-                            id="sseText"
-                            class="text-sm font-medium text-gray-600"
-                            >实时推送未连接</span
-                        >
-                    </div>
-                    <div
-                        class="text-xs text-gray-400 font-mono"
-                        id="lastEventTime"
-                    ></div>
-                </div>
-
-                <!-- [新增] 顶部状态栏 & 分页 -->
-                <div
-                    class="flex items-center justify-between bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 text-xs text-gray-500 mb-4"
-                >
-                    <span id="pageInfo">加载中...</span>
-                    <div class="flex gap-2">
+                    <span id="pageInfo">加载中…</span>
+                    <div class="flex items-center gap-3">
                         <button
-                            onclick="changePage(-1)"
-                            class="hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed"
                             id="prevBtn"
+                            onclick="changePage(-1)"
+                            class="hover:text-indigo-600 disabled:opacity-30 disabled:cursor-not-allowed transition"
                         >
                             上一页
                         </button>
-                        <span class="text-gray-300">|</span>
+                        <span class="text-slate-200">|</span>
                         <button
-                            onclick="changePage(1)"
-                            class="hover:text-blue-600 disabled:opacity-30 disabled:cursor-not-allowed"
                             id="nextBtn"
+                            onclick="changePage(1)"
+                            class="hover:text-indigo-600 disabled:opacity-30 disabled:cursor-not-allowed transition"
                         >
                             下一页
                         </button>
                     </div>
                 </div>
 
-                <!-- 评论列表容器 -->
-                <div
-                    id="commentsContainer"
-                    class="space-y-4 pb-4 min-h-[200px]"
-                >
+                <!-- 评论列表 -->
+                <div id="commentsContainer" class="space-y-4 min-h-[160px]">
                     <div
-                        class="text-center py-10 text-gray-400 bg-white rounded-xl border border-gray-200 border-dashed"
+                        class="text-center py-10 text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200"
                     >
-                        点击左侧“加载”按钮获取评论
+                        加载中…
                     </div>
                 </div>
 
-                <!-- [新增] 底部加载更多 (用于长列表) -->
-                <button
-                    onclick="loadComments(getConfig(), state.currentPage, 100)"
-                    class="w-full py-2 bg-white border border-gray-200 text-gray-500 text-sm rounded-lg hover:bg-gray-50 transition shadow-sm"
-                >
-                    试图加载更多 (每页 100 条)
-                </button>
+                <!-- 管理说明 -->
+                <p class="text-xs text-slate-400 mt-5 leading-relaxed">
+                    你只能编辑/删除自己发布的评论；管理员可以直接在 Matrix 客户端中
+                    治理评论房间。
+                </p>
+            </section>
+        </main>
+
+        <!-- 设置抽屉 -->
+        <div
+            id="settingsModal"
+            class="hidden fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-start justify-end"
+            onclick="if (event.target === this) closeSettings()"
+        >
+            <div
+                class="w-full max-w-md h-full bg-white shadow-2xl p-6 overflow-y-auto"
+            >
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-lg font-bold text-slate-900">设置</h2>
+                    <button
+                        onclick="closeSettings()"
+                        class="text-slate-400 hover:text-slate-600 text-2xl leading-none px-1"
+                    >
+                        ×
+                    </button>
+                </div>
+
+                <div class="space-y-5">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">
+                            API 地址
+                        </label>
+                        <input
+                            id="apiUrl"
+                            type="text"
+                            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                        />
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label
+                                class="block text-sm font-medium text-slate-700 mb-1"
+                            >
+                                Site ID
+                            </label>
+                            <input
+                                id="siteId"
+                                type="text"
+                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                class="block text-sm font-medium text-slate-700 mb-1"
+                            >
+                                Slug
+                            </label>
+                            <input
+                                id="slug"
+                                type="text"
+                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label
+                                class="block text-sm font-medium text-slate-700 mb-1"
+                            >
+                                昵称
+                            </label>
+                            <input
+                                id="settingNickname"
+                                type="text"
+                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                class="block text-sm font-medium text-slate-700 mb-1"
+                            >
+                                邮箱（可选）
+                            </label>
+                            <input
+                                id="settingEmail"
+                                type="email"
+                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="border-t border-slate-100 pt-5">
+                        <label
+                            class="block text-sm font-medium text-slate-700 mb-1"
+                        >
+                            身份公钥（Ed25519）
+                        </label>
+                        <div class="flex gap-2">
+                            <input
+                                id="publicKey"
+                                type="text"
+                                readonly
+                                class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono text-slate-500 truncate outline-none"
+                            />
+                            <button
+                                onclick="copyPublicKey()"
+                                class="shrink-0 text-xs border border-slate-200 rounded-lg px-3 text-slate-600 hover:bg-slate-50 transition"
+                            >
+                                复制
+                            </button>
+                        </div>
+                        <button
+                            onclick="resetIdentity()"
+                            class="mt-2 text-xs text-red-500 hover:text-red-700 font-medium"
+                        >
+                            重置身份
+                        </button>
+                        <p class="mt-1 text-[11px] text-slate-400 leading-relaxed">
+                            私钥只保存在本浏览器；重置后旧公钥发布的评论将不再显示
+                            编辑/删除入口。
+                        </p>
+                    </div>
+                </div>
+
+                <div class="flex gap-3 mt-8">
+                    <button
+                        onclick="closeSettings()"
+                        class="flex-1 border border-slate-200 rounded-lg py-2 text-sm text-slate-600 hover:bg-slate-50 transition"
+                    >
+                        取消
+                    </button>
+                    <button
+                        onclick="saveSettings()"
+                        class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg py-2 text-sm font-semibold transition"
+                    >
+                        保存并刷新
+                    </button>
+                </div>
             </div>
         </div>
 
-        <!-- 评论 DOM 模板 -->
-        <template id="commentTemplate">
-            <div
-                class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition group relative"
-                data-id=""
-            >
-                <div class="flex items-start justify-between mb-3">
-                    <div class="flex items-center gap-3">
-                        <!-- 头像 -->
-                        <div
-                            class="avatar-container w-9 h-9 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 overflow-hidden flex items-center justify-center text-sm font-bold text-slate-600 border border-white shadow-sm"
-                        >
-                            <img
-                                class="avatar-img hidden w-full h-full object-cover"
-                                src=""
-                                alt=""
-                            />
-                            <span class="avatar-placeholder">?</span>
-                        </div>
-
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <span
-                                    class="font-bold text-gray-900 text-sm nickname"
-                                    >User</span
-                                >
-
-                                <!-- 身份标识 -->
-                                <span
-                                    class="guest-badge hidden bg-gray-100 text-gray-500 text-[10px] font-medium px-1.5 py-0.5 rounded border border-gray-200"
-                                    >访客</span
-                                >
-                                <span
-                                    class="matrix-badge hidden bg-indigo-50 text-indigo-700 text-[10px] font-medium px-1.5 py-0.5 rounded border border-indigo-100 flex items-center gap-1"
-                                >
-                                    <span
-                                        class="w-1 h-1 bg-indigo-500 rounded-full"
-                                    ></span>
-                                    Matrix
-                                </span>
-                            </div>
-                            <div
-                                class="text-[10px] text-gray-400 time mt-0.5"
-                            ></div>
-                        </div>
-                    </div>
-
-                    <!-- 操作按钮 (Hover显示) -->
-                    <div
-                        class="flex gap-2 opacity-0 group-hover:opacity-100 transition duration-200"
-                    >
-                        <!-- 编辑与删除仅对公钥匹配的本地身份显示 -->
-                        <button
-                            class="text-xs font-medium text-slate-500 hover:text-green-600 edit-btn hidden px-1"
-                        >
-                            编辑
-                        </button>
-                        <button
-                            class="text-xs font-medium text-slate-500 hover:text-red-600 delete-btn hidden px-1"
-                        >
-                            删除
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 评论内容区 -->
-                <div class="content-wrapper pl-12">
-                    <div
-                        class="markdown-body text-sm text-gray-700 leading-relaxed break-words"
-                    ></div>
-
-                    <!-- 编辑输入框 (默认隐藏) -->
-                    <div class="edit-area hidden mt-2">
-                        <textarea
-                            class="w-full text-sm border-gray-300 rounded-md p-2 bg-gray-50 focus:bg-white transition"
-                            rows="3"
-                        ></textarea>
-                        <div class="flex gap-2 justify-end mt-2">
-                            <button
-                                class="text-xs text-gray-500 hover:text-gray-700 px-2 cancel-edit-btn"
-                            >
-                                取消
-                            </button>
-                            <button
-                                class="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 save-edit-btn"
-                            >
-                                保存修改
-                            </button>
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-        </template>
+        <!-- Toast -->
+        <div
+            id="toasts"
+            class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-72"
+        ></div>
 
         <script>
             // ==========================================
-            //  全局状态
+            // 全局状态
             // ==========================================
-            let currentSse = null;
 
-            // [新增] 分页状态
-            const state = {
-                currentPage: 1,
-                totalPages: 1,
-                totalItems: 0,
-                perPage: 20,
+            const SETTINGS_KEY = "cumments_demo_settings";
+            const IDENTITY_KEY = "cumments_identity";
+            const DEFAULT_SETTINGS = {
+                api: "http://localhost:7931",
+                siteId: "my-blog",
+                slug: "hello-world",
+                nickname: "访客",
+                email: "",
             };
 
+            const state = {
+                currentSse: null,
+                currentPage: 1,
+                perPage: 10,
+                filter: "all",
+                meta: null,
+                allComments: [],
+                mineComments: [],
+                mineTotal: 0,
+            };
+
+            let identity = null;
+
             // ==========================================
-            //  初始化逻辑
+            // 初始化
             // ==========================================
+
             document.addEventListener("DOMContentLoaded", () => {
-                // 恢复或生成 Ed25519 身份（私钥仅存本地，公钥即身份）
-                ensureIdentity().then((identity) => {
-                    document.getElementById("guestToken").value =
-                        identity.publicKey;
+                loadSettings();
+                ensureIdentity().then((id) => {
+                    identity = id;
+                    renderIdentity();
+                    initApp();
                 });
-                // 自动加载一次
-                initApp();
             });
+
+            function loadSettings() {
+                let saved = {};
+                try {
+                    saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+                } catch {
+                    saved = {};
+                }
+                const s = { ...DEFAULT_SETTINGS, ...saved };
+                document.getElementById("apiUrl").value = s.api;
+                document.getElementById("siteId").value = s.siteId;
+                document.getElementById("slug").value = s.slug;
+                document.getElementById("settingNickname").value = s.nickname;
+                document.getElementById("settingEmail").value = s.email;
+                syncComposer(s);
+            }
+
+            function getSettings() {
+                return {
+                    api: document.getElementById("apiUrl").value.trim().replace(/\/+$/, ""),
+                    siteId: document.getElementById("siteId").value.trim(),
+                    slug: document.getElementById("slug").value.trim(),
+                    nickname:
+                        document.getElementById("settingNickname").value.trim() ||
+                        "访客",
+                    email: document.getElementById("settingEmail").value.trim(),
+                };
+            }
+
+            function syncComposer(s) {
+                document.getElementById("composerNickname").value = s.nickname;
+                document.getElementById("composerEmail").value = s.email;
+                updateComposerAvatar();
+            }
+
+            function saveSettings() {
+                const s = getSettings();
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+                syncComposer(s);
+                closeSettings();
+                initApp();
+            }
+
+            function openSettings() {
+                const s = getSettings();
+                document.getElementById("apiUrl").value = s.api;
+                document.getElementById("siteId").value = s.siteId;
+                document.getElementById("slug").value = s.slug;
+                const composerNickname = document
+                    .getElementById("composerNickname")
+                    .value.trim();
+                const composerEmail = document
+                    .getElementById("composerEmail")
+                    .value.trim();
+                document.getElementById("settingNickname").value =
+                    composerNickname || s.nickname;
+                document.getElementById("settingEmail").value =
+                    composerEmail || s.email;
+                renderIdentity();
+                document.getElementById("settingsModal").classList.remove("hidden");
+            }
+
+            function closeSettings() {
+                document.getElementById("settingsModal").classList.add("hidden");
+            }
+
+            // ==========================================
+            // 身份
+            // ==========================================
 
             function base64url(bytes) {
                 let bin = "";
@@ -415,10 +509,14 @@
             }
 
             async function ensureIdentity() {
-                const stored = localStorage.getItem("cumments_identity");
+                const stored = localStorage.getItem(IDENTITY_KEY);
                 if (stored) {
-                    const parsed = JSON.parse(stored);
-                    if (parsed.publicKey && parsed.privateKey) return parsed;
+                    try {
+                        const parsed = JSON.parse(stored);
+                        if (parsed.publicKey && parsed.privateKey) return parsed;
+                    } catch {
+                        // fall through to regeneration
+                    }
                 }
                 return regenerateIdentity();
             }
@@ -435,17 +533,45 @@
                 const privRaw = new Uint8Array(
                     await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
                 );
-                const identity = {
+                const next = {
                     publicKey: base64url(pubRaw),
                     privateKey: base64url(privRaw),
                 };
-                localStorage.setItem(
-                    "cumments_identity",
-                    JSON.stringify(identity),
-                );
-                const el = document.getElementById("guestToken");
-                if (el) el.value = identity.publicKey;
-                return identity;
+                localStorage.setItem(IDENTITY_KEY, JSON.stringify(next));
+                identity = next;
+                renderIdentity();
+                return next;
+            }
+
+            async function resetIdentity() {
+                if (
+                    !confirm(
+                        "重置身份后，之前用旧公钥发布的评论将无法在此浏览器中编辑/删除。确定继续？",
+                    )
+                ) {
+                    return;
+                }
+                await regenerateIdentity();
+                toast("身份已重置");
+                await loadList();
+            }
+
+            function renderIdentity() {
+                const el = document.getElementById("publicKey");
+                if (el) el.value = identity ? identity.publicKey : "";
+            }
+
+            async function copyPublicKey() {
+                if (!identity) return;
+                try {
+                    await navigator.clipboard.writeText(identity.publicKey);
+                    toast("公钥已复制");
+                } catch {
+                    const el = document.getElementById("publicKey");
+                    el.select();
+                    document.execCommand("copy");
+                    toast("公钥已复制");
+                }
             }
 
             async function importPrivateKey(privateKeyB64) {
@@ -469,229 +595,424 @@
             }
 
             async function authorSignature(parts) {
-                const identity = await ensureIdentity();
-                const message = parts.join("\n");
-                const signature = await signMessage(identity.privateKey, message);
-                return { publicKey: identity.publicKey, signature };
+                const id = identity || (await ensureIdentity());
+                const signature = await signMessage(
+                    id.privateKey,
+                    parts.join("\n"),
+                );
+                return { publicKey: id.publicKey, signature };
             }
 
-            function getConfig() {
-                return {
-                    api: document
-                        .getElementById("apiUrl")
-                        .value.replace(/\/$/, ""),
-                    siteId: document.getElementById("siteId").value,
-                    slug: document.getElementById("slug").value,
-                    nickname: document.getElementById("nickname").value,
-                    email: document.getElementById("email").value,
+            function isOwn(comment) {
+                return (
+                    !!identity &&
+                    !!comment.author_public_key &&
+                    comment.author_public_key === identity.publicKey
+                );
+            }
+
+            // ==========================================
+            // API
+            // ==========================================
+
+            async function apiError(res) {
+                let message = res.statusText || `HTTP ${res.status}`;
+                try {
+                    const body = await res.json();
+                    if (body.error) message = body.error;
+                    if (body.code) message += ` (${body.code})`;
+                } catch {
+                    // keep status text
+                }
+                return message;
+            }
+
+            async function queryComments(cfg, page, perPage) {
+                const res = await fetch(
+                    `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                    {
+                        method: "QUERY",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ page, per_page: perPage }),
+                    },
+                );
+                if (!res.ok) throw new Error(await apiError(res));
+                return res.json();
+            }
+
+            async function getChallenge(cfg) {
+                const res = await fetch(`${cfg.api}/api/challenge`);
+                if (!res.ok) throw new Error(await apiError(res));
+                return res.json();
+            }
+
+            // ==========================================
+            // 评论列表
+            // ==========================================
+
+            function showLoading() {
+                const container = document.getElementById("commentsContainer");
+                container.innerHTML = `
+                    <div class="text-center py-10 text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">
+                        加载中…
+                    </div>
+                `;
+            }
+
+            function renderEmpty(message) {
+                const container = document.getElementById("commentsContainer");
+                container.innerHTML = `
+                    <div class="text-center py-10 text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">
+                        ${message}
+                    </div>
+                `;
+            }
+
+            function renderError(e) {
+                const container = document.getElementById("commentsContainer");
+                container.innerHTML = `
+                    <div class="text-center py-8 text-red-500 bg-red-50 rounded-2xl border border-red-100">
+                        加载失败：${escapeHtml(e.message)}
+                    </div>
+                `;
+            }
+
+            async function loadList() {
+                try {
+                    if (state.filter === "all") {
+                        await loadAll();
+                    } else {
+                        await loadMine();
+                    }
+                } catch (e) {
+                    renderError(e);
+                }
+            }
+
+            async function loadAll() {
+                const cfg = getSettings();
+                const json = await queryComments(cfg, state.currentPage, state.perPage);
+                state.allComments = json.data;
+                state.meta = json.meta;
+                state.mineTotal = 0;
+                renderComments(json.data);
+                updateHeader(json.meta.total);
+                updatePagination(json.meta);
+            }
+
+            async function loadMine() {
+                if (!state.meta) await loadAll();
+                const cfg = getSettings();
+                const collected = [];
+                let backendPage = 1;
+                const maxPage = state.meta ? state.meta.total_pages : 0;
+                let page = state.currentPage;
+                const need = page * state.perPage;
+
+                while (collected.length < need && backendPage <= maxPage) {
+                    const json = await queryComments(cfg, backendPage, 100);
+                    collected.push(
+                        ...json.data.filter((c) => isOwn(c)),
+                    );
+                    if (backendPage >= (json.meta ? json.meta.total_pages : backendPage)) {
+                        break;
+                    }
+                    backendPage += 1;
+                }
+
+                state.mineTotal = collected.length;
+                const totalPages = Math.max(
+                    1,
+                    Math.ceil(collected.length / state.perPage),
+                );
+                if (page > totalPages) {
+                    page = totalPages;
+                    state.currentPage = page;
+                }
+                const start = (page - 1) * state.perPage;
+                const items = collected.slice(start, start + state.perPage);
+                state.mineComments = items;
+
+                const meta = {
+                    total: collected.length,
+                    page,
+                    per_page: state.perPage,
+                    total_pages: totalPages,
+                };
+                renderComments(items);
+                updateHeader(collected.length);
+                updatePagination(meta);
+            }
+
+            function renderComments(items) {
+                const container = document.getElementById("commentsContainer");
+                container.innerHTML = "";
+                if (!items.length) {
+                    renderEmpty(
+                        state.filter === "mine"
+                            ? "你还没有在这篇文章下发表过评论。"
+                            : "还没有评论，来抢沙发吧。",
+                    );
+                    return;
+                }
+                items.forEach((comment) => {
+                    container.appendChild(createCommentElement(comment));
+                });
+            }
+
+            function createCommentElement(comment) {
+                const own = isOwn(comment);
+                const el = document.createElement("article");
+                el.dataset.id = comment.event_id;
+                el.className =
+                    "bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:shadow-md transition group";
+
+                const avatarStyle = commentAvatarStyle(
+                    comment.author_public_key || comment.event_id,
+                );
+                const initials = (comment.author_nickname || "访客")[0].toUpperCase();
+                const time = formatTime(comment.timestamp);
+                const badge = comment.author_public_key
+                    ? `<span class="text-[10px] font-medium text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">Cumments 访客</span>`
+                    : `<span class="text-[10px] font-medium text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">Matrix</span>`;
+
+                el.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-sm font-bold text-white"
+                                 style="${avatarStyle}">
+                                ${escapeHtml(initials)}
+                            </div>
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="font-semibold text-slate-900 text-sm truncate">
+                                        ${escapeHtml(comment.author_nickname || "访客")}
+                                    </span>
+                                    ${badge}
+                                </div>
+                                <div class="text-xs text-slate-400 mt-0.5">${time}</div>
+                            </div>
+                        </div>
+                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition ${own ? "" : "hidden"}">
+                            <button class="edit-btn text-xs text-slate-500 hover:text-indigo-600 px-1.5 py-1">编辑</button>
+                            <button class="delete-btn text-xs text-slate-500 hover:text-red-600 px-1.5 py-1">删除</button>
+                        </div>
+                    </div>
+                    <div class="comment-content markdown-body text-sm text-slate-700 leading-relaxed break-words mt-3 pl-12">
+                        ${renderMarkdown(comment.content)}
+                    </div>
+                    <div class="edit-box hidden mt-3 pl-12">
+                        <textarea class="edit-textarea w-full text-sm border border-slate-200 rounded-lg p-2.5 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none resize-y"
+                                  rows="3"></textarea>
+                        <div class="flex gap-2 justify-end mt-2">
+                            <button class="cancel-edit-btn text-xs text-slate-500 hover:text-slate-700 px-2 py-1">取消</button>
+                            <button class="save-edit-btn text-xs bg-green-600 hover:bg-green-700 text-white rounded-md px-3 py-1.5 font-medium">保存修改</button>
+                        </div>
+                    </div>
+                `;
+
+                if (own) {
+                    bindEdit(el, comment);
+                    el.querySelector(".delete-btn").onclick = () =>
+                        deleteComment(comment.event_id);
+                }
+
+                return el;
+            }
+
+            function bindEdit(el, comment) {
+                const editBtn = el.querySelector(".edit-btn");
+                const cancelBtn = el.querySelector(".cancel-edit-btn");
+                const saveBtn = el.querySelector(".save-edit-btn");
+                const editBox = el.querySelector(".edit-box");
+                const contentBox = el.querySelector(".comment-content");
+                const textarea = el.querySelector(".edit-textarea");
+
+                editBtn.onclick = () => {
+                    textarea.value = comment.content;
+                    editBox.classList.remove("hidden");
+                    contentBox.classList.add("hidden");
+                    textarea.focus();
+                };
+
+                cancelBtn.onclick = () => {
+                    editBox.classList.add("hidden");
+                    contentBox.classList.remove("hidden");
+                };
+
+                saveBtn.onclick = async () => {
+                    const next = textarea.value.trim();
+                    if (!next) {
+                        toast("评论内容不能为空", "error");
+                        return;
+                    }
+                    try {
+                        await submitEdit(comment, next);
+                        comment.content = next;
+                        contentBox.innerHTML = renderMarkdown(next);
+                        editBox.classList.add("hidden");
+                        contentBox.classList.remove("hidden");
+                        toast("评论已更新");
+                    } catch (e) {
+                        toast("编辑失败：" + e.message, "error");
+                    }
                 };
             }
 
-            async function initApp() {
-                const cfg = getConfig();
-                // 先断开旧 SSE
-                if (currentSse) {
-                    currentSse.close();
-                    updateSseStatus(false);
-                }
-                // 1. 加载列表 (默认第1页)
-                state.currentPage = 1;
-                await loadComments(cfg, 1, state.perPage);
-                // 2. 连接 SSE
-                connectSSE(cfg);
+            function updateHeader(count) {
+                document.getElementById("commentCount").textContent = count || 0;
             }
 
-            // ==========================================
-            //  API: 读取与列表渲染
-            // ==========================================
-
-            async function loadComments(cfg, page = 1, perPage = 20) {
-                const container = document.getElementById("commentsContainer");
-                container.style.opacity = "0.5";
-
-                try {
-                    const res = await fetch(
-                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
-                        {
-                            method: "QUERY",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ page, per_page: perPage }),
-                        },
-                    );
-                    if (!res.ok) throw new Error(await res.text());
-                    const json = await res.json();
-
-                    container.innerHTML = "";
-                    container.style.opacity = "1";
-
-                    if (json.data.length === 0) {
-                        container.innerHTML =
-                            '<div class="text-center py-10 text-gray-400">暂无评论 (或本页为空)</div>';
-                    } else {
-                        json.data.forEach((c) => renderComment(c));
-                    }
-
-                    // [新增] 更新分页状态
-                    if (json.meta) {
-                        state.currentPage = json.meta.page;
-                        state.totalPages = json.meta.total_pages;
-                        state.totalItems = json.meta.total;
-                        state.perPage = json.meta.per_page;
-                        updatePaginationUI(json.meta);
-                    }
-                } catch (e) {
-                    container.innerHTML = `<div class="bg-red-50 text-red-500 p-4 rounded-lg text-center border border-red-100">加载失败: ${e.message}</div>`;
-                    container.style.opacity = "1";
-                }
-            }
-
-            // [新增] 分页 UI 更新逻辑
-            function updatePaginationUI(meta) {
+            function updatePagination(meta) {
                 const info = document.getElementById("pageInfo");
-                const start = (meta.page - 1) * meta.per_page + 1;
-                const end = Math.min(start + meta.per_page - 1, meta.total);
-
-                info.innerText =
+                const start = meta.total > 0 ? (meta.page - 1) * meta.per_page + 1 : 0;
+                const end = meta.total > 0 ? Math.min(start + meta.per_page - 1, meta.total) : 0;
+                info.textContent =
                     meta.total > 0
-                        ? `显示 ${start}-${end} 条 (共 ${meta.total} 条)`
+                        ? `显示 ${start}-${end} 条（共 ${meta.total} 条）`
                         : "暂无数据";
-
                 document.getElementById("prevBtn").disabled = meta.page <= 1;
                 document.getElementById("nextBtn").disabled =
                     meta.page >= meta.total_pages;
             }
 
-            // [新增] 翻页动作
             function changePage(delta) {
-                const newPage = state.currentPage + delta;
-                if (newPage > 0 && newPage <= state.totalPages) {
-                    loadComments(getConfig(), newPage, state.perPage);
-                }
+                const next = state.currentPage + delta;
+                const max =
+                    state.filter === "mine"
+                        ? Math.max(1, Math.ceil(state.mineTotal / state.perPage))
+                        : state.meta
+                          ? state.meta.total_pages
+                          : 1;
+                if (next < 1 || next > max) return;
+                state.currentPage = next;
+                showLoading();
+                loadList();
             }
 
-            function renderComment(c, prepend = false) {
-                const container = document.getElementById("commentsContainer");
-                const id = c.event_id;
-                // 去重
-                const existing = document.querySelector(
-                    `div[data-id="${id}"]`,
-                );
-                if (existing) {
-                    // 如果已存在，可能是 Update 事件，更新内容
-                    existing.querySelector(".markdown-body").innerHTML =
-                        marked.parse(c.content);
-                    // 闪烁效果
-                    existing.classList.add("ring-2", "ring-green-400");
-                    setTimeout(
-                        () =>
-                            existing.classList.remove(
-                                "ring-2",
-                                "ring-green-400",
-                            ),
-                        1000,
-                    );
+            function switchTab(filter) {
+                if (state.filter === filter) return;
+                state.filter = filter;
+                state.currentPage = 1;
+                const allBtn = document.getElementById("tabAll");
+                const mineBtn = document.getElementById("tabMine");
+                if (filter === "all") {
+                    allBtn.className =
+                        "px-3 py-1.5 rounded-md font-medium text-slate-700 bg-white shadow-sm";
+                    mineBtn.className =
+                        "px-3 py-1.5 rounded-md font-medium text-slate-500 hover:text-slate-700 transition";
+                } else {
+                    mineBtn.className =
+                        "px-3 py-1.5 rounded-md font-medium text-slate-700 bg-white shadow-sm";
+                    allBtn.className =
+                        "px-3 py-1.5 rounded-md font-medium text-slate-500 hover:text-slate-700 transition";
+                }
+                showLoading();
+                loadList();
+            }
+
+            // ==========================================
+            // 发布 / 编辑 / 删除
+            // ==========================================
+
+            async function submitComment() {
+                const cfg = getSettings();
+                const nickname =
+                    document.getElementById("composerNickname").value.trim() ||
+                    "访客";
+                const email =
+                    document.getElementById("composerEmail").value.trim() || null;
+                const content = document
+                    .getElementById("composerContent")
+                    .value.trim();
+                if (!content) {
+                    toast("写点什么再发布吧", "error");
                     return;
                 }
 
-                // 清除“暂无评论”提示
-                if (
-                    container.children.length === 1 &&
-                    container.firstElementChild.innerText.includes("暂无评论")
-                ) {
-                    container.innerHTML = "";
-                }
+                const btn = document.getElementById("submitBtn");
+                const status = document.getElementById("powStatus");
+                btn.disabled = true;
 
-                const tpl = document.getElementById("commentTemplate");
-                const clone = tpl.content.cloneNode(true);
-                const el = clone.querySelector("div");
+                try {
+                    status.textContent = "获取 PoW 挑战…";
+                    const chal = await getChallenge(cfg);
+                    status.textContent = `计算 PoW（难度 ${chal.difficulty}）…`;
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    status.textContent = "签名中…";
+                    const { publicKey, signature } = await authorSignature([
+                        "POST",
+                        cfg.siteId,
+                        cfg.slug,
+                        content,
+                        nickname,
+                        chal.prefix,
+                    ]);
 
-                el.dataset.id = id;
-
-                // --- 1. 头像占位（后端未提供头像字段） ---
-                const avatarPlaceholder = el.querySelector(
-                    ".avatar-placeholder",
-                );
-                avatarPlaceholder.innerText = (
-                    c.author_nickname || "G"
-                )[0].toUpperCase();
-
-                // --- 2. 基础信息 ---
-                el.querySelector(".nickname").innerText =
-                    c.author_nickname || "访客";
-                el.querySelector(".time").innerText = new Date(
-                    c.timestamp,
-                ).toLocaleString();
-                el.querySelector(".markdown-body").innerHTML = marked.parse(
-                    c.content,
-                );
-
-                // --- 3. 身份徽章 ---
-                if (c.author_public_key) {
-                    el.querySelector(".guest-badge").classList.remove("hidden");
-                } else {
-                    el.querySelector(".matrix-badge").classList.remove(
-                        "hidden",
+                    status.textContent = "提交中…";
+                    const res = await fetch(
+                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                content,
+                                nickname,
+                                email,
+                                author_public_key: publicKey,
+                                author_signature: signature,
+                                challenge_response: `${chal.prefix}|${nonce}`,
+                            }),
+                        },
                     );
-                }
+                    if (!res.ok) throw new Error(await apiError(res));
 
-                // --- 4. 编辑/删除：仅当公钥匹配本地身份 ---
-                ensureIdentity().then((identity) => {
-                    if (
-                        !c.author_public_key ||
-                        c.author_public_key !== identity.publicKey
-                    ) {
-                        return;
-                    }
-
-                    const editBtn = el.querySelector(".edit-btn");
-                    const deleteBtn = el.querySelector(".delete-btn");
-
-                    editBtn.classList.remove("hidden");
-                    deleteBtn.classList.remove("hidden");
-
-                    deleteBtn.onclick = () => deleteComment(id);
-
-                    const editArea = el.querySelector(".edit-area");
-                    const contentArea = el.querySelector(".markdown-body");
-                    const textarea = editArea.querySelector("textarea");
-                    const saveBtn = el.querySelector(".save-edit-btn");
-                    const cancelBtn = el.querySelector(".cancel-edit-btn");
-
-                    editBtn.onclick = () => {
-                        editArea.classList.remove("hidden");
-                        contentArea.classList.add("hidden");
-                        textarea.value = c.content;
-                    };
-
-                    cancelBtn.onclick = () => {
-                        editArea.classList.add("hidden");
-                        contentArea.classList.remove("hidden");
-                    };
-
-                    saveBtn.onclick = () => submitEdit(id, textarea.value, el);
-                });
-
-                if (prepend) {
-                    container.prepend(el);
-                } else {
-                    container.appendChild(el);
+                    document.getElementById("composerContent").value = "";
+                    status.textContent = "提交成功，等待 Matrix 同步…";
+                    toast("评论已提交，等待同步");
+                    setTimeout(() => loadList(), 1200);
+                } catch (e) {
+                    status.textContent = "发送失败";
+                    toast("发布失败：" + e.message, "error");
+                } finally {
+                    btn.disabled = false;
                 }
             }
 
-            // ==========================================
-            //  交互逻辑: 删除 / 编辑
-            // ==========================================
+            async function submitEdit(comment, newContent) {
+                const cfg = getSettings();
+                const chal = await getChallenge(cfg);
+                const nonce = await solvePow(chal.prefix, chal.difficulty);
+                const { publicKey, signature } = await authorSignature([
+                    "PATCH",
+                    cfg.siteId,
+                    cfg.slug,
+                    comment.event_id,
+                    newContent,
+                    chal.prefix,
+                ]);
+                const res = await fetch(
+                    `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${comment.event_id}`,
+                    {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            content: newContent,
+                            author_public_key: publicKey,
+                            author_signature: signature,
+                            challenge_response: `${chal.prefix}|${nonce}`,
+                        }),
+                    },
+                );
+                if (!res.ok) throw new Error(await apiError(res));
+            }
 
-            // 删除
             async function deleteComment(commentId) {
-                if (!confirm("确定要删除这条评论吗？")) return;
-                const cfg = getConfig();
-
+                if (!confirm("确定删除这条评论吗？")) return;
+                const cfg = getSettings();
                 try {
-                    // 1. 获取 PoW 挑战
-                    const chalRes = await fetch(`${cfg.api}/api/challenge`);
-                    const chal = await chalRes.json();
-                    const nonce = await solvePoW(chal.prefix, chal.difficulty);
+                    const chal = await getChallenge(cfg);
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
                     const { publicKey, signature } = await authorSignature([
                         "DELETE",
                         cfg.siteId,
@@ -699,7 +1020,6 @@
                         commentId,
                         chal.prefix,
                     ]);
-
                     const res = await fetch(
                         `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
                         {
@@ -712,239 +1032,177 @@
                             }),
                         },
                     );
-                    if (!res.ok) throw new Error(await res.text());
-                    console.log("Delete requested");
+                    if (!res.ok) throw new Error(await apiError(res));
+                    toast("评论已删除");
+                    await loadList();
                 } catch (e) {
-                    alert("删除失败: " + e.message);
-                }
-            }
-
-            // 编辑 (PATCH + 签名)
-            async function submitEdit(commentId, newContent, domElement) {
-                const cfg = getConfig();
-                try {
-                    const chalRes = await fetch(`${cfg.api}/api/challenge`);
-                    const chal = await chalRes.json();
-                    const nonce = await solvePoW(chal.prefix, chal.difficulty);
-                    const { publicKey, signature } = await authorSignature([
-                        "PATCH",
-                        cfg.siteId,
-                        cfg.slug,
-                        commentId,
-                        newContent,
-                        chal.prefix,
-                    ]);
-                    const res = await fetch(
-                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
-                        {
-                            method: "PATCH",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                content: newContent,
-                                author_public_key: publicKey,
-                                author_signature: signature,
-                                challenge_response: `${chal.prefix}|${nonce}`,
-                            }),
-                        },
-                    );
-                    if (!res.ok) throw new Error(await res.text());
-                    domElement.querySelector(".edit-area").classList.add("hidden");
-                    domElement
-                        .querySelector(".markdown-body")
-                        .classList.remove("hidden");
-                } catch (e) {
-                    alert("编辑失败: " + e.message);
+                    toast("删除失败：" + e.message, "error");
                 }
             }
 
             // ==========================================
-            //  交互逻辑: 发布 (PoW)
+            // PoW
             // ==========================================
 
-            async function submitComment() {
-                const cfg = getConfig();
-                const content = document.getElementById("content").value;
-                if (!content) return alert("写点什么吧");
-
-                const btn = document.getElementById("submitBtn");
-                const status = document.getElementById("powStatus");
-                btn.disabled = true;
-
-                try {
-                    // 1. 获取挑战
-                    status.innerText = "正在获取 PoW 挑战...";
-                    const chalRes = await fetch(`${cfg.api}/api/challenge`);
-                    const chal = await chalRes.json();
-
-                    // 2. 计算 PoW
-                    status.innerText = `计算 Hash (难度 ${chal.difficulty})...`;
-                    const nonce = await solvePoW(chal.prefix, chal.difficulty);
-
-                    const challengeResponse = `${chal.prefix}|${nonce}`;
-
-                    // 3. 对规范消息签名
-                    status.innerText = "正在签名...";
-                    const { publicKey, signature } = await authorSignature([
-                        "POST",
-                        cfg.siteId,
-                        cfg.slug,
-                        content,
-                        cfg.nickname,
-                        chal.prefix,
-                    ]);
-
-                    // 4. 提交
-                    status.innerText = "正在提交...";
-                    const payload = {
-                        content: content,
-                        nickname: cfg.nickname,
-                        email: cfg.email || null,
-                        author_public_key: publicKey,
-                        author_signature: signature,
-                        challenge_response: challengeResponse,
-                    };
-
-                    const res = await fetch(
-                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
-                        {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(payload),
-                        },
-                    );
-
-                    if (!res.ok) throw new Error(await res.text());
-
-                    status.innerText = "发送成功！等待同步...";
-                    document.getElementById("content").value = "";
-                } catch (e) {
-                    status.innerText = "错误: " + e.message;
-                    alert("发送失败: " + e.message);
-                } finally {
-                    btn.disabled = false;
-                }
-            }
-
-            // PoW 算法
-            async function solvePoW(secret, difficulty) {
+            async function solvePow(prefix, difficulty) {
                 let nonce = 0;
-                const prefix = "0".repeat(difficulty);
+                const required = "0".repeat(difficulty);
                 const encoder = new TextEncoder();
-
                 while (true) {
-                    const input = `${secret}${nonce}`;
-                    const data = encoder.encode(input);
-                    const hashBuf = await crypto.subtle.digest("SHA-256", data);
-                    const hashArray = Array.from(new Uint8Array(hashBuf));
-                    const hashHex = hashArray
+                    const input = `${prefix}${nonce}`;
+                    const hashBuf = await crypto.subtle.digest(
+                        "SHA-256",
+                        encoder.encode(input),
+                    );
+                    const hashHex = Array.from(new Uint8Array(hashBuf))
                         .map((b) => b.toString(16).padStart(2, "0"))
                         .join("");
-
-                    if (hashHex.startsWith(prefix)) return nonce.toString();
-                    nonce++;
-                    if (nonce % 2000 === 0)
-                        await new Promise((r) => setTimeout(r, 0)); // 让出主线程
+                    if (hashHex.startsWith(required)) return nonce.toString();
+                    nonce += 1;
+                    if (nonce % 2000 === 0) {
+                        await new Promise((resolve) => setTimeout(resolve, 0));
+                    }
                 }
             }
 
             // ==========================================
-            //  SSE 实时处理
+            // SSE
             // ==========================================
 
-            function connectSSE(cfg) {
+            function connectSse() {
+                const cfg = getSettings();
                 const url = `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/sse`;
                 const sse = new EventSource(url);
-                currentSse = sse;
+                state.currentSse = sse;
 
                 sse.onopen = () => updateSseStatus(true);
                 sse.onerror = () => updateSseStatus(false);
 
-                sse.addEventListener("new_comment", (e) => {
-                    flashTime();
-                    const payload = JSON.parse(e.data).payload;
+                sse.addEventListener("new_comment", (event) => {
+                    const payload = JSON.parse(event.data).payload;
                     const comment = payload.comment;
-                    console.log("SSE New:", payload);
-
-                    // [修改] 如果我们在查看最后一页（最新消息），或者就在第一页且没满，直接渲染。
-                    // 否则，为了数据一致性，重新加载当前页（因为插入新数据会导致 Offset 偏移）
-                    // 简单策略：直接刷新当前页，确保看到最新状态
-                    loadComments(getConfig(), state.currentPage, state.perPage);
-
-                    // 视觉提示
-                    const toast = document.createElement("div");
-                    toast.className =
-                        "fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded shadow-lg z-50 text-sm animate-bounce";
-                    toast.innerText =
-                        "收到新评论: " + (comment.author_nickname || "访客");
-                    document.body.appendChild(toast);
-                    setTimeout(() => toast.remove(), 3000);
-                });
-
-                sse.addEventListener("comment_updated", (e) => {
-                    flashTime();
-                    const payload = JSON.parse(e.data).payload;
-                    const comment = payload.comment;
-                    console.log("SSE Update:", payload);
-                    // 重新渲染该评论以更新内容
-                    const el = document.querySelector(
-                        `div[data-id="${comment.event_id}"]`,
+                    toast(
+                        `新评论：${comment.author_nickname || "访客"}`,
+                        "success",
                     );
-                    if (el) {
-                        el.querySelector(".markdown-body").innerHTML =
-                            marked.parse(comment.content);
-                        // 视觉提示
-                        el.classList.add("bg-yellow-50");
-                        setTimeout(
-                            () => el.classList.remove("bg-yellow-50"),
-                            1000,
-                        );
-                    }
+                    loadList();
                 });
 
-                sse.addEventListener("comment_deleted", (e) => {
-                    flashTime();
-                    const payload = JSON.parse(e.data).payload;
-                    console.log("SSE Delete:", payload);
-                    const el = document.querySelector(
-                        `div[data-id="${payload.event_id}"]`,
+                sse.addEventListener("comment_updated", (event) => {
+                    const payload = JSON.parse(event.data).payload;
+                    toast(
+                        `评论已更新：${payload.comment.author_nickname || "访客"}`,
+                        "success",
                     );
-                    if (el) {
-                        el.classList.add("opacity-50", "bg-gray-100");
-                        el.querySelector(".markdown-body").innerHTML =
-                            '<em class="text-gray-400">评论已删除</em>';
-                        el.querySelectorAll("button").forEach((b) =>
-                            b.remove(),
-                        );
-                    }
+                    loadList();
                 });
+
+                sse.addEventListener("comment_deleted", () => {
+                    toast("有评论被删除", "info");
+                    loadList();
+                });
+            }
+
+            function closeSse() {
+                if (state.currentSse) {
+                    state.currentSse.close();
+                    state.currentSse = null;
+                }
+                updateSseStatus(false);
             }
 
             function updateSseStatus(connected) {
                 const indicator = document.getElementById("sseIndicator");
-                const ping = document.getElementById("ssePing");
                 const text = document.getElementById("sseText");
-
-                if (connected) {
-                    indicator.className =
-                        "relative inline-flex rounded-full h-3 w-3 bg-green-500";
-                    ping.classList.remove("hidden");
-                    text.innerText = "实时连接正常";
-                } else {
-                    indicator.className =
-                        "relative inline-flex rounded-full h-3 w-3 bg-red-500";
-                    ping.classList.add("hidden");
-                    text.innerText = "连接断开 (重连中...)";
-                }
+                indicator.className = `w-2 h-2 rounded-full ${
+                    connected ? "bg-green-500" : "bg-red-400"
+                }`;
+                text.textContent = connected ? "实时连接" : "未连接";
             }
 
-            function flashTime() {
-                const el = document.getElementById("lastEventTime");
-                el.innerText = new Date().toLocaleTimeString() + " 接收更新";
-                el.classList.add("text-blue-600", "font-bold");
-                setTimeout(
-                    () => el.classList.remove("text-blue-600", "font-bold"),
-                    1000,
-                );
+            // ==========================================
+            // 工具函数
+            // ==========================================
+
+            function renderMarkdown(text) {
+                if (typeof marked === "undefined") {
+                    return `<p>${escapeHtml(text || "")}</p>`;
+                }
+                const html = marked.parse(text || "");
+                return typeof DOMPurify !== "undefined"
+                    ? DOMPurify.sanitize(html)
+                    : html;
+            }
+
+            function escapeHtml(value) {
+                return String(value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }
+
+            function formatTime(iso) {
+                const date = new Date(iso);
+                if (Number.isNaN(date.getTime())) return "";
+                const diff = Date.now() - date.getTime();
+                const minutes = Math.floor(diff / 60000);
+                if (minutes < 1) return "刚刚";
+                if (minutes < 60) return `${minutes} 分钟前`;
+                const hours = Math.floor(minutes / 60);
+                if (hours < 24) return `${hours} 小时前`;
+                const days = Math.floor(hours / 24);
+                if (days < 30) return `${days} 天前`;
+                return date.toLocaleDateString("zh-CN");
+            }
+
+            function commentAvatarStyle(key) {
+                let hash = 0;
+                for (const ch of key) {
+                    hash = (hash * 31 + ch.codePointAt(0)) % 360;
+                }
+                return `background:linear-gradient(135deg, hsl(${hash},70%,58%), hsl(${(hash + 45) % 360},70%,46%));`;
+            }
+
+            function updateComposerAvatar() {
+                const input = document.getElementById("composerNickname");
+                const avatar = document.getElementById("composerAvatar");
+                const name = (input.value || "访客").trim();
+                avatar.textContent = name[0].toUpperCase();
+            }
+
+            function toast(message, type = "info") {
+                const el = document.createElement("div");
+                const bg =
+                    type === "error"
+                        ? "bg-red-600"
+                        : type === "success"
+                          ? "bg-emerald-600"
+                          : "bg-slate-800";
+                el.className = `${bg} text-white text-sm rounded-lg shadow-lg px-4 py-2.5 opacity-0 translate-y-1`;
+                el.textContent = message;
+                document.getElementById("toasts").appendChild(el);
+                requestAnimationFrame(() => {
+                    el.classList.remove("opacity-0", "translate-y-1");
+                });
+                setTimeout(() => {
+                    el.classList.add("opacity-0");
+                    setTimeout(() => el.remove(), 300);
+                }, 3200);
+            }
+
+            // ==========================================
+            // 入口
+            // ==========================================
+
+            async function initApp() {
+                closeSse();
+                state.currentPage = 1;
+                state.meta = null;
+                showLoading();
+                await loadList();
+                connectSse();
             }
         </script>
     </body>

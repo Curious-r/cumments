@@ -346,7 +346,8 @@ type: comment_deleted
 
 ## 前端集成
 
-`misc/frontend/index.html` 是可直接打开的测试页，已实现以下流程，默认 API 地址为
+`misc/frontend/index.html` 是按真实评论区形态做的演示页：发布、编辑/删除本人评论、
+分页、SSE 实时更新，以及“我的评论”管理视图。默认 API 地址为
 `http://localhost:7931`。
 
 ### 身份

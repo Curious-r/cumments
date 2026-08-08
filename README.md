@@ -360,8 +360,9 @@ object; `comment_deleted` contains the deleted `event_id`.
 
 ## Frontend Integration
 
-`misc/frontend/index.html` is a standalone test page implementing the flows
-below. It defaults to `http://localhost:7931`.
+`misc/frontend/index.html` is a standalone demo styled as a real comment
+section: posting, editing/deleting your own comments, pagination, SSE, and a
+“My comments” management view. It defaults to `http://localhost:7931`.
 
 ### Identity
 
