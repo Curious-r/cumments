@@ -270,7 +270,7 @@ async fn main() -> Result<()> {
         event_bus,
         reconciler_notify,
     };
-    let api_router = cumments_api::build_router(api_state);
+    let api_router = cumments_api::build_router(api_state, &settings.server.cors_origins);
 
     // ─────────────────────────────────────────────────────────────
     // 12. Assemble final router (merge push routes if shared port)

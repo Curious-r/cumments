@@ -12,7 +12,6 @@ pub struct Settings {
 pub struct Server {
     pub host: String,
     pub port: u16,
-    pub public_server_name: String,
     pub cors_origins: String,
 }
 
@@ -23,7 +22,6 @@ pub struct Database {
 
 #[derive(Debug, Deserialize)]
 pub struct Security {
-    pub admin_token: String,
     pub pow_secret: String,
     pub pow_difficulty: u32,
 }

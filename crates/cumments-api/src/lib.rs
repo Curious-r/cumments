@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{HeaderName, Method, StatusCode},
+    http::{HeaderName, HeaderValue, Method, StatusCode},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -183,13 +183,46 @@ static QUERY_METHOD: std::sync::LazyLock<Method> =
 static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
 
+/// Build the CORS layer from a comma-separated origin list.
+///
+/// `"*"` (or an empty list) keeps the previous permissive behavior; any other
+/// value restricts `Access-Control-Allow-Origin` to the listed origins and
+/// explicitly allows the methods and headers used by the API (including the
+/// custom `QUERY` method).
+fn cors_layer(cors_origins: &str) -> CorsLayer {
+    let origins: Vec<&str> = cors_origins
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if origins.is_empty() || origins.contains(&"*") {
+        return CorsLayer::permissive();
+    }
+
+    let allowed: Vec<HeaderValue> = origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+    CorsLayer::new()
+        .allow_origin(allowed)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            (*QUERY_METHOD).clone(),
+        ])
+        .allow_headers([HeaderName::from_static("content-type")])
+}
+
 /// Extract the signed challenge prefix from a `challenge|nonce` response.
 fn challenge_prefix(challenge_response: &str) -> &str {
     challenge_response.split('|').next().unwrap_or("")
 }
 
 /// Builds the Axum router for the API.
-pub fn build_router(state: ApiState) -> Router {
+pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
     Router::new()
         .route(
             "/api/sites/{site_id}/posts/{post_slug}/comments",
@@ -207,7 +240,7 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/api/challenge", get(get_challenge_handler))
         .route("/health", get(health_handler))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer(cors_origins))
         .with_state(state)
 }
 

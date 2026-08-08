@@ -9,13 +9,9 @@ host = "0.0.0.0"
 # Port number for the HTTP server
 port = 7931
 
-# Public Matrix server name used for generating deep links
-# For self-hosted Matrix server, use your domain (e.g., "example.com")
-# For matrix.org, use "matrix.org"
-public_server_name = "matrix.org"
-
 # CORS origins allowed to access the API
-# For production, specify exact domains instead of "*" for security
+# Comma-separated exact origins (e.g. "https://blog.example.com"),
+# "*" for permissive, or empty to send no CORS headers.
 cors_origins = "*"
 
 [database]
@@ -25,9 +21,6 @@ cors_origins = "*"
 url = "sqlite://data/cumments.db"
 
 [security]
-# Administrator token (reserved for future use)
-admin_token = "${YOUR_ADMIN_TOKEN_HERE}"
-
 # Proof-of-Work secret for issuing anti-spam challenges
 # Used to prevent automated spam comments
 pow_secret = "${YOUR_POW_SECRET_HERE}"
