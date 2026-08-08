@@ -140,7 +140,7 @@ pub fn handle_generate_registration(
         .unwrap_or_else(|| "cumments".to_string());
 
     let registration = build_registration(&url, &server_name, &sender_localpart, &id, args.quiet);
-    let yaml = serde_yaml::to_string(&registration)?;
+    let yaml = serde_yaml_ng::to_string(&registration)?;
     println!("{}", yaml);
 
     if !args.quiet {

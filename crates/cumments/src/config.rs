@@ -305,7 +305,7 @@ struct NamespaceRule {
 fn validate_registration_file(path: &str, check: &RegistrationCheck<'_>) -> Result<()> {
     let raw = fs::read_to_string(path)
         .map_err(|e| anyhow!("failed to read registration file {}: {}", path, e))?;
-    let registration: RegistrationFile = serde_yaml::from_str(&raw)
+    let registration: RegistrationFile = serde_yaml_ng::from_str(&raw)
         .map_err(|e| anyhow!("failed to parse registration file {}: {}", path, e))?;
 
     let mut errors = Vec::new();
