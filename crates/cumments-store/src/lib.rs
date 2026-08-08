@@ -995,6 +995,9 @@ impl RegistryStore for DbStore {
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(room_registry::Column::RoomId)
                     .update_column(room_registry::Column::IsActive)
+                    .update_column(room_registry::Column::SiteId)
+                    .update_column(room_registry::Column::PostSlug)
+                    .update_column(room_registry::Column::UpdatedAt)
                     .to_owned(),
             )
             .exec(&self.db)
