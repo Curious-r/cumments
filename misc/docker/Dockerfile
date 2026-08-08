@@ -1,14 +1,13 @@
-FROM rust:1.80-alpine AS builder
+FROM rust:1.88-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig sqlite-dev
+RUN apk add --no-cache build-base cmake clang musl-dev openssl-dev perl pkgconfig sqlite-dev
 
 WORKDIR /usr/src/app
 
 # Copy project files
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY migrations ./migrations
 
 # Create a dummy main to allow cargo to download dependencies
 RUN mkdir -p crates/cumments/src && \
@@ -25,15 +24,17 @@ COPY . .
 RUN cargo build --release --bin cumments
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install runtime dependencies
-RUN apk --no-cache add ca-certificates openssl sqlite-libs
+RUN apk --no-cache add ca-certificates sqlite-libs
 
 WORKDIR /app
 
 # Copy the binary from builder stage
 COPY --from=builder /usr/src/app/target/release/cumments ./cumments
+# Copy a runnable default configuration (logging mode; override via env vars)
+COPY --from=builder /usr/src/app/misc/docker/config.toml ./config.toml
 
 # Create data directory for SQLite database
 RUN mkdir -p /app/data

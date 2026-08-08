@@ -220,6 +220,11 @@ Returns a signed challenge string and difficulty.
 }
 ```
 
+### Health
+
+**`GET /health`**
+Returns `{"status": "ok"}`. Used by container healthchecks.
+
 ### Comment Operations
 
 **`QUERY /api/sites/{site_id}/posts/{post_slug}/comments`**
@@ -400,6 +405,7 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 - `PATCH /api/sites/{site_id}/posts/{post_slug}/comments/{id}`: 提交编辑评论意图。
 - `DELETE /api/sites/{site_id}/posts/{post_slug}/comments/{id}`: 提交删除评论意图。
 - `GET /api/sites/{site_id}/posts/{post_slug}/sse`: SSE 实时推送接口。
+- `GET /health`: 健康检查（容器 healthcheck 使用）。
 
 ### site_id 和 post_slug 校验规则
 - 允许字符: `a-z`, `A-Z`, `0-9`, `_`, `-`

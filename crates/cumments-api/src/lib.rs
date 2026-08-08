@@ -203,9 +203,15 @@ pub fn build_router(state: ApiState) -> Router {
             get(sse_handler),
         )
         .route("/api/challenge", get(get_challenge_handler))
+        .route("/health", get(health_handler))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+/// Simple liveness endpoint used by container healthchecks.
+async fn health_handler() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
 }
 
 /// The handler for generating a new PoW challenge.
