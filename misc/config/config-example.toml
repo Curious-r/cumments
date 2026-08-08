@@ -49,8 +49,8 @@ server_name = "your_server.tld"
 as_token = "${YOUR_AS_TOKEN_HERE}"
 hs_token = "${YOUR_HS_TOKEN_HERE}"
 
-# Sender user's username localpart (used as room creator / admin)
-bot_localpart = "cumments"
+# Localpart of the AppService sender user (used as room creator / admin)
+sender_localpart = "cumments"
 
 # Port for AppService to receive Matrix pushes
 # Set to the same value as server.port to share the main HTTP listener

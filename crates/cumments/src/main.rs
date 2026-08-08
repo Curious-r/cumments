@@ -138,9 +138,9 @@ async fn main() -> Result<()> {
                 .server_name
                 .as_deref()
                 .ok_or_else(|| anyhow!("`server_name` is required for appservice mode"))?;
-            let bot_localpart = settings
+            let sender_localpart = settings
                 .matrix
-                .bot_localpart
+                .sender_localpart
                 .clone()
                 .unwrap_or_else(|| "cumments".to_string());
             let owner_id = settings.matrix.owner_id.clone();
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
                 settings.matrix.homeserver_url.clone(),
                 as_token.to_string(),
                 server_name.to_string(),
-                bot_localpart,
+                sender_localpart,
                 owner_id,
                 virtual_user_store,
             ))

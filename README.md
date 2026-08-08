@@ -176,7 +176,7 @@ homeserver_url = "http://localhost:8008"
 server_name = "your_server.tld"
 as_token = "${AS_TOKEN}"
 hs_token = "${HS_TOKEN}"
-bot_localpart = "cumments"
+sender_localpart = "cumments"
 push_listen_port = 3001
 owner_id = "@admin:your_server.tld"
 ```

@@ -43,7 +43,7 @@ pub struct Matrix {
     /// The server name (domain) part of Matrix IDs
     pub server_name: Option<String>,
     /// Localpart for the AppService's sender user (default: "cumments")
-    pub bot_localpart: Option<String>,
+    pub sender_localpart: Option<String>,
     /// Port for the push receiver endpoint (default: 3001)
     /// Set to the same value as server.port to share the main listener
     pub push_listen_port: Option<u16>,
@@ -67,7 +67,7 @@ pub fn get_configuration(config_path: Option<&str>) -> Result<Settings, config::
         .set_default("server.port", 7931)?
         .set_default("server.host", "localhost")?
         .set_default("matrix.push_listen_port", 3001)?
-        .set_default("matrix.bot_localpart", "cumments")?
+        .set_default("matrix.sender_localpart", "cumments")?
         // Add in environment variables with a prefix of CUMMENTS and separator __
         // e.g. `CUMMENTS_SERVER__PORT=5000` would override `port` in `[server]`
         .add_source(config::Environment::with_prefix("CUMMENTS").separator("__"))
