@@ -122,9 +122,14 @@ pub fn parse_room_identity(
     let alias = canonical_alias?;
     let alias_str = alias;
 
-    // Supports #cumments_SITE_ID_POST_SLUG:domain and #SITE_ID_POST_SLUG:domain
+    // Supports #_cumments_SITE_ID_POST_SLUG:domain (current),
+    // #cumments_SITE_ID_POST_SLUG:domain (pre-convention legacy), and
+    // #SITE_ID_POST_SLUG:domain (pre-prefix legacy).
     let localpart = alias_str.split(':').next()?.strip_prefix('#')?;
-    let content_part = localpart.strip_prefix("cumments_").unwrap_or(localpart);
+    let content_part = localpart
+        .strip_prefix("_cumments_")
+        .or_else(|| localpart.strip_prefix("cumments_"))
+        .unwrap_or(localpart);
     let parts: Vec<_> = content_part.splitn(2, '_').collect();
 
     if parts.len() == 2 {
@@ -472,5 +477,67 @@ impl EventProcessor {
                 .await;
             info!("Unregistered room {} from registry", event.child_room_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_room_identity_from_preferred_underscored_alias() {
+        let identity =
+            parse_room_identity(None, Some("#_cumments_my-blog_hello-world:example.com"));
+
+        assert!(matches!(
+            identity,
+            Some(RoomIdentity {
+                site_id,
+                post_slug
+            }) if site_id == "my-blog" && post_slug == "hello-world"
+        ));
+    }
+
+    #[test]
+    fn parse_room_identity_from_pre_convention_alias() {
+        let identity = parse_room_identity(None, Some("#cumments_my-blog_hello-world:example.com"));
+
+        assert!(matches!(
+            identity,
+            Some(RoomIdentity {
+                site_id,
+                post_slug
+            }) if site_id == "my-blog" && post_slug == "hello-world"
+        ));
+    }
+
+    #[test]
+    fn parse_room_identity_from_unprefixed_legacy_alias() {
+        let identity = parse_room_identity(None, Some("#my-blog_hello-world:example.com"));
+
+        assert!(matches!(
+            identity,
+            Some(RoomIdentity {
+                site_id,
+                post_slug
+            }) if site_id == "my-blog" && post_slug == "hello-world"
+        ));
+    }
+
+    #[test]
+    fn parse_room_identity_prefers_metadata_over_alias() {
+        let metadata = r#"{"site_id": "meta-site", "post_slug": "meta-post"}"#;
+        let identity = parse_room_identity(
+            Some(metadata),
+            Some("#_cumments_alias-site_alias-post:example.com"),
+        );
+
+        assert!(matches!(
+            identity,
+            Some(RoomIdentity {
+                site_id,
+                post_slug
+            }) if site_id == "meta-site" && post_slug == "meta-post"
+        ));
     }
 }

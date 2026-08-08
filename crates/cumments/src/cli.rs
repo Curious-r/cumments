@@ -94,10 +94,25 @@ fn generate_token() -> String {
 
 /// Handle the `generate-registration` subcommand.
 pub fn handle_generate_registration(args: &GenerateRegistrationArgs) -> Result<()> {
+    let registration = build_registration(args);
+    let yaml = serde_yaml::to_string(&registration)?;
+    println!("{}", yaml);
+
+    if !args.quiet {
+        eprintln!("---");
+        eprintln!("Add these tokens to your config.toml under [matrix]:");
+        eprintln!("  as_token = \"{}\"", registration.as_token);
+        eprintln!("  hs_token = \"{}\"", registration.hs_token);
+    }
+
+    Ok(())
+}
+
+fn build_registration(args: &GenerateRegistrationArgs) -> AppServiceRegistration {
     let as_token = generate_token();
     let hs_token = generate_token();
 
-    let registration = AppServiceRegistration {
+    AppServiceRegistration {
         id: "cumments".to_string(),
         url: args.url.clone(),
         as_token: if args.quiet {
@@ -119,23 +134,11 @@ pub fn handle_generate_registration(args: &GenerateRegistrationArgs) -> Result<(
             }],
             aliases: vec![NamespaceRule {
                 exclusive: true,
-                regex: format!("#cumments_.*:{}", regex_escape(&args.server_name)),
+                regex: format!("#_cumments_.*:{}", regex_escape(&args.server_name)),
             }],
             rooms: vec![],
         },
-    };
-
-    let yaml = serde_yaml::to_string(&registration)?;
-    println!("{}", yaml);
-
-    if !args.quiet {
-        eprintln!("---");
-        eprintln!("Add these tokens to your config.toml under [matrix]:");
-        eprintln!("  as_token = \"{}\"", as_token);
-        eprintln!("  hs_token = \"{}\"", hs_token);
     }
-
-    Ok(())
 }
 
 /// Minimal regex escape for Matrix namespace patterns.
@@ -169,6 +172,26 @@ mod tests {
         assert_eq!(
             regex_escape(r"a+b(c).d[e]{1}|^$\\*?x"),
             r"a\+b\(c\)\.d\[e\]\{1\}\|\^\$\\\\\*\?x"
+        );
+    }
+
+    #[test]
+    fn registration_namespaces_use_underscored_prefixes() {
+        let args = GenerateRegistrationArgs {
+            url: "http://localhost:3001".to_string(),
+            server_name: "a+b.example.com".to_string(),
+            sender_localpart: "cumments".to_string(),
+            quiet: false,
+        };
+        let registration = build_registration(&args);
+
+        assert_eq!(
+            registration.namespaces.users[0].regex,
+            "@_cumments_.*:a\\+b\\.example\\.com"
+        );
+        assert_eq!(
+            registration.namespaces.aliases[0].regex,
+            "#_cumments_.*:a\\+b\\.example\\.com"
         );
     }
 }
