@@ -2,7 +2,8 @@
 #
 # Validation builds run only when Docker-relevant files change (the
 # Dockerfile/config, dependency manifests, or this workflow); code-only
-# changes are covered by ci.yml. Version tags always build and publish.
+# changes are covered by ci.yml. Version tags always build and publish;
+# manual runs can opt into publishing with the `publish` input.
 name: Docker
 
 on:
@@ -29,6 +30,12 @@ on:
       - 'crates/**/build.rs'
       - '.github/workflows/docker.yml'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the built image to GHCR
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -57,7 +64,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -75,7 +82,8 @@ jobs:
           images: ghcr.io/${{ steps.image.outputs.name }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true') }}
+            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push image
         id: build
@@ -83,14 +91,14 @@ jobs:
         with:
           context: .
           file: misc/docker/Dockerfile
-          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Generate build provenance attestation
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
         uses: actions/attest@v4
         with:
           subject-name: ghcr.io/${{ steps.image.outputs.name }}
