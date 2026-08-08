@@ -12,6 +12,24 @@ use tokio::sync::Notify;
 /// How long an intent may sit in `waiting_for_sync` (event sent, projection
 /// not observed) before the timeout reconciliation pass intervenes.
 const WAITING_FOR_SYNC_TIMEOUT_MINUTES: i64 = 10;
+/// Upper bound for processing a single intent, including all Matrix driver
+/// calls (room creation, joins, sends). Prevents one stuck homeserver request
+/// from stalling the whole write path.
+const INTENT_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Run one intent's processing future with a hard time budget.
+async fn run_intent<F>(future: F) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    match tokio::time::timeout(INTENT_TIMEOUT, future).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "intent processing timed out after {:?}",
+            INTENT_TIMEOUT
+        )),
+    }
+}
 
 /// The Reconciler acts as the Orchestrator of the background process.
 /// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
@@ -90,7 +108,7 @@ impl Reconciler {
         let num_intents = intents.len() as u64;
 
         for (id, intent) in intents {
-            let process_result: Result<()> = (async {
+            let process_result = run_intent(async {
                 // ORCHESTRATION START
                 // 1. Brain: Ensure the site space is ready
                 let space_id = self
@@ -175,7 +193,7 @@ impl Reconciler {
         let num_intents = intents.len() as u64;
 
         for (id, intent) in intents {
-            let process_result: Result<()> = (async {
+            let process_result = run_intent(async {
                 // 1. Registry: Locate the room ID for this deletion
                 let room_id = self
                     .registry_store
@@ -234,7 +252,7 @@ impl Reconciler {
         let num_intents = intents.len() as u64;
 
         for (id, intent) in intents {
-            let process_result: Result<()> = (async {
+            let process_result = run_intent(async {
                 // 1. Brain: Ensure site space
                 let space_id = self
                     .site_service
