@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

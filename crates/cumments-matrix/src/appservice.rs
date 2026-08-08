@@ -9,7 +9,7 @@ use cumments_core::{
     ports::{MatrixDriver, VirtualUserStore},
     protocol::{MESSAGE_CONTENT_KEY, METADATA_EVENT_TYPE},
 };
-use rand::RngCore;
+use rand::Rng;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
