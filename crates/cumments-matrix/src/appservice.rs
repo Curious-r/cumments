@@ -47,8 +47,6 @@ struct JoinedRoomsResponse {
 /// user and alias namespaces begin with `_` after the sigil, e.g.
 /// `@_irc_.*` / `#_irc_.*`.
 const ALIAS_PREFIX: &str = "_cumments_";
-/// Aliases created before the `_cumments_` convention was adopted.
-const LEGACY_ALIAS_PREFIX: &str = "cumments_";
 
 fn site_space_alias_localpart(site_id: &str) -> String {
     format!("{}{}", ALIAS_PREFIX, site_id)
@@ -67,17 +65,6 @@ fn comment_room_alias(server_name: &str, site_id: &str, post_slug: &str) -> Stri
         "#{}:{}",
         comment_room_alias_localpart(site_id, post_slug),
         server_name
-    )
-}
-
-fn legacy_site_space_alias(server_name: &str, site_id: &str) -> String {
-    format!("#{}{}:{}", LEGACY_ALIAS_PREFIX, site_id, server_name)
-}
-
-fn legacy_comment_room_alias(server_name: &str, site_id: &str, post_slug: &str) -> String {
-    format!(
-        "#{}{}_{}:{}",
-        LEGACY_ALIAS_PREFIX, site_id, post_slug, server_name
     )
 }
 
@@ -302,23 +289,6 @@ impl AppServiceMatrixDriver {
         }
     }
 
-    /// Resolve the first matching alias in a preference list.
-    ///
-    /// The preferred `_cumments_` alias is checked first; the pre-convention
-    /// `cumments_` alias is kept as a fallback so existing rooms can still be
-    /// adopted after a local database reset.
-    async fn resolve_room_by_alias_candidates(
-        &self,
-        aliases: &[String],
-    ) -> Result<Option<(String, String)>> {
-        for alias in aliases {
-            if let Some(room_id) = self.resolve_room_by_alias(alias).await? {
-                return Ok(Some((alias.clone(), room_id)));
-            }
-        }
-        Ok(None)
-    }
-
     /// Whether a room's metadata matches the expected identity.
     async fn room_metadata_matches(
         &self,
@@ -466,21 +436,17 @@ impl MatrixDriver for AppServiceMatrixDriver {
             // Recovery: after a local DB reset (or a partial previous run) the
             // space may already exist under our exclusive alias. Adopt it.
             let alias = site_space_alias(&self.server_name, site_id_str);
-            let legacy_alias = legacy_site_space_alias(&self.server_name, site_id_str);
-            match self
-                .resolve_room_by_alias_candidates(&[alias, legacy_alias])
-                .await?
-            {
-                Some((resolved_alias, room_id)) => {
+            match self.resolve_room_by_alias(&alias).await? {
+                Some(room_id) => {
                     if self.room_metadata_matches(&room_id, site_id, None).await? {
                         info!(
                             "Recovered existing site space {} via alias {}",
-                            room_id, resolved_alias
+                            room_id, alias
                         );
                     } else {
                         warn!(
                             "Adopting room {} under alias {} with repaired metadata",
-                            room_id, resolved_alias
+                            room_id, alias
                         );
                         let _ = self.set_room_metadata(&room_id, site_id, None).await;
                     }
@@ -516,26 +482,21 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // ── PHASE 0.5: ALIAS RECOVERY (cold local registry) ──
         if target_room_id.is_none() {
             let alias = comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
-            let legacy_alias =
-                legacy_comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
-            if let Some((resolved_alias, room_id)) = self
-                .resolve_room_by_alias_candidates(&[alias, legacy_alias])
-                .await?
-            {
+            if let Some(room_id) = self.resolve_room_by_alias(&alias).await? {
                 if self
                     .room_metadata_matches(&room_id, site_id, Some(post_slug))
                     .await?
                 {
                     info!(
                         "Recovered existing comment room {} via alias {}",
-                        room_id, resolved_alias
+                        room_id, alias
                     );
                 } else {
                     // The alias namespace is exclusive to us, so this is a room
                     // we created before metadata was written; repair it.
                     warn!(
                         "Adopting room {} under alias {} with repaired metadata",
-                        room_id, resolved_alias
+                        room_id, alias
                     );
                     let _ = self
                         .set_room_metadata(&room_id, site_id, Some(post_slug))
@@ -604,19 +565,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 // already exists after a DB reset.
                 let alias =
                     comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
-                let legacy_alias = legacy_comment_room_alias(
-                    &self.server_name,
-                    site_id.as_str(),
-                    post_slug.as_str(),
-                );
-                return match self
-                    .resolve_room_by_alias_candidates(&[alias, legacy_alias])
-                    .await?
-                {
-                    Some((resolved_alias, room_id)) => {
+                return match self.resolve_room_by_alias(&alias).await? {
+                    Some(room_id) => {
                         info!(
                             "Recovered comment room {} after createRoom failure via alias {}",
-                            room_id, resolved_alias
+                            room_id, alias
                         );
                         let _ = self
                             .set_room_metadata(&room_id, site_id, Some(post_slug))
@@ -990,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn alias_helpers_build_preferred_and_legacy_names() {
+    fn alias_helpers_build_underscored_aliases() {
         assert_eq!(
             site_space_alias("example.com", "my-blog"),
             "#_cumments_my-blog:example.com"
@@ -998,14 +951,6 @@ mod tests {
         assert_eq!(
             comment_room_alias("example.com", "my-blog", "hello-world"),
             "#_cumments_my-blog_hello-world:example.com"
-        );
-        assert_eq!(
-            legacy_site_space_alias("example.com", "my-blog"),
-            "#cumments_my-blog:example.com"
-        );
-        assert_eq!(
-            legacy_comment_room_alias("example.com", "my-blog", "hello-world"),
-            "#cumments_my-blog_hello-world:example.com"
         );
     }
 
