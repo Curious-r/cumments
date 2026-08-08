@@ -3,7 +3,7 @@ use crate::ports::{MatrixDriver, SiteStore};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
 /// A Domain Service that manages the lifecycle of Matrix Spaces for sites.
@@ -11,6 +11,9 @@ use tracing::info;
 pub struct SiteService {
     store: Arc<dyn SiteStore>,
     cache: Arc<RwLock<HashMap<String, String>>>,
+    /// Per-site locks so concurrent first-use of the same site cannot race two
+    /// createRoom calls; the loser re-checks cache/store and adopts the winner.
+    inflight: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl SiteService {
@@ -19,6 +22,7 @@ impl SiteService {
         Self {
             store,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            inflight: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -30,6 +34,18 @@ impl SiteService {
         driver: &dyn MatrixDriver,
     ) -> Result<String> {
         let site_id_str = site_id.as_str();
+
+        // Serialize concurrent first-use per site. The lock map entry is
+        // intentionally never removed: the Arc keeps the guard valid for any
+        // waiter even after the holder drops the map entry.
+        let site_lock = {
+            let mut inflight = self.inflight.lock().await;
+            inflight
+                .entry(site_id_str.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = site_lock.lock().await;
 
         // 1. Check memory cache
         {
