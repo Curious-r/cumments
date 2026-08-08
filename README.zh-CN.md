@@ -83,7 +83,7 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 Cumments 以 Matrix Application Service 身份注册。每个访客对应一个确定性虚拟用户：
 
 ```text
-@_cumments_{site_id}_{sha256(public_key) 前 4 字节 hex}:{server_name}
+@_cumments_{site_id}_{sha256(public_key) 前 8 字节 hex}:{server_name}
 ```
 
 Homeserver 通过 `PUT /_matrix/app/v1/transactions/{txnId}` 推送事件，以
@@ -166,7 +166,7 @@ homeserver_url = "http://localhost:8008"
 server_name = "your_server.tld"
 as_token = "${AS_TOKEN}"
 hs_token = "${HS_TOKEN}"
-sender_localpart = "cumments"
+sender_localpart = "_cumments_bot"
 push_listen_port = 3001
 owner_id = "@admin:your_server.tld"
 ```
@@ -385,7 +385,7 @@ type: comment_deleted
 
 ### 校验规则
 
-`site_id` 与 `post_slug` 允许 `[a-zA-Z0-9_-]`，长度 1–64；非法值返回
+`site_id` 与 `post_slug` 允许小写 `[a-z0-9-]`，长度 1–64；非法值返回
 `400 VALIDATION_ERROR`。
 
 ## 开发
@@ -404,9 +404,6 @@ GitHub Actions 会执行同样的命令。
 - `reply_to` 与 `email` 会被 API 接收，但尚未写入 Matrix 事件或读模型。`email`
   只存在本地意图队列的 payload 中；终态行作为审计日志保留，生产部署前请加保留
   期清理。
-- 虚拟用户 ID 取 `SHA-256(public_key)` 前 4 字节（32 位）：每站点约 7.7 万
-  作者时碰撞概率过半，碰撞会使两位作者共用一个 Matrix 虚拟用户（所有权校验仍
-  使用完整公钥，评论与编辑权不受影响）。大规模部署前应引入更长的后缀。
 - 速率限制、回复树、多实例/Postgres 尚未实现。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 

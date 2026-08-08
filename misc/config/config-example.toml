@@ -41,7 +41,7 @@ mode = "appservice"
 homeserver_url = "http://localhost:8008"
 
 # The server name (domain) used to generate virtual user IDs
-# e.g., "@_cumments_myblog_a1b2c3d4:your_server.tld"
+# e.g., "@_cumments_myblog_a1b2c3d4e5f60718:your_server.tld"
 server_name = "your_server.tld"
 
 # The following tokens must match those in registration.yaml
@@ -50,7 +50,7 @@ as_token = "${YOUR_AS_TOKEN_HERE}"
 hs_token = "${YOUR_HS_TOKEN_HERE}"
 
 # Localpart of the AppService sender user (used as room creator / admin)
-sender_localpart = "cumments"
+sender_localpart = "_cumments_bot"
 
 # Port for AppService to receive Matrix pushes
 # Set to the same value as server.port to share the main HTTP listener

@@ -6,10 +6,15 @@ use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 lazy_static::lazy_static! {
-    /// Allowed chars: a-z, A-Z, 0-9, underscore, hyphen.
+    /// Allowed chars: lowercase a-z, 0-9, hyphen.
+    ///
+    /// Uppercase and underscores are excluded deliberately: `site_id` and
+    /// `post_slug` are embedded in Matrix user IDs and room aliases, where
+    /// lowercase keeps user IDs spec-compliant and `_` stays a safe separator
+    /// in `#_cumments_{site}_{post}` aliases.
     /// Length: 1–64 characters.
     pub static ref ID_REGEX: regex::Regex =
-        regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").unwrap();
+        regex::Regex::new(r"^[a-z0-9-]{1,64}$").unwrap();
 }
 
 // A validated, owned representation of a Site ID.
@@ -123,4 +128,24 @@ pub struct RoomEventPage {
     /// `true` when the homeserver reported the start/end boundary (no more
     /// history in this direction).
     pub done: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_id_and_post_slug_accept_lowercase_hyphenated_slugs() {
+        assert!(SiteId::new("my-blog".to_string()).is_ok());
+        assert!(PostSlug::new("hello-world".to_string()).is_ok());
+        assert!(SiteId::new("a1-b2".to_string()).is_ok());
+    }
+
+    #[test]
+    fn site_id_and_post_slug_reject_underscores_and_uppercase() {
+        assert!(SiteId::new("my_blog".to_string()).is_err());
+        assert!(PostSlug::new("hello_world".to_string()).is_err());
+        assert!(SiteId::new("My-Blog".to_string()).is_err());
+        assert!(PostSlug::new("Hello-World".to_string()).is_err());
+    }
 }

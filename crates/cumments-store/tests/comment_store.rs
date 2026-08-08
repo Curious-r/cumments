@@ -37,7 +37,7 @@ async fn save_comment_records_original_sender() {
         .save_comment(
             &comment,
             "!room:hs",
-            "@_cumments_my-blog_a1b2c3d4:hs",
+            "@_cumments_my-blog_a1b2c3d4e5f60718:hs",
             &site,
             &slug,
         )
@@ -49,7 +49,7 @@ async fn save_comment_records_original_sender() {
         .await
         .expect("get comment")
         .expect("comment exists");
-    assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4:hs");
+    assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
 }
 
 #[tokio::test]
@@ -76,7 +76,7 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             .save_comment(
                 &comment,
                 "!room:hs",
-                "@_cumments_my-blog_a1b2c3d4:hs",
+                "@_cumments_my-blog_a1b2c3d4e5f60718:hs",
                 &site,
                 &slug,
             )

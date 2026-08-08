@@ -248,7 +248,7 @@ pub trait VirtualUserStore: Send + Sync {
     /// Returns the virtual Matrix user ID for the given author public key and site.
     /// Creates one deterministically if it doesn't exist yet.
     ///
-    /// Format: `@_cumments_{site_id}_{sha256_trunc8(public_key)}:{server_name}`
+    /// Format: `@_cumments_{site_id}_{sha256(public_key) first 8 bytes, hex}:{server_name}`
     async fn get_or_create_virtual_user(
         &self,
         author_public_key: &str,

@@ -18,7 +18,7 @@ pub struct GenerateRegistrationArgs {
     pub server_name: String,
 
     /// The localpart for the AppService's sender user
-    #[arg(long, default_value = "cumments")]
+    #[arg(long, default_value = "_cumments_bot")]
     pub sender_localpart: String,
 
     /// Rate-limited output (no as_token/hs_token values in stdout)
@@ -180,11 +180,12 @@ mod tests {
         let args = GenerateRegistrationArgs {
             url: "http://localhost:3001".to_string(),
             server_name: "a+b.example.com".to_string(),
-            sender_localpart: "cumments".to_string(),
+            sender_localpart: "_cumments_bot".to_string(),
             quiet: false,
         };
         let registration = build_registration(&args);
 
+        assert_eq!(registration.sender_localpart, "_cumments_bot");
         assert_eq!(
             registration.namespaces.users[0].regex,
             "@_cumments_.*:a\\+b\\.example\\.com"

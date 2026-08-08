@@ -90,7 +90,7 @@ Cumments registers as a Matrix Application Service. Each visitor is represented
 by a deterministic virtual user:
 
 ```text
-@_cumments_{site_id}_{sha256(public_key) first 4 bytes, hex}:{server_name}
+@_cumments_{site_id}_{sha256(public_key) first 8 bytes, hex}:{server_name}
 ```
 
 The homeserver pushes events to `PUT /_matrix/app/v1/transactions/{txnId}`,
@@ -176,7 +176,7 @@ homeserver_url = "http://localhost:8008"
 server_name = "your_server.tld"
 as_token = "${AS_TOKEN}"
 hs_token = "${HS_TOKEN}"
-sender_localpart = "cumments"
+sender_localpart = "_cumments_bot"
 push_listen_port = 3001
 owner_id = "@admin:your_server.tld"
 ```
@@ -410,8 +410,8 @@ reminds you that mnemonic recovery is unavailable.
 
 ### Validation
 
-`site_id` and `post_slug` accept `[a-zA-Z0-9_-]`, 1–64 characters. Invalid
-values return `400 VALIDATION_ERROR`.
+`site_id` and `post_slug` accept lowercase `[a-z0-9-]`, 1–64 characters.
+Invalid values return `400 VALIDATION_ERROR`.
 
 ## Development
 
@@ -430,10 +430,6 @@ CI runs the same commands on GitHub Actions.
   Matrix events or the read model. `email` lives only in the local intent
   queue payload; terminal rows are kept as an audit log, so add retention
   cleanup before production.
-- Virtual user IDs derive from the first 4 bytes of `SHA-256(public_key)`
-  (32 bits): collisions become likely at ~77k authors per site and would make
-  two authors share a Matrix virtual user (ownership checks still use the
-  full public key). Plan a longer suffix before large-scale deployment.
 - Rate limiting, reply trees, and multi-instance/Postgres support are not
   implemented yet.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse

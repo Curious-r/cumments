@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
                 .matrix
                 .sender_localpart
                 .clone()
-                .unwrap_or_else(|| "cumments".to_string());
+                .unwrap_or_else(|| "_cumments_bot".to_string());
             let owner_id = settings.matrix.owner_id.clone();
             let virtual_user_store: Arc<dyn cumments_core::ports::VirtualUserStore> =
                 db_store.clone();

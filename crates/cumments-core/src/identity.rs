@@ -49,18 +49,13 @@ pub fn verify_signature(public_key_b64: &str, message: &str, signature_b64: &str
 
 /// Public, stable identifier derived from an Ed25519 public key.
 ///
-/// First 4 bytes of SHA-256 over the raw public key, hex-encoded (8 chars) –
-/// same derivation used for the virtual user ID.
-///
-/// Known limitation: 4 bytes is a 32-bit space, so two public keys collide
-/// with probability ~50% once ~77k authors exist per site. Colliding authors
-/// share a Matrix virtual user (sender attribution and ownership checks still
-/// use the full public key, so comments and edit rights stay distinct); a
-/// longer suffix should be introduced before large-scale deployment.
+/// First 8 bytes of SHA-256 over the raw public key, hex-encoded (16 chars) –
+/// same derivation used for the virtual user ID. 64 bits makes collisions
+/// negligible for realistic comment-system deployments.
 pub fn derive_visitor_id_from_public_key(public_key_b64: &str) -> Option<String> {
     let bytes = URL_SAFE_NO_PAD.decode(public_key_b64.trim()).ok()?;
     let hash = Sha256::digest(&bytes);
-    Some(hex::encode(&hash[..4]))
+    Some(hex::encode(&hash[..8]))
 }
 
 #[cfg(test)]
@@ -107,7 +102,7 @@ mod tests {
         let a = derive_visitor_id_from_public_key(&public_key_b64).expect("valid key");
         let b = derive_visitor_id_from_public_key(&public_key_b64).expect("valid key");
         assert_eq!(a, b);
-        assert_eq!(a.len(), 8);
+        assert_eq!(a.len(), 16);
 
         let other = SigningKey::from_bytes(&[9u8; 32]);
         let other_b64 = URL_SAFE_NO_PAD.encode(other.verifying_key().to_bytes());
