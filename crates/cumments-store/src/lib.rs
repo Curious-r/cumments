@@ -866,6 +866,7 @@ impl CommentStore for DbStore {
             author_public_key: Set(comment.author_public_key.clone()),
             content: Set(comment.content.clone()),
             timestamp: Set(comment.timestamp),
+            reply_to: Set(comment.reply_to.clone()),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
@@ -883,6 +884,7 @@ impl CommentStore for DbStore {
                         comments::Column::AuthorPublicKey,
                         comments::Column::Content,
                         comments::Column::Timestamp,
+                        comments::Column::ReplyTo,
                         comments::Column::UpdatedAt,
                     ])
                     .to_owned(),
@@ -1088,6 +1090,7 @@ impl From<comments::Model> for Comment {
             author_public_key: model.author_public_key,
             content: model.content,
             timestamp: model.timestamp,
+            reply_to: model.reply_to,
             room_id: model.room_id,
             author_mxid: model.author_mxid,
         }

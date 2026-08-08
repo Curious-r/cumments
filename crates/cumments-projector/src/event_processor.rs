@@ -43,6 +43,8 @@ pub struct ParsedRoomMessage {
     /// Correlation hint: the intent queue row ID that produced this event,
     /// if the message was sent by Cumments.
     pub intent_id: Option<i64>,
+    /// Matrix event ID of the parent comment, if this event is a rich reply.
+    pub reply_to: Option<String>,
     pub origin_server_ts: i64,
     /// If this is an edit (m.replace), the relation details.
     pub relates_to: Option<ParsedRelation>,
@@ -379,6 +381,7 @@ impl EventProcessor {
             content: event.content.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+            reply_to: event.reply_to.clone(),
             room_id: event.room_id.clone(),
             author_mxid: event.sender.clone(),
         };

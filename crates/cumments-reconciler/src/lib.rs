@@ -152,6 +152,7 @@ impl Reconciler {
                         &intent.author_signature,
                         &intent.author_challenge,
                         &intent.site_id,
+                        intent.reply_to.as_deref(),
                         Some(id),
                     )
                     .await?;

@@ -45,13 +45,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_signature: &str,
         _author_challenge: &str,
         _site_id: &SiteId,
+        reply_to: Option<&str>,
         intent_id: Option<i64>,
     ) -> Result<String> {
         let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         info!(
-            "LOGGING: Post message to room={}. Author={} (visitor={}, intent={:?}): {}",
-            room_id, nickname, visitor_id, intent_id, content
+            "LOGGING: Post message to room={}. Author={} (visitor={}, reply_to={:?}, intent={:?}): {}",
+            room_id, nickname, visitor_id, reply_to, intent_id, content
         );
         Ok("log_event_id".to_string())
     }

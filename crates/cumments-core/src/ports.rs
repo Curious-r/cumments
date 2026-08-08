@@ -196,6 +196,7 @@ pub trait MatrixDriver: Send + Sync {
         author_signature: &str,
         author_challenge: &str,
         site_id: &SiteId,
+        reply_to: Option<&str>,
         // Correlation hint: the intent queue row ID, published in the event so
         // the projector can close the loop even if the push arrives before the
         // reconciler's write-back.

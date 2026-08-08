@@ -81,6 +81,7 @@ fn metadata_matches(meta: &serde_json::Value, site_id: &str, post_slug: Option<&
 }
 
 /// Build the `m.room.message` content for a new Cumments comment.
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 fn build_message_body(
     content: &str,
     nickname: &str,
@@ -89,6 +90,7 @@ fn build_message_body(
     author_challenge: &str,
     visitor_id: &str,
     intent_id: Option<i64>,
+    reply_to: Option<&str>,
 ) -> serde_json::Value {
     let formatted_body = format!(
         "<strong>{}</strong>: {}",
@@ -112,6 +114,13 @@ fn build_message_body(
         "nickname": nickname,
         "intent_id": intent_id,
     });
+    if let Some(parent_event_id) = reply_to {
+        message_body["m.relates_to"] = serde_json::json!({
+            "m.in_reply_to": {
+                "event_id": parent_event_id,
+            }
+        });
+    }
     message_body
 }
 
@@ -693,6 +702,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         site_id: &SiteId,
+        reply_to: Option<&str>,
         intent_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user via the store (includes site_id)
@@ -714,6 +724,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_challenge,
             &visitor_id,
             intent_id,
+            reply_to,
         );
 
         let txn_id = self.txn_id(intent_id);
@@ -1039,6 +1050,7 @@ mod tests {
             "chal",
             "abcd",
             Some(7),
+            None,
         );
 
         assert_eq!(body["msgtype"].as_str(), Some("m.text"));
@@ -1060,6 +1072,27 @@ mod tests {
 
         assert!(body.get("cumments_visitor_id").is_none());
         assert!(body.get("cumments_intent_id").is_none());
+    }
+
+    #[test]
+    fn message_body_with_reply_uses_standard_relation() {
+        let body = build_message_body(
+            "hello",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+            Some("$parent:hs"),
+        );
+
+        assert_eq!(
+            body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
+            Some("$parent:hs")
+        );
+        assert!(body["m.relates_to"].get("rel_type").is_none());
+        assert!(body.get(MESSAGE_CONTENT_KEY).is_some());
     }
 
     #[test]

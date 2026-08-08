@@ -233,6 +233,14 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     let structured_content = content_string(content, "content");
     let structured_nickname = content_string(content, "nickname");
 
+    // Extract the standard rich-reply relation, if any.
+    let reply_to = content
+        .get("m.relates_to")
+        .and_then(|rel| rel.get("m.in_reply_to"))
+        .and_then(|reply| reply.get("event_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     // Extract relation (edit)
     let relates_to = content.get("m.relates_to").and_then(|rel| {
         let rel_type = rel.get("rel_type").and_then(|v| v.as_str())?;
@@ -278,6 +286,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         author_public_key,
         author_signature,
         intent_id: content_i64(content, "intent_id"),
+        reply_to,
         origin_server_ts,
         relates_to,
         room_identity,
@@ -464,6 +473,41 @@ mod tests {
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert_eq!(parsed.content, "hello");
         assert_eq!(parsed.intent_id, Some(7));
+        assert!(parsed.relates_to.is_none());
+    }
+
+    #[test]
+    fn reply_event_parses_standard_relation() {
+        let event = PushEvent {
+            event_type: "m.room.message".to_string(),
+            event_id: Some("$reply:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "**Alice**: hello",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$parent:hs",
+                    }
+                },
+                "host.curious.cumments": {
+                    "visitor_id": "abcd",
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "content": "hello",
+                    "nickname": "Alice",
+                    "intent_id": 7,
+                }
+            })),
+            redacts: None,
+            unsigned: None,
+        };
+
+        let parsed = parse_push_message(&event).expect("parse reply");
+        assert_eq!(parsed.reply_to.as_deref(), Some("$parent:hs"));
         assert!(parsed.relates_to.is_none());
     }
 }

@@ -10,7 +10,7 @@ use axum::{
 };
 use cumments_core::{
     events::ProjectorEvent,
-    identity::{signature_message, verify_signature},
+    identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
     models::{Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
@@ -357,6 +357,15 @@ async fn post_comment_handler(
 ) -> Result<impl IntoResponse, AppError> {
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
+    if req
+        .reply_to
+        .as_deref()
+        .is_some_and(|reply_to| reply_to.trim().is_empty())
+    {
+        return Err(AppError::BadRequest(
+            "reply_to must not be empty when provided.".to_string(),
+        ));
+    }
 
     // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
@@ -365,14 +374,14 @@ async fn post_comment_handler(
 
     // 2b. Verify the author's Ed25519 signature over the canonical message.
     let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&[
-        "POST",
+    let message = post_signature_message(
         &site_id,
         &post_slug,
         &req.content,
         &req.nickname,
+        req.reply_to.as_deref(),
         challenge,
-    ]);
+    );
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
     }

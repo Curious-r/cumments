@@ -175,6 +175,21 @@
                                     class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                                 />
                             </div>
+                            <div
+                                id="replyBanner"
+                                class="hidden flex items-center gap-2 text-xs text-indigo-600 bg-indigo-50 rounded-lg px-3 py-2"
+                            >
+                                <span>
+                                    正在回复
+                                    <strong id="replyTargetName"></strong>
+                                </span>
+                                <button
+                                    onclick="cancelReply()"
+                                    class="ml-auto text-indigo-400 hover:text-indigo-600 transition"
+                                >
+                                    取消
+                                </button>
+                            </div>
                             <textarea
                                 id="composerContent"
                                 rows="3"
@@ -495,6 +510,7 @@
                 allComments: [],
                 mineComments: [],
                 mineTotal: 0,
+                replyingTo: null,
             };
 
             let identity = null;
@@ -1273,9 +1289,66 @@
                     );
                     return;
                 }
-                items.forEach((comment) => {
-                    container.appendChild(createCommentElement(comment));
+
+                const { roots, byParent } = buildReplyTree(items);
+                roots.forEach((comment) => {
+                    container.appendChild(renderCommentBranch(comment, byParent, 0));
                 });
+            }
+
+            const MAX_REPLY_DEPTH = 8;
+
+            function buildReplyTree(items) {
+                const byParent = new Map();
+                const ids = new Set(items.map((c) => c.event_id));
+                const roots = [];
+
+                for (const comment of items) {
+                    if (comment.reply_to && ids.has(comment.reply_to)) {
+                        if (!byParent.has(comment.reply_to)) {
+                            byParent.set(comment.reply_to, []);
+                        }
+                        byParent.get(comment.reply_to).push(comment);
+                    } else {
+                        roots.push(comment);
+                    }
+                }
+
+                const byTime = (a, b) => new Date(a.timestamp) - new Date(b.timestamp);
+                roots.sort((a, b) => byTime(b, a));
+                for (const children of byParent.values()) {
+                    children.sort(byTime);
+                }
+
+                return { roots, byParent };
+            }
+
+            function renderCommentBranch(comment, byParent, depth) {
+                const wrapper = document.createElement("div");
+                wrapper.appendChild(createCommentElement(comment));
+
+                const children = byParent.get(comment.event_id);
+                if (children && children.length) {
+                    if (depth < MAX_REPLY_DEPTH) {
+                        const childBox = document.createElement("div");
+                        childBox.className =
+                            "ml-6 pl-4 border-l-2 border-slate-100 space-y-4 mt-4";
+                        children.forEach((child) => {
+                            childBox.appendChild(
+                                renderCommentBranch(child, byParent, depth + 1),
+                            );
+                        });
+                        wrapper.appendChild(childBox);
+                    } else {
+                        const note = document.createElement("div");
+                        note.className =
+                            "ml-6 pl-4 text-xs text-slate-400 border-l-2 border-slate-100 mt-3";
+                        note.textContent = "回复深度已达上限";
+                        wrapper.appendChild(note);
+                    }
+                }
+
+                return wrapper;
             }
 
             function createCommentElement(comment) {
@@ -1311,9 +1384,12 @@
                                 <div class="text-xs text-slate-400 mt-0.5">${time}</div>
                             </div>
                         </div>
-                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition ${own ? "" : "hidden"}">
+                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                            <button class="reply-btn text-xs text-slate-500 hover:text-indigo-600 px-1.5 py-1">回复</button>
+                            ${own ? `
                             <button class="edit-btn text-xs text-slate-500 hover:text-indigo-600 px-1.5 py-1">编辑</button>
                             <button class="delete-btn text-xs text-slate-500 hover:text-red-600 px-1.5 py-1">删除</button>
+                            ` : ""}
                         </div>
                     </div>
                     <div class="comment-content markdown-body text-sm text-slate-700 leading-relaxed break-words mt-3 pl-12">
@@ -1329,6 +1405,7 @@
                     </div>
                 `;
 
+                el.querySelector(".reply-btn").onclick = () => startReply(comment);
                 if (own) {
                     bindEdit(el, comment);
                     el.querySelector(".delete-btn").onclick = () =>
@@ -1433,6 +1510,29 @@
             // 发布 / 编辑 / 删除
             // ==========================================
 
+            function startReply(comment) {
+                state.replyingTo = comment;
+                updateReplyBanner();
+                document.getElementById("composerContent").focus();
+            }
+
+            function cancelReply() {
+                state.replyingTo = null;
+                updateReplyBanner();
+            }
+
+            function updateReplyBanner() {
+                const banner = document.getElementById("replyBanner");
+                const name = document.getElementById("replyTargetName");
+                if (state.replyingTo) {
+                    name.textContent =
+                        state.replyingTo.author_nickname || "访客";
+                    banner.classList.remove("hidden");
+                } else {
+                    banner.classList.add("hidden");
+                }
+            }
+
             async function submitComment() {
                 const cfg = getSettings();
                 const nickname =
@@ -1445,6 +1545,9 @@
                     toast("写点什么再发布吧", "error");
                     return;
                 }
+                const replyTo = state.replyingTo
+                    ? state.replyingTo.event_id
+                    : "";
 
                 const btn = document.getElementById("submitBtn");
                 const status = document.getElementById("powStatus");
@@ -1462,6 +1565,7 @@
                         cfg.slug,
                         content,
                         nickname,
+                        replyTo,
                         chal.prefix,
                     ]);
 
@@ -1476,6 +1580,9 @@
                                 nickname,
                                 author_public_key: publicKey,
                                 author_signature: signature,
+                                reply_to: state.replyingTo
+                                    ? state.replyingTo.event_id
+                                    : null,
                                 challenge_response: `${chal.prefix}|${nonce}`,
                             }),
                         },
@@ -1483,6 +1590,8 @@
                     if (!res.ok) throw new Error(await apiError(res));
 
                     document.getElementById("composerContent").value = "";
+                    state.replyingTo = null;
+                    updateReplyBanner();
                     status.textContent = "提交成功，等待 Matrix 同步…";
                     toast("评论已提交，等待同步");
                     setTimeout(() => loadList(), 1200);

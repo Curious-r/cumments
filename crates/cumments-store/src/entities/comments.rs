@@ -15,6 +15,7 @@ pub struct Model {
     pub author_nickname: Option<String>,
     pub content: String,
     pub timestamp: DateTimeUtc,
+    pub reply_to: Option<String>,
     pub created_at: DateTimeUtc,
     pub author_public_key: Option<String>,
     pub updated_at: DateTimeUtc,

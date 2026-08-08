@@ -103,6 +103,8 @@ pub struct Comment {
     pub author_public_key: Option<String>,
     pub content: String,
     pub timestamp: DateTime<Utc>,
+    /// Matrix event ID of the parent comment, when this comment is a reply.
+    pub reply_to: Option<String>,
     /// Matrix room the comment lives in. Internal integrity check for edits
     /// and redactions; never exposed through the API/SSE.
     #[serde(skip)]

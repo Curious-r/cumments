@@ -30,6 +30,7 @@ async fn save_comment_records_original_sender() {
         author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
         content: "hello".to_string(),
         timestamp: Utc::now(),
+        reply_to: Some("$parent:hs".to_string()),
         room_id: "!room:hs".to_string(),
         author_mxid: String::new(),
     };
@@ -52,6 +53,55 @@ async fn save_comment_records_original_sender() {
         .expect("comment exists");
     assert_eq!(stored.room_id, "!room:hs");
     assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
+    assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
+}
+
+#[tokio::test]
+async fn update_comment_preserves_reply_to() {
+    let store = DbStore::connect(&test_db_url("comment-reply-edit"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+
+    let comment = Comment {
+        event_id: "$event:hs".to_string(),
+        site_id: site.as_str().to_string(),
+        post_slug: slug.as_str().to_string(),
+        author_nickname: Some("Alice".to_string()),
+        author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+        content: "original".to_string(),
+        timestamp: Utc::now(),
+        reply_to: Some("$parent:hs".to_string()),
+        room_id: "!room:hs".to_string(),
+        author_mxid: String::new(),
+    };
+
+    store
+        .save_comment(
+            &comment,
+            "!room:hs",
+            "@_cumments_my-blog_a1b2c3d4e5f60718:hs",
+            &site,
+            &slug,
+        )
+        .await
+        .expect("save comment");
+
+    assert!(
+        store
+            .update_comment_content("$event:hs", "edited")
+            .await
+            .expect("update comment")
+    );
+
+    let stored = store
+        .get_comment("$event:hs")
+        .await
+        .expect("get comment")
+        .expect("comment exists");
+    assert_eq!(stored.content, "edited");
+    assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
 }
 
 #[tokio::test]
@@ -72,6 +122,7 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             content: content.to_string(),
             timestamp: ts,
+            reply_to: None,
             room_id: "!room:hs".to_string(),
             author_mxid: String::new(),
         };

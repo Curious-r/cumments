@@ -25,6 +25,29 @@ pub fn signature_message(parts: &[&str]) -> String {
     parts.join("\n")
 }
 
+/// Build the canonical message signed when posting a comment.
+///
+/// `reply_to` is always present as its own line (empty when there is no parent)
+/// so the reply relation cannot be swapped after signing.
+pub fn post_signature_message(
+    site_id: &str,
+    post_slug: &str,
+    content: &str,
+    nickname: &str,
+    reply_to: Option<&str>,
+    challenge: &str,
+) -> String {
+    signature_message(&[
+        "POST",
+        site_id,
+        post_slug,
+        content,
+        nickname,
+        reply_to.unwrap_or(""),
+        challenge,
+    ])
+}
+
 /// Decode a base64url-encoded Ed25519 public key.
 pub fn parse_public_key(public_key_b64: &str) -> Option<VerifyingKey> {
     let bytes = URL_SAFE_NO_PAD.decode(public_key_b64.trim()).ok()?;
@@ -112,5 +135,17 @@ mod tests {
             derive_visitor_id_from_public_key(&other_b64).expect("valid key")
         );
         assert_eq!(derive_visitor_id_from_public_key("garbage"), None);
+    }
+
+    #[test]
+    fn post_signature_message_includes_reply_to_slot() {
+        assert_eq!(
+            post_signature_message("my-blog", "hello", "content", "Alice", Some("$p:hs"), "ch"),
+            "POST\nmy-blog\nhello\ncontent\nAlice\n$p:hs\nch"
+        );
+        assert_eq!(
+            post_signature_message("my-blog", "hello", "content", "Alice", None, "ch"),
+            "POST\nmy-blog\nhello\ncontent\nAlice\n\nch"
+        );
     }
 }
