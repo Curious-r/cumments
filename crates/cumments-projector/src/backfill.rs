@@ -56,11 +56,21 @@ impl Backfiller {
     /// Discover Cumments rooms, rebuild site/registry entries, then backfill
     /// every comment room. A failure in one room is logged and skipped so a
     /// single broken room does not abort the whole run.
-    pub async fn run(&self) -> anyhow::Result<BackfillSummary> {
+    pub async fn run(&self, max_pages: u32) -> anyhow::Result<BackfillSummary> {
         let mut rooms = Vec::new();
 
         for room_id in self.driver.joined_rooms().await? {
-            let Some(meta) = self.driver.room_metadata(&room_id).await? else {
+            let meta = match self.driver.room_metadata(&room_id).await {
+                Ok(meta) => meta,
+                Err(e) => {
+                    warn!(
+                        "Backfill: failed to read metadata for {}: {:?}; skipping",
+                        room_id, e
+                    );
+                    continue;
+                }
+            };
+            let Some(meta) = meta else {
                 continue;
             };
             let Some(site_id) = meta.get("site_id").and_then(|v| v.as_str()) else {
@@ -94,7 +104,9 @@ impl Backfiller {
             ..Default::default()
         };
         for room_id in rooms {
-            match self.backfill_room(&room_id).await {
+            // 0 means "unlimited" (u32::MAX is effectively unbounded).
+            let room_max_pages = if max_pages == 0 { u32::MAX } else { max_pages };
+            match self.backfill_room(&room_id, room_max_pages).await {
                 Ok(events) => {
                     summary.events += events;
                     info!("Backfilled {} ({} events)", room_id, events);
@@ -107,17 +119,26 @@ impl Backfiller {
 
     /// Fetch a room's full history (or continue from the stored cursor),
     /// replay it in chronological order, and persist the next cursor.
-    async fn backfill_room(&self, room_id: &str) -> anyhow::Result<usize> {
+    async fn backfill_room(&self, room_id: &str, max_pages: u32) -> anyhow::Result<usize> {
         let mut from = self.cursor_store.get_cursor(room_id).await?;
         let mut collected: Vec<serde_json::Value> = Vec::new();
         let mut last_batch: Option<String> = None;
-        let mut done;
+        let mut done = false;
+        let mut pages = 0u32;
 
         loop {
+            if pages >= max_pages {
+                warn!(
+                    "Backfill reached the {}-page cap for {}; cursor saved, run again to continue",
+                    max_pages, room_id
+                );
+                break;
+            }
             let page = self
                 .driver
                 .get_room_events(room_id, from.as_deref(), PAGE_SIZE)
                 .await?;
+            pages += 1;
             collected.extend(page.events);
             done = page.done;
             match page.next_batch {

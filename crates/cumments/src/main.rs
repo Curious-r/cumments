@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
     if let Some(cmd) = &args.command {
         match cmd {
             cli::Commands::GenerateRegistration(_) => unreachable!("handled earlier"),
-            cli::Commands::Backfill(_) => {
+            cli::Commands::Backfill(args) => {
                 let backfiller = cumments_projector::backfill::Backfiller::new(
                     driver.clone(),
                     event_processor.clone(),
@@ -181,7 +181,7 @@ async fn main() -> Result<()> {
                     db_store.clone(),
                     db_store.clone(),
                 );
-                let summary = backfiller.run().await?;
+                let summary = backfiller.run(args.max_pages).await?;
                 tracing::info!(
                     "Backfill complete: {} rooms, {} events",
                     summary.rooms,

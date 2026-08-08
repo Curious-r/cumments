@@ -28,7 +28,13 @@ pub struct GenerateRegistrationArgs {
 
 /// Backfill the read model from Matrix room history.
 #[derive(clap::Args, Debug)]
-pub struct BackfillArgs {}
+pub struct BackfillArgs {
+    /// Stop fetching a room after this many history pages (~100 events each).
+    /// The cursor is saved so a later run resumes where it stopped.
+    /// `0` disables the cap.
+    #[arg(long, default_value_t = 500)]
+    pub max_pages: u32,
+}
 
 /// Create a consistent single-file SQLite backup.
 #[derive(clap::Args, Debug)]
