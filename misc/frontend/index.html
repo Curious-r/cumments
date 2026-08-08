@@ -412,8 +412,8 @@
                             重置身份
                         </button>
                         <p class="mt-1 text-[11px] text-slate-400 leading-relaxed">
-                            身份 = Ed25519 公钥。私钥只保存在本浏览器；助记词不落盘、
-                            仅在创建当次会话可查看。长期备份请抄写助记词或导出私钥；
+                            身份 = Ed25519 公钥。私钥只保存在本浏览器；助记词不跨会话
+                            保存、仅在创建当次会话可查看。长期备份请抄写助记词或导出私钥；
                             恢复/导入/重置后，旧公钥发布的评论将不再显示编辑/删除入口。
                         </p>
                     </div>
@@ -449,8 +449,8 @@
                     id="mnemonicModalDesc"
                     class="mt-1 text-xs text-slate-500 leading-relaxed"
                 >
-                    这是新身份唯一的恢复凭证，只显示这一次，不会保存在本浏览器或服务器。
-                    请用纸笔抄写并妥善保管；丢失后只能用导出的私钥 JSON 恢复。
+                    这是新身份唯一的恢复凭证。它不会跨会话保存，也不会发送到任何服务器；
+                    请用纸笔抄写并妥善保管，丢失后只能用导出的私钥 JSON 恢复。
                 </p>
                 <div
                     id="mnemonicWords"
@@ -486,7 +486,7 @@
         <!-- Toast -->
         <div
             id="toasts"
-            class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-72"
+            class="fixed top-4 right-4 z-[80] flex flex-col gap-2 w-72"
         ></div>
 
         <script>
@@ -846,7 +846,7 @@
                         : "身份助记词（本次会话）";
                 document.getElementById("mnemonicModalDesc").textContent =
                     mode === "backup"
-                        ? "这是新身份唯一的恢复凭证，只显示这一次，不会保存在本浏览器或服务器。请用纸笔抄写并妥善保管；丢失后只能用导出的私钥 JSON 恢复。"
+                        ? "这是新身份唯一的恢复凭证。它不会跨会话保存，也不会发送到任何服务器；请用纸笔抄写并妥善保管，丢失后只能用导出的私钥 JSON 恢复。"
                         : "助记词仅在创建当次会话中可再查看，关闭标签页后即消失。长期备份请抄写，或使用导出私钥。";
                 document.getElementById("mnemonicModalPrimary").textContent =
                     mode === "backup" ? "我已备份，继续" : "关闭";
