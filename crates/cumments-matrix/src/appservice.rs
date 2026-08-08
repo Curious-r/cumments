@@ -81,6 +81,41 @@ fn metadata_matches(meta: &serde_json::Value, site_id: &str, post_slug: Option<&
     site_ok && slug_ok
 }
 
+/// Returns a copy of a room's `m.room.power_levels` content with the owner
+/// raised to admin (100), preserving every other field. Returns `None` when
+/// the owner already has at least admin power.
+fn power_levels_with_owner(
+    content: &serde_json::Value,
+    owner_id: &str,
+) -> Option<serde_json::Value> {
+    let level = content
+        .get("users")
+        .and_then(|u| u.get(owner_id))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if level >= 100 {
+        return None;
+    }
+
+    let mut updated = content.clone();
+    match updated
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("users"))
+        .and_then(|u| u.as_object_mut())
+    {
+        Some(users) => {
+            users.insert(owner_id.to_string(), 100.into());
+        }
+        None => {
+            let obj = updated.as_object_mut()?;
+            let mut users = serde_json::Map::new();
+            users.insert(owner_id.to_string(), 100.into());
+            obj.insert("users".to_string(), serde_json::Value::Object(users));
+        }
+    }
+    Some(updated)
+}
+
 /// Build the `m.room.message` content for a new Cumments comment.
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 fn build_message_body(
@@ -410,6 +445,54 @@ impl AppServiceMatrixDriver {
         }
     }
 
+    /// Read a room's current `m.room.power_levels` content, if any.
+    async fn get_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.power_levels",
+            urlencode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to query power levels: {}", e))?;
+
+        if resp.status().is_success() {
+            Ok(Some(resp.json().await?))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(None)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Failed to query power levels ({}): {}",
+                status,
+                body
+            ))
+        }
+    }
+
+    /// Write a room's `m.room.power_levels` content (full state replacement).
+    async fn write_power_levels(&self, room_id: &str, content: &serde_json::Value) -> Result<()> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.power_levels",
+            urlencode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, None)
+            .json(content)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to set power levels: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to set power levels ({}): {}", status, body));
+        }
+        Ok(())
+    }
+
     /// Resolve a room ID from its alias via the homeserver directory.
     async fn resolve_room_by_alias(&self, alias: &str) -> Result<Option<String>> {
         let path = format!("_matrix/client/v3/directory/room/{}", urlencode(alias));
@@ -600,6 +683,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                         );
                         let _ = self.set_room_metadata(&room_id, site_id, None).await;
                     }
+                    self.ensure_owner_admin(&room_id).await;
                     Ok(room_id)
                 }
                 None => Err(anyhow!(
@@ -652,6 +736,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                         .set_room_metadata(&room_id, site_id, Some(post_slug))
                         .await;
                 }
+                self.ensure_owner_admin(&room_id).await;
                 target_room_id = Some(room_id);
             }
         }
@@ -725,6 +810,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                             .set_room_metadata(&room_id, site_id, Some(post_slug))
                             .await;
                         self.link_room_to_space(space_id, &room_id).await;
+                        self.ensure_owner_admin(&room_id).await;
                         Ok(room_id)
                     }
                     None => Err(anyhow!(
@@ -1006,6 +1092,29 @@ impl MatrixDriver for AppServiceMatrixDriver {
     async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         self.get_room_metadata(room_id).await
     }
+
+    #[instrument(skip(self))]
+    async fn ensure_owner_admin(&self, room_id: &str) {
+        // Best-effort: failures are logged here and never fail the caller.
+        let updated = match self.get_power_levels(room_id).await {
+            Ok(Some(content)) => match power_levels_with_owner(&content, &self.owner_id) {
+                Some(updated) => updated,
+                None => return, // owner already has admin power
+            },
+            // No power-levels event: room defaults apply, so create one that
+            // grants the owner admin.
+            Ok(None) => serde_json::json!({ "users": { self.owner_id.clone(): 100 } }),
+            Err(e) => {
+                warn!("Failed to read power levels for room {}: {:#}", room_id, e);
+                return;
+            }
+        };
+
+        match self.write_power_levels(room_id, &updated).await {
+            Ok(()) => info!("Granted owner admin power in room {}", room_id),
+            Err(e) => warn!("Failed to grant owner admin in room {}: {:#}", room_id, e),
+        }
+    }
 }
 
 /// Percent-encode a string for safe use in URL path segments.
@@ -1067,6 +1176,48 @@ mod tests {
         assert!(metadata_matches(&meta, "my-blog", Some("hello-world")));
         assert!(!metadata_matches(&meta, "my-blog", None));
         assert!(!metadata_matches(&meta, "my-blog", Some("other")));
+    }
+
+    #[test]
+    fn power_levels_owner_already_admin_is_unchanged() {
+        let content = json!({
+            "ban": 50,
+            "users": { "@owner:example.com": 100, "@other:example.com": 0 }
+        });
+        assert!(power_levels_with_owner(&content, "@owner:example.com").is_none());
+    }
+
+    #[test]
+    fn power_levels_raises_owner_to_admin_and_preserves_rest() {
+        let content = json!({
+            "ban": 50,
+            "state_default": 50,
+            "users": { "@owner:example.com": 50, "@other:example.com": 0 }
+        });
+        let updated = power_levels_with_owner(&content, "@owner:example.com")
+            .expect("owner should be raised to admin");
+        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["users"]["@other:example.com"], 0);
+        assert_eq!(updated["ban"], 50);
+        assert_eq!(updated["state_default"], 50);
+    }
+
+    #[test]
+    fn power_levels_adds_missing_owner_entry() {
+        let content = json!({ "users": { "@other:example.com": 0 } });
+        let updated =
+            power_levels_with_owner(&content, "@owner:example.com").expect("owner should be added");
+        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["users"]["@other:example.com"], 0);
+    }
+
+    #[test]
+    fn power_levels_creates_users_map_when_missing() {
+        let content = json!({ "ban": 50 });
+        let updated = power_levels_with_owner(&content, "@owner:example.com")
+            .expect("users map should be created");
+        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["ban"], 50);
     }
 
     #[test]

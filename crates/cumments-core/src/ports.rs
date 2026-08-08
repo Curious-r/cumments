@@ -243,6 +243,11 @@ pub trait MatrixDriver: Send + Sync {
     /// Checks whether an event exists on the homeserver. Used to decide if a
     /// timed-out `waiting_for_sync` intent can be safely resent.
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
+
+    /// Best-effort: ensure the configured human owner has admin power (100)
+    /// in the room. Failures are logged by the driver and never fail the
+    /// caller.
+    async fn ensure_owner_admin(&self, room_id: &str);
 }
 
 /// Persistence for backfill cursors (per-room pagination tokens).

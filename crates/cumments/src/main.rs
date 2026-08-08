@@ -204,6 +204,39 @@ async fn main() -> Result<()> {
     tracing::info!("Reconciler started in background.");
 
     // ─────────────────────────────────────────────────────────────
+    // 9b. Ensure the human owner keeps admin power in every known
+    //     Cumments room (appservice mode, best-effort)
+    // ─────────────────────────────────────────────────────────────
+    if appservice.is_some() {
+        let sweep_driver = driver.clone();
+        tokio::spawn(async move {
+            let rooms = match sweep_driver.joined_rooms().await {
+                Ok(rooms) => rooms,
+                Err(e) => {
+                    tracing::warn!("Owner admin sweep: failed to list joined rooms: {:?}", e);
+                    return;
+                }
+            };
+            for room_id in rooms {
+                match sweep_driver.room_metadata(&room_id).await {
+                    Ok(Some(meta)) if meta.get("site_id").and_then(|v| v.as_str()).is_some() => {
+                        sweep_driver.ensure_owner_admin(&room_id).await;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "Owner admin sweep: failed to read metadata for {}: {:?}",
+                            room_id,
+                            e
+                        );
+                    }
+                }
+            }
+        });
+        tracing::info!("Owner admin sweep started in background.");
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // 10. Start Event Receiver based on mode
     // ─────────────────────────────────────────────────────────────
     match &appservice {
