@@ -140,6 +140,35 @@ pub fn handle_generate_registration(args: &GenerateRegistrationArgs) -> Result<(
 
 /// Minimal regex escape for Matrix namespace patterns.
 fn regex_escape(s: &str) -> String {
-    // Only "." needs escaping for our limited use case
-    s.replace('.', "\\.")
+    let mut escaped = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(
+            c,
+            '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_escape_leaves_plain_server_names_alone() {
+        assert_eq!(regex_escape("curious.host"), "curious\\.host");
+        assert_eq!(regex_escape("localhost"), "localhost");
+        assert_eq!(regex_escape("example-123.com"), "example-123\\.com");
+    }
+
+    #[test]
+    fn regex_escape_escapes_all_metacharacters() {
+        assert_eq!(
+            regex_escape(r"a+b(c).d[e]{1}|^$\\*?x"),
+            r"a\+b\(c\)\.d\[e\]\{1\}\|\^\$\\\\\*\?x"
+        );
+    }
 }
