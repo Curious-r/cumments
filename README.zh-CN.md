@@ -271,6 +271,9 @@ docker build -t cumments -f misc/docker/Dockerfile .
 docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
 
+Dockerfile 位于 `misc/docker` 下，构建上下文必须是仓库根目录（注意命令末尾
+的 `.`）；不要直接执行 `docker build misc/docker`。
+
 发布镜像只在 `v*` 版本 tag 时推送到 GHCR：
 
 ```bash

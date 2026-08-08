@@ -1,3 +1,6 @@
+# Build context must be the repository root:
+#   docker build -f misc/docker/Dockerfile .
+
 ARG RUST_VERSION=1.97
 FROM rust:${RUST_VERSION}-alpine AS builder
 
@@ -11,7 +14,7 @@ LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${REVISION}"
 
 # Install build dependencies
-RUN apk add --no-cache build-base cmake clang musl-dev openssl-dev perl pkgconfig sqlite-dev
+RUN apk add --no-cache build-base cmake clang musl-dev pkgconfig sqlite-dev
 
 WORKDIR /usr/src/app
 
@@ -24,14 +27,18 @@ RUN mkdir -p crates/cumments/src && \
     echo 'fn main() { println!("Dummy build"); }' > crates/cumments/src/main.rs
 
 # Download and compile dependencies
-RUN cargo build --release --locked --bin cumments
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/src/app/target \
+    cargo build --release --locked --bin cumments
 RUN rm -rf target/release/deps/cumments*
 
 # Copy actual source code
 COPY . .
 
 # Build the cumments binary
-RUN cargo build --release --locked --bin cumments
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/src/app/target \
+    cargo build --release --locked --bin cumments
 
 # Runtime stage
 FROM alpine:3.22

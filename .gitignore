@@ -12,5 +12,5 @@ devenv.local.nix
 /target
 /data/*
 !/data/.keep
-/misc/config/config.toml
 /config.toml
+/registration.yaml

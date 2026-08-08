@@ -288,6 +288,9 @@ docker build -t cumments -f misc/docker/Dockerfile .
 docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 ```
 
+The Dockerfile lives under `misc/docker`, so the build context must be the
+repository root (note the trailing `.`). Do not run `docker build misc/docker`.
+
 Prebuilt images are published to GHCR from version tags:
 
 ```bash
