@@ -217,9 +217,9 @@ impl Matrix {
 /// Priority:
 /// 1. `--config <path>` (explicit CLI flag)
 /// 2. `CUMMENTS_CONFIG` environment variable
-/// 3. `$XDG_CONFIG_HOME/cumments/config.toml` (or `~/.config/cumments/config.toml`)
-/// 4. `/etc/cumments/config.toml`
-/// 5. `./config.toml` (local development fallback)
+/// 3. `$XDG_CONFIG_HOME/cumments/cumments.toml` (or `~/.config/cumments/cumments.toml`)
+/// 4. `/etc/cumments/cumments.toml`
+/// 5. `./cumments.toml` (local development fallback)
 pub fn resolve_config_path(explicit: Option<&str>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(PathBuf::from(path));
@@ -238,18 +238,18 @@ fn default_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        paths.push(PathBuf::from(xdg).join("cumments").join("config.toml"));
+        paths.push(PathBuf::from(xdg).join("cumments").join("cumments.toml"));
     } else if let Some(home) = std::env::var_os("HOME") {
         paths.push(
             PathBuf::from(home)
                 .join(".config")
                 .join("cumments")
-                .join("config.toml"),
+                .join("cumments.toml"),
         );
     }
 
-    paths.push(PathBuf::from("/etc/cumments/config.toml"));
-    paths.push(PathBuf::from("config.toml"));
+    paths.push(PathBuf::from("/etc/cumments/cumments.toml"));
+    paths.push(PathBuf::from("cumments.toml"));
     paths
 }
 
@@ -595,8 +595,8 @@ namespaces:
     #[test]
     fn default_config_paths_include_system_and_local_fallbacks() {
         let paths = default_config_paths();
-        assert!(paths.contains(&PathBuf::from("/etc/cumments/config.toml")));
-        assert!(paths.contains(&PathBuf::from("config.toml")));
+        assert!(paths.contains(&PathBuf::from("/etc/cumments/cumments.toml")));
+        assert!(paths.contains(&PathBuf::from("cumments.toml")));
     }
 
     #[test]

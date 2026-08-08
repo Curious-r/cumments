@@ -145,7 +145,7 @@ pub fn handle_generate_registration(
 
     if !args.quiet {
         eprintln!("---");
-        eprintln!("Add these tokens to your config.toml under [matrix.appservice]:");
+        eprintln!("Add these tokens to your cumments.toml under [matrix.appservice]:");
         eprintln!("  as_token = \"{}\"", registration.as_token);
         eprintln!("  hs_token = \"{}\"", registration.hs_token);
     }
