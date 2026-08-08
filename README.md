@@ -375,13 +375,14 @@ comment and verifying the signature.
 
 Identity recovery is mnemonic-first: a fresh identity is derived from a BIP39
 12-word English mnemonic via SLIP-0010 at the fixed path `m/44'/1328'/0'`. The
-mnemonic is never persisted — it is shown once at creation (and again within
-the same session from the settings drawer), so you must write it down. The
+mnemonic is not persisted across sessions — it lives only in the current tab's
+session storage, is shown once at creation, and can be viewed again from the
+settings drawer within the same session — so you must write it down. The
 derived private key is cached in `localStorage`; clearing browser data removes
 that cache, but the mnemonic is the offline backup — entering it again in the
 settings drawer re-derives the exact same identity and writes it back. The
-mnemonic itself is deliberately never persisted, so it stays separate from the
-local cache (paper, a password manager, or another device).
+mnemonic itself is deliberately kept out of long-lived storage, so it stays
+separate from the local cache (paper, a password manager, or another device).
 
 As an advanced option, the settings drawer can export the identity as a JSON
 file (`{version, publicKey, privateKey}`) and import it back; imports are
