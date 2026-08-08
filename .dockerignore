@@ -13,8 +13,6 @@ data/
 .env
 
 **/cumments.toml
-# Legacy name kept ignored so old local files are never packed into the image
-**/config.toml
 **/registration.yaml
 
 .devenv*
