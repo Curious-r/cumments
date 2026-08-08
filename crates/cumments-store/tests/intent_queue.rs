@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
-    intents::PostCommentIntent,
+    intents::{PostCommentIntent, UpdateCommentIntent},
     models::{PostSlug, SiteId},
     ports::IntentStore,
 };
@@ -16,6 +16,17 @@ fn post_intent() -> PostCommentIntent {
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
         reply_to: None,
+    }
+}
+
+fn update_intent() -> UpdateCommentIntent {
+    UpdateCommentIntent {
+        site_id: SiteId::from("my-blog"),
+        post_slug: PostSlug::from("hello-world"),
+        event_id: "$original:hs".to_string(),
+        content: "edited".to_string(),
+        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
+        author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
     }
 }
 
@@ -130,5 +141,90 @@ async fn failure_records_schedule_retry_then_dead_letters() {
     assert!(
         !retrying,
         "intent should be dead-lettered after budget exhaustion"
+    );
+}
+
+#[tokio::test]
+async fn update_intent_completion_closes_loop_and_never_regresses() {
+    let store = DbStore::connect(&test_db_url("update-complete"))
+        .await
+        .expect("connect in-memory db");
+
+    store
+        .save_update_intent(&update_intent())
+        .await
+        .expect("save update intent");
+    let pending = store.get_pending_update_intents().await.expect("pending");
+    let (id, _) = pending[0];
+
+    // Simulate the projector seeing the replacement before the reconciler's
+    // write-back: complete first, then attempt the write-back.
+    store
+        .mark_update_intent_completed("$original:hs")
+        .await
+        .expect("complete");
+    store
+        .mark_update_intent_waiting_for_sync(id, "!room:hs")
+        .await
+        .expect("late write-back");
+
+    let stuck = store
+        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1))
+        .await
+        .expect("stuck query");
+    assert!(
+        stuck.is_empty(),
+        "completed update intent must not be regressed to waiting_for_sync"
+    );
+
+    // A late failure must not resurrect a completed intent.
+    let retrying = store
+        .record_update_intent_failure(id, "late failure")
+        .await
+        .expect("record failure");
+    assert!(!retrying, "completed intent must not be rescheduled");
+    assert!(
+        store
+            .get_pending_update_intents()
+            .await
+            .expect("pending query")
+            .is_empty(),
+        "completed intent must not reappear as pending"
+    );
+}
+
+#[tokio::test]
+async fn failure_records_do_not_resurrect_failed_intents() {
+    let store = DbStore::connect(&test_db_url("no-resurrect"))
+        .await
+        .expect("connect in-memory db");
+
+    store
+        .save_post_intent(&post_intent())
+        .await
+        .expect("save intent");
+    let pending = store.get_pending_post_intents().await.expect("pending");
+    let (id, _) = pending[0];
+
+    // Dead-letter directly (retry_count stays below the budget).
+    store
+        .dead_letter_post_intent(id, "event exists but never projected")
+        .await
+        .expect("dead letter");
+
+    let retrying = store
+        .record_post_intent_failure(id, "late failure")
+        .await
+        .expect("record failure");
+    assert!(
+        !retrying,
+        "dead-lettered intent must not be resurrected by a late failure"
+    );
+    assert!(
+        store
+            .get_pending_post_intents()
+            .await
+            .expect("pending query")
+            .is_empty()
     );
 }

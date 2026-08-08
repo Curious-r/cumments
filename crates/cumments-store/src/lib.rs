@@ -421,6 +421,13 @@ impl IntentStore for DbStore {
                         sea_orm::sea_query::Expr::value(room_id),
                     )
                     .filter(intent_queue_update_comment::COLUMN.id.eq(id))
+                    // Never regress an already-completed intent (push may have
+                    // arrived before this write-back).
+                    .filter(
+                        intent_queue_update_comment::COLUMN
+                            .status
+                            .eq(IntentStatus::Pending),
+                    )
             },
         )
         .await
@@ -438,6 +445,13 @@ impl IntentStore for DbStore {
                         sea_orm::sea_query::Expr::value(room_id),
                     )
                     .filter(intent_queue_delete_comment::COLUMN.id.eq(id))
+                    // Never regress an already-completed intent (push may have
+                    // arrived before this write-back).
+                    .filter(
+                        intent_queue_delete_comment::COLUMN
+                            .status
+                            .eq(IntentStatus::Pending),
+                    )
             },
         )
         .await
@@ -450,6 +464,11 @@ impl IntentStore for DbStore {
         else {
             return Ok(false);
         };
+
+        // Completed or dead-lettered intents must not be resurrected.
+        if model.status == IntentStatus::Completed || model.status == IntentStatus::Failed {
+            return Ok(false);
+        }
 
         if model.retry_count >= MAX_RETRIES {
             intent_queue_post_comment::Entity::update_many()
@@ -507,6 +526,11 @@ impl IntentStore for DbStore {
             return Ok(false);
         };
 
+        // Completed or dead-lettered intents must not be resurrected.
+        if model.status == IntentStatus::Completed || model.status == IntentStatus::Failed {
+            return Ok(false);
+        }
+
         if model.retry_count >= MAX_RETRIES {
             intent_queue_delete_comment::Entity::update_many()
                 .col_expr(
@@ -562,6 +586,11 @@ impl IntentStore for DbStore {
         else {
             return Ok(false);
         };
+
+        // Completed or dead-lettered intents must not be resurrected.
+        if model.status == IntentStatus::Completed || model.status == IntentStatus::Failed {
+            return Ok(false);
+        }
 
         if model.retry_count >= MAX_RETRIES {
             intent_queue_update_comment::Entity::update_many()
