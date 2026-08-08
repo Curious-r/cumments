@@ -51,3 +51,44 @@ async fn save_comment_records_original_sender() {
         .expect("comment exists");
     assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4:hs");
 }
+
+#[tokio::test]
+async fn comments_with_equal_timestamps_sort_by_event_id() {
+    let store = DbStore::connect(&test_db_url("comment-order"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+    let ts = Utc::now();
+
+    for (event_id, content) in [("$b:hs", "second"), ("$a:hs", "first")] {
+        let comment = Comment {
+            event_id: event_id.to_string(),
+            site_id: site.as_str().to_string(),
+            post_slug: slug.as_str().to_string(),
+            author_nickname: Some("Alice".to_string()),
+            author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+            content: content.to_string(),
+            timestamp: ts,
+            author_mxid: String::new(),
+        };
+        store
+            .save_comment(
+                &comment,
+                "!room:hs",
+                "@_cumments_my-blog_a1b2c3d4:hs",
+                &site,
+                &slug,
+            )
+            .await
+            .expect("save comment");
+    }
+
+    let (comments, _) = store
+        .get_comments(&site, &slug, 10, 0)
+        .await
+        .expect("query comments");
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[0].event_id, "$a:hs");
+    assert_eq!(comments[1].event_id, "$b:hs");
+}

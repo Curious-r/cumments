@@ -786,7 +786,8 @@ impl CommentStore for DbStore {
         let query = comments::Entity::find()
             .filter(comments::COLUMN.site_id.eq(site_id_str))
             .filter(comments::COLUMN.post_slug.eq(post_slug_str))
-            .order_by_desc(comments::Column::Timestamp);
+            .order_by_desc(comments::Column::Timestamp)
+            .order_by_asc(comments::Column::EventId);
 
         let count = query.clone().count(&self.db).await?;
         if limit <= 0 {
