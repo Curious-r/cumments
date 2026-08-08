@@ -298,8 +298,9 @@ docker pull ghcr.io/curious-r/cumments:0.17.0
 docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
 ```
 
-`latest` follows the newest `v*` tag. `main` and pull requests build the image
-for validation but do not publish it.
+`latest` follows the newest `v*` tag. The image is also built for validation on
+`main` and pull requests when Docker-related files change, but is only pushed
+to GHCR from version tags.
 
 To use your own config file, mount it over the bundled one:
 

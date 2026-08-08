@@ -281,7 +281,8 @@ docker pull ghcr.io/curious-r/cumments:0.17.0
 docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
 ```
 
-`latest` 跟随最新的 `v*` tag；`main` 分支和 PR 只构建验证，不推送镜像。
+`latest` 跟随最新的 `v*` tag；`main` 分支和 PR 在 Docker 相关文件变更时也会
+构建验证，但只在 `v*` tag 时推送镜像到 GHCR。
 
 使用自己的配置文件时，可以直接覆盖镜像内置的配置：
 
