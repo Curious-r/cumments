@@ -187,7 +187,8 @@ owner_id = "@admin:your_server.tld"
 
 ```bash
 # 生成 AppService registration 文件
-cumments generate-registration --server-name your_server.tld
+# （首次 cargo run 会先编译 Cumments，之后复用构建缓存）
+cargo run -p cumments -- generate-registration --server-name your_server.tld
 ```
 
 把生成的 `registration.yaml` 放到 homeserver，将打印的 `as_token` /
@@ -197,6 +198,9 @@ cumments generate-registration --server-name your_server.tld
 mkdir -p data
 RUST_LOG=info cargo run -p cumments
 ```
+
+如果更喜欢独立二进制，先 `cargo build --release` 一次，之后用
+`target/release/cumments` 完成其余步骤。
 
 ### Docker
 
@@ -225,6 +229,9 @@ cumments generate-registration --server-name <domain> [--url <url>] [--quiet]
 cumments backfill
 cumments backup --output <file>
 ```
+
+以上示例假设 `cumments` 已安装或在 `PATH` 中；在源码目录里请给任何命令加上
+`cargo run -p cumments --` 前缀，例如 `cargo run -p cumments -- backfill`。
 
 ## API
 

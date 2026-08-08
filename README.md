@@ -200,7 +200,8 @@ access to a Matrix homeserver.
 
 ```bash
 # Generate an AppService registration file
-cumments generate-registration --server-name your_server.tld
+# (the first `cargo run` compiles Cumments; the binary is then cached)
+cargo run -p cumments -- generate-registration --server-name your_server.tld
 ```
 
 Place the generated `registration.yaml` on the homeserver, put the printed
@@ -210,6 +211,9 @@ Place the generated `registration.yaml` on the homeserver, put the printed
 mkdir -p data
 RUST_LOG=info cargo run -p cumments
 ```
+
+If you prefer a standalone binary, `cargo build --release` once and use
+`target/release/cumments` for the rest of the quick start.
 
 ### Docker
 
@@ -239,6 +243,10 @@ cumments generate-registration --server-name <domain> [--url <url>] [--quiet]
 cumments backfill
 cumments backup --output <file>
 ```
+
+These examples assume `cumments` is installed or on `PATH`. From the source
+tree, prefix any command with `cargo run -p cumments --`, e.g.
+`cargo run -p cumments -- backfill`.
 
 ## API
 
