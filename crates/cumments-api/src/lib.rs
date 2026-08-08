@@ -610,7 +610,12 @@ async fn sse_handler(
             };
 
             if matches && let Ok(json) = serde_json::to_string(&event) {
-                yield Ok(Event::default().data(json));
+                let event_name = match &event {
+                    ProjectorEvent::NewComment { .. } => "new_comment",
+                    ProjectorEvent::CommentUpdated { .. } => "comment_updated",
+                    ProjectorEvent::CommentDeleted { .. } => "comment_deleted",
+                };
+                yield Ok(Event::default().event(event_name).data(json));
             }
         }
     };
