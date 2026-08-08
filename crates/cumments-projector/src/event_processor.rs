@@ -213,36 +213,12 @@ impl EventProcessor {
                 return;
             }
             None => {
-                // Room is completely UNKNOWN to us.
-                // Attempt just-in-time registration if we have its identity.
-                if let Some(ref identity) = event.room_identity {
-                    if let (Ok(site_id), Ok(post_slug)) = (
-                        SiteId::new(identity.site_id.clone()),
-                        PostSlug::new(identity.post_slug.clone()),
-                    ) {
-                        let _ = self
-                            .registry_store
-                            .register_room(&event.room_id, &site_id, &post_slug)
-                            .await;
-                        // Note: we deliberately do NOT call `ensure_site_exists`
-                        // here – that would map the comment room ID as the site's
-                        // Matrix Space. Space mappings are established by the
-                        // space-child discovery flow / `SiteService::ensure_space`.
-                        info!(
-                            "Just-in-time registered new room {} for site {}",
-                            event.room_id, identity.site_id
-                        );
-                    } else {
-                        warn!(
-                            "Ignoring unknown room {}: invalid Cumments identity {}/{}",
-                            event.room_id, identity.site_id, identity.post_slug
-                        );
-                        return;
-                    }
-                } else {
-                    debug!("Ignoring message from unregistered room {}", event.room_id);
-                    return;
-                }
+                // Push events carry no room state, so an unknown room has no
+                // identity to register from; rooms are registered ahead of
+                // event processing by the reconciler, space-child discovery,
+                // or backfill.
+                debug!("Ignoring message from unregistered room {}", event.room_id);
+                return;
             }
         }
 
@@ -527,12 +503,13 @@ impl EventProcessor {
                 }
             }
         } else {
-            // Mark as inactive
-            let _ = self
-                .registry_store
-                .invalidate_room_registry(&event.child_room_id)
-                .await;
-            info!("Unregistered room {} from registry", event.child_room_id);
+            // Space membership is organizational only: a comment room's
+            // identity comes from its metadata + canonical alias, not from
+            // being linked into a Space, so unlinking does not deactivate it.
+            info!(
+                "Room {} unlinked from site space {}; registry unchanged",
+                event.child_room_id, event.space_room_id
+            );
         }
     }
 }
