@@ -80,6 +80,84 @@ fn metadata_matches(meta: &serde_json::Value, site_id: &str, post_slug: Option<&
     site_ok && slug_ok
 }
 
+/// Build the `m.room.message` content for a new Cumments comment.
+fn build_message_body(
+    content: &str,
+    nickname: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    visitor_id: &str,
+    intent_id: Option<i64>,
+) -> serde_json::Value {
+    let formatted_body = format!(
+        "<strong>{}</strong>: {}",
+        html_escape(nickname),
+        html_escape(content)
+    );
+    let mut message_body = serde_json::json!({
+        "msgtype": "m.text",
+        "body": format!("**{}**: {}", nickname, content),
+        "format": "org.matrix.custom.html",
+        "formatted_body": formatted_body,
+    });
+    message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "visitor_id": visitor_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        // Structured fields so the projector can store the pure content
+        // and nickname instead of parsing them back out of the body.
+        "content": content,
+        "nickname": nickname,
+        "intent_id": intent_id,
+    });
+    message_body
+}
+
+/// Build the `m.room.message` content for an edit (`m.replace`).
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
+fn build_edit_body(
+    event_id: &str,
+    new_content: &str,
+    nickname: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    visitor_id: &str,
+    intent_id: Option<i64>,
+) -> serde_json::Value {
+    let formatted_content = format!("**{}**: {}", nickname, new_content);
+    let mut new_content_obj = serde_json::json!({
+        "msgtype": "m.text",
+        "body": formatted_content,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<strong>{}</strong>: {}",
+            html_escape(nickname),
+            html_escape(new_content)
+        ),
+    });
+    new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "visitor_id": visitor_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        "content": new_content,
+        "nickname": nickname,
+        "intent_id": intent_id,
+    });
+    serde_json::json!({
+        "msgtype": "m.text",
+        "body": format!("* {}", formatted_content),
+        "m.new_content": new_content_obj,
+        "m.relates_to": {
+            "rel_type": "m.replace",
+            "event_id": event_id,
+        },
+    })
+}
+
 /// The AppService-based Matrix driver.
 ///
 /// This driver authenticates with the AppService `as_token` and can
@@ -628,28 +706,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.ensure_joined(room_id, &virtual_user).await?;
 
         // 3. Send the message as the virtual user
-        let formatted_body = format!(
-            "<strong>{}</strong>: {}",
-            html_escape(nickname),
-            html_escape(content)
+        let message_body = build_message_body(
+            content,
+            nickname,
+            author_public_key,
+            author_signature,
+            author_challenge,
+            &visitor_id,
+            intent_id,
         );
-        let mut message_body = serde_json::json!({
-            "msgtype": "m.text",
-            "body": format!("**{}**: {}", nickname, content),
-            "format": "org.matrix.custom.html",
-            "formatted_body": formatted_body,
-        });
-        message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
-            "visitor_id": visitor_id,
-            "public_key": author_public_key,
-            "signature": author_signature,
-            "challenge": author_challenge,
-            // Structured fields so the projector can store the pure content
-            // and nickname instead of parsing them back out of the body.
-            "content": content,
-            "nickname": nickname,
-            "intent_id": intent_id,
-        });
 
         let txn_id = self.txn_id(intent_id);
         let path = format!(
@@ -701,35 +766,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.ensure_joined(room_id, &virtual_user).await?;
 
         // 3. Send m.replace as the virtual user
-        let formatted_content = format!("**{}**: {}", nickname, new_content);
-        let mut new_content_obj = serde_json::json!({
-            "msgtype": "m.text",
-            "body": formatted_content,
-            "format": "org.matrix.custom.html",
-            "formatted_body": format!(
-                "<strong>{}</strong>: {}",
-                html_escape(nickname),
-                html_escape(new_content)
-            ),
-        });
-        new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
-            "visitor_id": visitor_id,
-            "public_key": author_public_key,
-            "signature": author_signature,
-            "challenge": author_challenge,
-            "content": new_content,
-            "nickname": nickname,
-            "intent_id": intent_id,
-        });
-        let message_body = serde_json::json!({
-            "msgtype": "m.text",
-            "body": format!(" * {}", formatted_content),
-            "m.new_content": new_content_obj,
-            "m.relates_to": {
-                "rel_type": "m.replace",
-                "event_id": event_id,
-            },
-        });
+        let message_body = build_edit_body(
+            event_id,
+            new_content,
+            nickname,
+            author_public_key,
+            author_signature,
+            author_challenge,
+            &visitor_id,
+            intent_id,
+        );
 
         let txn_id = self.txn_id(intent_id);
         let path = format!(
@@ -981,5 +1027,76 @@ mod tests {
             "&lt;b onclick=&quot;x&quot;&gt;a &amp; b&lt;/b&gt;"
         );
         assert_eq!(html_escape("plain text"), "plain text");
+    }
+
+    #[test]
+    fn message_body_uses_namespaced_content_block() {
+        let body = build_message_body(
+            "hello <b>",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+        );
+
+        assert_eq!(body["msgtype"].as_str(), Some("m.text"));
+        assert_eq!(body["body"].as_str(), Some("**Alice**: hello <b>"));
+        assert_eq!(body["format"].as_str(), Some("org.matrix.custom.html"));
+        assert_eq!(
+            body["formatted_body"].as_str(),
+            Some("<strong>Alice</strong>: hello &lt;b&gt;")
+        );
+
+        let ns = body.get(MESSAGE_CONTENT_KEY).expect("namespaced block");
+        assert_eq!(ns["visitor_id"].as_str(), Some("abcd"));
+        assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
+        assert_eq!(ns["signature"].as_str(), Some("sig"));
+        assert_eq!(ns["challenge"].as_str(), Some("chal"));
+        assert_eq!(ns["content"].as_str(), Some("hello <b>"));
+        assert_eq!(ns["nickname"].as_str(), Some("Alice"));
+        assert_eq!(ns["intent_id"].as_i64(), Some(7));
+
+        assert!(body.get("cumments_visitor_id").is_none());
+        assert!(body.get("cumments_intent_id").is_none());
+    }
+
+    #[test]
+    fn edit_body_uses_namespaced_block_in_new_content() {
+        let body = build_edit_body(
+            "$original:hs",
+            "edited <b>",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(42),
+        );
+
+        assert_eq!(body["msgtype"].as_str(), Some("m.text"));
+        assert_eq!(body["body"].as_str(), Some("* **Alice**: edited <b>"));
+        assert_eq!(body["m.relates_to"]["rel_type"].as_str(), Some("m.replace"));
+        assert_eq!(
+            body["m.relates_to"]["event_id"].as_str(),
+            Some("$original:hs")
+        );
+
+        let new_content = body.get("m.new_content").expect("new content");
+        assert_eq!(new_content["body"].as_str(), Some("**Alice**: edited <b>"));
+        let ns = new_content
+            .get(MESSAGE_CONTENT_KEY)
+            .expect("namespaced block");
+        assert_eq!(ns["visitor_id"].as_str(), Some("abcd"));
+        assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
+        assert_eq!(ns["signature"].as_str(), Some("sig"));
+        assert_eq!(ns["challenge"].as_str(), Some("chal"));
+        assert_eq!(ns["content"].as_str(), Some("edited <b>"));
+        assert_eq!(ns["nickname"].as_str(), Some("Alice"));
+        assert_eq!(ns["intent_id"].as_i64(), Some(42));
+
+        assert!(body.get(MESSAGE_CONTENT_KEY).is_none());
+        assert!(body.get("cumments_intent_id").is_none());
     }
 }
