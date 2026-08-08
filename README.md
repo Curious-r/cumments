@@ -196,6 +196,7 @@ cors_origins = "*"
 url = "sqlite://data/cumments.db"
 
 [security]
+# Replace with a random secret; this is a literal value, not a ${VAR} expansion.
 pow_secret = "pow_secret_key"
 pow_difficulty = 4
 
@@ -219,8 +220,8 @@ sender_localpart = "_cumments_bot"
 # Tokens must match registration.yaml; prefer environment variables:
 # CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=...
 # CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=...
-# as_token = ""
-# hs_token = ""
+# as_token = "<as_token from registration.yaml>"
+# hs_token = "<hs_token from registration.yaml>"
 # Optional: verify at startup that this config matches registration.yaml
 # registration_file = "registration.yaml"
 

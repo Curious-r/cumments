@@ -116,7 +116,7 @@ pub struct Moderation {
 }
 
 /// Fully validated AppService settings, ready to wire up the driver.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppServiceRuntime {
     pub id: String,
     pub homeserver_url: String,
@@ -130,6 +130,13 @@ pub struct AppServiceRuntime {
     pub appservice_url: String,
 }
 
+fn require_non_empty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
+    match value {
+        Some(v) if !v.trim().is_empty() => Ok(v),
+        _ => bail!("`{field}` must not be empty"),
+    }
+}
+
 impl Matrix {
     /// Validate all AppService-specific settings and return a ready-to-use bundle.
     pub fn appservice_runtime(&self) -> Result<AppServiceRuntime> {
@@ -141,39 +148,35 @@ impl Matrix {
             .homeserver
             .as_ref()
             .ok_or_else(|| anyhow!("`[matrix.homeserver]` is required in appservice mode"))?;
-        let homeserver_url = homeserver
-            .address
-            .as_ref()
-            .ok_or_else(|| anyhow!("`matrix.homeserver.address` is required in appservice mode"))?;
-        let server_name = homeserver
-            .domain
-            .as_ref()
-            .ok_or_else(|| anyhow!("`matrix.homeserver.domain` is required in appservice mode"))?;
+        let homeserver_url =
+            require_non_empty(homeserver.address.as_deref(), "matrix.homeserver.address")?;
+        let server_name =
+            require_non_empty(homeserver.domain.as_deref(), "matrix.homeserver.domain")?;
 
         let appservice = self
             .appservice
             .as_ref()
             .ok_or_else(|| anyhow!("`[matrix.appservice]` is required in appservice mode"))?;
-        let appservice_url = appservice
-            .url
-            .as_ref()
-            .ok_or_else(|| anyhow!("`matrix.appservice.url` is required in appservice mode"))?;
-        let as_token = appservice.as_token.as_ref().ok_or_else(|| {
-            anyhow!("`matrix.appservice.as_token` is required in appservice mode")
-        })?;
-        let hs_token = appservice.hs_token.as_ref().ok_or_else(|| {
-            anyhow!("`matrix.appservice.hs_token` is required in appservice mode")
-        })?;
+        let appservice_url = require_non_empty(appservice.url.as_deref(), "matrix.appservice.url")?;
+        let as_token =
+            require_non_empty(appservice.as_token.as_deref(), "matrix.appservice.as_token")?;
+        let hs_token =
+            require_non_empty(appservice.hs_token.as_deref(), "matrix.appservice.hs_token")?;
+        let owner_id = require_non_empty(
+            self.moderation.as_ref().and_then(|m| m.owner_id.as_deref()),
+            "matrix.moderation.owner_id",
+        )?;
+        let id = require_non_empty(Some(&appservice.id), "matrix.appservice.id")?;
+        let sender_localpart = require_non_empty(
+            Some(&appservice.sender_localpart),
+            "matrix.appservice.sender_localpart",
+        )?;
+        let listen_host = require_non_empty(
+            Some(&appservice.listen_host),
+            "matrix.appservice.listen_host",
+        )?;
 
-        let owner_id = self
-            .moderation
-            .as_ref()
-            .and_then(|m| m.owner_id.as_ref())
-            .ok_or_else(|| {
-                anyhow!("`matrix.moderation.owner_id` is required in appservice mode")
-            })?;
-
-        if !appservice.sender_localpart.starts_with("_cumments_") {
+        if !sender_localpart.starts_with("_cumments_") {
             bail!(
                 "`matrix.appservice.sender_localpart` must start with `_cumments_` \
                  so the sender user falls inside the users namespace"
@@ -184,27 +187,27 @@ impl Matrix {
             validate_registration_file(
                 path,
                 &RegistrationCheck {
-                    id: &appservice.id,
+                    id,
                     url: appservice_url,
                     as_token,
                     hs_token,
-                    sender_localpart: &appservice.sender_localpart,
+                    sender_localpart,
                     server_name,
                 },
             )?;
         }
 
         Ok(AppServiceRuntime {
-            id: appservice.id.clone(),
-            homeserver_url: homeserver_url.clone(),
-            server_name: server_name.clone(),
-            as_token: as_token.clone(),
-            hs_token: hs_token.clone(),
-            sender_localpart: appservice.sender_localpart.clone(),
-            owner_id: owner_id.clone(),
-            listen_host: appservice.listen_host.clone(),
+            id: id.to_string(),
+            homeserver_url: homeserver_url.to_string(),
+            server_name: server_name.to_string(),
+            as_token: as_token.to_string(),
+            hs_token: hs_token.to_string(),
+            sender_localpart: sender_localpart.to_string(),
+            owner_id: owner_id.to_string(),
+            listen_host: listen_host.to_string(),
             listen_port: appservice.listen_port,
-            appservice_url: appservice_url.clone(),
+            appservice_url: appservice_url.to_string(),
         })
     }
 }
@@ -594,5 +597,65 @@ namespaces:
         let paths = default_config_paths();
         assert!(paths.contains(&PathBuf::from("/etc/cumments/config.toml")));
         assert!(paths.contains(&PathBuf::from("config.toml")));
+    }
+
+    #[test]
+    fn appservice_runtime_rejects_empty_values() {
+        let mut settings = parse(
+            r#"
+[server]
+host = "0.0.0.0"
+port = 7931
+cors_origins = "*"
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "appservice"
+
+[matrix.homeserver]
+address = "https://matrix.example.com"
+domain = "example.com"
+
+[matrix.appservice]
+id = "cumments"
+url = "https://cumments.example.com"
+listen_host = "0.0.0.0"
+listen_port = 3001
+sender_localpart = "_cumments_bot"
+as_token = "as"
+hs_token = "hs"
+
+[matrix.moderation]
+owner_id = "@admin:example.com"
+"#,
+        )
+        .expect("parse settings");
+
+        settings.matrix.appservice.as_mut().unwrap().url = Some(String::new());
+        let err = settings.matrix.appservice_runtime().expect_err("empty url");
+        assert!(err.to_string().contains("matrix.appservice.url"));
+
+        settings.matrix.appservice.as_mut().unwrap().url =
+            Some("https://cumments.example.com".to_string());
+        settings.matrix.appservice.as_mut().unwrap().as_token = Some(String::new());
+        let err = settings
+            .matrix
+            .appservice_runtime()
+            .expect_err("empty as_token");
+        assert!(err.to_string().contains("matrix.appservice.as_token"));
+
+        settings.matrix.appservice.as_mut().unwrap().as_token = Some("as".to_string());
+        settings.matrix.moderation.as_mut().unwrap().owner_id = Some(String::new());
+        let err = settings
+            .matrix
+            .appservice_runtime()
+            .expect_err("empty owner_id");
+        assert!(err.to_string().contains("matrix.moderation.owner_id"));
     }
 }

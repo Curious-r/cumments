@@ -183,6 +183,7 @@ cors_origins = "*"
 url = "sqlite://data/cumments.db"
 
 [security]
+# 请替换为随机 secret；这是字面量，config 不会做 ${VAR} 替换。
 pow_secret = "pow_secret_key"
 pow_difficulty = 4
 
@@ -206,8 +207,8 @@ sender_localpart = "_cumments_bot"
 # token 必须与 registration.yaml 一致；生产环境建议用环境变量：
 # CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=...
 # CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=...
-# as_token = ""
-# hs_token = ""
+# as_token = "<as_token from registration.yaml>"
+# hs_token = "<hs_token from registration.yaml>"
 # 可选：启动时校验本配置与 registration.yaml 是否一致
 # registration_file = "registration.yaml"
 
