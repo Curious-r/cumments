@@ -7,6 +7,16 @@
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+        <script type="module">
+            import {
+                generateMnemonic,
+                mnemonicToSeedSync,
+                validateMnemonic,
+            } from "https://cdn.jsdelivr.net/npm/@metamask/scure-bip39@2.1.1/+esm";
+            import { wordlist } from "https://cdn.jsdelivr.net/npm/@metamask/scure-bip39@2.1.1/dist/wordlists/english/+esm";
+            window.bip39 = { generateMnemonic, mnemonicToSeedSync, validateMnemonic };
+            window.bip39Wordlist = wordlist;
+        </script>
         <style>
             .markdown-body p {
                 margin-bottom: 0.5rem;
@@ -344,15 +354,67 @@
                                 复制
                             </button>
                         </div>
+
+                        <div class="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                                onclick="showMnemonic()"
+                                class="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition"
+                            >
+                                显示助记词
+                            </button>
+                            <button
+                                onclick="exportPrivateKey()"
+                                class="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition"
+                            >
+                                导出私钥
+                            </button>
+                            <button
+                                onclick="toggleMnemonicRestore()"
+                                class="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition"
+                            >
+                                助记词恢复
+                            </button>
+                            <button
+                                onclick="document.getElementById('privateKeyFile').click()"
+                                class="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition"
+                            >
+                                导入私钥
+                            </button>
+                        </div>
+
+                        <div id="mnemonicRestoreBox" class="hidden mt-3">
+                            <textarea
+                                id="mnemonicInput"
+                                rows="3"
+                                placeholder="输入 12 个英文助记词（空格分隔）…"
+                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-mono resize-y focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                            ></textarea>
+                            <button
+                                onclick="restoreFromMnemonic()"
+                                class="mt-2 w-full text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg px-3 py-2 hover:bg-indigo-100 transition"
+                            >
+                                恢复此身份
+                            </button>
+                        </div>
+
+                        <input
+                            id="privateKeyFile"
+                            type="file"
+                            accept=".json,application/json"
+                            class="hidden"
+                            onchange="importPrivateKeyFile(event)"
+                        />
+
                         <button
                             onclick="resetIdentity()"
-                            class="mt-2 text-xs text-red-500 hover:text-red-700 font-medium"
+                            class="mt-3 text-xs text-red-500 hover:text-red-700 font-medium"
                         >
                             重置身份
                         </button>
                         <p class="mt-1 text-[11px] text-slate-400 leading-relaxed">
-                            私钥只保存在本浏览器；重置后旧公钥发布的评论将不再显示
-                            编辑/删除入口。
+                            身份 = Ed25519 公钥。私钥只保存在本浏览器；助记词不落盘、
+                            仅在创建当次会话可查看。长期备份请抄写助记词或导出私钥；
+                            恢复/导入/重置后，旧公钥发布的评论将不再显示编辑/删除入口。
                         </p>
                     </div>
                 </div>
@@ -374,6 +436,53 @@
             </div>
         </div>
 
+        <!-- 助记词弹窗 -->
+        <div
+            id="mnemonicModal"
+            class="hidden fixed inset-0 z-[70] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+            <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl p-6">
+                <h2 id="mnemonicModalTitle" class="text-lg font-bold text-slate-900">
+                    备份你的身份助记词
+                </h2>
+                <p
+                    id="mnemonicModalDesc"
+                    class="mt-1 text-xs text-slate-500 leading-relaxed"
+                >
+                    这是新身份唯一的恢复凭证，只显示这一次，不会保存在本浏览器或服务器。
+                    请用纸笔抄写并妥善保管；丢失后只能用导出的私钥 JSON 恢复。
+                </p>
+                <div
+                    id="mnemonicWords"
+                    class="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 border border-slate-200 p-3 font-mono text-sm"
+                ></div>
+                <div class="mt-4 flex gap-2">
+                    <button
+                        onclick="copyMnemonic()"
+                        class="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 transition"
+                    >
+                        复制助记词
+                    </button>
+                    <button
+                        id="mnemonicModalPrimary"
+                        onclick="acknowledgeMnemonicBackup()"
+                        class="flex-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-3 py-2.5 font-semibold transition"
+                    >
+                        我已备份，继续
+                    </button>
+                </div>
+                <div class="mt-3 text-center">
+                    <button
+                        id="mnemonicModalAlt"
+                        onclick="discardMnemonicBackup()"
+                        class="text-[11px] text-slate-400 hover:text-slate-600 underline underline-offset-2"
+                    >
+                        不想用助记词？改用随机私钥身份
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Toast -->
         <div
             id="toasts"
@@ -387,6 +496,7 @@
 
             const SETTINGS_KEY = "cumments_demo_settings";
             const IDENTITY_KEY = "cumments_identity";
+            const MNEMONIC_SESSION_KEY = "cumments_mnemonic_session";
             const DEFAULT_SETTINGS = {
                 api: "http://localhost:7931",
                 siteId: "my-blog",
@@ -407,6 +517,8 @@
             };
 
             let identity = null;
+            let mnemonicModalMode = "backup";
+            let currentMnemonic = null;
 
             // ==========================================
             // 初始化
@@ -515,13 +627,13 @@
                         const parsed = JSON.parse(stored);
                         if (parsed.publicKey && parsed.privateKey) return parsed;
                     } catch {
-                        // fall through to regeneration
+                        // fall through to createIdentity
                     }
                 }
-                return regenerateIdentity();
+                return createIdentity();
             }
 
-            async function regenerateIdentity() {
+            async function generateRandomIdentity() {
                 const keyPair = await crypto.subtle.generateKey(
                     { name: "Ed25519" },
                     true,
@@ -533,14 +645,371 @@
                 const privRaw = new Uint8Array(
                     await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
                 );
-                const next = {
+                return {
                     publicKey: base64url(pubRaw),
                     privateKey: base64url(privRaw),
                 };
+            }
+
+            function saveIdentity(next) {
                 localStorage.setItem(IDENTITY_KEY, JSON.stringify(next));
                 identity = next;
                 renderIdentity();
                 return next;
+            }
+
+            function bip39Ready() {
+                return !!(window.bip39 && window.bip39Wordlist);
+            }
+
+            async function hmacSha512(keyBytes, dataBytes) {
+                const key = await crypto.subtle.importKey(
+                    "raw",
+                    keyBytes,
+                    { name: "HMAC", hash: "SHA-512" },
+                    false,
+                    ["sign"],
+                );
+                return new Uint8Array(
+                    await crypto.subtle.sign("HMAC", key, dataBytes),
+                );
+            }
+
+            function ser32(index) {
+                const bytes = new Uint8Array(4);
+                new DataView(bytes.buffer).setUint32(0, index >>> 0);
+                return bytes;
+            }
+
+            async function slip10Master(seed) {
+                const i = await hmacSha512(
+                    new TextEncoder().encode("ed25519 seed"),
+                    seed,
+                );
+                return { key: i.slice(0, 32), chainCode: i.slice(32) };
+            }
+
+            async function slip10Child(node, index) {
+                const data = new Uint8Array(1 + 32 + 4);
+                data[0] = 0;
+                data.set(node.key, 1);
+                data.set(ser32(index), 33);
+                const i = await hmacSha512(node.chainCode, data);
+                return { key: i.slice(0, 32), chainCode: i.slice(32) };
+            }
+
+            async function mnemonicToIdentity(mnemonic) {
+                const normalized = mnemonic
+                    .trim()
+                    .toLowerCase()
+                    .split(/\s+/)
+                    .join(" ");
+                if (!bip39Ready()) {
+                    throw new Error("助记词库未加载，请检查网络后重试");
+                }
+                if (
+                    !window.bip39.validateMnemonic(
+                        normalized,
+                        window.bip39Wordlist,
+                    )
+                ) {
+                    throw new Error("助记词无效，请检查拼写");
+                }
+                const seed = window.bip39.mnemonicToSeedSync(normalized);
+                let node = await slip10Master(seed);
+                // SLIP-0010 m/44'/1328'/0'：Cumments 演示使用的固定派生路径
+                // （后端只认最终公钥，不感知派生方式；改路径会让旧助记词失效）
+                for (const index of [
+                    0x80000000 + 44,
+                    0x80000000 + 1328,
+                    0x80000000,
+                ]) {
+                    node = await slip10Child(node, index);
+                }
+                // 48 字节 PKCS#8 DER：固定前缀 + 32 字节 Ed25519 种子
+                const der = new Uint8Array(48);
+                der.set(
+                    [
+                        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03,
+                        0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+                    ],
+                    0,
+                );
+                der.set(node.key, 16);
+                const privateKey = await crypto.subtle.importKey(
+                    "pkcs8",
+                    der,
+                    { name: "Ed25519" },
+                    true,
+                    ["sign"],
+                );
+                const jwk = await crypto.subtle.exportKey("jwk", privateKey);
+                return { publicKey: jwk.x, privateKey: base64url(der) };
+            }
+
+            async function createIdentity() {
+                if (bip39Ready()) {
+                    const mnemonic = window.bip39.generateMnemonic(
+                        window.bip39Wordlist,
+                    );
+                    try {
+                        sessionStorage.setItem(MNEMONIC_SESSION_KEY, mnemonic);
+                    } catch {
+                        // 隐私模式等场景下 sessionStorage 可能不可用，不影响创建
+                    }
+                    const next = await mnemonicToIdentity(mnemonic);
+                    identity = next;
+                    renderIdentity();
+                    showMnemonicModal(mnemonic, "backup");
+                    return next;
+                }
+                const next = await generateRandomIdentity();
+                saveIdentity(next);
+                toast(
+                    "助记词库未能加载，已生成随机身份；可稍后重置身份以启用助记词恢复",
+                    "error",
+                );
+                return next;
+            }
+
+            function showMnemonicModal(mnemonic, mode) {
+                mnemonicModalMode = mode;
+                currentMnemonic = mnemonic;
+                const box = document.getElementById("mnemonicWords");
+                box.innerHTML = "";
+                mnemonic.split(" ").forEach((word, i) => {
+                    const el = document.createElement("div");
+                    el.className =
+                        "rounded-lg bg-white border border-slate-200 px-2 py-1.5 text-center";
+                    el.textContent = `${i + 1}. ${word}`;
+                    box.appendChild(el);
+                });
+                document.getElementById("mnemonicModalTitle").textContent =
+                    mode === "backup"
+                        ? "备份你的身份助记词"
+                        : "身份助记词（本次会话）";
+                document.getElementById("mnemonicModalDesc").textContent =
+                    mode === "backup"
+                        ? "这是新身份唯一的恢复凭证，只显示这一次，不会保存在本浏览器或服务器。请用纸笔抄写并妥善保管；丢失后只能用导出的私钥 JSON 恢复。"
+                        : "助记词仅在创建当次会话中可再查看，关闭标签页后即消失。长期备份请抄写，或使用导出私钥。";
+                document.getElementById("mnemonicModalPrimary").textContent =
+                    mode === "backup" ? "我已备份，继续" : "关闭";
+                document.getElementById("mnemonicModalAlt").classList.toggle(
+                    "hidden",
+                    mode !== "backup",
+                );
+                document.getElementById("mnemonicModal").classList.remove(
+                    "hidden",
+                );
+            }
+
+            function closeMnemonicModal() {
+                document.getElementById("mnemonicModal").classList.add("hidden");
+                currentMnemonic = null;
+            }
+
+            async function acknowledgeMnemonicBackup() {
+                if (mnemonicModalMode !== "backup") {
+                    closeMnemonicModal();
+                    return;
+                }
+                if (identity) {
+                    try {
+                        localStorage.setItem(
+                            IDENTITY_KEY,
+                            JSON.stringify(identity),
+                        );
+                    } catch {
+                        toast(
+                            "身份保存失败，请检查浏览器存储权限；可先复制助记词",
+                            "error",
+                        );
+                        return;
+                    }
+                }
+                closeMnemonicModal();
+                toast("身份已创建，助记词请妥善保管", "success");
+            }
+
+            async function discardMnemonicBackup() {
+                closeMnemonicModal();
+                try {
+                    sessionStorage.removeItem(MNEMONIC_SESSION_KEY);
+                } catch {
+                    // ignore
+                }
+                const next = await generateRandomIdentity();
+                saveIdentity(next);
+                toast("已改用随机私钥身份，仍可在设置中导出私钥备份", "info");
+            }
+
+            async function copyMnemonic() {
+                if (!currentMnemonic) return;
+                try {
+                    await navigator.clipboard.writeText(currentMnemonic);
+                    toast("助记词已复制");
+                } catch {
+                    toast("复制失败，请手动抄写", "error");
+                }
+            }
+
+            function showMnemonic() {
+                let mnemonic = null;
+                try {
+                    mnemonic = sessionStorage.getItem(MNEMONIC_SESSION_KEY);
+                } catch {
+                    // ignore
+                }
+                if (!mnemonic) {
+                    toast(
+                        "助记词仅在创建当次会话可查看；未备份请用导出私钥保存身份",
+                        "info",
+                    );
+                    return;
+                }
+                showMnemonicModal(mnemonic, "view");
+            }
+
+            function toggleMnemonicRestore() {
+                const box = document.getElementById("mnemonicRestoreBox");
+                box.classList.toggle("hidden");
+                if (!box.classList.contains("hidden")) {
+                    document.getElementById("mnemonicInput").focus();
+                }
+            }
+
+            async function restoreFromMnemonic() {
+                const input = document
+                    .getElementById("mnemonicInput")
+                    .value.trim();
+                if (!input) {
+                    toast("请输入助记词", "error");
+                    return;
+                }
+                let next;
+                try {
+                    next = await mnemonicToIdentity(input);
+                } catch (e) {
+                    toast(e.message || "助记词无效", "error");
+                    return;
+                }
+                const normalized = input
+                    .toLowerCase()
+                    .split(/\s+/)
+                    .join(" ");
+                if (identity && identity.publicKey === next.publicKey) {
+                    try {
+                        sessionStorage.setItem(
+                            MNEMONIC_SESSION_KEY,
+                            normalized,
+                        );
+                    } catch {
+                        // ignore
+                    }
+                    toast("助记词与当前身份一致，无需恢复", "success");
+                    return;
+                }
+                if (
+                    !confirm(
+                        "恢复后将切换为该助记词对应的身份，当前身份发布的评论将失去编辑/删除入口。确定继续？",
+                    )
+                ) {
+                    return;
+                }
+                try {
+                    sessionStorage.setItem(MNEMONIC_SESSION_KEY, normalized);
+                } catch {
+                    // ignore
+                }
+                saveIdentity(next);
+                document.getElementById("mnemonicRestoreBox").classList.add(
+                    "hidden",
+                );
+                document.getElementById("mnemonicInput").value = "";
+                toast("身份已从助记词恢复", "success");
+                await loadList();
+            }
+
+            function exportPrivateKey() {
+                if (!identity) {
+                    toast("身份尚未就绪", "error");
+                    return;
+                }
+                const payload = {
+                    version: 1,
+                    publicKey: identity.publicKey,
+                    privateKey: identity.privateKey,
+                };
+                const blob = new Blob([JSON.stringify(payload, null, 2)], {
+                    type: "application/json",
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `cumments-identity-${identity.publicKey.slice(0, 8)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                toast("私钥已导出为 JSON 文件", "success");
+            }
+
+            async function importPrivateKeyFile(event) {
+                const file = event.target.files && event.target.files[0];
+                event.target.value = "";
+                if (!file) return;
+                try {
+                    const parsed = JSON.parse(await file.text());
+                    if (
+                        !parsed ||
+                        parsed.version !== 1 ||
+                        !parsed.publicKey ||
+                        !parsed.privateKey
+                    ) {
+                        throw new Error(
+                            "文件格式不正确（需要 version/publicKey/privateKey）",
+                        );
+                    }
+                    const privateKey = await crypto.subtle.importKey(
+                        "pkcs8",
+                        base64urlToBytes(parsed.privateKey),
+                        { name: "Ed25519" },
+                        true,
+                        ["sign"],
+                    );
+                    const jwk = await crypto.subtle.exportKey(
+                        "jwk",
+                        privateKey,
+                    );
+                    if (jwk.x !== parsed.publicKey) {
+                        throw new Error("私钥与公钥不匹配，已拒绝导入");
+                    }
+                    if (
+                        identity &&
+                        identity.publicKey === parsed.publicKey
+                    ) {
+                        toast("导入的是当前身份", "success");
+                        return;
+                    }
+                    if (
+                        !confirm(
+                            "导入后将切换为该私钥对应的身份，当前身份发布的评论将失去编辑/删除入口。确定继续？",
+                        )
+                    ) {
+                        return;
+                    }
+                    saveIdentity({
+                        publicKey: parsed.publicKey,
+                        privateKey: parsed.privateKey,
+                    });
+                    try {
+                        sessionStorage.removeItem(MNEMONIC_SESSION_KEY);
+                    } catch {
+                        // ignore
+                    }
+                    toast("私钥已导入", "success");
+                    await loadList();
+                } catch (e) {
+                    toast(e.message || "导入失败", "error");
+                }
             }
 
             async function resetIdentity() {
@@ -551,8 +1020,7 @@
                 ) {
                     return;
                 }
-                await regenerateIdentity();
-                toast("身份已重置");
+                await createIdentity();
                 await loadList();
             }
 
