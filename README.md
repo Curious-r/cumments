@@ -263,6 +263,9 @@ Server-Sent Events for real-time updates.
 
 ## 7. Frontend Integration Guide
 
+`misc/frontend/index.html` is a standalone test page implementing the flows
+below. It defaults to `http://localhost:7931`.
+
 ### 1. Identity (Ed25519 keypair)
 The frontend generates an Ed25519 keypair with WebCrypto and stores it locally.
 The **public key is the identity**: it is sent as `author_public_key`, returned
@@ -413,6 +416,9 @@ docker run -p 7931:7931 -v $(pwd)/data:/app/data cumments
 - 不合法时返回 `400 VALIDATION_ERROR`
 
 ## 7. 前端集成建议
+
+`misc/frontend/index.html` 是可直接打开的测试页，已实现以下流程，
+默认 API 地址为 `http://localhost:7931`。
 
 ### 1. PoW 计算逻辑
 1. 调用 `/api/challenge` 获取挑战字符串 `prefix`。
