@@ -362,7 +362,8 @@ object; `comment_deleted` contains the deleted `event_id`.
 
 `misc/frontend/index.html` is a standalone demo styled as a real comment
 section: posting, editing/deleting your own comments, pagination, SSE, and a
-“My comments” management view. It defaults to `http://localhost:7931`.
+“My comments” management view, plus identity backup/restore. It defaults to
+`http://localhost:7931`.
 
 ### Identity
 
@@ -371,6 +372,19 @@ browser. The **public key is the identity**: send it as `author_public_key`,
 and sign the canonical request message with the private key. Edit/delete are
 authorized by comparing the presented public key to the one stored with the
 comment and verifying the signature.
+
+Identity recovery is mnemonic-first: a fresh identity is derived from a BIP39
+12-word English mnemonic via SLIP-0010 at the fixed path `m/44'/1328'/0'`. The
+mnemonic is never persisted — it is shown once at creation (and again within
+the same session from the settings drawer), so you must write it down. The
+derived private key stays in `localStorage`, which also means clearing browser
+data loses the private key even if the mnemonic was backed up.
+
+As an advanced option, the settings drawer can export the identity as a JSON
+file (`{version, publicKey, privateKey}`) and import it back; imports are
+rejected when the private key does not match the stated public key. If the
+BIP39 CDN is unreachable, the demo falls back to a random Ed25519 identity and
+reminds you that mnemonic recovery is unavailable.
 
 ### Proof of Work
 
