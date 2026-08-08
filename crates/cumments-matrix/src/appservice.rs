@@ -383,7 +383,8 @@ impl AppServiceMatrixDriver {
     }
 
     /// Set Cumments metadata on a room (state event
-    /// `host.curious.cumments.metadata`).
+    /// `host.curious.cumments.metadata`). Returns an error when the
+    /// homeserver rejected the write.
     async fn set_room_metadata(
         &self,
         room_id: &str,
@@ -409,10 +410,12 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            warn!(
+            return Err(anyhow!(
                 "Setting metadata for room {} failed ({}): {}",
-                room_id, status, body
-            );
+                room_id,
+                status,
+                body
+            ));
         }
         Ok(())
     }
@@ -439,6 +442,35 @@ impl AppServiceMatrixDriver {
             let body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Failed to query room metadata ({}): {}",
+                status,
+                body
+            ))
+        }
+    }
+
+    /// Whether the room was created as a Matrix Space (`m.room.create` with
+    /// `type: "m.space"`).
+    async fn room_is_space(&self, room_id: &str) -> Result<bool> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.create",
+            urlencode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to query room create state: {}", e))?;
+
+        if resp.status().is_success() {
+            let content: serde_json::Value = resp.json().await?;
+            Ok(content.get("type").and_then(|v| v.as_str()) == Some("m.space"))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(false)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Failed to query room create state ({}): {}",
                 status,
                 body
             ))
@@ -671,6 +703,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let alias = site_space_alias(&self.server_name, site_id_str);
             match self.resolve_room_by_alias(&alias).await? {
                 Some(room_id) => {
+                    if !self.room_is_space(&room_id).await? {
+                        warn!(
+                            "Refusing to adopt room {} as site space: not created as m.space",
+                            room_id
+                        );
+                        return Err(anyhow!(
+                            "Alias {} resolved to a non-space room; not adopting",
+                            alias
+                        ));
+                    }
                     if self.room_metadata_matches(&room_id, site_id, None).await? {
                         info!(
                             "Recovered existing site space {} via alias {}",
@@ -681,7 +723,12 @@ impl MatrixDriver for AppServiceMatrixDriver {
                             "Adopting room {} under alias {} with repaired metadata",
                             room_id, alias
                         );
-                        let _ = self.set_room_metadata(&room_id, site_id, None).await;
+                        if let Err(e) = self.set_room_metadata(&room_id, site_id, None).await {
+                            warn!(
+                                "Failed to repair space metadata for room {}: {:#}",
+                                room_id, e
+                            );
+                        }
                     }
                     self.ensure_owner_admin(&room_id).await;
                     Ok(room_id)
@@ -732,9 +779,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
                         "Adopting room {} under alias {} with repaired metadata",
                         room_id, alias
                     );
-                    let _ = self
+                    if let Err(e) = self
                         .set_room_metadata(&room_id, site_id, Some(post_slug))
-                        .await;
+                        .await
+                    {
+                        warn!(
+                            "Failed to repair comment room metadata for {}: {:#}",
+                            room_id, e
+                        );
+                    }
                 }
                 self.ensure_owner_admin(&room_id).await;
                 target_room_id = Some(room_id);
@@ -806,9 +859,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
                             "Recovered comment room {} after createRoom failure via alias {}",
                             room_id, alias
                         );
-                        let _ = self
+                        if let Err(e) = self
                             .set_room_metadata(&room_id, site_id, Some(post_slug))
-                            .await;
+                            .await
+                        {
+                            warn!(
+                                "Failed to repair comment room metadata for {}: {:#}",
+                                room_id, e
+                            );
+                        }
                         self.link_room_to_space(space_id, &room_id).await;
                         self.ensure_owner_admin(&room_id).await;
                         Ok(room_id)
@@ -1091,6 +1150,37 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
     async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         self.get_room_metadata(room_id).await
+    }
+
+    #[instrument(skip(self))]
+    async fn room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.canonical_alias",
+            urlencode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to query canonical alias: {}", e))?;
+
+        if resp.status().is_success() {
+            let content: serde_json::Value = resp.json().await?;
+            Ok(content
+                .get("alias")
+                .and_then(|v| v.as_str())
+                .map(String::from))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(None)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Failed to query canonical alias ({}): {}",
+                status,
+                body
+            ))
+        }
     }
 
     #[instrument(skip(self))]

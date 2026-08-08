@@ -15,9 +15,10 @@ use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{BackfillCursorStore, MatrixDriver, RegistryStore, SiteStore};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::event_processor::EventProcessor;
+use crate::event_processor::parse_room_identity;
 use crate::push_receiver::{PushEvent, process_single_event};
 
 const PAGE_SIZE: u32 = 100;
@@ -72,9 +73,18 @@ impl Backfiller {
                 }
             };
             let Some(meta) = meta else {
+                // No metadata: legacy rooms (created before the metadata state
+                // event existed) can still be identified from their canonical
+                // alias, which lives in our exclusive `#_cumments_*` namespace.
+                if self.register_legacy_room_by_alias(&room_id).await? {
+                    rooms.push(room_id.clone());
+                }
                 continue;
             };
             let Some(site_id) = meta.get("site_id").and_then(|v| v.as_str()) else {
+                if self.register_legacy_room_by_alias(&room_id).await? {
+                    rooms.push(room_id.clone());
+                }
                 continue;
             };
 
@@ -139,6 +149,63 @@ impl Backfiller {
             }
         }
         Ok(summary)
+    }
+
+    /// Try to identify a metadata-less room from its canonical alias and
+    /// register it as a comment room. Returns `true` when the room was
+    /// registered. Read-only with respect to Matrix.
+    async fn register_legacy_room_by_alias(&self, room_id: &str) -> anyhow::Result<bool> {
+        let alias = match self.driver.room_canonical_alias(room_id).await {
+            Ok(alias) => alias,
+            Err(e) => {
+                warn!(
+                    "Backfill: failed to read canonical alias for {}: {:?}; skipping",
+                    room_id, e
+                );
+                return Ok(false);
+            }
+        };
+        let Some(alias) = alias else {
+            debug!(
+                "Backfill: skipping room {} without metadata or canonical alias",
+                room_id
+            );
+            return Ok(false);
+        };
+
+        let Some(identity) = parse_room_identity(None, Some(&alias)) else {
+            debug!(
+                "Backfill: skipping room {} with non-Cumments alias {}",
+                room_id, alias
+            );
+            return Ok(false);
+        };
+        let Ok(site_id) = SiteId::new(identity.site_id) else {
+            warn!(
+                "Backfill: skipping room {} with invalid site id from alias {}",
+                room_id, alias
+            );
+            return Ok(false);
+        };
+        let Ok(post_slug) = PostSlug::new(identity.post_slug) else {
+            warn!(
+                "Backfill: skipping room {} with invalid post slug from alias {}",
+                room_id, alias
+            );
+            return Ok(false);
+        };
+
+        self.registry_store
+            .register_room(room_id, &site_id, &post_slug)
+            .await?;
+        info!(
+            "Backfill: discovered legacy comment room {} for {}/{} via alias {}",
+            room_id,
+            site_id.as_str(),
+            post_slug.as_str(),
+            alias
+        );
+        Ok(true)
     }
 
     /// Fetch a room's full history (or continue from the stored cursor),

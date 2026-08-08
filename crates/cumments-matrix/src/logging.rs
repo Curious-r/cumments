@@ -124,6 +124,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(None)
     }
 
+    async fn room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
+        info!(
+            "LOGGING: Canonical alias for {} (no real homeserver)",
+            room_id
+        );
+        Ok(None)
+    }
+
     async fn ensure_owner_admin(&self, room_id: &str) {
         info!("LOGGING: Ensure owner admin for room {} (no-op)", room_id);
     }

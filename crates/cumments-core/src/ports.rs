@@ -240,6 +240,9 @@ pub trait MatrixDriver: Send + Sync {
     /// Read a room's `host.curious.cumments.metadata` state event, if any.
     async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
 
+    /// Read a room's canonical alias (`m.room.canonical_alias`), if any.
+    async fn room_canonical_alias(&self, room_id: &str) -> Result<Option<String>>;
+
     /// Checks whether an event exists on the homeserver. Used to decide if a
     /// timed-out `waiting_for_sync` intent can be safely resent.
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
