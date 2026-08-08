@@ -486,8 +486,9 @@ CI runs the same commands on GitHub Actions.
 
 ## Known Limitations
 
-- Reply trees use Matrix rich replies (`m.in_reply_to`); the demo UI limits
-  nesting to 8 levels. Email is deliberately not collected.
+- Reply trees use Matrix rich replies (`m.in_reply_to`) with no depth limit;
+  the demo UI only collapses rendering past 8 levels. Email is deliberately
+  not collected.
 - Rate limiting, multi-instance/Postgres support, and operational monitoring
   are not implemented yet.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse

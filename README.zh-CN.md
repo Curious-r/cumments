@@ -457,8 +457,8 @@ GitHub Actions 会执行同样的命令。
 
 ## 已知限制
 
-- 回复树使用 Matrix rich replies（`m.in_reply_to`），验证页限制嵌套深度为
-  8 层。项目有意不收集邮箱。
+- 回复树使用 Matrix rich replies（`m.in_reply_to`），不设深度限制；验证页
+  仅在渲染时折叠超过 8 层的子树。项目有意不收集邮箱。
 - 速率限制、多实例/Postgres、运维监控尚未实现。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 
