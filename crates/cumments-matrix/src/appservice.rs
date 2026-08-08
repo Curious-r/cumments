@@ -116,6 +116,26 @@ fn power_levels_with_owner(
     Some(updated)
 }
 
+/// Whether `sender_user_id` can send state events in a room, according to its
+/// `m.room.power_levels` content: the sender's explicit `users` entry (or
+/// `users_default`) against the event-specific requirement for our metadata
+/// event type (or `state_default`).
+fn has_state_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
+    let user_power = power_levels
+        .get("users")
+        .and_then(|u| u.get(sender_user_id))
+        .and_then(|v| v.as_i64())
+        .or_else(|| power_levels.get("users_default").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+    let required = power_levels
+        .get("events")
+        .and_then(|e| e.get(METADATA_EVENT_TYPE))
+        .and_then(|v| v.as_i64())
+        .or_else(|| power_levels.get("state_default").and_then(|v| v.as_i64()))
+        .unwrap_or(50);
+    user_power >= required
+}
+
 /// Build the `m.room.message` content for a new Cumments comment.
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 fn build_message_body(
@@ -525,6 +545,44 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Whether the AS sender can write state events in the room. Reading the
+    /// power levels doubles as a membership check: non-members get an error.
+    async fn sender_can_write_state(&self, room_id: &str) -> Result<bool> {
+        Ok(match self.get_power_levels(room_id).await? {
+            Some(power_levels) => has_state_power(&power_levels, &self.sender_user_id()),
+            // No power-levels event: Matrix defaults apply and leave the
+            // sender below the state-writing threshold, so treat as unable.
+            None => false,
+        })
+    }
+
+    /// Admission guard before adopting a room found via our exclusive alias
+    /// namespace.
+    ///
+    /// The trust anchor is the homeserver-enforced exclusive `#_cumments_*`
+    /// namespace: a room under one of our canonical aliases should be one we
+    /// created. As a belt-and-suspenders check (e.g. if the registration
+    /// namespace is misconfigured, or the room was created by an old run with
+    /// a different sender), refuse to take over a room the AS sender cannot
+    /// actually govern: it must be a member and able to write state events.
+    /// A room we cannot govern would let a third party steer comments into an
+    /// uncontrolled room, so we fail loudly instead of silently adopting it.
+    async fn ensure_room_adoptable(&self, room_id: &str) -> Result<()> {
+        match self.sender_can_write_state(room_id).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(anyhow!(
+                "Refusing to adopt room {}: AS sender cannot write state \
+                 (not a member or insufficient power)",
+                room_id
+            )),
+            Err(e) => Err(anyhow!(
+                "Cannot verify governance of room {} before adoption: {:#}",
+                room_id,
+                e
+            )),
+        }
+    }
+
     /// Resolve a room ID from its alias via the homeserver directory.
     async fn resolve_room_by_alias(&self, alias: &str) -> Result<Option<String>> {
         let path = format!("_matrix/client/v3/directory/room/{}", urlencode(alias));
@@ -719,6 +777,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                             room_id, alias
                         );
                     } else {
+                        self.ensure_room_adoptable(&room_id).await?;
                         warn!(
                             "Adopting room {} under alias {} with repaired metadata",
                             room_id, alias
@@ -775,6 +834,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 } else {
                     // The alias namespace is exclusive to us, so this is a room
                     // we created before metadata was written; repair it.
+                    self.ensure_room_adoptable(&room_id).await?;
                     warn!(
                         "Adopting room {} under alias {} with repaired metadata",
                         room_id, alias
@@ -855,18 +915,29 @@ impl MatrixDriver for AppServiceMatrixDriver {
                     comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
                 return match self.resolve_room_by_alias(&alias).await? {
                     Some(room_id) => {
-                        info!(
-                            "Recovered comment room {} after createRoom failure via alias {}",
-                            room_id, alias
-                        );
-                        if let Err(e) = self
-                            .set_room_metadata(&room_id, site_id, Some(post_slug))
-                            .await
+                        if self
+                            .room_metadata_matches(&room_id, site_id, Some(post_slug))
+                            .await?
                         {
-                            warn!(
-                                "Failed to repair comment room metadata for {}: {:#}",
-                                room_id, e
+                            info!(
+                                "Recovered comment room {} after createRoom failure via alias {}",
+                                room_id, alias
                             );
+                        } else {
+                            self.ensure_room_adoptable(&room_id).await?;
+                            warn!(
+                                "Adopting room {} after createRoom failure via alias {} with repaired metadata",
+                                room_id, alias
+                            );
+                            if let Err(e) = self
+                                .set_room_metadata(&room_id, site_id, Some(post_slug))
+                                .await
+                            {
+                                warn!(
+                                    "Failed to repair comment room metadata for {}: {:#}",
+                                    room_id, e
+                                );
+                            }
                         }
                         self.link_room_to_space(space_id, &room_id).await;
                         self.ensure_owner_admin(&room_id).await;
@@ -1308,6 +1379,45 @@ mod tests {
             .expect("users map should be created");
         assert_eq!(updated["users"]["@owner:example.com"], 100);
         assert_eq!(updated["ban"], 50);
+    }
+
+    #[test]
+    fn state_power_explicit_admin_can_write_state() {
+        let pl = json!({
+            "users": { "@_cumments_bot:example.com": 100 },
+            "state_default": 50
+        });
+        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_default_member_cannot_write_state() {
+        let pl = json!({ "state_default": 50 });
+        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_users_default_can_write_state() {
+        let pl = json!({ "users_default": 50, "state_default": 50 });
+        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_event_specific_override_is_respected() {
+        let pl = json!({
+            "users": { "@_cumments_bot:example.com": 50 },
+            "state_default": 50,
+            "events": { METADATA_EVENT_TYPE: 100 }
+        });
+        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_missing_fields_fall_back_to_defaults() {
+        let pl = json!({ "users": { "@_cumments_bot:example.com": 49 } });
+        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
+        let pl = json!({ "users": { "@_cumments_bot:example.com": 50 } });
+        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
     }
 
     #[test]
