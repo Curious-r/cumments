@@ -12,7 +12,7 @@ use cumments_core::{
     events::ProjectorEvent,
     identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
-    models::{Comment, PostSlug, SiteId},
+    models::{AuthorType, Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
 };
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,7 @@ pub enum AppError {
     NotFound(String),
     MethodNotAllowed,
     Unauthorized(String),
+    NotManageable(String),
     BadRequest(String),
     Internal(String),
 }
@@ -68,6 +69,7 @@ impl IntoResponse for AppError {
             ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "NOT_FOUND", None),
             AppError::Unauthorized(msg) => (StatusCode::FORBIDDEN, msg, "UNAUTHORIZED", None),
+            AppError::NotManageable(msg) => (StatusCode::FORBIDDEN, msg, "NOT_MANAGEABLE", None),
             AppError::MethodNotAllowed => (
                 StatusCode::METHOD_NOT_ALLOWED,
                 "Method not allowed. Use QUERY for queries, POST for submissions.".to_string(),
@@ -446,6 +448,12 @@ async fn delete_comment_handler(
             if comment.site_id != site_id || comment.post_slug != post_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
+            if comment.author.kind == AuthorType::Matrix {
+                return Err(AppError::NotManageable(
+                    "This comment was posted by a Matrix user; manage it from a Matrix client."
+                        .to_string(),
+                ));
+            }
             match state.store.get_comment_author_public_key(&comment_id).await {
                 Ok(Some(expected)) if expected == req.author_public_key => {}
                 Ok(Some(_)) => {
@@ -544,6 +552,12 @@ async fn update_comment_handler(
         Ok(Some(comment)) => {
             if comment.site_id != site_id || comment.post_slug != post_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
+            }
+            if comment.author.kind == AuthorType::Matrix {
+                return Err(AppError::NotManageable(
+                    "This comment was posted by a Matrix user; manage it from a Matrix client."
+                        .to_string(),
+                ));
             }
             match state.store.get_comment_author_public_key(&comment_id).await {
                 Ok(Some(expected)) if expected == req.author_public_key => {}
@@ -644,6 +658,7 @@ async fn sse_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cumments_core::models::CommentAuthor;
     use validator::Validate;
 
     #[test]
@@ -673,5 +688,37 @@ mod tests {
         assert!(cors_layer("  , , ").is_none());
         assert!(cors_layer("*").is_some());
         assert!(cors_layer("https://blog.example.com").is_some());
+    }
+
+    #[test]
+    fn not_manageable_error_is_forbidden_with_dedicated_code() {
+        let response = AppError::NotManageable("matrix-owned".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn comment_serializes_nested_author_and_hides_internal_fields() {
+        let comment = Comment {
+            event_id: "$e:hs".to_string(),
+            site_id: "my-blog".to_string(),
+            post_slug: "hello".to_string(),
+            author: CommentAuthor {
+                kind: AuthorType::Guest,
+                nickname: Some("Alice".to_string()),
+                public_key: Some("pk".to_string()),
+                mxid: None,
+            },
+            content: "hi".to_string(),
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            room_id: "!room:hs".to_string(),
+            author_mxid: "@_cumments_my-blog_abcd:hs".to_string(),
+        };
+
+        let json = serde_json::to_value(&comment).expect("serialize comment");
+        assert_eq!(json["author"]["type"], "guest");
+        assert_eq!(json["author"]["public_key"], "pk");
+        assert!(json.get("author_mxid").is_none());
+        assert!(json.get("room_id").is_none());
     }
 }

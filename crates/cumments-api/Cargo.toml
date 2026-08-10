@@ -11,6 +11,7 @@ anyhow.workspace = true
 async-stream.workspace = true
 axum.workspace = true
 base64.workspace = true
+chrono.workspace = true
 hex.workspace = true
 hmac.workspace = true
 rand.workspace = true
