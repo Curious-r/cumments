@@ -1140,9 +1140,25 @@
             function isOwn(comment) {
                 return (
                     !!identity &&
-                    !!comment.author_public_key &&
-                    comment.author_public_key === identity.publicKey
+                    comment.author &&
+                    comment.author.type === "guest" &&
+                    comment.author.public_key === identity.publicKey
                 );
+            }
+
+            function authorName(comment) {
+                const author = comment.author || {};
+                if (author.type === "matrix") {
+                    return author.mxid
+                        ? author.mxid.replace(/^@/, "").split(":")[0]
+                        : "Matrix 用户";
+                }
+                return author.nickname || "访客";
+            }
+
+            function authorAvatarKey(comment) {
+                const author = comment.author || {};
+                return author.public_key || author.mxid || comment.event_id;
             }
 
             // ==========================================
@@ -1358,12 +1374,12 @@
                 el.className =
                     "bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:shadow-md transition group";
 
-                const avatarStyle = commentAvatarStyle(
-                    comment.author_public_key || comment.event_id,
-                );
-                const initials = (comment.author_nickname || "访客")[0].toUpperCase();
+                const avatarStyle = commentAvatarStyle(authorAvatarKey(comment));
+                const initials = authorName(comment)[0].toUpperCase();
                 const time = formatTime(comment.timestamp);
-                const badge = comment.author_public_key
+                const isGuest =
+                    comment.author && comment.author.type === "guest";
+                const badge = isGuest
                     ? `<span class="text-[10px] font-medium text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">Cumments 访客</span>`
                     : `<span class="text-[10px] font-medium text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">Matrix</span>`;
 
@@ -1377,7 +1393,7 @@
                             <div class="min-w-0">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span class="font-semibold text-slate-900 text-sm truncate">
-                                        ${escapeHtml(comment.author_nickname || "访客")}
+                                        ${escapeHtml(authorName(comment))}
                                     </span>
                                     ${badge}
                                 </div>
@@ -1526,7 +1542,7 @@
                 const name = document.getElementById("replyTargetName");
                 if (state.replyingTo) {
                     name.textContent =
-                        state.replyingTo.author_nickname || "访客";
+                        authorName(state.replyingTo);
                     banner.classList.remove("hidden");
                 } else {
                     banner.classList.add("hidden");
@@ -1706,7 +1722,7 @@
                     const payload = JSON.parse(event.data).payload;
                     const comment = payload.comment;
                     toast(
-                        `新评论：${comment.author_nickname || "访客"}`,
+                        `新评论：${authorName(comment)}`,
                         "success",
                     );
                     loadList();
@@ -1715,7 +1731,7 @@
                 sse.addEventListener("comment_updated", (event) => {
                     const payload = JSON.parse(event.data).payload;
                     toast(
-                        `评论已更新：${payload.comment.author_nickname || "访客"}`,
+                        `评论已更新：${authorName(payload.comment)}`,
                         "success",
                     );
                     loadList();
