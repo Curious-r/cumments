@@ -98,9 +98,7 @@ pub struct Comment {
     pub event_id: String,
     pub site_id: String,
     pub post_slug: String,
-    pub author_nickname: Option<String>,
-    /// Public Ed25519 key of the author (base64url); safe to expose.
-    pub author_public_key: Option<String>,
+    pub author: CommentAuthor,
     pub content: String,
     pub timestamp: DateTime<Utc>,
     /// Matrix event ID of the parent comment, when this comment is a reply.
@@ -113,6 +111,54 @@ pub struct Comment {
     /// edits (m.replace) and never exposed through the API/SSE.
     #[serde(skip)]
     pub author_mxid: String,
+}
+
+/// Which identity model a comment belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthorType {
+    /// Posted through the Cumments API by an AS virtual user; ownership is
+    /// the Ed25519 public key embedded in the event.
+    Guest,
+    /// Posted directly in Matrix by a regular account; ownership is governed
+    /// by Matrix (sender identity and room power levels).
+    Matrix,
+}
+
+impl AuthorType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthorType::Guest => "guest",
+            AuthorType::Matrix => "matrix",
+        }
+    }
+
+    /// Parse a stored `comments.author_type` value, falling back to the
+    /// legacy signal (presence of a public key) for rows written before the
+    /// column existed.
+    pub fn from_db(value: &str, has_public_key: bool) -> Self {
+        match value {
+            "guest" => AuthorType::Guest,
+            "matrix" => AuthorType::Matrix,
+            _ if has_public_key => AuthorType::Guest,
+            _ => AuthorType::Matrix,
+        }
+    }
+}
+
+/// Author identity exposed through the API.
+///
+/// - Guest comments carry `public_key`; `mxid` is intentionally not exposed
+///   because the virtual user ID is an implementation detail derived from the
+///   key and site.
+/// - Matrix-native comments carry `mxid`; `public_key` is always `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentAuthor {
+    #[serde(rename = "type")]
+    pub kind: AuthorType,
+    pub nickname: Option<String>,
+    pub public_key: Option<String>,
+    pub mxid: Option<String>,
 }
 
 /// Represents a website that uses Cumments.
@@ -153,5 +199,15 @@ mod tests {
         assert!(PostSlug::new("hello_world".to_string()).is_err());
         assert!(SiteId::new("My-Blog".to_string()).is_err());
         assert!(PostSlug::new("Hello-World".to_string()).is_err());
+    }
+
+    #[test]
+    fn author_type_parses_db_values_with_legacy_fallback() {
+        assert_eq!(AuthorType::from_db("guest", false), AuthorType::Guest);
+        assert_eq!(AuthorType::from_db("matrix", true), AuthorType::Matrix);
+        // Legacy rows written before the column existed: a stored public key
+        // means guest, anything else is a Matrix-native comment.
+        assert_eq!(AuthorType::from_db("", true), AuthorType::Guest);
+        assert_eq!(AuthorType::from_db("", false), AuthorType::Matrix);
     }
 }

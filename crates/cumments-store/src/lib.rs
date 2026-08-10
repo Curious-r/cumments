@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::identity::derive_visitor_id_from_public_key;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
-use cumments_core::models::{Comment, PostSlug, Site, SiteId};
+use cumments_core::models::{AuthorType, Comment, CommentAuthor, PostSlug, Site, SiteId};
 use cumments_core::ports::{
     BackfillCursorStore, CommentStore, IntentStore, RegistryStore, SiteStore, VirtualUserStore,
 };
@@ -862,14 +862,9 @@ impl CommentStore for DbStore {
             site_id: Set(comment.site_id.clone()),
             post_slug: Set(comment.post_slug.clone()),
             author_mxid: Set(sender.to_owned()),
-            author_type: Set(if comment.author_public_key.is_some() {
-                "guest"
-            } else {
-                "matrix"
-            }
-            .to_string()),
-            author_nickname: Set(comment.author_nickname.clone()),
-            author_public_key: Set(comment.author_public_key.clone()),
+            author_type: Set(comment.author.kind.as_str().to_string()),
+            author_nickname: Set(comment.author.nickname.clone()),
+            author_public_key: Set(comment.author.public_key.clone()),
             content: Set(comment.content.clone()),
             timestamp: Set(comment.timestamp),
             reply_to: Set(comment.reply_to.clone()),
@@ -1096,8 +1091,16 @@ impl From<comments::Model> for Comment {
             event_id: model.event_id,
             site_id: model.site_id,
             post_slug: model.post_slug,
-            author_nickname: model.author_nickname,
-            author_public_key: model.author_public_key,
+            author: CommentAuthor {
+                kind: AuthorType::from_db(&model.author_type, model.author_public_key.is_some()),
+                nickname: model.author_nickname,
+                public_key: model.author_public_key,
+                mxid: if model.author_type == "matrix" {
+                    Some(model.author_mxid.clone())
+                } else {
+                    None
+                },
+            },
             content: model.content,
             timestamp: model.timestamp,
             reply_to: model.reply_to,

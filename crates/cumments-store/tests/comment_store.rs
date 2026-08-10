@@ -1,5 +1,5 @@
 use chrono::Utc;
-use cumments_core::models::{Comment, PostSlug, SiteId};
+use cumments_core::models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId};
 use cumments_core::ports::CommentStore;
 use cumments_store::DbStore;
 
@@ -26,8 +26,12 @@ async fn save_comment_records_original_sender() {
         event_id: "$event:hs".to_string(),
         site_id: site.as_str().to_string(),
         post_slug: slug.as_str().to_string(),
-        author_nickname: Some("Alice".to_string()),
-        author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+        author: CommentAuthor {
+            kind: AuthorType::Guest,
+            nickname: Some("Alice".to_string()),
+            public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+            mxid: None,
+        },
         content: "hello".to_string(),
         timestamp: Utc::now(),
         reply_to: Some("$parent:hs".to_string()),
@@ -53,6 +57,11 @@ async fn save_comment_records_original_sender() {
         .expect("comment exists");
     assert_eq!(stored.room_id, "!room:hs");
     assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
+    assert_eq!(stored.author.kind, AuthorType::Guest);
+    assert_eq!(
+        stored.author.public_key.as_deref(),
+        Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc")
+    );
     assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
 }
 
@@ -68,8 +77,12 @@ async fn update_comment_preserves_reply_to() {
         event_id: "$event:hs".to_string(),
         site_id: site.as_str().to_string(),
         post_slug: slug.as_str().to_string(),
-        author_nickname: Some("Alice".to_string()),
-        author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+        author: CommentAuthor {
+            kind: AuthorType::Guest,
+            nickname: Some("Alice".to_string()),
+            public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+            mxid: None,
+        },
         content: "original".to_string(),
         timestamp: Utc::now(),
         reply_to: Some("$parent:hs".to_string()),
@@ -118,8 +131,12 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             event_id: event_id.to_string(),
             site_id: site.as_str().to_string(),
             post_slug: slug.as_str().to_string(),
-            author_nickname: Some("Alice".to_string()),
-            author_public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+            author: CommentAuthor {
+                kind: AuthorType::Guest,
+                nickname: Some("Alice".to_string()),
+                public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+                mxid: None,
+            },
             content: content.to_string(),
             timestamp: ts,
             reply_to: None,
@@ -145,4 +162,45 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].event_id, "$a:hs");
     assert_eq!(comments[1].event_id, "$b:hs");
+}
+
+#[tokio::test]
+async fn matrix_native_comment_roundtrip() {
+    let store = DbStore::connect(&test_db_url("comment-matrix"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+
+    let comment = Comment {
+        event_id: "$matrix:hs".to_string(),
+        site_id: site.as_str().to_string(),
+        post_slug: slug.as_str().to_string(),
+        author: CommentAuthor {
+            kind: AuthorType::Matrix,
+            nickname: None,
+            public_key: None,
+            mxid: Some("@alice:hs".to_string()),
+        },
+        content: "from matrix".to_string(),
+        timestamp: Utc::now(),
+        reply_to: None,
+        room_id: "!room:hs".to_string(),
+        author_mxid: "@alice:hs".to_string(),
+    };
+
+    store
+        .save_comment(&comment, "!room:hs", "@alice:hs", &site, &slug)
+        .await
+        .expect("save comment");
+
+    let stored = store
+        .get_comment("$matrix:hs")
+        .await
+        .expect("get comment")
+        .expect("comment exists");
+    assert_eq!(stored.author.kind, AuthorType::Matrix);
+    assert!(stored.author.public_key.is_none());
+    assert_eq!(stored.author.mxid.as_deref(), Some("@alice:hs"));
+    assert_eq!(stored.author_mxid, "@alice:hs");
 }

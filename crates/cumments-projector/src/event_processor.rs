@@ -8,7 +8,7 @@
 
 use cumments_core::{
     events::ProjectorEvent,
-    models::{Comment, PostSlug, SiteId},
+    models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
 };
 use serde::Deserialize;
@@ -348,12 +348,25 @@ impl EventProcessor {
         }
 
         // Handle Original Posts
+        let is_matrix_native = event.author_public_key.is_none();
         let comment = Comment {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),
             post_slug: post_slug.clone(),
-            author_nickname: event.author_display_name.clone(),
-            author_public_key: event.author_public_key.clone(),
+            author: CommentAuthor {
+                kind: if is_matrix_native {
+                    AuthorType::Matrix
+                } else {
+                    AuthorType::Guest
+                },
+                nickname: event.author_display_name.clone(),
+                public_key: event.author_public_key.clone(),
+                mxid: if is_matrix_native {
+                    Some(event.sender.clone())
+                } else {
+                    None
+                },
+            },
             content: event.content.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
