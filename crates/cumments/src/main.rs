@@ -102,6 +102,11 @@ async fn main() -> Result<()> {
         db_store.clone(), // CommentStore
         db_store.clone(), // IntentStore
         event_bus.clone(),
+        settings
+            .matrix
+            .homeserver
+            .as_ref()
+            .and_then(|h| h.domain.clone()),
     ));
     tracing::info!("EventProcessor initialized.");
 

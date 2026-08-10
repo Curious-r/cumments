@@ -154,20 +154,6 @@ pub(crate) async fn process_single_event(
 
 // ── Push event helpers ────────────────────────────────────────────
 
-/// Extract the display name from a Cumments message body.
-///
-/// The AppServiceMatrixDriver formats the body as:
-///   `**nickname**: comment content`
-///
-/// In push mode we don't have access to the room member list, so we
-/// parse the nickname back out of the body.
-fn extract_author_display_name(body: &str) -> Option<String> {
-    body.strip_prefix("**")
-        .and_then(|s| s.split_once("**: "))
-        .map(|(nick, _)| nick.to_string())
-        .filter(|n| !n.is_empty())
-}
-
 /// Structured Cumments content takes precedence. Otherwise, for
 /// Cumments-generated (legacy) messages, strip the `**nickname**: ` prefix
 /// from the body; external Matrix messages are treated as plain content.
@@ -212,6 +198,18 @@ fn content_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
         .and_then(|v| v.as_i64())
 }
 
+/// Whether a Matrix sender is one of our exclusive AS virtual users.
+///
+/// The AppService registration reserves the `@_cumments_.*` user namespace,
+/// so a localpart starting with `_cumments_` can only belong to Cumments.
+fn is_virtual_user_sender(sender: &str) -> bool {
+    sender
+        .strip_prefix('@')
+        .and_then(|s| s.split_once(':'))
+        .map(|(localpart, _)| localpart.starts_with("_cumments_"))
+        .unwrap_or(false)
+}
+
 // ── Push event parsers ────────────────────────────────────────────
 
 /// Parse a push message event into a `ParsedRoomMessage`.
@@ -224,14 +222,25 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     // Extract message body
     let body = content.get("body").and_then(|v| v.as_str())?;
 
-    // Extract the public identity fields. The visitor id's presence marks this
-    // as a Cumments-generated message for legacy body parsing.
-    let visitor_id =
-        content_string(content, "visitor_id").or_else(|| content_string(content, "public_key"));
+    let is_virtual_sender = is_virtual_user_sender(sender);
+
+    // Structured Cumments fields are only trusted for our virtual users.
+    // Matrix-native senders may copy a block into their event; it must be
+    // ignored so it cannot be used to impersonate a guest identity.
     let author_public_key = content_string(content, "public_key").map(|s| s.to_string());
     let author_signature = content_string(content, "signature").map(|s| s.to_string());
+    let author_challenge = content_string(content, "challenge").map(|s| s.to_string());
     let structured_content = content_string(content, "content");
     let structured_nickname = content_string(content, "nickname");
+    let visitor_id =
+        content_string(content, "visitor_id").or_else(|| content_string(content, "public_key"));
+
+    let trusted_block = is_virtual_sender
+        && author_public_key.is_some()
+        && author_signature.is_some()
+        && author_challenge.is_some()
+        && structured_content.is_some()
+        && structured_nickname.is_some();
 
     // Extract the standard rich-reply relation, if any.
     let reply_to = content
@@ -259,8 +268,12 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             let nc_is_cumments = nc_namespace.is_some();
             Some(extract_message_content(
                 nc_body,
-                nc_is_cumments,
-                nc_structured,
+                is_virtual_sender && nc_is_cumments,
+                if is_virtual_sender {
+                    nc_structured
+                } else {
+                    None
+                },
             ))
         })?;
         Some(ParsedRelation {
@@ -279,13 +292,41 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
         sender: sender.clone(),
-        content: extract_message_content(body, visitor_id.is_some(), structured_content),
-        author_display_name: structured_nickname
-            .map(|s| s.to_string())
-            .or_else(|| extract_author_display_name(body)),
-        author_public_key,
-        author_signature,
-        intent_id: content_i64(content, "intent_id"),
+        content: extract_message_content(
+            body,
+            is_virtual_sender && visitor_id.is_some(),
+            if is_virtual_sender {
+                structured_content
+            } else {
+                None
+            },
+        ),
+        author_display_name: if is_virtual_sender {
+            structured_nickname.map(|s| s.to_string())
+        } else {
+            None
+        },
+        author_public_key: if trusted_block {
+            author_public_key
+        } else {
+            None
+        },
+        author_signature: if trusted_block {
+            author_signature
+        } else {
+            None
+        },
+        author_challenge: if trusted_block {
+            author_challenge
+        } else {
+            None
+        },
+        is_virtual_sender,
+        intent_id: if trusted_block {
+            content_i64(content, "intent_id")
+        } else {
+            None
+        },
         reply_to,
         origin_server_ts,
         relates_to,
@@ -384,15 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn author_display_name_from_structured_or_legacy_body() {
-        assert_eq!(
-            extract_author_display_name("**Alice**: hi"),
-            Some("Alice".into())
-        );
-        assert_eq!(extract_author_display_name("plain body"), None);
-    }
-
-    #[test]
     fn edit_event_carries_intent_id_for_precise_closed_loop() {
         let event = PushEvent {
             event_type: "m.room.message".to_string(),
@@ -409,6 +441,7 @@ mod tests {
                         "visitor_id": "abcd",
                         "public_key": "pubkey",
                         "signature": "sig",
+                        "challenge": "chal",
                         "content": "edited",
                         "nickname": "Alice",
                         "intent_id": 42,
@@ -458,6 +491,7 @@ mod tests {
                     "visitor_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
+                    "challenge": "chal",
                     "content": "hello",
                     "nickname": "Alice",
                     "intent_id": 7,
@@ -497,6 +531,7 @@ mod tests {
                     "visitor_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
+                    "challenge": "chal",
                     "content": "hello",
                     "nickname": "Alice",
                     "intent_id": 7,
@@ -509,5 +544,66 @@ mod tests {
         let parsed = parse_push_message(&event).expect("parse reply");
         assert_eq!(parsed.reply_to.as_deref(), Some("$parent:hs"));
         assert!(parsed.relates_to.is_none());
+    }
+
+    #[test]
+    fn matrix_native_message_ignores_cumments_block() {
+        let event = PushEvent {
+            event_type: "m.room.message".to_string(),
+            event_id: Some("$native:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@alice:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "plain body",
+                "host.curious.cumments": {
+                    "visitor_id": "abcd",
+                    "public_key": "fake-pubkey",
+                    "signature": "fake-signature",
+                    "challenge": "fake-challenge",
+                    "content": "spoofed content",
+                    "nickname": "Spoofed",
+                    "intent_id": 42,
+                }
+            })),
+            redacts: None,
+            unsigned: None,
+        };
+
+        let parsed = parse_push_message(&event).expect("parse native message");
+        assert!(!parsed.is_virtual_sender);
+        assert_eq!(parsed.content, "plain body");
+        assert!(parsed.author_public_key.is_none());
+        assert!(parsed.author_signature.is_none());
+        assert!(parsed.author_challenge.is_none());
+        assert!(parsed.author_display_name.is_none());
+        assert!(parsed.intent_id.is_none());
+    }
+
+    #[test]
+    fn virtual_user_message_without_full_block_is_untrusted() {
+        let event = PushEvent {
+            event_type: "m.room.message".to_string(),
+            event_id: Some("$guest:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "legacy body",
+            })),
+            redacts: None,
+            unsigned: None,
+        };
+
+        let parsed = parse_push_message(&event).expect("parse guest message");
+        assert!(parsed.is_virtual_sender);
+        assert!(parsed.author_public_key.is_none());
+        assert!(parsed.author_signature.is_none());
+        assert!(parsed.author_challenge.is_none());
+        assert!(parsed.intent_id.is_none());
     }
 }

@@ -8,6 +8,10 @@
 
 use cumments_core::{
     events::ProjectorEvent,
+    identity::{
+        derive_visitor_id_from_public_key, post_signature_message, signature_message,
+        verify_signature,
+    },
     models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
 };
@@ -40,6 +44,10 @@ pub struct ParsedRoomMessage {
     pub author_public_key: Option<String>,
     /// The author's Ed25519 signature embedded in the event, if any.
     pub author_signature: Option<String>,
+    /// The PoW challenge prefix embedded in the event, if any.
+    pub author_challenge: Option<String>,
+    /// Whether the sender is one of our exclusive AS virtual users.
+    pub is_virtual_sender: bool,
     /// Correlation hint: the intent queue row ID that produced this event,
     /// if the message was sent by Cumments.
     pub intent_id: Option<i64>,
@@ -139,6 +147,33 @@ pub fn parse_room_identity(
     }
 }
 
+/// Verify a guest event's identity claims.
+///
+/// The sender must be exactly the virtual user derived from the embedded
+/// public key for this site, and the Ed25519 signature must cover the
+/// canonical Cumments message. Matrix-native senders never pass through this
+/// path; `server_name` is required in AppService mode.
+fn verify_guest_event(
+    server_name: Option<&str>,
+    sender: &str,
+    site_id: &str,
+    public_key: &str,
+    signature: &str,
+    message: &str,
+) -> bool {
+    let Some(visitor_id) = derive_visitor_id_from_public_key(public_key) else {
+        return false;
+    };
+    let Some(server_name) = server_name else {
+        return false;
+    };
+    let expected_sender = format!("@_cumments_{}_{}:{}", site_id, visitor_id, server_name);
+    if sender != expected_sender {
+        return false;
+    }
+    verify_signature(public_key, message, signature)
+}
+
 // ── Core processing functions ─────────────────────────────────────
 
 /// The central processor – holds only abstract store references.
@@ -148,6 +183,7 @@ pub struct EventProcessor {
     comment_store: Arc<dyn CommentStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
+    server_name: Option<String>,
 }
 
 impl EventProcessor {
@@ -157,6 +193,7 @@ impl EventProcessor {
         comment_store: Arc<dyn CommentStore>,
         intent_store: Arc<dyn IntentStore>,
         event_bus: broadcast::Sender<ProjectorEvent>,
+        server_name: Option<String>,
     ) -> Self {
         Self {
             site_store,
@@ -164,6 +201,7 @@ impl EventProcessor {
             comment_store,
             intent_store,
             event_bus,
+            server_name,
         }
     }
 
@@ -272,6 +310,44 @@ impl EventProcessor {
                 }
             }
 
+            // Guest edits must carry a valid Cumments identity block and
+            // signature; Matrix-native edits are governed by the sender check
+            // above.
+            if event.is_virtual_sender {
+                let valid = match (
+                    &event.author_public_key,
+                    &event.author_signature,
+                    &event.author_challenge,
+                ) {
+                    (Some(pk), Some(sig), Some(chal)) => {
+                        let message = signature_message(&[
+                            "PATCH",
+                            &site_id,
+                            &post_slug,
+                            &relation.target_event_id,
+                            &relation.new_content,
+                            chal,
+                        ]);
+                        verify_guest_event(
+                            self.server_name.as_deref(),
+                            &event.sender,
+                            &site_id,
+                            pk,
+                            sig,
+                            &message,
+                        )
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    warn!(
+                        "Rejecting guest edit for {} from {}: missing or invalid Cumments identity block",
+                        relation.target_event_id, event.sender
+                    );
+                    return;
+                }
+            }
+
             // Closed-loop: complete the exact update intent that produced this
             // event. The correlation ID lets concurrent edits to the same
             // comment close independently; legacy events without it fall back
@@ -328,6 +404,45 @@ impl EventProcessor {
             return;
         }
 
+        // Guest posts must carry a valid Cumments identity block and
+        // signature. Matrix-native posts skip this path entirely: their
+        // identity is the Matrix sender itself.
+        if event.is_virtual_sender {
+            let valid = match (
+                &event.author_public_key,
+                &event.author_signature,
+                &event.author_challenge,
+                &event.author_display_name,
+            ) {
+                (Some(pk), Some(sig), Some(chal), Some(nick)) => {
+                    let message = post_signature_message(
+                        &site_id,
+                        &post_slug,
+                        &event.content,
+                        nick,
+                        event.reply_to.as_deref(),
+                        chal,
+                    );
+                    verify_guest_event(
+                        self.server_name.as_deref(),
+                        &event.sender,
+                        &site_id,
+                        pk,
+                        sig,
+                        &message,
+                    )
+                }
+                _ => false,
+            };
+            if !valid {
+                warn!(
+                    "Rejecting guest post {} from {}: missing or invalid Cumments identity block",
+                    event.event_id, event.sender
+                );
+                return;
+            }
+        }
+
         // Closed-loop: mark the originating post intent as completed. Prefer
         // the correlation ID when present – the push may arrive before the
         // reconciler's write-back, so the event_id is not yet stored on the
@@ -348,7 +463,7 @@ impl EventProcessor {
         }
 
         // Handle Original Posts
-        let is_matrix_native = event.author_public_key.is_none();
+        let is_matrix_native = !event.is_virtual_sender;
         let comment = Comment {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),
@@ -559,6 +674,67 @@ mod tests {
                 site_id,
                 post_slug
             }) if site_id == "meta-site" && post_slug == "meta-post"
+        ));
+    }
+
+    #[test]
+    fn guest_event_verification_accepts_only_expected_virtual_sender() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use cumments_core::identity::post_signature_message;
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
+        let sender = format!("@_cumments_my-blog_{}:example.com", visitor_id);
+        let challenge = "challenge";
+        let message =
+            post_signature_message("my-blog", "hello", "content", "Alice", None, challenge);
+        let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+
+        assert!(verify_guest_event(
+            Some("example.com"),
+            &sender,
+            "my-blog",
+            &public_key,
+            &signature,
+            &message,
+        ));
+        // Wrong server name must fail the sender check.
+        assert!(!verify_guest_event(
+            Some("other.example.com"),
+            &sender,
+            "my-blog",
+            &public_key,
+            &signature,
+            &message,
+        ));
+        // A sender that does not match the derived virtual user must fail.
+        assert!(!verify_guest_event(
+            Some("example.com"),
+            "@_cumments_my-blog_0000000000000000:example.com",
+            "my-blog",
+            &public_key,
+            &signature,
+            &message,
+        ));
+        // Without a configured server name there is nothing to bind to.
+        assert!(!verify_guest_event(
+            None,
+            &sender,
+            "my-blog",
+            &public_key,
+            &signature,
+            &message,
+        ));
+        // Tampered signature must fail.
+        assert!(!verify_guest_event(
+            Some("example.com"),
+            &sender,
+            "my-blog",
+            &public_key,
+            "AAAA",
+            &message,
         ));
     }
 }
