@@ -11,16 +11,17 @@ Matrix history with `cumments backfill`.
 
 - **Matrix as the event log** — comments are `m.room.message` events, edits are
   `m.replace`, and deletions are `m.redaction`.
-- **Publicly verifiable ownership** — each event carries the author's Ed25519
-  public key, signature, and the signed PoW challenge in the
-  `host.curious.cumments` content block, so ownership survives a complete
-  read-model rebuild.
+- **Two kinds of authors** — guest comments posted through the API are
+  publicly verifiable: each event carries the author's Ed25519 public key,
+  signature, and signed PoW challenge in the `host.curious.cumments` content
+  block. Matrix-native comments (regular Matrix accounts that join the room)
+  are identified by their Matrix ID and governed by room power levels.
 - **Disposable read model** — SQLite is only a projection; `cumments backfill`
   rebuilds sites, the room registry, and comments from Matrix history.
 - **AppService-first** — production mode registers as a Matrix Application
   Service, uses virtual users, and receives events via HTTP push.
-- **PoW anti-spam** — comments require solving a signed proof-of-work challenge;
-  no login or account system.
+- **PoW anti-spam** — guest comments require solving a signed proof-of-work
+  challenge; no login or account system.
 - **Reply trees** — replies use Matrix rich replies (`m.in_reply_to`), so any
   Matrix client can render them, and the demo page shows nested threads.
 - **Real-time SSE updates** — `new_comment`, `comment_updated`, and
@@ -119,8 +120,9 @@ authenticated with `hs_token`.
 ### Logging Mode (local development)
 
 The `LoggingMatrixDriver` logs actions instead of talking to a homeserver.
-Useful for exercising the API and the local read model without Matrix side
-effects.
+Useful for exercising the API and the intent queue without Matrix side
+effects. Comments are **not** projected into the read model because there is
+no homeserver pushing events back.
 
 ## Recovery
 
@@ -382,6 +384,14 @@ All write operations require `author_public_key` (base64url Ed25519, 32 bytes)
 and `author_signature` over a canonical message. The PoW `challenge_prefix` is
 the part of `challenge_response` before `|`.
 
+Authors come in two forms:
+
+- `"type": "guest"` — posted through the Cumments API by a virtual user;
+  `author.public_key` is set and `PATCH`/`DELETE` work via the API.
+- `"type": "matrix"` — posted directly in Matrix by a regular account;
+  `author.mxid` is set. These comments are managed from a Matrix client, and
+  the Cumments API returns `403 NOT_MANAGEABLE` for `PATCH`/`DELETE`.
+
 **List comments**
 
 `QUERY /api/sites/{site_id}/posts/{post_slug}/comments` (RFC 10008)
@@ -401,8 +411,12 @@ Response:
       "event_id": "$event:server",
       "site_id": "my-blog",
       "post_slug": "hello-world",
-      "author_nickname": "Alice",
-      "author_public_key": "...",
+      "author": {
+        "type": "guest",
+        "nickname": "Alice",
+        "public_key": "...",
+        "mxid": null
+      },
       "content": "...",
       "timestamp": "2026-08-08T00:00:00Z"
     }
@@ -435,8 +449,11 @@ Body:
 Signature message:
 
 ```text
-POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{challenge_prefix}
+POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{reply_to}\n{challenge_prefix}
 ```
+
+`reply_to` is the Matrix event ID of the parent comment, or an empty line when
+the comment is not a reply.
 
 **Edit a comment**
 
@@ -537,6 +554,8 @@ frontend's inline scripts with `node --check`.
   not collected.
 - Rate limiting, multi-instance/Postgres support, and operational monitoring
   are not implemented yet.
+- Matrix-native comments bypass the API's PoW by design; spam in that path is
+  governed by Matrix room moderation (power levels, bans, etc.).
 - `backfill` has unit tests, but end-to-end validation against a real Synapse
   deployment is still pending.
 

@@ -10,14 +10,15 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 
 - **Matrix 即事件日志** —— 评论是 `m.room.message`，编辑是 `m.replace`，
   删除是 `m.redaction`。
-- **所有权公开可验证** —— 每条事件携带作者的 Ed25519 公钥、签名与被签名的 PoW
-  challenge（位于 `host.curious.cumments` content block），读模型整库丢弃后
-  身份依然可重建。
+- **两类作者** —— 通过 API 发布的游客评论可公开验证：每条事件携带作者的
+  Ed25519 公钥、签名与被签名的 PoW challenge（位于 `host.curious.cumments`
+  content block），读模型整库丢弃后身份依然可重建。Matrix 原生评论（直接加入
+  房间的普通 Matrix 账号）以 Matrix ID 为身份，由房间权力级别治理。
 - **可丢弃的读模型** —— SQLite 只是投影；`cumments backfill` 可以从 Matrix 历史重建
   sites、房间注册表与全部评论。
 - **AppService-first** —— 生产模式以 Matrix Application Service 注册，使用虚拟用户，
   通过 HTTP push 接收事件。
-- **PoW 防刷** —— 发评论需要解决带签名的 proof-of-work 挑战，无需登录/账号体系。
+- **PoW 防刷** —— 游客评论需要解决带签名的 proof-of-work 挑战，无需登录/账号体系。
 - **回复树** —— 回复使用 Matrix rich replies（`m.in_reply_to`），Matrix
   客户端可直接渲染，验证页也提供嵌套树状展示。
 - **SSE 实时更新** —— 提供 `new_comment` / `comment_updated` / `comment_deleted` 事件。
@@ -109,7 +110,8 @@ Homeserver 通过 `PUT /_matrix/app/v1/transactions/{txnId}` 推送事件，以
 
 ### Logging 模式（本地开发）
 
-`LoggingMatrixDriver` 只记录日志、不连 homeserver，适合调试 API 与本地读模型。
+`LoggingMatrixDriver` 只记录日志、不连 homeserver，适合调试 API 与意图队列。
+由于没有 homeserver 回推事件，评论**不会**被投影进读模型。
 
 ## 恢复体系
 
@@ -360,6 +362,14 @@ cumments backup --output <file>
 所有写操作都需要 `author_public_key`（base64url Ed25519，32 字节）与对规范消息的
 `author_signature`。`challenge_prefix` 是 `challenge_response` 中 `|` 之前的部分。
 
+作者分两类：
+
+- `"type": "guest"` —— 经 Cumments API 由虚拟用户发布；`author.public_key`
+  有值，`PATCH`/`DELETE` 可通过 API 完成。
+- `"type": "matrix"` —— 普通 Matrix 账号直接在房间内发布；`author.mxid`
+  有值。此类评论请用 Matrix 客户端管理，API 的 `PATCH`/`DELETE` 会返回
+  `403 NOT_MANAGEABLE`。
+
 **查询评论**
 
 `QUERY /api/sites/{site_id}/posts/{post_slug}/comments`（RFC 10008）
@@ -379,8 +389,12 @@ cumments backup --output <file>
       "event_id": "$event:server",
       "site_id": "my-blog",
       "post_slug": "hello-world",
-      "author_nickname": "Alice",
-      "author_public_key": "...",
+      "author": {
+        "type": "guest",
+        "nickname": "Alice",
+        "public_key": "...",
+        "mxid": null
+      },
       "content": "...",
       "timestamp": "2026-08-08T00:00:00Z"
     }
@@ -413,8 +427,10 @@ cumments backup --output <file>
 签名消息：
 
 ```text
-POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{challenge_prefix}
+POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{reply_to}\n{challenge_prefix}
 ```
+
+`reply_to` 是父评论的 Matrix event ID；非回复时为空行。
 
 **编辑评论**
 
@@ -461,7 +477,8 @@ type: comment_deleted
 
 用 WebCrypto 生成 Ed25519 密钥对，私钥只留在浏览器。**公钥即身份**：请求时提交
 `author_public_key`，并用私钥对规范消息签名。编辑/删除通过比对评论中存储的公钥并
-验证签名来授权。
+验证签名来授权。该模型只适用于 `author.type === "guest"` 的评论；Matrix 原生评论
+在演示页只读展示，编辑/删除请在 Matrix 客户端进行。
 
 身份恢复以助记词为主：新身份由 BIP39 12 词英文助记词经 SLIP-0010 在固定路径
 `m/44'/1328'/0'` 派生。助记词**不跨会话持久化**——只保存在当前标签页的会话存储
@@ -503,6 +520,8 @@ GitHub Actions 会执行同样的命令，另外用 `node --check` 校验验证�
 - 回复树使用 Matrix rich replies（`m.in_reply_to`），不设深度限制；验证页
   仅在渲染时折叠超过 8 层的子树。项目有意不收集邮箱。
 - 速率限制、多实例/Postgres、运维监控尚未实现。
+- Matrix 原生评论按设计不受 API 的 PoW 约束；该路径的刷屏交由 Matrix 房间治理
+  （权力级别、禁言、封禁等）处理。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 
 ## License
