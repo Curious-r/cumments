@@ -862,6 +862,12 @@ impl CommentStore for DbStore {
             site_id: Set(comment.site_id.clone()),
             post_slug: Set(comment.post_slug.clone()),
             author_mxid: Set(sender.to_owned()),
+            author_type: Set(if comment.author_public_key.is_some() {
+                "guest"
+            } else {
+                "matrix"
+            }
+            .to_string()),
             author_nickname: Set(comment.author_nickname.clone()),
             author_public_key: Set(comment.author_public_key.clone()),
             content: Set(comment.content.clone()),
@@ -880,6 +886,7 @@ impl CommentStore for DbStore {
                         comments::Column::SiteId,
                         comments::Column::PostSlug,
                         comments::Column::AuthorMxid,
+                        comments::Column::AuthorType,
                         comments::Column::AuthorNickname,
                         comments::Column::AuthorPublicKey,
                         comments::Column::Content,

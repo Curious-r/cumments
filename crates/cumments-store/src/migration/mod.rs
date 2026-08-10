@@ -12,6 +12,7 @@ pub mod m20260808_000006_public_key_identity;
 pub mod m20260808_000007_backfill_cursor;
 pub mod m20260808_000008_author_challenge;
 pub mod m20260808_000009_comment_reply_to;
+pub mod m20260811_000010_author_type;
 
 pub struct Migrator;
 
@@ -56,6 +57,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260808_000007_backfill_cursor::Migration),
             Box::new(m20260808_000008_author_challenge::Migration),
             Box::new(m20260808_000009_comment_reply_to::Migration),
+            Box::new(m20260811_000010_author_type::Migration),
         ]
     }
 }

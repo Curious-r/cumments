@@ -12,6 +12,7 @@ pub struct Model {
     pub site_id: String,
     pub post_slug: String,
     pub author_mxid: String,
+    pub author_type: String,
     pub author_nickname: Option<String>,
     pub content: String,
     pub timestamp: DateTimeUtc,
