@@ -1,0 +1,617 @@
+//! Pure wire-format builders and helpers for Cumments Matrix events.
+//!
+//! Everything in this module is transport-agnostic: no HTTP, no driver state.
+//! Keeping the wire format separate from `appservice.rs` makes it reviewable
+//! and testable on its own.
+
+use cumments_core::protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE};
+use rand::Rng;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Preferred alias localpart prefix. The Matrix spec recommends exclusive
+/// user and alias namespaces begin with `_` after the sigil, e.g.
+/// `@_irc_.*` / `#_irc_.*`.
+pub(crate) const ALIAS_PREFIX: &str = "_cumments_";
+pub(crate) fn site_space_alias_localpart(site_id: &str) -> String {
+    format!("{}{}", ALIAS_PREFIX, site_id)
+}
+
+pub(crate) fn comment_room_alias_localpart(site_id: &str, post_slug: &str) -> String {
+    format!("{}{}_{}", ALIAS_PREFIX, site_id, post_slug)
+}
+
+pub(crate) fn site_space_alias(server_name: &str, site_id: &str) -> String {
+    format!("#{}:{}", site_space_alias_localpart(site_id), server_name)
+}
+
+pub(crate) fn comment_room_alias(server_name: &str, site_id: &str, post_slug: &str) -> String {
+    format!(
+        "#{}:{}",
+        comment_room_alias_localpart(site_id, post_slug),
+        server_name
+    )
+}
+/// Whether a metadata state payload matches the expected Cumments identity.
+/// Spaces carry `post_slug: null`; comment rooms carry the post slug.
+pub(crate) fn metadata_matches(
+    meta: &serde_json::Value,
+    site_id: &str,
+    post_slug: Option<&str>,
+) -> bool {
+    let site_ok = meta.get("site_id").and_then(|v| v.as_str()) == Some(site_id);
+    let slug_ok = match post_slug {
+        Some(slug) => meta.get("post_slug").and_then(|v| v.as_str()) == Some(slug),
+        None => matches!(meta.get("post_slug"), None | Some(serde_json::Value::Null)),
+    };
+    site_ok && slug_ok
+}
+/// Whether a room version still requires the room creator to be listed in
+/// `m.room.power_levels.users`.
+///
+/// Room versions 1-11 explicitly privilege the creator through the power
+/// levels event (and allow that power to be changed). From version 12 onward
+/// the creator is never listed in the event and instead holds immutable
+/// infinite power. Unknown/absent versions are treated conservatively as
+/// explicit (the pre-v12 behaviour).
+pub(crate) fn room_requires_explicit_creator(version: Option<&str>) -> bool {
+    let major = version
+        .and_then(|v| v.split(['.', '-']).next())
+        .and_then(|v| v.parse::<u32>().ok());
+    major.is_none_or(|v| v < 12)
+}
+/// Build the `m.room.power_levels` content used when creating a Cumments room.
+/// Omitted fields take the room-version defaults; the owner always receives
+/// admin power, and the AS sender is only listed when the room version needs
+/// an explicit creator entry.
+pub(crate) fn initial_power_levels(
+    sender_user_id: &str,
+    owner_id: &str,
+    include_sender: bool,
+) -> serde_json::Value {
+    let mut users = serde_json::Map::new();
+    if include_sender {
+        users.insert(sender_user_id.to_string(), 100.into());
+    }
+    users.insert(owner_id.to_string(), 100.into());
+    serde_json::json!({ "users": users })
+}
+/// Returns a copy of a room's `m.room.power_levels` content with the owner
+/// raised to admin (100), preserving every other field. Returns `None` when
+/// the owner already has at least admin power.
+pub(crate) fn power_levels_with_owner(
+    content: &serde_json::Value,
+    owner_id: &str,
+) -> Option<serde_json::Value> {
+    let level = content
+        .get("users")
+        .and_then(|u| u.get(owner_id))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if level >= 100 {
+        return None;
+    }
+
+    let mut updated = content.clone();
+    match updated
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("users"))
+        .and_then(|u| u.as_object_mut())
+    {
+        Some(users) => {
+            users.insert(owner_id.to_string(), 100.into());
+        }
+        None => {
+            let obj = updated.as_object_mut()?;
+            let mut users = serde_json::Map::new();
+            users.insert(owner_id.to_string(), 100.into());
+            obj.insert("users".to_string(), serde_json::Value::Object(users));
+        }
+    }
+    Some(updated)
+}
+
+/// Whether `sender_user_id` can send state events in a room, according to its
+/// `m.room.power_levels` content: the sender's explicit `users` entry (or
+/// `users_default`) against the event-specific requirement for our metadata
+/// event type (or `state_default`).
+pub(crate) fn has_state_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
+    let user_power = power_levels
+        .get("users")
+        .and_then(|u| u.get(sender_user_id))
+        .and_then(|v| v.as_i64())
+        .or_else(|| power_levels.get("users_default").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+    let required = power_levels
+        .get("events")
+        .and_then(|e| e.get(ROOM_METADATA_EVENT_TYPE))
+        .and_then(|v| v.as_i64())
+        .or_else(|| power_levels.get("state_default").and_then(|v| v.as_i64()))
+        .unwrap_or(50);
+    user_power >= required
+}
+
+/// Build the rich-reply fallback body following the pre-v1.13 spec format:
+/// each line of the original body is prefixed with `> `, the first line also
+/// carries the original sender's MXID, followed by a blank line and the reply
+/// content. Returns `None` when there is nothing useful to quote.
+pub(crate) fn reply_fallback_body(
+    sender_mxid: &str,
+    original: &str,
+    content: &str,
+) -> Option<String> {
+    if original.is_empty() {
+        return None;
+    }
+    let mut quoted = original
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                format!("> <{}> {}", sender_mxid, line)
+            } else {
+                format!("> {}", line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    quoted.push_str("\n\n");
+    quoted.push_str(content);
+    Some(quoted)
+}
+
+/// Build the `m.room.message` content for a new Cumments comment.
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
+pub(crate) fn build_message_body(
+    content: &str,
+    displayname: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    guest_id: &str,
+    intent_id: Option<i64>,
+    reply_to: Option<&str>,
+    reply_to_body: Option<&str>,
+    reply_to_sender: Option<&str>,
+) -> serde_json::Value {
+    // The body is the pure comment text unless a rich-reply fallback is
+    // available: the quoted original is only for clients without relation
+    // support. The structured block always carries the pure content.
+    let body = match (reply_to, reply_to_body, reply_to_sender) {
+        (Some(_), Some(original), Some(sender)) => {
+            reply_fallback_body(sender, original, content).unwrap_or_else(|| content.to_string())
+        }
+        _ => content.to_string(),
+    };
+    let mut message_body = serde_json::json!({
+        "msgtype": "m.text",
+        "body": body,
+    });
+    message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "guest_id": guest_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        // Structured fields so the projector can store the pure content
+        // and displayname instead of parsing them back out of the body.
+        "content": content,
+        "displayname": displayname,
+        "intent_id": intent_id,
+    });
+    if let Some(parent_event_id) = reply_to {
+        message_body["m.relates_to"] = serde_json::json!({
+            "m.in_reply_to": {
+                "event_id": parent_event_id,
+            }
+        });
+    }
+    message_body
+}
+/// Build the `m.room.message` content for an edit (`m.replace`).
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
+pub(crate) fn build_edit_body(
+    event_id: &str,
+    new_content: &str,
+    displayname: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    guest_id: &str,
+    intent_id: Option<i64>,
+) -> serde_json::Value {
+    let mut new_content_obj = serde_json::json!({
+        "msgtype": "m.text",
+        "body": new_content,
+    });
+    new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "guest_id": guest_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        "content": new_content,
+        "displayname": displayname,
+        "intent_id": intent_id,
+    });
+    serde_json::json!({
+        "msgtype": "m.text",
+        // Matrix edits require a fallback body starting with "* ".
+        "body": format!("* {}", new_content),
+        "m.new_content": new_content_obj,
+        "m.relates_to": {
+            "rel_type": "m.replace",
+            "event_id": event_id,
+        },
+    })
+}
+/// Build the `m.room.redaction` content. When a delete proof is available it
+/// is embedded as a JSON string in `reason` so the event log carries the
+/// authorization independently of the intent queue.
+pub(crate) fn build_redaction_body(proof: Option<&serde_json::Value>) -> serde_json::Value {
+    match proof {
+        Some(proof) => serde_json::json!({ "reason": proof.to_string() }),
+        None => serde_json::json!({}),
+    }
+}
+
+/// Percent-encode a string for safe use in URL path segments.
+/// Matrix room IDs contain `!` and `:` — these are technically safe in
+/// URL paths, but we encode them for correctness.
+pub(crate) fn urlencode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(byte as char);
+            }
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
+}
+
+/// Deterministic transaction ID for intent-driven requests.
+///
+/// The operation kind is part of the ID so distinct intent queues can never
+/// collide on a homeserver that deduplicates by `(user, device, txn_id)`.
+pub(crate) fn format_txn_id(kind: &str, intent_id: Option<i64>) -> String {
+    match intent_id {
+        Some(id) => format!("cumments_{}_{}", kind, id),
+        None => {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let mut random_bytes = [0u8; 4];
+            rand::rng().fill_bytes(&mut random_bytes);
+            format!("cumments_{}_{}_{}", kind, ts, hex::encode(random_bytes))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn metadata_matches_space() {
+        let meta = json!({"site_id": "my-blog", "post_slug": null});
+        assert!(metadata_matches(&meta, "my-blog", None));
+        assert!(!metadata_matches(&meta, "other", None));
+        assert!(!metadata_matches(&meta, "my-blog", Some("hello")));
+    }
+
+    #[test]
+    fn metadata_matches_space_without_slug_key() {
+        let meta = json!({"site_id": "my-blog"});
+        assert!(metadata_matches(&meta, "my-blog", None));
+    }
+
+    #[test]
+    fn metadata_matches_comment_room() {
+        let meta = json!({"site_id": "my-blog", "post_slug": "hello-world"});
+        assert!(metadata_matches(&meta, "my-blog", Some("hello-world")));
+        assert!(!metadata_matches(&meta, "my-blog", None));
+        assert!(!metadata_matches(&meta, "my-blog", Some("other")));
+    }
+
+    #[test]
+    fn power_levels_owner_already_admin_is_unchanged() {
+        let content = json!({
+            "ban": 50,
+            "users": { "@owner:example.com": 100, "@other:example.com": 0 }
+        });
+        assert!(power_levels_with_owner(&content, "@owner:example.com").is_none());
+    }
+
+    #[test]
+    fn power_levels_raises_owner_to_admin_and_preserves_rest() {
+        let content = json!({
+            "ban": 50,
+            "state_default": 50,
+            "users": { "@owner:example.com": 50, "@other:example.com": 0 }
+        });
+        let updated = power_levels_with_owner(&content, "@owner:example.com")
+            .expect("owner should be raised to admin");
+        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["users"]["@other:example.com"], 0);
+        assert_eq!(updated["ban"], 50);
+        assert_eq!(updated["state_default"], 50);
+    }
+
+    #[test]
+    fn power_levels_adds_missing_owner_entry() {
+        let content = json!({ "users": { "@other:example.com": 0 } });
+        let updated =
+            power_levels_with_owner(&content, "@owner:example.com").expect("owner should be added");
+        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["users"]["@other:example.com"], 0);
+    }
+
+    #[test]
+    fn power_levels_creates_users_map_when_missing() {
+        let content = json!({ "ban": 50 });
+        let updated = power_levels_with_owner(&content, "@owner:example.com")
+            .expect("users map should be created");
+        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["ban"], 50);
+    }
+
+    #[test]
+    fn state_power_explicit_admin_can_write_state() {
+        let pl = json!({
+            "users": { "@_cumments_bot:example.com": 100 },
+            "state_default": 50
+        });
+        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_default_member_cannot_write_state() {
+        let pl = json!({ "state_default": 50 });
+        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_users_default_can_write_state() {
+        let pl = json!({ "users_default": 50, "state_default": 50 });
+        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_event_specific_override_is_respected() {
+        let pl = json!({
+            "users": { "@_cumments_bot:example.com": 50 },
+            "state_default": 50,
+            "events": { ROOM_METADATA_EVENT_TYPE: 100 }
+        });
+        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn state_power_missing_fields_fall_back_to_defaults() {
+        let pl = json!({ "users": { "@_cumments_bot:example.com": 49 } });
+        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
+        let pl = json!({ "users": { "@_cumments_bot:example.com": 50 } });
+        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn urlencode_encodes_alias_hash_and_colon() {
+        assert_eq!(
+            urlencode("#_cumments_my-blog:example.com"),
+            "%23_cumments_my-blog%3Aexample.com"
+        );
+        assert_eq!(urlencode("!abc:example.com"), "%21abc%3Aexample.com");
+    }
+
+    #[test]
+    fn alias_helpers_build_underscored_aliases() {
+        assert_eq!(
+            site_space_alias("example.com", "my-blog"),
+            "#_cumments_my-blog:example.com"
+        );
+        assert_eq!(
+            comment_room_alias("example.com", "my-blog", "hello-world"),
+            "#_cumments_my-blog_hello-world:example.com"
+        );
+    }
+
+    #[test]
+    fn message_body_uses_namespaced_content_block() {
+        let body = build_message_body(
+            "hello <b>",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(body["msgtype"].as_str(), Some("m.text"));
+        assert_eq!(body["body"].as_str(), Some("hello <b>"));
+        assert!(body.get("format").is_none());
+        assert!(body.get("formatted_body").is_none());
+
+        let ns = body.get(MESSAGE_CONTENT_KEY).expect("namespaced block");
+        assert_eq!(ns["guest_id"].as_str(), Some("abcd"));
+        assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
+        assert_eq!(ns["signature"].as_str(), Some("sig"));
+        assert_eq!(ns["challenge"].as_str(), Some("chal"));
+        assert_eq!(ns["content"].as_str(), Some("hello <b>"));
+        assert_eq!(ns["displayname"].as_str(), Some("Alice"));
+        assert_eq!(ns["intent_id"].as_i64(), Some(7));
+
+        assert!(body.get("cumments_guest_id").is_none());
+        assert!(body.get("cumments_intent_id").is_none());
+    }
+
+    #[test]
+    fn message_body_with_reply_uses_standard_relation() {
+        let body = build_message_body(
+            "hello",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+            Some("$parent:hs"),
+            Some("original line one\noriginal line two"),
+            Some("@alice:hs"),
+        );
+
+        assert_eq!(
+            body["body"].as_str(),
+            Some("> <@alice:hs> original line one\n> original line two\n\nhello")
+        );
+        // The structured block still carries only the pure reply content.
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"].as_str(), Some("hello"));
+        assert_eq!(
+            body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
+            Some("$parent:hs")
+        );
+        assert!(body["m.relates_to"].get("rel_type").is_none());
+        assert!(body.get(MESSAGE_CONTENT_KEY).is_some());
+    }
+
+    #[test]
+    fn reply_without_known_original_keeps_pure_body() {
+        let body = build_message_body(
+            "hello",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+            Some("$parent:hs"),
+            None,
+            None,
+        );
+        assert_eq!(body["body"].as_str(), Some("hello"));
+        assert_eq!(
+            body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
+            Some("$parent:hs")
+        );
+    }
+
+    #[test]
+    fn reply_fallback_quotes_multiline_original() {
+        assert_eq!(
+            reply_fallback_body("@alice:hs", "first\nsecond", "reply").as_deref(),
+            Some("> <@alice:hs> first\n> second\n\nreply")
+        );
+        assert_eq!(reply_fallback_body("@alice:hs", "", "reply"), None);
+    }
+
+    #[test]
+    fn edit_body_uses_namespaced_block_in_new_content() {
+        let body = build_edit_body(
+            "$original:hs",
+            "edited <b>",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(42),
+        );
+
+        assert_eq!(body["msgtype"].as_str(), Some("m.text"));
+        assert_eq!(body["body"].as_str(), Some("* edited <b>"));
+        assert_eq!(body["m.relates_to"]["rel_type"].as_str(), Some("m.replace"));
+        assert_eq!(
+            body["m.relates_to"]["event_id"].as_str(),
+            Some("$original:hs")
+        );
+
+        let new_content = body.get("m.new_content").expect("new content");
+        assert_eq!(new_content["body"].as_str(), Some("edited <b>"));
+        assert!(new_content.get("format").is_none());
+        assert!(new_content.get("formatted_body").is_none());
+        let ns = new_content
+            .get(MESSAGE_CONTENT_KEY)
+            .expect("namespaced block");
+        assert_eq!(ns["guest_id"].as_str(), Some("abcd"));
+        assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
+        assert_eq!(ns["signature"].as_str(), Some("sig"));
+        assert_eq!(ns["challenge"].as_str(), Some("chal"));
+        assert_eq!(ns["content"].as_str(), Some("edited <b>"));
+        assert_eq!(ns["displayname"].as_str(), Some("Alice"));
+        assert_eq!(ns["intent_id"].as_i64(), Some(42));
+
+        assert!(body.get(MESSAGE_CONTENT_KEY).is_none());
+        assert!(body.get("cumments_intent_id").is_none());
+    }
+
+    #[test]
+    fn redaction_body_embeds_proof_as_reason() {
+        let proof = json!({
+            "host.curious.cumments.redaction": {
+                "public_key": "pk",
+                "signature": "sig",
+                "challenge": "chal",
+            }
+        });
+        let body = build_redaction_body(Some(&proof));
+        assert_eq!(body["reason"], proof.to_string());
+        assert_eq!(build_redaction_body(None), json!({}));
+    }
+
+    #[test]
+    fn txn_ids_are_deterministic_and_namespaced_per_operation() {
+        assert_eq!(format_txn_id("post", Some(7)), "cumments_post_7");
+        assert_eq!(format_txn_id("update", Some(7)), "cumments_update_7");
+        assert_eq!(format_txn_id("delete", Some(7)), "cumments_delete_7");
+        // Same intent id in different queues must never produce the same txn id.
+        let ids: std::collections::HashSet<_> = [
+            format_txn_id("post", Some(7)),
+            format_txn_id("update", Some(7)),
+            format_txn_id("delete", Some(7)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn txn_ids_without_intent_are_random_but_namespaced() {
+        let a = format_txn_id("post", None);
+        let b = format_txn_id("post", None);
+        assert!(a.starts_with("cumments_post_"));
+        assert!(b.starts_with("cumments_post_"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn explicit_creator_required_only_below_room_version_12() {
+        assert!(room_requires_explicit_creator(None));
+        assert!(room_requires_explicit_creator(Some("1")));
+        assert!(room_requires_explicit_creator(Some("11")));
+        assert!(room_requires_explicit_creator(Some("1.2")));
+        assert!(!room_requires_explicit_creator(Some("12")));
+        assert!(!room_requires_explicit_creator(Some("13")));
+        assert!(!room_requires_explicit_creator(Some("12.1")));
+    }
+
+    #[test]
+    fn initial_power_levels_omits_sender_for_implicit_creator_versions() {
+        let explicit =
+            initial_power_levels("@_cumments_bot:example.com", "@owner:example.com", true);
+        assert_eq!(explicit["users"]["@_cumments_bot:example.com"], 100);
+        assert_eq!(explicit["users"]["@owner:example.com"], 100);
+
+        let implicit =
+            initial_power_levels("@_cumments_bot:example.com", "@owner:example.com", false);
+        assert!(
+            implicit["users"]
+                .get("@_cumments_bot:example.com")
+                .is_none()
+        );
+        assert_eq!(implicit["users"]["@owner:example.com"], 100);
+    }
+}

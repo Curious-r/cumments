@@ -1,3 +1,5 @@
+mod wire;
+
 pub mod appservice;
 pub mod logging;
 
