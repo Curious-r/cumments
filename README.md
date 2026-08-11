@@ -432,7 +432,7 @@ Response:
       "post_slug": "hello-world",
       "author": {
         "type": "guest",
-        "nickname": "Alice",
+        "displayname": "Alice",
         "public_key": "...",
         "mxid": null
       },
@@ -458,7 +458,7 @@ Body:
 ```json
 {
   "content": "...",
-  "nickname": "Alice",
+  "displayname": "Alice",
   "author_public_key": "...",
   "author_signature": "...",
   "challenge_response": "challenge|nonce"
@@ -468,7 +468,7 @@ Body:
 Signature message:
 
 ```text
-POST\n{site_id}\n{post_slug}\n{content}\n{nickname}\n{reply_to}\n{challenge_prefix}
+POST\n{site_id}\n{post_slug}\n{content}\n{displayname}\n{reply_to}\n{challenge_prefix}
 ```
 
 `reply_to` is the Matrix event ID of the parent comment, or an empty line when
