@@ -3,6 +3,7 @@ use crate::intents::{
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
 };
 use crate::models::{Comment, CommentPage, PostSlug, RoomEventPage, RoomIdentity, SiteId};
+use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -164,6 +165,42 @@ pub trait SiteStore: Send + Sync {
 
     /// Ensures a site exists in the database, creating it with default values if not.
     async fn ensure_site_exists(&self, site_id: &str, matrix_space_id: &str) -> Result<()>;
+}
+
+/// Port for site identity and write-path authentication state.
+#[async_trait]
+pub trait SiteAuthStore: Send + Sync {
+    /// Creates a site row for an API-registered site (unverified, origin auth).
+    async fn register_site(&self, site_id: &str, claim_token_hash: &str) -> Result<()>;
+
+    /// Full authentication state of a site, if a row exists.
+    async fn get_site_auth(&self, site_id: &str) -> Result<Option<SiteAuthInfo>>;
+
+    /// Stored SHA-256 hash of the site's claim token, if any.
+    async fn get_claim_token_hash(&self, site_id: &str) -> Result<Option<String>>;
+
+    /// Inserts the rows of one verification challenge (same raw token, one
+    /// row per origin).
+    async fn insert_verification_tokens(&self, tokens: &[NewVerificationToken]) -> Result<()>;
+
+    /// Returns an unconsumed, unexpired verification token row, if any.
+    async fn find_verification_token(
+        &self,
+        site_id: &str,
+        origin: &Origin,
+        token_hash: &str,
+    ) -> Result<Option<VerificationToken>>;
+
+    /// Marks a verification token row consumed. Returns `false` if it was
+    /// already consumed (e.g. by a concurrent confirmation).
+    async fn consume_verification_token(&self, id: i64) -> Result<bool>;
+
+    /// Records a verified origin and marks the site verified.
+    async fn add_verified_origin(&self, site_id: &str, origin: &Origin) -> Result<()>;
+
+    /// Stores the site's HMAC key and switches the site to secret auth.
+    /// The key is needed in plain form to verify HMAC signatures.
+    async fn store_site_secret(&self, site_id: &str, secret: &str) -> Result<()>;
 }
 
 /// Defines the atomic actions that can be performed on the Matrix network.
