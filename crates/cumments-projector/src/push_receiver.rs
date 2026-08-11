@@ -87,6 +87,29 @@ pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Ro
         .with_state(state)
 }
 
+/// Like [`push_router`] but with an `M_UNRECOGNIZED` fallback for unknown
+/// routes.
+///
+/// Use this only for standalone (dedicated-port) deployments where the router
+/// owns every unmatched path. When the push routes are merged into the API
+/// router, axum allows only one fallback per merged router, so the shared-port
+/// build keeps the API router's behaviour.
+pub fn push_router_standalone(processor: Arc<EventProcessor>, hs_token: String) -> axum::Router {
+    push_router(processor, hs_token).fallback(handle_unknown)
+}
+
+/// Respond to unknown AppService routes with the spec's `M_UNRECOGNIZED`
+/// error instead of an empty 404.
+async fn handle_unknown() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "errcode": "M_UNRECOGNIZED",
+            "error": "Unrecognized request"
+        })),
+    )
+}
+
 /// Handle `POST /_matrix/app/v1/ping` (AppService API v1.7+).
 ///
 /// The homeserver uses this to verify reachability and `hs_token` correctness

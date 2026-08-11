@@ -287,7 +287,7 @@ async fn main() -> Result<()> {
                         )
                     })?;
                 tracing::info!("PushReceiver listening on {}", listener.local_addr()?);
-                let push_app = cumments_projector::push_receiver::push_router(
+                let push_app = cumments_projector::push_receiver::push_router_standalone(
                     event_processor.clone(),
                     as_conf.hs_token.clone(),
                 );
