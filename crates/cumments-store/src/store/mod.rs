@@ -10,6 +10,7 @@ pub mod comments;
 pub mod identity;
 pub mod intents;
 pub mod registry;
+pub mod site_auth;
 
 /// A database-backed implementation of the storage ports.
 #[derive(Clone)]

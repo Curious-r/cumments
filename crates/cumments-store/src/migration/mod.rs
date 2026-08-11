@@ -18,6 +18,7 @@ pub mod m20260811_000012_comments_sender_mxid;
 pub mod m20260811_000013_comments_author_displayname;
 pub mod m20260811_000014_backfill_cursors_next_token;
 pub mod m20260811_000015_comments_author_display_name;
+pub mod m20260812_000016_site_authentication;
 
 pub struct Migrator;
 
@@ -68,6 +69,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260811_000013_comments_author_displayname::Migration),
             Box::new(m20260811_000014_backfill_cursors_next_token::Migration),
             Box::new(m20260811_000015_comments_author_display_name::Migration),
+            Box::new(m20260812_000016_site_authentication::Migration),
         ]
     }
 }

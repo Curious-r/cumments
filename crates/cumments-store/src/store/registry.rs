@@ -1,4 +1,5 @@
 use super::DbStore;
+use crate::entities::active_enums::{SiteAuthMode, SiteVerificationStatus};
 use crate::entities::{room_registry, sites};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -109,11 +110,18 @@ impl SiteStore for DbStore {
     }
 
     async fn save_site(&self, site: &Site) -> Result<()> {
+        let now = chrono::Utc::now();
         let active_model = sites::ActiveModel {
             id: Set(site.id.clone()),
             matrix_space_id: Set(site.matrix_space_id.clone()),
             display_name: Set(site.display_name.clone()),
+            auth_mode: Set(SiteAuthMode::Origin),
+            verification_status: Set(SiteVerificationStatus::Unverified),
+            claim_token_hash: Set(None),
+            secret: Set(None),
+            verified_at: Set(None),
             created_at: Set(site.created_at),
+            updated_at: Set(Some(now)),
         };
 
         sites::Entity::insert(active_model)
@@ -129,11 +137,18 @@ impl SiteStore for DbStore {
     }
 
     async fn ensure_site_exists(&self, site_id: &str, matrix_space_id: &str) -> Result<()> {
+        let now = chrono::Utc::now();
         let active_model = sites::ActiveModel {
             id: Set(site_id.to_owned()),
             matrix_space_id: Set(matrix_space_id.to_owned()),
             display_name: Set(Some(site_id.to_owned())),
-            created_at: Set(chrono::Utc::now()),
+            auth_mode: Set(SiteAuthMode::Origin),
+            verification_status: Set(SiteVerificationStatus::Unverified),
+            claim_token_hash: Set(None),
+            secret: Set(None),
+            verified_at: Set(None),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
         };
 
         sites::Entity::insert(active_model)

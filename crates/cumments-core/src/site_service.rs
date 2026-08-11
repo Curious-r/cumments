@@ -63,8 +63,12 @@ impl SiteService {
             }
         }
 
-        // 2. Check Store
-        if let Some(site) = self.store.get_site(site_id).await? {
+        // 2. Check Store. A blank space ID means the site was pre-registered
+        // through the API but never provisioned in Matrix yet; treat it as
+        // missing so the driver creates the Space.
+        if let Some(site) = self.store.get_site(site_id).await?
+            && !site.matrix_space_id.is_empty()
+        {
             let space_id = site.matrix_space_id;
             // Update cache
             self.cache_put(site_id_str.to_string(), space_id.clone())
