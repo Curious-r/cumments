@@ -6,7 +6,8 @@
 //! The `hs_token` is verified against the configured value before any events
 //! are processed. Per the Matrix AppService specification the token arrives
 //! in the `Authorization: Bearer` header; the legacy `?hs_token=` query
-//! parameter is also accepted for homeservers that use it.
+//! parameter is also accepted for homeservers that use it. When both are
+//! present they must agree, per the spec's compatibility guidance.
 
 use crate::event_processor::{
     EventProcessor, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
@@ -69,7 +70,7 @@ struct UnsignedData {
 /// The `hs_token` is read from the standard `Authorization: Bearer` header
 /// (with the legacy `?hs_token=` query parameter as a fallback) and compared
 /// against the configured value. Requests without a valid token are rejected
-/// with 401 UNAUTHORIZED.
+/// with 403 FORBIDDEN, matching the AppService API's `M_FORBIDDEN` error.
 pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Router {
     let state = Arc::new(PushState {
         processor,
@@ -93,14 +94,14 @@ async fn handle_transaction(
     Json(txn): Json<Transaction>,
 ) -> impl IntoResponse {
     // ── hs_token verification ──
-    let received = bearer_token(&headers).or_else(|| query.get("hs_token").map(|s| s.as_str()));
+    let received = received_hs_token(&headers, &query);
     if received != Some(state.hs_token.as_str()) {
         tracing::warn!(
             "Push transaction rejected: invalid hs_token (received: {:?})",
             received.map(|s| &s[..8.min(s.len())])
         );
         return (
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             Json(serde_json::json!({"errcode": "M_FORBIDDEN", "error": "Invalid hs_token"})),
         );
     }
@@ -138,6 +139,23 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, token)| token.trim())
         .filter(|token| !token.is_empty())
+}
+
+/// Resolve the `hs_token` from the standard header and/or the legacy query
+/// parameter. The header takes precedence; when both are supplied they must
+/// match, otherwise no token is considered valid.
+fn received_hs_token<'a>(
+    headers: &'a HeaderMap,
+    query: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let header_token = bearer_token(headers);
+    let query_token = query.get("hs_token").map(|s| s.as_str());
+    match (header_token, query_token) {
+        (Some(header), Some(query)) if header == query => Some(header),
+        (Some(header), None) => Some(header),
+        (None, Some(query)) => Some(query),
+        _ => None,
+    }
 }
 
 // ── Event dispatch ────────────────────────────────────────────────
@@ -438,6 +456,51 @@ mod tests {
         assert_eq!(bearer_token(&headers), None);
 
         assert_eq!(bearer_token(&HeaderMap::new()), None);
+    }
+
+    fn headers_with_bearer(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_str(token).unwrap());
+        headers
+    }
+
+    #[test]
+    fn hs_token_accepts_header_only() {
+        let query = HashMap::new();
+        assert_eq!(
+            received_hs_token(&headers_with_bearer("Bearer abc123"), &query),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn hs_token_accepts_legacy_query_only() {
+        let headers = HeaderMap::new();
+        let mut query = HashMap::new();
+        query.insert("hs_token".to_string(), "abc123".to_string());
+        assert_eq!(received_hs_token(&headers, &query), Some("abc123"));
+    }
+
+    #[test]
+    fn hs_token_requires_agreement_when_both_are_present() {
+        let mut query = HashMap::new();
+        query.insert("hs_token".to_string(), "query123".to_string());
+
+        // Both present and matching: accepted.
+        assert_eq!(
+            received_hs_token(&headers_with_bearer("Bearer query123"), &query),
+            Some("query123")
+        );
+        // Both present but disagreeing: no token is valid.
+        assert_eq!(
+            received_hs_token(&headers_with_bearer("Bearer header123"), &query),
+            None
+        );
+    }
+
+    #[test]
+    fn hs_token_rejects_missing_tokens() {
+        assert_eq!(received_hs_token(&HeaderMap::new(), &HashMap::new()), None);
     }
 
     #[test]
