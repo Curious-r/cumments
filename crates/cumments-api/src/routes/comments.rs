@@ -84,7 +84,8 @@ pub(crate) async fn query_comments_handler(
         .get_comments(&site_id_val, &post_slug_val, limit, offset)
         .await
     {
-        Ok((comments, total)) => {
+        Ok(page_data) => {
+            let total = page_data.total;
             let total_pages = if total > 0 {
                 (total + per_page - 1) / per_page
             } else {
@@ -92,7 +93,7 @@ pub(crate) async fn query_comments_handler(
             };
 
             let response = PaginatedResponse {
-                data: comments,
+                data: page_data.items,
                 meta: PaginationMeta {
                     total,
                     page,

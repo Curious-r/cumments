@@ -182,6 +182,20 @@ pub struct RoomEventPage {
     pub done: bool,
 }
 
+/// Identity of a Cumments room, extracted from metadata or alias.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomIdentity {
+    pub site_id: String,
+    pub post_slug: String,
+}
+
+/// One page of projected comments for a site/post.
+#[derive(Debug, Clone, Default)]
+pub struct CommentPage {
+    pub items: Vec<Comment>,
+    pub total: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

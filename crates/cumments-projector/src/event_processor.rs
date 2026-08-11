@@ -6,12 +6,12 @@
 //! `PushReceiver` (and any future transport) calls into these same
 //! functions.
 
-use crate::parsed::{ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild, RoomIdentity};
+use crate::parsed::{ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild};
 use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
 use cumments_core::{
     identity::{post_signature_message, signature_message},
-    models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
+    models::{AuthorType, Comment, CommentAuthor, PostSlug, RoomIdentity, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
     projector_events::ProjectorEvent,
 };
@@ -69,9 +69,6 @@ impl EventProcessor {
         self.registry_store
             .get_registered_room_identity(room_id)
             .await
-            .map(|identity| {
-                identity.map(|(site_id, post_slug)| RoomIdentity { site_id, post_slug })
-            })
     }
 
     /// Process a room message (new comment or edit).

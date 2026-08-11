@@ -2,7 +2,7 @@ use super::DbStore;
 use crate::entities::comments;
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId};
+use cumments_core::models::{AuthorType, Comment, CommentAuthor, CommentPage, PostSlug, SiteId};
 use cumments_core::ports::CommentStore;
 use sea_orm::{EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set};
 
@@ -23,7 +23,7 @@ impl CommentStore for DbStore {
         post_slug: &PostSlug,
         limit: i64,
         offset: i64,
-    ) -> Result<(Vec<Comment>, i64)> {
+    ) -> Result<CommentPage> {
         let site_id_str = site_id.as_str();
         let post_slug_str = post_slug.as_str();
 
@@ -35,7 +35,10 @@ impl CommentStore for DbStore {
 
         let count = query.clone().count(&self.db).await?;
         if limit <= 0 {
-            return Ok((Vec::new(), count as i64));
+            return Ok(CommentPage {
+                items: Vec::new(),
+                total: count as i64,
+            });
         }
 
         let models = query
@@ -45,7 +48,10 @@ impl CommentStore for DbStore {
 
         let comments = models.into_iter().map(Comment::from).collect();
 
-        Ok((comments, count as i64))
+        Ok(CommentPage {
+            items: comments,
+            total: count as i64,
+        })
     }
 
     async fn save_comment(

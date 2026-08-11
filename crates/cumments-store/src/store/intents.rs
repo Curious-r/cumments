@@ -5,7 +5,10 @@ use crate::entities::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
+use cumments_core::intents::{
+    DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
+    PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
+};
 use cumments_core::ports::IntentStore;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set, UpdateMany,
@@ -99,7 +102,7 @@ impl IntentStore for DbStore {
         Ok(())
     }
 
-    async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>> {
+    async fn get_pending_post_intents(&self) -> Result<Vec<PendingPostIntent>> {
         let models = intent_queue_post_comment::Entity::find()
             .filter(
                 intent_queue_post_comment::COLUMN
@@ -116,7 +119,7 @@ impl IntentStore for DbStore {
         let mut intents = Vec::new();
         for m in models {
             match serde_json::from_str::<PostCommentIntent>(&m.payload) {
-                Ok(intent) => intents.push((m.id, intent)),
+                Ok(intent) => intents.push(PendingPostIntent { id: m.id, intent }),
                 Err(e) => warn!(
                     "Skipping corrupt post intent {} (will not block the batch): {:#}",
                     m.id, e
@@ -126,7 +129,7 @@ impl IntentStore for DbStore {
         Ok(intents)
     }
 
-    async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>> {
+    async fn get_pending_delete_intents(&self) -> Result<Vec<PendingDeleteIntent>> {
         let models = intent_queue_delete_comment::Entity::find()
             .filter(
                 intent_queue_delete_comment::COLUMN
@@ -143,7 +146,7 @@ impl IntentStore for DbStore {
         let mut intents = Vec::new();
         for m in models {
             match serde_json::from_str::<DeleteCommentIntent>(&m.payload) {
-                Ok(intent) => intents.push((m.id, intent)),
+                Ok(intent) => intents.push(PendingDeleteIntent { id: m.id, intent }),
                 Err(e) => warn!(
                     "Skipping corrupt delete intent {} (will not block the batch): {:#}",
                     m.id, e
@@ -153,7 +156,7 @@ impl IntentStore for DbStore {
         Ok(intents)
     }
 
-    async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>> {
+    async fn get_pending_update_intents(&self) -> Result<Vec<PendingUpdateIntent>> {
         let models = intent_queue_update_comment::Entity::find()
             .filter(
                 intent_queue_update_comment::COLUMN
@@ -178,7 +181,7 @@ impl IntentStore for DbStore {
                 author_signature: m.author_signature.unwrap_or_default(),
                 author_challenge: m.author_challenge.unwrap_or_default(),
             };
-            intents.push((m.id, intent));
+            intents.push(PendingUpdateIntent { id: m.id, intent });
         }
         Ok(intents)
     }
@@ -505,7 +508,7 @@ impl IntentStore for DbStore {
     async fn get_stuck_post_intents(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<(i64, String, Option<String>)>> {
+    ) -> Result<Vec<StuckPostIntent>> {
         let models = intent_queue_post_comment::Entity::find()
             .filter(
                 intent_queue_post_comment::COLUMN
@@ -518,7 +521,11 @@ impl IntentStore for DbStore {
 
         Ok(models
             .into_iter()
-            .map(|m| (m.id, m.matrix_event_id.unwrap_or_default(), m.room_id))
+            .map(|m| StuckPostIntent {
+                id: m.id,
+                event_id: m.matrix_event_id.unwrap_or_default(),
+                room_id: m.room_id,
+            })
             .collect())
     }
 

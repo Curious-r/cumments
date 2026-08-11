@@ -1,13 +1,7 @@
 //! Transport-agnostic parsed Matrix event structures.
 
+use cumments_core::models::RoomIdentity;
 use serde::Deserialize;
-
-/// Identity of a Cumments room, extracted from metadata or alias.
-#[derive(Debug, Clone)]
-pub struct RoomIdentity {
-    pub site_id: String,
-    pub post_slug: String,
-}
 
 /// A parsed room message event.
 #[derive(Debug)]

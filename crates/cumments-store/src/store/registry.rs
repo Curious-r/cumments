@@ -2,7 +2,7 @@ use super::DbStore;
 use crate::entities::{room_registry, sites};
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::models::{PostSlug, Site, SiteId};
+use cumments_core::models::{PostSlug, RoomIdentity, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteStore};
 use sea_orm::{EntityTrait, QueryFilter, Set};
 
@@ -31,15 +31,15 @@ impl RegistryStore for DbStore {
         Ok(room.map(|r| r.is_active))
     }
 
-    async fn get_registered_room_identity(
-        &self,
-        room_id: &str,
-    ) -> Result<Option<(String, String)>> {
+    async fn get_registered_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>> {
         let room = room_registry::Entity::find_by_id(room_id.to_owned())
             .one(&self.db)
             .await?;
 
-        Ok(room.map(|r| (r.site_id, r.post_slug)))
+        Ok(room.map(|r| RoomIdentity {
+            site_id: r.site_id,
+            post_slug: r.post_slug,
+        }))
     }
 
     async fn register_room(

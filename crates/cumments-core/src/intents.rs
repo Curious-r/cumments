@@ -77,3 +77,33 @@ pub struct UpdateCommentIntent {
     #[serde(default)]
     pub author_challenge: String,
 }
+
+/// A post intent together with its queue row id.
+#[derive(Debug, Clone)]
+pub struct PendingPostIntent {
+    pub id: i64,
+    pub intent: PostCommentIntent,
+}
+
+/// A delete intent together with its queue row id.
+#[derive(Debug, Clone)]
+pub struct PendingDeleteIntent {
+    pub id: i64,
+    pub intent: DeleteCommentIntent,
+}
+
+/// An update intent together with its queue row id.
+#[derive(Debug, Clone)]
+pub struct PendingUpdateIntent {
+    pub id: i64,
+    pub intent: UpdateCommentIntent,
+}
+
+/// A post intent stuck in `waiting_for_sync`, with the recorded Matrix event
+/// and room ids used to verify whether the event actually exists.
+#[derive(Debug, Clone)]
+pub struct StuckPostIntent {
+    pub id: i64,
+    pub event_id: String,
+    pub room_id: Option<String>,
+}

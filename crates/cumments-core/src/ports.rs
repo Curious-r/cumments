@@ -1,5 +1,8 @@
-use crate::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
-use crate::models::{Comment, PostSlug, RoomEventPage, SiteId};
+use crate::intents::{
+    DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
+    PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
+};
+use crate::models::{Comment, CommentPage, PostSlug, RoomEventPage, RoomIdentity, SiteId};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -10,9 +13,9 @@ pub trait IntentStore: Send + Sync {
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()>;
 
-    async fn get_pending_post_intents(&self) -> Result<Vec<(i64, PostCommentIntent)>>;
-    async fn get_pending_delete_intents(&self) -> Result<Vec<(i64, DeleteCommentIntent)>>;
-    async fn get_pending_update_intents(&self) -> Result<Vec<(i64, UpdateCommentIntent)>>;
+    async fn get_pending_post_intents(&self) -> Result<Vec<PendingPostIntent>>;
+    async fn get_pending_delete_intents(&self) -> Result<Vec<PendingDeleteIntent>>;
+    async fn get_pending_update_intents(&self) -> Result<Vec<PendingUpdateIntent>>;
 
     /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
     async fn mark_post_intent_waiting_for_sync(
@@ -48,12 +51,11 @@ pub trait IntentStore: Send + Sync {
     /// Transitions a post intent to 'completed' when the projector sees the event.
     async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
 
-    /// Post intents stuck in `waiting_for_sync` since before `cutoff`,
-    /// as `(id, matrix_event_id, room_id)`.
+    /// Post intents stuck in `waiting_for_sync` since before `cutoff`.
     async fn get_stuck_post_intents(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<(i64, String, Option<String>)>>;
+    ) -> Result<Vec<StuckPostIntent>>;
 
     /// IDs of delete intents stuck in `waiting_for_sync` since before `cutoff`.
     async fn get_stuck_delete_intent_ids(
@@ -85,15 +87,14 @@ pub trait CommentStore: Send + Sync {
     /// Fetches a single comment by its Matrix event ID.
     async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>>;
 
-    /// Fetches a paginated list of projected comments for a given site and post.
-    /// Returns the list of comments and the total number of comments.
+    /// Fetches one page of projected comments for a given site and post.
     async fn get_comments(
         &self,
         site_id: &SiteId,
         post_slug: &PostSlug,
         limit: i64,
         offset: i64,
-    ) -> Result<(Vec<Comment>, i64)>;
+    ) -> Result<CommentPage>;
 
     /// Saves a new comment or updates an existing one (on conflict).
     async fn save_comment(
@@ -132,13 +133,12 @@ pub trait RegistryStore: Send + Sync {
     /// Checks if a room is active in the registry.
     async fn is_room_active(&self, room_id: &str) -> Result<Option<bool>>;
 
-    /// Looks up the Cumments identity (`(site_id, post_slug)`) registered for a room.
+    /// Looks up the Cumments identity registered for a room.
     ///
     /// Unlike [`Self::get_registered_room`] this is a reverse lookup by room ID,
     /// used by the projector to resolve the context of incoming Matrix events
     /// without depending on room state metadata.
-    async fn get_registered_room_identity(&self, room_id: &str)
-    -> Result<Option<(String, String)>>;
+    async fn get_registered_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>>;
 
     /// Registers or reactivates a room in the registry.
     async fn register_room(

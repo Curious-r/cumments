@@ -115,7 +115,9 @@ impl Reconciler {
         }
         let num_intents = intents.len() as u64;
 
-        for (id, intent) in intents {
+        for pending in intents {
+            let id = pending.id;
+            let intent = pending.intent;
             let process_result = run_intent(async {
                 // ORCHESTRATION START
                 // 1. Brain: Ensure the site space is ready
@@ -237,7 +239,9 @@ impl Reconciler {
         }
         let num_intents = intents.len() as u64;
 
-        for (id, intent) in intents {
+        for pending in intents {
+            let id = pending.id;
+            let intent = pending.intent;
             let process_result = run_intent(async {
                 // 1. Registry: Locate the room ID for this deletion
                 let room_id = self
@@ -306,7 +310,9 @@ impl Reconciler {
         }
         let num_intents = intents.len() as u64;
 
-        for (id, intent) in intents {
+        for pending in intents {
+            let id = pending.id;
+            let intent = pending.intent;
             let process_result = run_intent(async {
                 // 1. Brain: Ensure site space
                 let space_id = self
@@ -401,7 +407,10 @@ impl Reconciler {
             chrono::Utc::now() - chrono::Duration::minutes(WAITING_FOR_SYNC_TIMEOUT_MINUTES);
         let mut handled = 0u64;
 
-        for (id, event_id, room_id) in self.intent_store.get_stuck_post_intents(cutoff).await? {
+        for stuck in self.intent_store.get_stuck_post_intents(cutoff).await? {
+            let id = stuck.id;
+            let event_id = stuck.event_id;
+            let room_id = stuck.room_id;
             handled += 1;
 
             let Some(room_id) = room_id else {

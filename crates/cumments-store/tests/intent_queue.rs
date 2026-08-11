@@ -56,7 +56,7 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
         .expect("save intent");
     let pending = store.get_pending_post_intents().await.expect("pending");
     assert_eq!(pending.len(), 1);
-    let (id, _) = pending[0];
+    let id = pending[0].id;
 
     store
         .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
@@ -76,9 +76,9 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
         .await
         .expect("stuck query");
     assert_eq!(stuck.len(), 1);
-    assert_eq!(stuck[0].0, id);
-    assert_eq!(stuck[0].1, "$event:hs");
-    assert_eq!(stuck[0].2.as_deref(), Some("!room:hs"));
+    assert_eq!(stuck[0].id, id);
+    assert_eq!(stuck[0].event_id, "$event:hs");
+    assert_eq!(stuck[0].room_id.as_deref(), Some("!room:hs"));
 
     // Dead-lettering removes it from both stuck and pending views.
     store
@@ -110,7 +110,7 @@ async fn failure_records_schedule_retry_then_dead_letters() {
         .await
         .expect("save intent");
     let pending = store.get_pending_post_intents().await.expect("pending");
-    let (id, _) = pending[0];
+    let id = pending[0].id;
 
     // First failure: retried (back to pending, but not due immediately).
     let retrying = store
@@ -156,7 +156,7 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
         .await
         .expect("save update intent");
     let pending = store.get_pending_update_intents().await.expect("pending");
-    let (id, _) = pending[0];
+    let id = pending[0].id;
 
     // Simulate the projector seeing the replacement before the reconciler's
     // write-back: complete first, then attempt the write-back.
@@ -211,8 +211,8 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
 
     let pending = store.get_pending_update_intents().await.expect("pending");
     assert_eq!(pending.len(), 2);
-    let (first_id, _) = pending[0];
-    let (second_id, _) = pending[1];
+    let first_id = pending[0].id;
+    let second_id = pending[1].id;
 
     // One edit is observed after its write-back; the other is still pending.
     store
@@ -230,7 +230,7 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
         1,
         "pending edit must not be closed by another edit"
     );
-    assert_eq!(pending[0].0, second_id);
+    assert_eq!(pending[0].id, second_id);
 
     let stuck = store
         .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1))
@@ -250,7 +250,7 @@ async fn failure_records_do_not_resurrect_failed_intents() {
         .await
         .expect("save intent");
     let pending = store.get_pending_post_intents().await.expect("pending");
-    let (id, _) = pending[0];
+    let id = pending[0].id;
 
     // Dead-letter directly (retry_count stays below the budget).
     store

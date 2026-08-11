@@ -155,10 +155,12 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             .expect("save comment");
     }
 
-    let (comments, _) = store
+    let page = store
         .get_comments(&site, &slug, 10, 0)
         .await
         .expect("query comments");
+    let comments = page.items;
+    assert_eq!(page.total, 2);
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].event_id, "$a:hs");
     assert_eq!(comments[1].event_id, "$b:hs");
