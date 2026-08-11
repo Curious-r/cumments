@@ -322,31 +322,12 @@ impl AppServiceMatrixDriver {
             return Ok(());
         }
 
-        // Check membership state first so we never call /join for users that
-        // are already in the room (cached after the first check).
-        let member_path = format!(
-            "_matrix/client/v3/rooms/{}/state/m.room.member/{}",
-            urlencode(room_id),
-            urlencode(virtual_user)
-        );
-        match self
-            .request(reqwest::Method::GET, &member_path, Some(virtual_user))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(content) = resp.json::<serde_json::Value>().await
-                    && content.get("membership").and_then(|v| v.as_str()) == Some("join")
-                {
-                    self.cache_joined(cache_key);
-                    return Ok(());
-                }
-            }
-            Ok(_) => {}
-            Err(e) => warn!(
-                "Virtual user {} membership check failed for room {}: {:?}",
-                virtual_user, room_id, e
-            ),
+        // Check membership from the AS sender's perspective (it created the
+        // room and holds state access) so the result is authoritative for
+        // users that are already joined.
+        if self.is_member(room_id, virtual_user).await {
+            self.cache_joined(cache_key);
+            return Ok(());
         }
 
         let path = format!("_matrix/client/v3/rooms/{}/join", urlencode(room_id));
@@ -364,11 +345,17 @@ impl AppServiceMatrixDriver {
                 .and_then(|v| v.get("errcode").and_then(|e| e.as_str()).map(str::to_owned))
                 .unwrap_or_default();
             if errcode == "M_FORBIDDEN" {
-                // M_FORBIDDEN commonly means "already joined"; the send below
-                // remains the authoritative check.
+                // M_FORBIDDEN can mean "already joined", banned, or denied by
+                // join rules; do not guess. Re-check membership from the AS
+                // sender's perspective and only treat a confirmed join as
+                // success. Anything else is left for the send to resolve.
+                if self.is_member(room_id, virtual_user).await {
+                    self.cache_joined(cache_key);
+                    return Ok(());
+                }
                 self.invalidate_joined(&cache_key);
                 warn!(
-                    "Virtual user {} join room {} returned M_FORBIDDEN ({}): {}",
+                    "Virtual user {} join room {} returned M_FORBIDDEN and is not joined ({}): {}",
                     virtual_user, room_id, status, body
                 );
             } else {
@@ -381,6 +368,55 @@ impl AppServiceMatrixDriver {
             self.cache_joined(cache_key);
         }
         Ok(())
+    }
+
+    /// Whether the virtual user has `join` membership in the room, queried as
+    /// the AS sender. Errors are logged and treated as "not joined" so the
+    /// subsequent `/join` (or the final send) remains the authority.
+    async fn is_member(&self, room_id: &str, virtual_user: &str) -> bool {
+        let member_path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.member/{}",
+            urlencode(room_id),
+            urlencode(virtual_user)
+        );
+        let resp = match self
+            .request(reqwest::Method::GET, &member_path, None)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!(
+                    "Membership check for {} in {} failed: {:?}",
+                    virtual_user, room_id, e
+                );
+                return false;
+            }
+        };
+
+        if resp.status().is_success() {
+            match resp.json::<serde_json::Value>().await {
+                Ok(content) => content.get("membership").and_then(|v| v.as_str()) == Some("join"),
+                Err(e) => {
+                    warn!(
+                        "Failed to parse membership for {} in {}: {:?}",
+                        virtual_user, room_id, e
+                    );
+                    false
+                }
+            }
+        } else {
+            if resp.status() != reqwest::StatusCode::NOT_FOUND {
+                warn!(
+                    "Membership check for {} in {} failed ({}): {}",
+                    virtual_user,
+                    room_id,
+                    resp.status(),
+                    resp.text().await.unwrap_or_default()
+                );
+            }
+            false
+        }
     }
 
     fn is_joined_cached(&self, cache_key: &(String, String)) -> bool {
