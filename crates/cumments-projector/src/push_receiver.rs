@@ -1,10 +1,12 @@
 //! PushReceiver – AppService push event endpoint.
 //!
 //! Receives events pushed by the Matrix homeserver via
-//! `PUT /_matrix/app/v1/transactions/{txnId}?hs_token={hs_token}`
+//! `PUT /_matrix/app/v1/transactions/{txnId}`.
 //! and feeds them into the transport-agnostic [`EventProcessor`].
-//! The `hs_token` query parameter is verified against the configured
-//! value before any events are processed.
+//! The `hs_token` is verified against the configured value before any events
+//! are processed. Per the Matrix AppService specification the token arrives
+//! in the `Authorization: Bearer` header; the legacy `?hs_token=` query
+//! parameter is also accepted for homeservers that use it.
 
 use crate::event_processor::{
     EventProcessor, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
@@ -12,7 +14,7 @@ use crate::event_processor::{
 use axum::{
     Json,
     extract::{Path, Query},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::put,
 };
@@ -64,8 +66,9 @@ struct UnsignedData {
 /// Build the axum router for the AppService push endpoint.
 ///
 /// # Panics
-/// The `hs_token` is compared against the `hs_token` query parameter
-/// sent by the homeserver. Requests without a valid token are rejected
+/// The `hs_token` is read from the standard `Authorization: Bearer` header
+/// (with the legacy `?hs_token=` query parameter as a fallback) and compared
+/// against the configured value. Requests without a valid token are rejected
 /// with 401 UNAUTHORIZED.
 pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Router {
     let state = Arc::new(PushState {
@@ -85,11 +88,12 @@ pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Ro
 async fn handle_transaction(
     Path(_txn_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
     state: axum::extract::State<Arc<PushState>>,
     Json(txn): Json<Transaction>,
 ) -> impl IntoResponse {
     // ── hs_token verification ──
-    let received = query.get("hs_token").map(|s| s.as_str());
+    let received = bearer_token(&headers).or_else(|| query.get("hs_token").map(|s| s.as_str()));
     if received != Some(state.hs_token.as_str()) {
         tracing::warn!(
             "Push transaction rejected: invalid hs_token (received: {:?})",
@@ -123,6 +127,17 @@ async fn handle_transaction(
 
     // The AppService protocol requires an empty JSON object response.
     (StatusCode::OK, Json(serde_json::json!({})))
+}
+
+/// Read the `hs_token` from the `Authorization: Bearer` header.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, token)| token.trim())
+        .filter(|token| !token.is_empty())
 }
 
 // ── Event dispatch ────────────────────────────────────────────────
@@ -408,6 +423,33 @@ async fn parse_push_space_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn bearer_token_accepts_standard_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer abc123"));
+        assert_eq!(bearer_token(&headers), Some("abc123"));
+    }
+
+    #[test]
+    fn bearer_token_scheme_is_case_insensitive() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("bearer abc123"));
+        assert_eq!(bearer_token(&headers), Some("abc123"));
+    }
+
+    #[test]
+    fn bearer_token_rejects_missing_or_empty() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer"));
+        assert_eq!(bearer_token(&headers), None);
+
+        headers.insert("authorization", HeaderValue::from_static("Basic abc123"));
+        assert_eq!(bearer_token(&headers), None);
+
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
+    }
 
     #[test]
     fn structured_content_takes_precedence() {
