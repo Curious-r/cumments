@@ -272,21 +272,18 @@ impl AppServiceMatrixDriver {
 
     /// Generate a transaction ID for idempotent requests.
     ///
-    /// When an intent ID is available (post intents), the txn ID is
-    /// deterministic: if the homeserver accepted the first attempt but the
-    /// response was lost, a retry with the same txn ID returns the original
-    /// event instead of creating a duplicate comment.
-    fn txn_id(&self, intent_id: Option<i64>) -> String {
-        if let Some(id) = intent_id {
-            return format!("cumments_intent_{}", id);
-        }
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let mut random_bytes = [0u8; 4];
-        rand::rng().fill_bytes(&mut random_bytes);
-        format!("cumments_{}_{}", ts, hex::encode(random_bytes))
+    /// When an intent ID is available the txn ID is deterministic: if the
+    /// homeserver accepted the first attempt but the response was lost, a
+    /// retry with the same txn ID returns the original event instead of
+    /// creating a duplicate.
+    ///
+    /// The `kind` is part of the ID because homeservers scope transaction-ID
+    /// deduplication per (user, device, txn_id) without considering the
+    /// endpoint. Post and update intents are both sent by the same virtual
+    /// user through `/send`, so separate queues with colliding ids would
+    /// otherwise make an edit replay the original post.
+    fn txn_id(&self, kind: &str, intent_id: Option<i64>) -> String {
+        format_txn_id(kind, intent_id)
     }
 
     /// Make an authenticated CS API request with optional virtual user.
@@ -1055,7 +1052,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             reply_to,
         );
 
-        let txn_id = self.txn_id(intent_id);
+        let txn_id = self.txn_id("post", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             urlencode(room_id),
@@ -1124,7 +1121,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             intent_id,
         );
 
-        let txn_id = self.txn_id(intent_id);
+        let txn_id = self.txn_id("update", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             urlencode(room_id),
@@ -1162,7 +1159,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         proof: Option<&serde_json::Value>,
     ) -> Result<()> {
         // Redact as the sender user (has admin power level in the room).
-        let txn_id = self.txn_id(intent_id);
+        let txn_id = self.txn_id("delete", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/redact/{}/{}",
             urlencode(room_id),
@@ -1370,6 +1367,25 @@ fn urlencode(s: &str) -> String {
         }
     }
     result
+}
+
+/// Deterministic transaction ID for intent-driven requests.
+///
+/// The operation kind is part of the ID so distinct intent queues can never
+/// collide on a homeserver that deduplicates by `(user, device, txn_id)`.
+fn format_txn_id(kind: &str, intent_id: Option<i64>) -> String {
+    match intent_id {
+        Some(id) => format!("cumments_{}_{}", kind, id),
+        None => {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let mut random_bytes = [0u8; 4];
+            rand::rng().fill_bytes(&mut random_bytes);
+            format!("cumments_{}_{}_{}", kind, ts, hex::encode(random_bytes))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1605,5 +1621,30 @@ mod tests {
         let body = build_redaction_body(Some(&proof));
         assert_eq!(body["reason"], proof.to_string());
         assert_eq!(build_redaction_body(None), json!({}));
+    }
+
+    #[test]
+    fn txn_ids_are_deterministic_and_namespaced_per_operation() {
+        assert_eq!(format_txn_id("post", Some(7)), "cumments_post_7");
+        assert_eq!(format_txn_id("update", Some(7)), "cumments_update_7");
+        assert_eq!(format_txn_id("delete", Some(7)), "cumments_delete_7");
+        // Same intent id in different queues must never produce the same txn id.
+        let ids: std::collections::HashSet<_> = [
+            format_txn_id("post", Some(7)),
+            format_txn_id("update", Some(7)),
+            format_txn_id("delete", Some(7)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn txn_ids_without_intent_are_random_but_namespaced() {
+        let a = format_txn_id("post", None);
+        let b = format_txn_id("post", None);
+        assert!(a.starts_with("cumments_post_"));
+        assert!(b.starts_with("cumments_post_"));
+        assert_ne!(a, b);
     }
 }
