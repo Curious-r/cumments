@@ -137,8 +137,8 @@ and `Server listening on 0.0.0.0:7931`. The entrypoint fixes the ownership of
 
 ## 6. Verify
 
-1. Open the demo frontend (`misc/frontend/index.html`) against the API and
-   post a comment.
+1. Open the [demo frontend](demo.md) (`misc/demo/index.html`) against the API
+   and post a comment.
 2. In Matrix, check that a Space (`Comments: <site>`), a comment room
    (`Comments: <site>/<post>`), and the virtual user were created.
 3. The comment should appear in the frontend in real time via SSE.

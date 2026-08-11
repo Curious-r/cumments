@@ -47,7 +47,7 @@ verification and troubleshooting — is in the [installation guide](docs/install
 | [Configuration](docs/configuration.md) | Config discovery, environment variables, full example |
 | [Architecture](docs/architecture.md) | System design, operation modes, recovery, crates |
 | [API](docs/api.md) | Challenge, comments, signatures, SSE |
-| [Frontend](docs/frontend.md) | Demo page, identity, proof of work |
+| [Demo](docs/demo.md) | Backend-only positioning, demo page, identity, proof of work |
 | [Development](docs/development.md) | Toolchain, CLI, building the image from main |
 
 ## License

@@ -1,9 +1,25 @@
-# Frontend integration
+# Demo frontend
 
-`misc/frontend/index.html` is a standalone demo styled as a real comment
-section: posting, editing/deleting your own comments, pagination, SSE, and a
-"My comments" management view, plus identity backup/restore. It defaults to
-`http://localhost:7931`.
+Cumments is a **backend-only** project: it exposes an HTTP API and SSE stream,
+and speaks Matrix through its AppService. The repository does **not** ship a
+production frontend. Website and SSG-template developers are expected to write
+their own comment section for their own pages, using the
+[HTTP API](api.md) (challenge, PoW, signing, comments, SSE).
+
+`misc/demo/index.html` is a standalone demo that exercises the full API: it
+connects to a real backend and supports posting, editing and deleting your own
+comments, pagination, nested replies, SSE live updates, and a "My comments"
+management view. Use it as a reference implementation, not as a reusable
+component.
+
+## Running the demo
+
+The demo is a single HTML file with no build step. Open it in a browser and
+set the API URL in the settings drawer (default `http://localhost:7931`). It
+loads Tailwind, Markdown, DOMPurify and BIP39 from CDNs.
+
+The demo has a built-in language switcher (中文 / EN) in the top bar; the
+choice is remembered in `localStorage` (`cumments_demo_lang`).
 
 ## Identity
 
@@ -36,3 +52,5 @@ reminds you that mnemonic recovery is unavailable.
 2. Find a `nonce` such that `SHA256(prefix + nonce)` starts with `difficulty`
    leading zero hex digits.
 3. Submit `challenge_response = prefix + "|" + nonce`.
+
+The canonical signing messages are documented in the [API reference](api.md).

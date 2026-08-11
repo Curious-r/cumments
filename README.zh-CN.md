@@ -43,7 +43,7 @@ appservice，挂载配置与数据目录，然后用
 | [配置](docs/configuration.md) | 配置发现顺序、环境变量、完整示例 |
 | [架构](docs/architecture.md) | 系统设计、运行模式、恢复、crate 结构 |
 | [API](docs/api.md) | 挑战、评论、签名、SSE |
-| [前端](docs/frontend.md) | 演示页、身份、proof of work |
+| [演示页](docs/demo.md) | 后端定位说明、演示页、身份、proof of work |
 | [开发](docs/development.md) | 工具链、CLI、从 main 构建镜像 |
 
 ## License

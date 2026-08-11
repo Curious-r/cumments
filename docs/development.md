@@ -13,7 +13,7 @@ cargo test --locked --all-targets --all-features
 cargo test --locked --doc --all-features
 ```
 
-CI also runs a syntax check of the frontend's inline scripts with
+CI also runs a syntax check of the demo's inline scripts with
 `node --check`.
 
 ## CLI
