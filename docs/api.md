@@ -230,6 +230,8 @@ on the site backend and used to sign every write request.
 Enabled by setting `security.admin_token`. All admin routes require
 `Authorization: Bearer <token>`.
 
+Admin routes are rate limited (60 requests/minute per client key).
+
 ### List sites
 
 `GET /api/v1/admin/sites`

@@ -131,6 +131,8 @@ Every forwarded write request must carry:
   `timestamp\nMETHOD\npath\nsha256_hex(body)`
 
 with the key being the site secret. The timestamp must be within ±5 minutes.
+The signature does not cover the `Host` header, so a secret must never be
+shared between Cumments instances.
 
 ### Cloudflare Pages Functions
 
@@ -152,6 +154,11 @@ function hex(bytes) {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+const CUMMENTS_BASE = "https://comments.example.com";
+// Must be the Cumments endpoint your frontend posts to — the proxy's own
+// route may differ and the signature covers this path, not the proxy path.
+const CUMMENTS_PATH = "/api/v1/sites/<site_id>/posts/<post_slug>/comments";
+
 export async function onRequestPost(context) {
   const body = await context.request.text();
   const timestamp = String(Math.floor(Date.now() / 1000));
@@ -159,10 +166,10 @@ export async function onRequestPost(context) {
     context.env.CUMMENTS_SITE_SECRET,
     timestamp,
     "POST",
-    new URL(context.request.url).pathname,
+    CUMMENTS_PATH,
     new TextEncoder().encode(body),
   );
-  const upstream = await fetch("https://comments.example.com" + new URL(context.request.url).pathname, {
+  const upstream = await fetch(CUMMENTS_BASE + CUMMENTS_PATH, {
     method: "POST",
     headers: {
       "content-type": "application/json",
