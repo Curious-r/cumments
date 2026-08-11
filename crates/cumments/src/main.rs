@@ -233,11 +233,36 @@ async fn main() -> Result<()> {
     if appservice.is_some() {
         let sweep_driver = driver.clone();
         tokio::spawn(async move {
-            let rooms = match sweep_driver.joined_rooms().await {
-                Ok(rooms) => rooms,
-                Err(e) => {
-                    tracing::warn!("Owner admin sweep: failed to list joined rooms: {:?}", e);
-                    return;
+            // The homeserver may not be ready when this task starts (compose
+            // `depends_on` only waits for container start, not readiness).
+            // Try immediately and retry at a fixed interval until it answers
+            // or the retry budget runs out; no artificial startup delay is
+            // needed because the interval only applies between attempts.
+            const SWEEP_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+            const SWEEP_MAX_RETRIES: usize = 10;
+
+            let mut retries = 0;
+            let rooms = loop {
+                match sweep_driver.joined_rooms().await {
+                    Ok(rooms) => break rooms,
+                    Err(e) => {
+                        retries += 1;
+                        if retries > SWEEP_MAX_RETRIES {
+                            tracing::warn!(
+                                "Owner admin sweep: giving up after {} retries: {:?}",
+                                retries - 1,
+                                e
+                            );
+                            return;
+                        }
+                        tracing::warn!(
+                            "Owner admin sweep: failed to list joined rooms (retry {}/{}): {:?}",
+                            retries,
+                            SWEEP_MAX_RETRIES,
+                            e
+                        );
+                        tokio::time::sleep(SWEEP_RETRY_INTERVAL).await;
+                    }
                 }
             };
             for room_id in rooms {
