@@ -1,35 +1,27 @@
+use crate::routes::comments::{
+    QUERY_METHOD, delete_comment_handler, post_comment_handler, query_comments_handler,
+    update_comment_handler,
+};
+use crate::routes::misc::{get_challenge_handler, health_handler};
+use crate::routes::sse::sse_handler;
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::{HeaderName, HeaderValue, Method, StatusCode},
-    response::{
-        IntoResponse,
-        sse::{Event, KeepAlive, Sse},
-    },
+    Router,
+    http::{HeaderName, HeaderValue, Method},
     routing::{delete, get, post},
 };
 use cumments_core::{
-    identity::{post_signature_message, signature_message, verify_signature},
-    intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
-    models::{AuthorType, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
     projector_events::ProjectorEvent,
 };
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::{Notify, broadcast};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use validator::Validate;
 
 pub mod error;
 pub mod pow;
 pub mod request;
-
-use crate::error::AppError;
-use crate::request::{
-    ChallengeResponse, DeleteCommentRequest, PaginatedResponse, PaginationMeta, PaginationQuery,
-    PostCommentRequest, UpdateCommentRequest,
-};
+pub mod routes;
 
 // ----------------------
 
@@ -46,16 +38,6 @@ pub struct ApiState {
     pub reconciler_notify: Arc<Notify>,
 }
 
-/// The QUERY method for HTTP.
-static QUERY_METHOD: std::sync::LazyLock<Method> =
-    std::sync::LazyLock::new(|| Method::from_bytes(b"QUERY").unwrap());
-
-/// The Accept-Query response header (RFC 10008, Section 3).
-static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
-    std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
-
-/// Build the CORS layer from a comma-separated origin list.
-///
 /// `"*"` keeps permissive behavior; an empty list disables cross-origin
 /// support (no CORS headers are sent); any other value restricts
 /// `Access-Control-Allow-Origin` to the listed origins and explicitly allows
@@ -93,19 +75,6 @@ fn cors_layer(cors_origins: &str) -> Option<CorsLayer> {
     )
 }
 
-/// Extract the signed challenge prefix from a `challenge|nonce` response.
-fn challenge_prefix(challenge_response: &str) -> &str {
-    challenge_response.split('|').next().unwrap_or("")
-}
-
-/// Basic shape check for a Matrix event ID used as a reply target.
-fn validate_reply_to_format(reply_to: &str) -> Result<(), &'static str> {
-    if reply_to.len() > 255 || !reply_to.starts_with('$') || !reply_to.contains(':') {
-        return Err("reply_to must be a Matrix event ID (e.g. \"$event:server\")");
-    }
-    Ok(())
-}
-
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
     let router = Router::new()
@@ -133,441 +102,14 @@ pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
     }
 }
 
-/// Simple liveness endpoint used by container healthchecks.
-async fn health_handler() -> impl IntoResponse {
-    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
-}
-
-/// The handler for generating a new PoW challenge.
-async fn get_challenge_handler(State(state): State<ApiState>) -> impl IntoResponse {
-    let challenge = state.pow.generate_challenge();
-    let response = ChallengeResponse {
-        prefix: challenge.prefix,
-        difficulty: challenge.difficulty,
-    };
-    (StatusCode::OK, Json(response))
-}
-
-/// The handler for querying comments via the QUERY method (RFC 10008).
-///
-/// Pagination parameters are passed as JSON request body instead of
-/// URL query string, allowing for future extension to complex filters.
-///
-/// This handler is registered as the fallback for non-POST requests.
-/// It validates the method and rejects non-QUERY requests with 405.
-async fn query_comments_handler(
-    method: Method,
-    State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
-    body: String,
-) -> Result<impl IntoResponse, AppError> {
-    // 1. Only QUERY method is accepted here
-    if method != *QUERY_METHOD {
-        return Err(AppError::MethodNotAllowed);
-    }
-
-    // 2. Validate path params
-    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-
-    // 3. Parse pagination from JSON body (empty body → defaults)
-    let query: PaginationQuery = if body.is_empty() {
-        PaginationQuery {
-            page: None,
-            per_page: None,
-        }
-    } else {
-        serde_json::from_str(&body)
-            .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?
-    };
-    query.validate().map_err(AppError::Validation)?;
-
-    tracing::info!(
-        "QUERY comments for site: {}, post: {} (page: {:?}, per_page: {:?})",
-        site_id_val.as_str(),
-        post_slug_val.as_str(),
-        query.page,
-        query.per_page,
-    );
-
-    let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
-    let limit = per_page;
-    let offset = (page - 1) * per_page;
-
-    match state
-        .store
-        .get_comments(&site_id_val, &post_slug_val, limit, offset)
-        .await
-    {
-        Ok((comments, total)) => {
-            let total_pages = if total > 0 {
-                (total + per_page - 1) / per_page
-            } else {
-                0
-            };
-
-            let response = PaginatedResponse {
-                data: comments,
-                meta: PaginationMeta {
-                    total,
-                    page,
-                    per_page,
-                    total_pages,
-                },
-            };
-
-            // Advertise QUERY support and accepted media type per RFC 10008.
-            let headers = [(ACCEPT_QUERY.clone(), "application/json")];
-            Ok((headers, (StatusCode::OK, Json(response))))
-        }
-        Err(e) => {
-            tracing::error!("Failed to query comments: {:?}", e);
-            Err(AppError::Internal(
-                "Failed to retrieve comments.".to_string(),
-            ))
-        }
-    }
-}
-
-/// The handler for receiving a new comment post.
-async fn post_comment_handler(
-    State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
-    Json(req): Json<PostCommentRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    // 1. Validate input
-    req.validate().map_err(AppError::Validation)?;
-    if req
-        .reply_to
-        .as_deref()
-        .is_some_and(|reply_to| reply_to.trim().is_empty())
-    {
-        return Err(AppError::BadRequest(
-            "reply_to must not be empty when provided.".to_string(),
-        ));
-    }
-    if let Some(reply_to) = req.reply_to.as_deref()
-        && let Err(msg) = validate_reply_to_format(reply_to)
-    {
-        return Err(AppError::BadRequest(msg.to_string()));
-    }
-
-    // 2. Verify the PoW challenge
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
-
-    // 2b. Verify the author's Ed25519 signature over the canonical message.
-    let challenge = challenge_prefix(&req.challenge_response);
-    let message = post_signature_message(
-        &site_id,
-        &post_slug,
-        &req.content,
-        &req.displayname,
-        req.reply_to.as_deref(),
-        challenge,
-    );
-    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
-        return Err(AppError::InvalidSignature);
-    }
-
-    // The reply target must belong to the same site/post when it is already
-    // visible in the read model. Unknown targets are accepted so a fast reply
-    // does not depend on projection timing; Matrix relation semantics still
-    // apply.
-    if let Some(reply_to) = req.reply_to.as_deref() {
-        match state.store.get_comment(reply_to).await {
-            Ok(Some(parent)) => {
-                if parent.site_id != site_id || parent.post_slug != post_slug {
-                    return Err(AppError::BadRequest(
-                        "reply_to must reference a comment in the same site and post.".to_string(),
-                    ));
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::error!("Failed to validate reply target: {:?}", e);
-                return Err(AppError::Internal(
-                    "Failed to validate reply target.".to_string(),
-                ));
-            }
-        }
-    }
-
-    // 3. Create the business intent
-    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-
-    let intent = PostCommentIntent {
-        site_id: site_id_val,
-        post_slug: post_slug_val,
-        content: req.content,
-        displayname: req.displayname,
-        author_public_key: req.author_public_key,
-        author_signature: req.author_signature,
-        author_challenge: challenge.to_string(),
-        reply_to: req.reply_to,
-    };
-
-    // 4. Save the intent for the reconciler
-    match state.store.save_post_intent(&intent).await {
-        Ok(_) => {
-            tracing::info!("Successfully saved a new comment intent.");
-            state.reconciler_notify.notify_one();
-            Ok((
-                StatusCode::ACCEPTED,
-                "Comment received and queued for processing.",
-            ))
-        }
-
-        Err(e) => {
-            tracing::error!("Failed to save comment intent: {:?}", e);
-            Err(AppError::Internal("Failed to queue comment.".to_string()))
-        }
-    }
-}
-
-/// The handler for receiving a new delete comment request.
-async fn delete_comment_handler(
-    State(state): State<ApiState>,
-    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
-    Json(req): Json<DeleteCommentRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    // 1. Validate input
-    req.validate().map_err(AppError::Validation)?;
-
-    // 2. Verify the PoW challenge
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
-
-    // 2b. Verify the author's Ed25519 signature.
-    let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&["DELETE", &site_id, &post_slug, &comment_id, challenge]);
-    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
-        return Err(AppError::InvalidSignature);
-    }
-
-    // 2c. Authorization: the presented public key must be the comment's owner.
-    match state.store.get_comment(&comment_id).await {
-        Ok(Some(comment)) => {
-            if comment.site_id != site_id || comment.post_slug != post_slug {
-                return Err(AppError::NotFound("Comment not found.".to_string()));
-            }
-            if comment.author.kind == AuthorType::Matrix {
-                return Err(AppError::NotManageable(
-                    "This comment was posted by a Matrix user; manage it from a Matrix client."
-                        .to_string(),
-                ));
-            }
-            match state.store.get_comment_author_public_key(&comment_id).await {
-                Ok(Some(expected)) if expected == req.author_public_key => {}
-                Ok(Some(_)) => {
-                    return Err(AppError::Unauthorized(
-                        "You are not authorized to delete this comment.".to_string(),
-                    ));
-                }
-                Ok(None) => {
-                    return Err(AppError::Unauthorized(
-                        "Cannot verify ownership for this comment.".to_string(),
-                    ));
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to fetch comment owner verifier for authorization: {:?}",
-                        e
-                    );
-                    return Err(AppError::Internal(
-                        "Internal server error during authorization.".to_string(),
-                    ));
-                }
-            }
-        }
-        Ok(None) => {
-            return Err(AppError::NotFound("Comment not found.".to_string()));
-        }
-        Err(e) => {
-            tracing::error!("Failed to fetch comment for authorization: {:?}", e);
-            return Err(AppError::Internal(
-                "Internal server error during authorization.".to_string(),
-            ));
-        }
-    }
-
-    // 3. Create the business intent
-    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-    let intent = DeleteCommentIntent {
-        site_id: site_id_val,
-        post_slug: post_slug_val,
-        event_id: comment_id,
-        author_public_key: req.author_public_key,
-        author_signature: req.author_signature,
-        author_challenge: challenge.to_string(),
-    };
-
-    // 4. Save the intent for the reconciler
-    match state.store.save_delete_intent(&intent).await {
-        Ok(_) => {
-            tracing::info!("Successfully saved a delete comment intent.");
-            state.reconciler_notify.notify_one();
-            Ok((
-                StatusCode::ACCEPTED,
-                "Delete request received and queued for processing.",
-            ))
-        }
-        Err(e) => {
-            tracing::error!("Failed to save delete comment intent: {:?}", e);
-            Err(AppError::Internal(
-                "Failed to queue delete request.".to_string(),
-            ))
-        }
-    }
-}
-
-/// The handler for receiving a new update comment request.
-async fn update_comment_handler(
-    State(state): State<ApiState>,
-    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
-    Json(req): Json<UpdateCommentRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    // 1. Validate input
-    req.validate().map_err(AppError::Validation)?;
-
-    // 2. Verify the PoW challenge
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
-
-    // 3b. Verify the author's Ed25519 signature.
-    let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&[
-        "PATCH",
-        &site_id,
-        &post_slug,
-        &comment_id,
-        &req.content,
-        challenge,
-    ]);
-    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
-        return Err(AppError::InvalidSignature);
-    }
-
-    // 3c. Authorization: the presented public key must be the comment's owner,
-    // and the comment must belong to the site/post in the path.
-    match state.store.get_comment(&comment_id).await {
-        Ok(Some(comment)) => {
-            if comment.site_id != site_id || comment.post_slug != post_slug {
-                return Err(AppError::NotFound("Comment not found.".to_string()));
-            }
-            if comment.author.kind == AuthorType::Matrix {
-                return Err(AppError::NotManageable(
-                    "This comment was posted by a Matrix user; manage it from a Matrix client."
-                        .to_string(),
-                ));
-            }
-            match state.store.get_comment_author_public_key(&comment_id).await {
-                Ok(Some(expected)) if expected == req.author_public_key => {}
-                Ok(Some(_)) => {
-                    return Err(AppError::Unauthorized(
-                        "You are not authorized to edit this comment.".to_string(),
-                    ));
-                }
-                Ok(None) => {
-                    return Err(AppError::Unauthorized(
-                        "Cannot verify ownership for this comment.".to_string(),
-                    ));
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to fetch comment owner verifier for authorization: {:?}",
-                        e
-                    );
-                    return Err(AppError::Internal(
-                        "Internal server error during authorization.".to_string(),
-                    ));
-                }
-            }
-        }
-        Ok(None) => {
-            return Err(AppError::NotFound("Comment not found.".to_string()));
-        }
-        Err(e) => {
-            tracing::error!("Failed to fetch comment for authorization: {:?}", e);
-            return Err(AppError::Internal(
-                "Internal server error during authorization.".to_string(),
-            ));
-        }
-    }
-
-    // 4. Create the business intent
-    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-    let intent = UpdateCommentIntent {
-        site_id: site_id_val,
-        post_slug: post_slug_val,
-        event_id: comment_id,
-        content: req.content,
-        author_public_key: req.author_public_key,
-        author_signature: req.author_signature,
-        author_challenge: challenge.to_string(),
-    };
-
-    // 5. Save the intent for the reconciler
-    match state.store.save_update_intent(&intent).await {
-        Ok(_) => {
-            tracing::info!("Successfully saved an update comment intent.");
-            state.reconciler_notify.notify_one();
-            Ok((
-                StatusCode::ACCEPTED,
-                "Update request received and queued for processing.",
-            ))
-        }
-        Err(e) => {
-            tracing::error!("Failed to save update comment intent: {:?}", e);
-            Err(AppError::Internal(
-                "Failed to queue update request.".to_string(),
-            ))
-        }
-    }
-}
-
-/// SSE handler that streams projector events for a specific post.
-async fn sse_handler(
-    State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
-) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let mut rx = state.event_bus.subscribe();
-
-    let stream = async_stream::stream! {
-        while let Ok(event) = rx.recv().await {
-            // Filter events by site_id and post_slug
-            let matches = match &event {
-                ProjectorEvent::CommentCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                ProjectorEvent::CommentUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                ProjectorEvent::CommentDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-            };
-
-            if matches && let Ok(json) = serde_json::to_string(&event) {
-                let event_name = match &event {
-                    ProjectorEvent::CommentCreated { .. } => "comment_created",
-                    ProjectorEvent::CommentUpdated { .. } => "comment_updated",
-                    ProjectorEvent::CommentDeleted { .. } => "comment_deleted",
-                };
-                yield Ok(Event::default().event(event_name).data(json));
-            }
-        }
-    };
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::AppError;
     use crate::request::PaginationQuery;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use cumments_core::models::AuthorType;
     use cumments_core::models::{Comment, CommentAuthor};
     use validator::Validate;
 
@@ -630,14 +172,5 @@ mod tests {
         assert_eq!(json["author"]["public_key"], "pk");
         assert!(json.get("sender_mxid").is_none());
         assert!(json.get("room_id").is_none());
-    }
-
-    #[test]
-    fn reply_to_format_validation_accepts_event_ids_and_rejects_garbage() {
-        assert!(validate_reply_to_format("$event:server").is_ok());
-        assert!(validate_reply_to_format("$a:hs").is_ok());
-        assert!(validate_reply_to_format("not-an-event").is_err());
-        assert!(validate_reply_to_format("$no-server").is_err());
-        assert!(validate_reply_to_format(&format!("${}", "x".repeat(300))).is_err());
     }
 }
