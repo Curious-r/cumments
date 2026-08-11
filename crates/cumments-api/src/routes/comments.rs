@@ -149,7 +149,7 @@ pub(crate) async fn post_comment_handler(
         &site_id,
         &post_slug,
         &req.content,
-        &req.displayname,
+        &req.display_name,
         req.reply_to.as_deref(),
         challenge,
     );
@@ -188,7 +188,7 @@ pub(crate) async fn post_comment_handler(
         site_id: site_id_val,
         post_slug: post_slug_val,
         content: req.content,
-        displayname: req.displayname,
+        display_name: req.display_name,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
         author_challenge: challenge.to_string(),

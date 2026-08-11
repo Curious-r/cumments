@@ -156,7 +156,7 @@ mod tests {
             post_slug: "hello".to_string(),
             author: CommentAuthor {
                 kind: AuthorType::Guest,
-                displayname: Some("Alice".to_string()),
+                display_name: Some("Alice".to_string()),
                 public_key: Some("pk".to_string()),
                 mxid: None,
             },

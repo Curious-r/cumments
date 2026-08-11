@@ -28,7 +28,7 @@ async fn save_comment_records_original_sender() {
         post_slug: slug.as_str().to_string(),
         author: CommentAuthor {
             kind: AuthorType::Guest,
-            displayname: Some("Alice".to_string()),
+            display_name: Some("Alice".to_string()),
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             mxid: None,
         },
@@ -79,7 +79,7 @@ async fn update_comment_preserves_reply_to() {
         post_slug: slug.as_str().to_string(),
         author: CommentAuthor {
             kind: AuthorType::Guest,
-            displayname: Some("Alice".to_string()),
+            display_name: Some("Alice".to_string()),
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             mxid: None,
         },
@@ -133,7 +133,7 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             post_slug: slug.as_str().to_string(),
             author: CommentAuthor {
                 kind: AuthorType::Guest,
-                displayname: Some("Alice".to_string()),
+                display_name: Some("Alice".to_string()),
                 public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
                 mxid: None,
             },
@@ -180,7 +180,7 @@ async fn matrix_native_comment_roundtrip() {
         post_slug: slug.as_str().to_string(),
         author: CommentAuthor {
             kind: AuthorType::Matrix,
-            displayname: None,
+            display_name: None,
             public_key: None,
             mxid: Some("@alice:hs".to_string()),
         },

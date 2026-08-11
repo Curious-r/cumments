@@ -225,7 +225,7 @@ impl EventProcessor {
                 &event.author_public_key,
                 &event.author_signature,
                 &event.author_challenge,
-                &event.displayname,
+                &event.display_name,
             ) {
                 (Some(pk), Some(sig), Some(chal), Some(nick)) => {
                     let message = post_signature_message(
@@ -268,7 +268,7 @@ impl EventProcessor {
                 } else {
                     AuthorType::Guest
                 },
-                displayname: event.displayname.clone(),
+                display_name: event.display_name.clone(),
                 public_key: event.author_public_key.clone(),
                 mxid: if is_matrix_native {
                     Some(event.sender.clone())

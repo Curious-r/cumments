@@ -169,7 +169,7 @@ impl Reconciler {
                     .post_message(
                         &room_id,
                         &intent.content,
-                        &intent.displayname,
+                        &intent.display_name,
                         &intent.author_public_key,
                         &intent.author_signature,
                         &intent.author_challenge,
@@ -342,10 +342,10 @@ impl Reconciler {
                     .register_room(&room_id, &intent.site_id, &intent.post_slug)
                     .await?;
 
-                // 4. Hands: Fetch original displayname to maintain it
-                let displayname = self
+                // 4. Hands: Fetch original display name to maintain it
+                let display_name = self
                     .comment_store
-                    .get_author_displayname(&intent.event_id)
+                    .get_author_display_name(&intent.event_id)
                     .await?
                     .unwrap_or_else(|| "Guest".to_string());
 
@@ -355,7 +355,7 @@ impl Reconciler {
                         &room_id,
                         &intent.event_id,
                         &intent.content,
-                        &displayname,
+                        &display_name,
                         &intent.author_public_key,
                         &intent.author_signature,
                         &intent.author_challenge,

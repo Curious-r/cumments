@@ -163,7 +163,7 @@ pub(crate) fn reply_fallback_body(
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_message_body(
     content: &str,
-    displayname: &str,
+    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
@@ -194,7 +194,7 @@ pub(crate) fn build_message_body(
         // Structured fields so the projector can store the pure content
         // and displayname instead of parsing them back out of the body.
         "content": content,
-        "displayname": displayname,
+        "displayname": display_name,
         "intent_id": intent_id,
     });
     if let Some(parent_event_id) = reply_to {
@@ -211,7 +211,7 @@ pub(crate) fn build_message_body(
 pub(crate) fn build_edit_body(
     event_id: &str,
     new_content: &str,
-    displayname: &str,
+    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
@@ -228,7 +228,7 @@ pub(crate) fn build_edit_body(
         "signature": author_signature,
         "challenge": author_challenge,
         "content": new_content,
-        "displayname": displayname,
+        "displayname": display_name,
         "intent_id": intent_id,
     });
     serde_json::json!({

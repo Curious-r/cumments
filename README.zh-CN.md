@@ -407,7 +407,7 @@ cumments backup --output <file>
       "post_slug": "hello-world",
       "author": {
         "type": "guest",
-        "displayname": "Alice",
+        "display_name": "Alice",
         "public_key": "...",
         "mxid": null
       },
@@ -433,7 +433,7 @@ cumments backup --output <file>
 ```json
 {
   "content": "...",
-  "displayname": "Alice",
+  "display_name": "Alice",
   "author_public_key": "...",
   "author_signature": "...",
   "challenge_response": "challenge|nonce"
@@ -443,7 +443,7 @@ cumments backup --output <file>
 签名消息：
 
 ```text
-POST\n{site_id}\n{post_slug}\n{content}\n{displayname}\n{reply_to}\n{challenge_prefix}
+POST\n{site_id}\n{post_slug}\n{content}\n{display_name}\n{reply_to}\n{challenge_prefix}
 ```
 
 `reply_to` 是父评论的 Matrix event ID；非回复时为空行。

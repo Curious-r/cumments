@@ -113,7 +113,7 @@ pub trait CommentStore: Send + Sync {
     async fn delete_comment(&self, event_id: &str) -> Result<bool>;
 
     /// Gets the author display name for a specific event.
-    async fn get_author_displayname(&self, event_id: &str) -> Result<Option<String>>;
+    async fn get_author_display_name(&self, event_id: &str) -> Result<Option<String>>;
 
     /// Returns the stored author public key for a comment, if any. Used to
     /// authorize edit/delete requests by comparing the presented key.
@@ -191,7 +191,7 @@ pub trait MatrixDriver: Send + Sync {
         &self,
         room_id: &str,
         content: &str,
-        displayname: &str,
+        display_name: &str,
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
@@ -214,7 +214,7 @@ pub trait MatrixDriver: Send + Sync {
         room_id: &str,
         event_id: &str,
         new_content: &str,
-        displayname: &str,
+        display_name: &str,
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,

@@ -19,7 +19,7 @@ pub struct PostCommentIntent {
     pub content: String,
 
     /// Display name of the author. For guests, this is provided by them.
-    pub displayname: String,
+    pub display_name: String,
 
     /// Ed25519 public key identifying the author (base64url).
     /// Ownership is publicly verifiable from Matrix events.

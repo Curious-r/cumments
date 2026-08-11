@@ -33,7 +33,7 @@ pub fn post_signature_message(
     site_id: &str,
     post_slug: &str,
     content: &str,
-    displayname: &str,
+    display_name: &str,
     reply_to: Option<&str>,
     challenge: &str,
 ) -> String {
@@ -42,7 +42,7 @@ pub fn post_signature_message(
         site_id,
         post_slug,
         content,
-        displayname,
+        display_name,
         reply_to.unwrap_or(""),
         challenge,
     ])

@@ -42,7 +42,7 @@ pub struct PostCommentRequest {
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
     #[validate(length(min = 1, max = 50))]
-    pub displayname: String,
+    pub display_name: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
     pub author_public_key: String,
     /// Ed25519 signature over the canonical POST message.

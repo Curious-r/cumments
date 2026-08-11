@@ -40,7 +40,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         &self,
         room_id: &str,
         content: &str,
-        displayname: &str,
+        display_name: &str,
         author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
@@ -55,7 +55,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         info!(
             "LOGGING: Post message to room={}. Author={} (guest={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, intent={:?}): {}",
             room_id,
-            displayname,
+            display_name,
             guest_id,
             reply_to,
             reply_to_body,
@@ -71,7 +71,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         room_id: &str,
         event_id: &str,
         new_content: &str,
-        displayname: &str,
+        display_name: &str,
         author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
@@ -82,7 +82,7 @@ impl MatrixDriver for LoggingMatrixDriver {
             .unwrap_or_else(|| "invalid".to_string());
         info!(
             "LOGGING: Update message {} in room={}. Author={} (guest={}, intent={:?}): {}",
-            event_id, room_id, displayname, guest_id, intent_id, new_content
+            event_id, room_id, display_name, guest_id, intent_id, new_content
         );
         Ok(format!("log_update_{}", event_id))
     }

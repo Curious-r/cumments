@@ -340,14 +340,14 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     let author_signature = namespaced_string(content, "signature").map(|s| s.to_string());
     let author_challenge = namespaced_string(content, "challenge").map(|s| s.to_string());
     let structured_content = namespaced_string(content, "content");
-    let structured_displayname = namespaced_string(content, "displayname");
+    let structured_display_name = namespaced_string(content, "displayname");
 
     let trusted_block = is_virtual_sender
         && author_public_key.is_some()
         && author_signature.is_some()
         && author_challenge.is_some()
         && structured_content.is_some()
-        && structured_displayname.is_some();
+        && structured_display_name.is_some();
 
     // Extract the standard rich-reply relation, if any.
     let reply_to = content
@@ -405,8 +405,8 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
                 None
             },
         ),
-        displayname: if is_virtual_sender {
-            structured_displayname.map(|s| s.to_string())
+        display_name: if is_virtual_sender {
+            structured_display_name.map(|s| s.to_string())
         } else {
             None
         },
@@ -711,7 +711,7 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse edit");
-        assert_eq!(parsed.displayname.as_deref(), Some("Alice"));
+        assert_eq!(parsed.display_name.as_deref(), Some("Alice"));
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert_eq!(parsed.content, "edited");
@@ -756,7 +756,7 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse comment");
-        assert_eq!(parsed.displayname.as_deref(), Some("Alice"));
+        assert_eq!(parsed.display_name.as_deref(), Some("Alice"));
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert_eq!(parsed.content, "hello");
@@ -832,7 +832,7 @@ mod tests {
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
-        assert!(parsed.displayname.is_none());
+        assert!(parsed.display_name.is_none());
         assert!(parsed.intent_id.is_none());
     }
 

@@ -167,7 +167,7 @@
                         <div class="flex-1 space-y-2">
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <input
-                                    id="composerDisplayname"
+                                    id="composerDisplayName"
                                     type="text"
                                     maxlength="50"
                                     placeholder="昵称"
@@ -324,7 +324,7 @@
                                 昵称
                             </label>
                             <input
-                                id="settingDisplayname"
+                                id="settingDisplayName"
                                 type="text"
                                 class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                             />
@@ -498,7 +498,7 @@
                 api: "http://localhost:7931",
                 siteId: "my-blog",
                 slug: "hello-world",
-                displayname: "访客",
+                displayName: "访客",
             };
 
             const state = {
@@ -548,7 +548,7 @@
                 document.getElementById("apiUrl").value = s.api;
                 document.getElementById("siteId").value = s.siteId;
                 document.getElementById("slug").value = s.slug;
-                document.getElementById("settingDisplayname").value = s.displayname;
+                document.getElementById("settingDisplayName").value = s.displayName;
                 syncComposer(s);
             }
 
@@ -557,14 +557,14 @@
                     api: document.getElementById("apiUrl").value.trim().replace(/\/+$/, ""),
                     siteId: document.getElementById("siteId").value.trim(),
                     slug: document.getElementById("slug").value.trim(),
-                    displayname:
-                        document.getElementById("settingDisplayname").value.trim() ||
+                    displayName:
+                        document.getElementById("settingDisplayName").value.trim() ||
                         "访客",
                 };
             }
 
             function syncComposer(s) {
-                document.getElementById("composerDisplayname").value = s.displayname;
+                document.getElementById("composerDisplayName").value = s.displayName;
                 updateComposerAvatar();
             }
 
@@ -581,11 +581,11 @@
                 document.getElementById("apiUrl").value = s.api;
                 document.getElementById("siteId").value = s.siteId;
                 document.getElementById("slug").value = s.slug;
-                const composerDisplayname = document
-                    .getElementById("composerDisplayname")
+                const composerDisplayName = document
+                    .getElementById("composerDisplayName")
                     .value.trim();
-                document.getElementById("settingDisplayname").value =
-                    composerDisplayname || s.displayname;
+                document.getElementById("settingDisplayName").value =
+                    composerDisplayName || s.displayName;
                 renderIdentity();
                 document.getElementById("settingsModal").classList.remove("hidden");
             }
@@ -1154,7 +1154,7 @@
                         ? author.mxid.replace(/^@/, "").split(":")[0]
                         : "Matrix 用户";
                 }
-                return author.displayname || "访客";
+                return author.display_name || "访客";
             }
 
             function authorAvatarKey(comment) {
@@ -1552,8 +1552,8 @@
 
             async function submitComment() {
                 const cfg = getSettings();
-                const displayname =
-                    document.getElementById("composerDisplayname").value.trim() ||
+                const displayName =
+                    document.getElementById("composerDisplayName").value.trim() ||
                     "访客";
                 const content = document
                     .getElementById("composerContent")
@@ -1581,7 +1581,7 @@
                         cfg.siteId,
                         cfg.slug,
                         content,
-                        displayname,
+                        displayName,
                         replyTo,
                         chal.prefix,
                     ]);
@@ -1594,7 +1594,7 @@
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
                                 content,
-                                displayname,
+                                display_name: displayName,
                                 author_public_key: publicKey,
                                 author_signature: signature,
                                 reply_to: state.replyingTo
@@ -1809,7 +1809,7 @@
             }
 
             function updateComposerAvatar() {
-                const input = document.getElementById("composerDisplayname");
+                const input = document.getElementById("composerDisplayName");
                 const avatar = document.getElementById("composerAvatar");
                 const name = (input.value || "访客").trim();
                 avatar.textContent = name[0].toUpperCase();

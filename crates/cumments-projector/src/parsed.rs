@@ -13,7 +13,7 @@ pub struct ParsedRoomMessage {
     /// The plain-text body of the message.
     pub content: String,
     /// The resolved display name of the author, if available.
-    pub displayname: Option<String>,
+    pub display_name: Option<String>,
     /// The author's Ed25519 public key embedded in the event, if any.
     pub author_public_key: Option<String>,
     /// The author's Ed25519 signature embedded in the event, if any.
