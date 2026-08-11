@@ -139,7 +139,11 @@ impl SiteStore for DbStore {
         sites::Entity::insert(active_model)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(sites::Column::Id)
-                    .do_nothing()
+                    // Upsert instead of do-nothing: with DO NOTHING and no
+                    // RETURNING row, sea-orm treats a conflicting existing
+                    // site as an insert failure, which made every space-child
+                    // push event fail and blocked the homeserver's push queue.
+                    .update_columns([sites::Column::MatrixSpaceId, sites::Column::DisplayName])
                     .to_owned(),
             )
             .exec(&self.db)
