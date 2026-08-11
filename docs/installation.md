@@ -1,29 +1,40 @@
 # Quick start
 
-This guide follows the AppService deployment flow: a Matrix homeserver (the
-examples use [tuwunel](https://github.com/matrix-construct/tuwunel)) plus the
-official Cumments image from GHCR.
+This guide runs a complete local stack with the official images: a
+[tuwunel](https://github.com/matrix-construct/tuwunel) homeserver and Cumments
+as its Matrix Application Service. The ready-made compose file lives at
+[`misc/docker/compose.yaml`](../misc/docker/compose.yaml) and is a minimal,
+self-contained example: both services are configured entirely through
+environment variables; the only manual step outside the compose file is
+generating the AppService registration and copying its tokens in.
 
 ## Prerequisites
 
 - Docker with Compose (v2).
-- A Matrix homeserver reachable from the Cumments container, and a Matrix
-  domain (`your_server.tld` below).
-- A place where the homeserver can reach Cumments (in Compose, the service
-  name is enough, e.g. `http://cumments:7931`).
+- `curl`, for creating the first Matrix account.
 
-## 1. Prepare the directory layout
+## 1. Copy the compose file
 
-```text
-deploy/
-├── docker-compose.yml        # or your existing compose project
-├── cumments.env              # env_file for the Cumments service
-├── cumments/
-│   ├── config/               # mounted read-only at /etc/cumments
-│   │   ├── cumments.toml
-│   │   └── registration.yaml
-│   └── data/                 # mounted read-write at /srv/cumments (SQLite)
+Copy the example into a directory of its own so the generated
+`registration.yaml` does not end up inside the repository:
+
+```bash
+mkdir -p ~/cumments-demo && cd ~/cumments-demo
+cp /path/to/cumments/misc/docker/compose.yaml docker-compose.yml
 ```
+
+For a local test the defaults work as-is: the Matrix server name is
+`localhost:8008`, tuwunel is published on port `8008`, and the Cumments API on
+port `7931`. For a real deployment, create a `.env` file next to the compose
+file before generating the registration:
+
+```dotenv
+MATRIX_DOMAIN=matrix.example.com
+```
+
+`MATRIX_DOMAIN` is the Matrix server name, i.e. the part after `:` in user IDs
+and aliases. Both services read it from the same variable, so changing it in
+one place keeps them consistent.
 
 ## 2. Generate the AppService registration
 
@@ -31,119 +42,79 @@ deploy/
 docker run --rm --entrypoint cumments \
   ghcr.io/curious-r/cumments:latest \
   generate-registration \
-  --server-name your_server.tld \
-  --url http://cumments:7931
+  --server-name localhost:8008 \
+  --url http://cumments:7931 > registration.yaml
 ```
 
-- `--server-name` is the Matrix ID domain (the part after `:` in user IDs).
+- `--server-name` must equal `MATRIX_DOMAIN` (`localhost:8008` for the local
+  default).
 - `--url` is the callback URL the homeserver uses to push events. Inside
-  Compose this is the service name, e.g. `http://cumments:7931`; behind a
-  reverse proxy use the public URL.
-- The command prints `registration.yaml` on stdout and the matching
-  `as_token` / `hs_token` on stderr. Save the YAML as
-  `cumments/config/registration.yaml` and note both tokens.
+  Compose this is the service name, `http://cumments:7931`; behind a reverse
+  proxy use the public URL instead.
+- The YAML is written to stdout and saved as `registration.yaml`. The matching
+  `as_token` and `hs_token` are printed to stderr — copy them for the next
+  step.
 
-## 3. Register the appservice with the homeserver
+## 3. Fill in the tokens
 
-For tuwunel, put `registration.yaml` where tuwunel loads appservice
-registrations and restart it, then verify from the admin room:
-
-```text
-!admin appservices list
-```
-
-Other homeservers (Synapse, Conduit, ...) accept the same YAML through their
-own appservice registration mechanism.
-
-## 4. Configure Cumments
-
-`cumments/config/cumments.toml`:
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 7931
-cors_origins = "*"
-
-[database]
-url = "sqlite:///srv/cumments/cumments.db"
-
-[security]
-pow_secret = "replace-with-a-long-random-secret"
-pow_difficulty = 4
-
-[matrix]
-mode = "appservice"
-
-[matrix.homeserver]
-address = "http://tuwunel:6167"   # reachable from the Cumments container
-domain = "your_server.tld"
-
-[matrix.appservice]
-id = "cumments"
-url = "http://cumments:7931"      # callback URL, reachable from the homeserver
-listen_host = "0.0.0.0"
-listen_port = 3001
-sender_localpart = "_cumments_bot"
-# Prefer environment variables over committing tokens to files:
-# CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=...
-# CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=...
-# as_token = "<as_token from step 2>"
-# hs_token = "<hs_token from step 2>"
-registration_file = "/etc/cumments/registration.yaml"
-# room_version = "12"   # optional; see docs/configuration.md
-
-[matrix.moderation]
-owner_id = "@admin:your_server.tld"
-```
-
-`cumments.env` (env_file used by Compose):
-
-```dotenv
-CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN=<as_token from step 2>
-CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN=<hs_token from step 2>
-RUST_LOG=info
-```
-
-## 5. Start it
-
-Add the service to the compose project that defines `tuwunel` (or adjust the
-network name). The ready-made block lives in `misc/docker/compose.yaml`:
+Open `docker-compose.yml` and replace the two placeholders:
 
 ```yaml
-services:
-  cumments:
-    image: ghcr.io/curious-r/cumments:latest
-    env_file: cumments.env
-    restart: unless-stopped
-    volumes:
-      - ./cumments/config/:/etc/cumments/:ro
-      - ./cumments/data/:/srv/cumments/:rw
-    depends_on:
-      - tuwunel
-    networks:
-      - tuwunel
+      CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN: "<as_token>"
+      CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN: "<hs_token>"
 ```
+
+The same file is mounted into both containers: tuwunel loads it as its
+AppService registration, and Cumments validates its configuration against it at
+startup, so a typo or a mismatched token fails fast.
+
+## 4. Start the stack
 
 ```bash
 docker compose up -d
+docker compose logs -f tuwunel
 docker compose logs -f cumments
 ```
 
-You should see `Configuration loaded successfully.`, `Database initialized.`,
-and `Server listening on 0.0.0.0:7931`. The entrypoint fixes the ownership of
-`/srv/cumments` and drops to the unprivileged `cumments` user; set
-`PUID`/`PGID` in the environment to make data files owned by your host user.
+Cumments should log `Configuration loaded successfully.`, `Database
+initialized.`, and `Server listening on 0.0.0.0:7931`.
+
+> The example intentionally keeps registration open on tuwunel so the first
+> account can be created with one request. Set `TUWUNEL_REGISTRATION_TOKEN`
+> and remove
+> `TUWUNEL_YES_I_AM_VERY_VERY_SURE_I_WANT_AN_OPEN_REGISTRATION_SERVER_PRONE_TO_ABUSE`
+> before exposing the homeserver beyond your machine.
+
+## 5. Create the admin account
+
+The first account registered on tuwunel is granted admin privileges. The
+compose file expects it to be `admin`:
+
+```bash
+curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"your-admin-password","auth":{"type":"m.login.dummy"}}'
+```
+
+The response contains `user_id`, `device_id`, and `access_token`. If you pick a
+different username, update
+`CUMMENTS__MATRIX__MODERATION__OWNER_ID` (default
+`@admin:localhost:8008`) in the compose file and restart Cumments:
+
+```bash
+docker compose up -d --force-recreate cumments
+```
 
 ## 6. Verify
 
-1. Open the [demo frontend](demo.md) (`misc/demo/index.html`) against the API
-   and post a comment.
+1. Open the [demo frontend](demo.md) (`misc/demo/index.html`) against
+   `http://localhost:7931` and post a comment.
 2. In Matrix, check that a Space (`Comments: <site>`), a comment room
    (`Comments: <site>/<post>`), and the virtual user were created.
 3. The comment should appear in the frontend in real time via SSE.
 
-If a comment never appears, the read model can be rebuilt from Matrix history:
+If comments exist in Matrix but not in the API, rebuild the read model from
+Matrix history:
 
 ```bash
 docker compose exec cumments cumments backfill
@@ -152,19 +123,24 @@ docker compose exec cumments cumments backfill
 ## Optional: room version 12
 
 Room version 12 hardens rooms (hash-based room IDs, immutable creator power).
-On tuwunel, set `default_room_version = "12"` in the homeserver config, or
-request v12 per room with `room_version = "12"` in
-`[matrix.appservice]` (see docs/configuration.md).
+On tuwunel, set `TUWUNEL_DEFAULT_ROOM_VERSION: "12"` in the compose
+environment, or request v12 per room with
+`CUMMENTS__MATRIX__APPSERVICE__ROOM_VERSION: "12"` (see
+[configuration.md](configuration.md)).
 
 ## Troubleshooting
 
-- **`unknown field` on startup**: the running binary is older than the config
-  file. Rebuild/re-pull the image (`docker compose pull`) or check that a
-  locally built test image actually contains the latest main (the `git clone`
-  RUN layer is cached by Docker; build with
-  `docker compose build --no-cache` or a changing build arg).
-- **`invalid hs_token` warnings**: the `hs_token` in the config/env does not
-  match the registration file registered on the homeserver.
+- **Compose refuses to start**: the `./registration.yaml` bind mount does not
+  exist yet. Run step 2 first.
+- **`as_token` / `hs_token` mismatch**: the values in the compose file do not
+  match the registration YAML. Regenerate both together, or copy them from the
+  stderr output of step 2.
+- **Cumments logs `invalid hs_token`**: the token registered on the homeserver
+  differs from `CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN`; fix and restart both
+  services.
 - **Comments exist in Matrix but not in the API**: the push queue was blocked
   or a transaction was never acked; restart the service and, if needed, run
   `cumments backfill`.
+- **The server name changed after first start**: tuwunel stores the server name
+  in its database and cannot change it later. Remove the `tuwunel-data` volume
+  (`docker compose down -v`) and start over.

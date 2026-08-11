@@ -76,8 +76,10 @@ For local development, set `mode = "logging"`; no `matrix.homeserver`,
   Cumments, so it must be reachable *from* the homeserver, not from your
   browser.
 - Environment variables are spelled with the `CUMMENTS__` prefix and `__`
-  separators, e.g. `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN`. A config file is
-  required for the non-Matrix sections; `--config <path>` points at it.
+  separators, e.g. `CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN`. The whole
+  configuration can come from environment variables alone (the bundled
+  `misc/docker/compose.yaml` does exactly this); a config file is optional,
+  and `--config <path>` overrides file discovery.
 - The schema is strict: unknown keys are rejected, so old flat field names
   (`matrix.homeserver_url`, `matrix.server_name`, ...) fail fast instead of
   being silently ignored.

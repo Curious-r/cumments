@@ -1,24 +1,84 @@
-# Cumments AppService service, using the official published image.
+# Minimal runnable Cumments + tuwunel stack.
 #
-# Add this block to the compose project that also defines the `tuwunel`
-# service, or adjust the network/depends_on names for your homeserver.
-# Paths are relative to this compose file; see docs/installation.md.
+# Setup checklist:
+#
+#   1. Generate the AppService registration (run from this directory):
+#        docker run --rm --entrypoint cumments \
+#          ghcr.io/curious-r/cumments:latest \
+#          generate-registration \
+#          --server-name localhost:8008 \
+#          --url http://cumments:7931 > registration.yaml
+#      The YAML is printed on stdout; as_token and hs_token are printed on
+#      stderr. Copy those two values into the placeholders below.
+#
+#   2. Start the stack:
+#        docker compose up -d
+#
+#   3. Create the first (admin) account, then post a comment from
+#      misc/demo/index.html. The full walkthrough, including the exact
+#      registration request, is in docs/installation.md.
+#
+# Set MATRIX_DOMAIN to your Matrix server name (the part after ':' in user
+# IDs) when this is not a local test, e.g. in a .env file next to this file:
+#     MATRIX_DOMAIN=matrix.example.com
 services:
-  cumments:
-    # Official image; `latest` tracks the newest version tag.
-    image: ghcr.io/curious-r/cumments:latest
-    # Temporary: build from repository main instead of the published image.
-    # build:
-    #   context: ../..
-    #   dockerfile: misc/docker/Dockerfile
-    env_file: cumments.env
+  tuwunel:
+    image: jevolk/tuwunel:latest
     restart: unless-stopped
+    ports:
+      - "8008:6167"
     volumes:
-      # Read-only config directory (cumments.toml + registration.yaml).
-      - ./cumments/config/:/etc/cumments/:ro
-      # Writable SQLite data directory.
-      - ./cumments/data/:/srv/cumments/:rw
+      - tuwunel-data:/var/lib/tuwunel
+      # registration.yaml generated in step 1; loaded by tuwunel at startup.
+      - ./registration.yaml:/etc/tuwunel/appservices/cumments.yaml:ro
+    environment:
+      TUWUNEL_SERVER_NAME: "${MATRIX_DOMAIN:-localhost:8008}"
+      TUWUNEL_DATABASE_PATH: /var/lib/tuwunel
+      TUWUNEL_ADDRESS: 0.0.0.0
+      TUWUNEL_PORT: 6167
+      TUWUNEL_ALLOW_REGISTRATION: "true"
+      # Local test only: registration is open so the first account can be
+      # created with one request. Set TUWUNEL_REGISTRATION_TOKEN and remove
+      # the flag below before exposing this server.
+      TUWUNEL_YES_I_AM_VERY_VERY_SURE_I_WANT_AN_OPEN_REGISTRATION_SERVER_PRONE_TO_ABUSE: "true"
+      TUWUNEL_ALLOW_FEDERATION: "false"
+      TUWUNEL_APPSERVICE_DIR: /etc/tuwunel/appservices
+
+  cumments:
+    image: ghcr.io/curious-r/cumments:latest
+    restart: unless-stopped
+    ports:
+      - "7931:7931"
+    volumes:
+      - cumments-data:/srv/cumments
+      # Same registration file, so Cumments validates its tokens at startup.
+      - ./registration.yaml:/etc/cumments/registration.yaml:ro
+    environment:
+      CUMMENTS__SERVER__HOST: 0.0.0.0
+      CUMMENTS__SERVER__PORT: 7931
+      CUMMENTS__SERVER__CORS_ORIGINS: "*"
+      CUMMENTS__DATABASE__URL: sqlite:///srv/cumments/cumments.db
+      # Replace with a long random secret before going public.
+      CUMMENTS__SECURITY__POW_SECRET: dev-only-secret-0123456789abcdef
+      CUMMENTS__SECURITY__POW_DIFFICULTY: 4
+      CUMMENTS__MATRIX__MODE: appservice
+      CUMMENTS__MATRIX__HOMESERVER__ADDRESS: http://tuwunel:6167
+      CUMMENTS__MATRIX__HOMESERVER__DOMAIN: "${MATRIX_DOMAIN:-localhost:8008}"
+      CUMMENTS__MATRIX__APPSERVICE__ID: cumments
+      CUMMENTS__MATRIX__APPSERVICE__URL: http://cumments:7931
+      # Same port as the API server: the push receiver shares the listener.
+      CUMMENTS__MATRIX__APPSERVICE__LISTEN_HOST: 0.0.0.0
+      CUMMENTS__MATRIX__APPSERVICE__LISTEN_PORT: 7931
+      CUMMENTS__MATRIX__APPSERVICE__SENDER_LOCALPART: _cumments_bot
+      # Replace with the values printed by generate-registration (step 1).
+      CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN: "<as_token>"
+      CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN: "<hs_token>"
+      CUMMENTS__MATRIX__APPSERVICE__REGISTRATION_FILE: /etc/cumments/registration.yaml
+      CUMMENTS__MATRIX__MODERATION__OWNER_ID: "@admin:${MATRIX_DOMAIN:-localhost:8008}"
+      RUST_LOG: info
     depends_on:
       - tuwunel
-    networks:
-      - tuwunel
+
+volumes:
+  tuwunel-data:
+  cumments-data:

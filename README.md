@@ -25,19 +25,23 @@ that can be rebuilt from Matrix history with `cumments backfill`.
 
 ## Quick start (Docker)
 
+The bundled compose file starts a minimal local stack — tuwunel plus Cumments
+— with everything configured through environment variables:
+
 ```bash
+mkdir -p ~/cumments-demo && cd ~/cumments-demo
+cp /path/to/cumments/misc/docker/compose.yaml docker-compose.yml
 docker run --rm --entrypoint cumments \
   ghcr.io/curious-r/cumments:latest \
   generate-registration \
-  --server-name your_server.tld \
-  --url http://cumments:7931
+  --server-name localhost:8008 \
+  --url http://cumments:7931 > registration.yaml
+# Replace the <as_token>/<hs_token> placeholders in docker-compose.yml, then:
+docker compose up -d
 ```
 
-Save the printed `registration.yaml` and tokens, register the appservice with
-your Matrix homeserver, mount the config and data directories, and start it
-with the compose block in [`misc/docker/compose.yaml`](misc/docker/compose.yaml).
-The full walkthrough — directory layout, tuwunel registration, configuration,
-verification and troubleshooting — is in the [installation guide](docs/installation.md).
+The full walkthrough — registration, the admin account, verification and
+troubleshooting — is in the [installation guide](docs/installation.md).
 
 ## Documentation
 

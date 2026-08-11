@@ -21,18 +21,22 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Ma
 
 ## 快速开始（Docker）
 
+仓库自带的 compose 文件会启动一个最小本地栈——tuwunel 加 Cumments——所有配置
+都通过环境变量写在明面上：
+
 ```bash
+mkdir -p ~/cumments-demo && cd ~/cumments-demo
+cp /path/to/cumments/misc/docker/compose.yaml docker-compose.yml
 docker run --rm --entrypoint cumments \
   ghcr.io/curious-r/cumments:latest \
   generate-registration \
-  --server-name your_server.tld \
-  --url http://cumments:7931
+  --server-name localhost:8008 \
+  --url http://cumments:7931 > registration.yaml
+# 把 docker-compose.yml 里的 <as_token>/<hs_token> 占位符替换掉，然后：
+docker compose up -d
 ```
 
-保存输出的 `registration.yaml` 与 token，在 Matrix homeserver 上注册该
-appservice，挂载配置与数据目录，然后用
-[`misc/docker/compose.yaml`](misc/docker/compose.yaml) 里的服务块启动。
-完整的目录结构、tuwunel 注册、配置、验证与排障步骤见
+注册文件的生成、管理员账号的创建、验证与排障的完整流程见
 [安装指南](docs/installation.md)。
 
 ## 文档
