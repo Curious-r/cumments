@@ -275,7 +275,7 @@ pub trait BackfillCursorStore: Send + Sync {
 }
 
 /// Port for virtual user identity management (AppService mode).
-/// Maps Cumments visitor fingerprints to stable Matrix virtual user IDs.
+/// Maps Cumments guest public keys to stable Matrix virtual user IDs.
 #[async_trait]
 pub trait VirtualUserStore: Send + Sync {
     /// Returns the virtual Matrix user ID for the given author public key and site.

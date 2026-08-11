@@ -6,7 +6,7 @@
 //! events; edit/delete requests are authorized by verifying a signature over
 //! the request against the stored public key.
 //!
-//! - `visitor_id`: a short public identifier derived from the public key,
+//! - `guest_id`: a short public identifier derived from the public key,
 //!   matching the hash segment of the virtual user ID.
 //! - Public key and signature are carried in the Matrix event content
 //!   (`host.curious.cumments.public_key` / `host.curious.cumments.signature`),
@@ -76,7 +76,7 @@ pub fn verify_signature(public_key_b64: &str, message: &str, signature_b64: &str
 /// First 8 bytes of SHA-256 over the raw public key, hex-encoded (16 chars) –
 /// same derivation used for the virtual user ID. 64 bits makes collisions
 /// negligible for realistic comment-system deployments.
-pub fn derive_visitor_id_from_public_key(public_key_b64: &str) -> Option<String> {
+pub fn derive_guest_id_from_public_key(public_key_b64: &str) -> Option<String> {
     let bytes = URL_SAFE_NO_PAD.decode(public_key_b64.trim()).ok()?;
     let hash = Sha256::digest(&bytes);
     Some(hex::encode(&hash[..8]))
@@ -119,12 +119,12 @@ mod tests {
     }
 
     #[test]
-    fn visitor_id_is_stable_and_derived_from_public_key() {
+    fn guest_id_is_stable_and_derived_from_public_key() {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
         let public_key_b64 = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
 
-        let a = derive_visitor_id_from_public_key(&public_key_b64).expect("valid key");
-        let b = derive_visitor_id_from_public_key(&public_key_b64).expect("valid key");
+        let a = derive_guest_id_from_public_key(&public_key_b64).expect("valid key");
+        let b = derive_guest_id_from_public_key(&public_key_b64).expect("valid key");
         assert_eq!(a, b);
         assert_eq!(a.len(), 16);
 
@@ -132,9 +132,9 @@ mod tests {
         let other_b64 = URL_SAFE_NO_PAD.encode(other.verifying_key().to_bytes());
         assert_ne!(
             a,
-            derive_visitor_id_from_public_key(&other_b64).expect("valid key")
+            derive_guest_id_from_public_key(&other_b64).expect("valid key")
         );
-        assert_eq!(derive_visitor_id_from_public_key("garbage"), None);
+        assert_eq!(derive_guest_id_from_public_key("garbage"), None);
     }
 
     #[test]

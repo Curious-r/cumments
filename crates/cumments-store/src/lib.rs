@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::identity::derive_visitor_id_from_public_key;
+use cumments_core::identity::derive_guest_id_from_public_key;
 use cumments_core::intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent};
 use cumments_core::models::{AuthorType, Comment, CommentAuthor, PostSlug, Site, SiteId};
 use cumments_core::ports::{
@@ -1138,12 +1138,12 @@ impl VirtualUserStore for DbStore {
         server_name: &str,
     ) -> Result<String> {
         // 1. Compute the deterministic virtual user ID
-        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+        let guest_id = derive_guest_id_from_public_key(author_public_key)
             .ok_or_else(|| anyhow::anyhow!("invalid author public key"))?;
         let virtual_user_id = format!(
             "@_cumments_{}_{}:{}",
             site_id.as_str(),
-            visitor_id,
+            guest_id,
             server_name
         );
 
@@ -1151,7 +1151,7 @@ impl VirtualUserStore for DbStore {
         // virtual user even when the current server_name differs (e.g. after
         // a domain migration), so edits keep matching the original sender.
         if let Some(existing) = virtual_users::Entity::find()
-            .filter(virtual_users::Column::Fingerprint.eq(author_public_key))
+            .filter(virtual_users::Column::PublicKey.eq(author_public_key))
             .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
             .one(&self.db)
             .await?
@@ -1159,9 +1159,9 @@ impl VirtualUserStore for DbStore {
             return Ok(existing.virtual_user_id);
         }
 
-        // 2. Try to insert – on conflict (fingerprint + site_id already exists), do nothing
+        // 2. Try to insert – on conflict (public_key + site_id already exists), do nothing
         let active_model = virtual_users::ActiveModel {
-            fingerprint: Set(author_public_key.to_owned()),
+            public_key: Set(author_public_key.to_owned()),
             site_id: Set(site_id.as_str().to_owned()),
             virtual_user_id: Set(virtual_user_id.clone()),
             server_name: Set(server_name.to_owned()),
@@ -1171,7 +1171,7 @@ impl VirtualUserStore for DbStore {
         virtual_users::Entity::insert(active_model)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::columns([
-                    virtual_users::Column::Fingerprint,
+                    virtual_users::Column::PublicKey,
                     virtual_users::Column::SiteId,
                 ])
                 .do_nothing()
@@ -1183,7 +1183,7 @@ impl VirtualUserStore for DbStore {
         // Re-read after the insert: a concurrent request may have won the
         // race, and the winner's stored ID is authoritative.
         if let Some(existing) = virtual_users::Entity::find()
-            .filter(virtual_users::Column::Fingerprint.eq(author_public_key))
+            .filter(virtual_users::Column::PublicKey.eq(author_public_key))
             .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
             .one(&self.db)
             .await?

@@ -292,7 +292,7 @@ fn content_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
 
 /// Whether a Matrix sender is one of our exclusive AS virtual users.
 ///
-/// Virtual user localparts follow `_cumments_{site_id}_{visitor_id}`, where
+/// Virtual user localparts follow `_cumments_{site_id}_{guest_id}`, where
 /// the site is `[a-z0-9-]{1,64}` and the visitor is 16 lowercase hex digits.
 /// Matching the exact shape (rather than the broader `@_cumments_.*`
 /// namespace) excludes the AS sender account itself (`@_cumments_bot`) and
@@ -307,7 +307,7 @@ fn is_virtual_user_sender(sender: &str) -> bool {
     let Some(rest) = localpart.strip_prefix("_cumments_") else {
         return false;
     };
-    let Some((site_id, visitor_id)) = rest.rsplit_once('_') else {
+    let Some((site_id, guest_id)) = rest.rsplit_once('_') else {
         return false;
     };
     let site_ok = !site_id.is_empty()
@@ -315,11 +315,9 @@ fn is_virtual_user_sender(sender: &str) -> bool {
         && site_id
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    let visitor_ok = visitor_id.len() == 16
-        && visitor_id
-            .chars()
-            .all(|c| matches!(c, '0'..='9' | 'a'..='f'));
-    site_ok && visitor_ok
+    let guest_ok =
+        guest_id.len() == 16 && guest_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    site_ok && guest_ok
 }
 
 // ── Push event parsers ────────────────────────────────────────────
@@ -695,7 +693,7 @@ mod tests {
                 "m.new_content": {
                     "body": "**Alice**: edited",
                     "host.curious.cumments.message": {
-                        "visitor_id": "abcd",
+                        "guest_id": "abcd",
                         "public_key": "pubkey",
                         "signature": "sig",
                         "challenge": "chal",
@@ -745,7 +743,7 @@ mod tests {
                 "msgtype": "m.text",
                 "body": "**Alice**: hello",
                 "host.curious.cumments.message": {
-                    "visitor_id": "abcd",
+                    "guest_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
@@ -785,7 +783,7 @@ mod tests {
                     }
                 },
                 "host.curious.cumments.message": {
-                    "visitor_id": "abcd",
+                    "guest_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
@@ -816,7 +814,7 @@ mod tests {
                 "msgtype": "m.text",
                 "body": "plain body",
                 "host.curious.cumments.message": {
-                    "visitor_id": "abcd",
+                    "guest_id": "abcd",
                     "public_key": "fake-pubkey",
                     "signature": "fake-signature",
                     "challenge": "fake-challenge",

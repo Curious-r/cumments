@@ -10,7 +10,7 @@ use anyhow::Result;
 use cumments_core::{
     events::ProjectorEvent,
     identity::{
-        derive_visitor_id_from_public_key, post_signature_message, signature_message,
+        derive_guest_id_from_public_key, post_signature_message, signature_message,
         verify_signature,
     },
     models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
@@ -158,13 +158,13 @@ fn verify_guest_event(
     signature: &str,
     message: &str,
 ) -> bool {
-    let Some(visitor_id) = derive_visitor_id_from_public_key(public_key) else {
+    let Some(guest_id) = derive_guest_id_from_public_key(public_key) else {
         return false;
     };
     let Some(server_name) = server_name else {
         return false;
     };
-    let expected_sender = format!("@_cumments_{}_{}:{}", site_id, visitor_id, server_name);
+    let expected_sender = format!("@_cumments_{}_{}:{}", site_id, guest_id, server_name);
     if sender != expected_sender {
         return false;
     }
@@ -697,8 +697,8 @@ mod tests {
 
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
         let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
-        let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
-        let sender = format!("@_cumments_my-blog_{}:example.com", visitor_id);
+        let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
+        let sender = format!("@_cumments_my-blog_{}:example.com", guest_id);
         let challenge = "challenge";
         let message =
             post_signature_message("my-blog", "hello", "content", "Alice", None, challenge);

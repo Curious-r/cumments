@@ -4,7 +4,7 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::{
-    identity::derive_visitor_id_from_public_key,
+    identity::derive_guest_id_from_public_key,
     models::{PostSlug, RoomEventPage, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
     protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE},
@@ -214,7 +214,7 @@ fn build_message_body(
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    visitor_id: &str,
+    guest_id: &str,
     intent_id: Option<i64>,
     reply_to: Option<&str>,
     reply_to_body: Option<&str>,
@@ -234,7 +234,7 @@ fn build_message_body(
         "body": body,
     });
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
-        "visitor_id": visitor_id,
+        "guest_id": guest_id,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
@@ -263,7 +263,7 @@ fn build_edit_body(
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    visitor_id: &str,
+    guest_id: &str,
     intent_id: Option<i64>,
 ) -> serde_json::Value {
     let mut new_content_obj = serde_json::json!({
@@ -271,7 +271,7 @@ fn build_edit_body(
         "body": new_content,
     });
     new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
-        "visitor_id": visitor_id,
+        "guest_id": guest_id,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
@@ -1231,7 +1231,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
-        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+        let guest_id = derive_guest_id_from_public_key(author_public_key)
             .ok_or_else(|| anyhow!("invalid author public key"))?;
 
         // 2. Ensure the virtual user is in the room (best-effort)
@@ -1249,7 +1249,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_public_key,
             author_signature,
             author_challenge,
-            &visitor_id,
+            &guest_id,
             intent_id,
             reply_to,
             reply_to_body,
@@ -1302,7 +1302,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
-        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+        let guest_id = derive_guest_id_from_public_key(author_public_key)
             .ok_or_else(|| anyhow!("invalid author public key"))?;
 
         // 2. Ensure joined (best-effort)
@@ -1321,7 +1321,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_public_key,
             author_signature,
             author_challenge,
-            &visitor_id,
+            &guest_id,
             intent_id,
         );
 
@@ -1742,7 +1742,7 @@ mod tests {
         assert!(body.get("formatted_body").is_none());
 
         let ns = body.get(MESSAGE_CONTENT_KEY).expect("namespaced block");
-        assert_eq!(ns["visitor_id"].as_str(), Some("abcd"));
+        assert_eq!(ns["guest_id"].as_str(), Some("abcd"));
         assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
         assert_eq!(ns["signature"].as_str(), Some("sig"));
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
@@ -1750,7 +1750,7 @@ mod tests {
         assert_eq!(ns["displayname"].as_str(), Some("Alice"));
         assert_eq!(ns["intent_id"].as_i64(), Some(7));
 
-        assert!(body.get("cumments_visitor_id").is_none());
+        assert!(body.get("cumments_guest_id").is_none());
         assert!(body.get("cumments_intent_id").is_none());
     }
 
@@ -1841,7 +1841,7 @@ mod tests {
         let ns = new_content
             .get(MESSAGE_CONTENT_KEY)
             .expect("namespaced block");
-        assert_eq!(ns["visitor_id"].as_str(), Some("abcd"));
+        assert_eq!(ns["guest_id"].as_str(), Some("abcd"));
         assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
         assert_eq!(ns["signature"].as_str(), Some("sig"));
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
