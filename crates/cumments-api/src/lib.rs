@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderName, HeaderValue, Method, StatusCode},
     response::{
-        IntoResponse, Response,
+        IntoResponse,
         sse::{Event, KeepAlive, Sse},
     },
     routing::{delete, get, post},
@@ -11,89 +11,25 @@ use axum::{
 use cumments_core::{
     identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
-    models::{AuthorType, Comment, PostSlug, SiteId},
+    models::{AuthorType, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
     projector_events::ProjectorEvent,
 };
-use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};
 use tokio::sync::{Notify, broadcast};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use validator::Validate;
 
+pub mod error;
 pub mod pow;
+pub mod request;
 
-// --- Error Handling ---
-
-#[derive(Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-    pub code: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
-}
-
-pub enum AppError {
-    InvalidPoW,
-    InvalidSignature,
-    Validation(validator::ValidationErrors),
-    NotFound(String),
-    MethodNotAllowed,
-    Unauthorized(String),
-    NotManageable(String),
-    BadRequest(String),
-    Internal(String),
-}
-
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let (status, error_msg, code, details) = match self {
-            AppError::InvalidPoW => (
-                StatusCode::FORBIDDEN,
-                "Invalid Proof-of-Work response.".to_string(),
-                "INVALID_POW",
-                None,
-            ),
-            AppError::InvalidSignature => (
-                StatusCode::FORBIDDEN,
-                "Invalid author signature.".to_string(),
-                "INVALID_SIGNATURE",
-                None,
-            ),
-            AppError::Validation(errs) => (
-                StatusCode::BAD_REQUEST,
-                "Input validation failed.".to_string(),
-                "VALIDATION_ERROR",
-                serde_json::to_value(errs).ok(),
-            ),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "NOT_FOUND", None),
-            AppError::Unauthorized(msg) => (StatusCode::FORBIDDEN, msg, "UNAUTHORIZED", None),
-            AppError::NotManageable(msg) => (StatusCode::FORBIDDEN, msg, "NOT_MANAGEABLE", None),
-            AppError::MethodNotAllowed => (
-                StatusCode::METHOD_NOT_ALLOWED,
-                "Method not allowed. Use QUERY for queries, POST for submissions.".to_string(),
-                "METHOD_NOT_ALLOWED",
-                None,
-            ),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST", None),
-            AppError::Internal(msg) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                msg,
-                "INTERNAL_ERROR",
-                None,
-            ),
-        };
-
-        let body = Json(ErrorResponse {
-            error: error_msg,
-            code: code.to_string(),
-            details,
-        });
-
-        (status, body).into_response()
-    }
-}
+use crate::error::AppError;
+use crate::request::{
+    ChallengeResponse, DeleteCommentRequest, PaginatedResponse, PaginationMeta, PaginationQuery,
+    PostCommentRequest, UpdateCommentRequest,
+};
 
 // ----------------------
 
@@ -108,71 +44,6 @@ pub struct ApiState {
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub reconciler_notify: Arc<Notify>,
-}
-
-/// The query parameters for pagination (sent as JSON body for QUERY method).
-#[derive(Debug, Deserialize, Validate)]
-pub struct PaginationQuery {
-    // The upper bound keeps `(page - 1) * per_page` inside i64 even with the
-    // largest allowed per_page (100).
-    #[validate(range(min = 1, max = 1_000_000))]
-    pub page: Option<i64>,
-    #[validate(range(min = 1, max = 100))]
-    pub per_page: Option<i64>,
-}
-
-#[derive(Serialize)]
-pub struct PaginatedResponse {
-    pub data: Vec<Comment>,
-    pub meta: PaginationMeta,
-}
-
-#[derive(Serialize)]
-pub struct PaginationMeta {
-    pub total: i64,
-    pub page: i64,
-    pub per_page: i64,
-    pub total_pages: i64,
-}
-
-/// The response for the `GET /api/challenge` endpoint.
-#[derive(Serialize)]
-pub struct ChallengeResponse {
-    pub prefix: String,
-    pub difficulty: u32,
-}
-
-/// Request DTO for posting a comment.
-#[derive(Debug, Deserialize, Validate)]
-pub struct PostCommentRequest {
-    #[validate(length(min = 1, max = 5000))]
-    pub content: String,
-    #[validate(length(min = 1, max = 50))]
-    pub displayname: String,
-    /// Ed25519 public key of the author (base64url, 32 bytes raw).
-    pub author_public_key: String,
-    /// Ed25519 signature over the canonical POST message.
-    pub author_signature: String,
-    pub reply_to: Option<String>,
-    pub challenge_response: String,
-}
-
-/// Request DTO for deleting a comment.
-#[derive(Debug, Deserialize, Validate)]
-pub struct DeleteCommentRequest {
-    pub author_public_key: String,
-    pub author_signature: String,
-    pub challenge_response: String,
-}
-
-/// Request DTO for updating a comment.
-#[derive(Debug, Deserialize, Validate)]
-pub struct UpdateCommentRequest {
-    #[validate(length(min = 1, max = 5000))]
-    pub content: String,
-    pub author_public_key: String,
-    pub author_signature: String,
-    pub challenge_response: String,
 }
 
 /// The QUERY method for HTTP.
@@ -695,7 +566,9 @@ async fn sse_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cumments_core::models::CommentAuthor;
+    use crate::error::AppError;
+    use crate::request::PaginationQuery;
+    use cumments_core::models::{Comment, CommentAuthor};
     use validator::Validate;
 
     #[test]
