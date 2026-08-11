@@ -29,4 +29,4 @@ validator.workspace = true
 
 [dev-dependencies]
 cumments-store.workspace = true
-tower = "0.5"
+tower.workspace = true
