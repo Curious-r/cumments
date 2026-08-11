@@ -4,8 +4,8 @@
 use crate::wire::{
     build_edit_body, build_message_body, build_redaction_body, comment_room_alias,
     comment_room_alias_localpart, format_txn_id, has_state_power, initial_power_levels,
-    metadata_matches, power_levels_with_owner, room_requires_explicit_creator, site_space_alias,
-    site_space_alias_localpart, urlencode,
+    metadata_matches, percent_encode, power_levels_with_owner, room_requires_explicit_creator,
+    site_space_alias, site_space_alias_localpart,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -185,7 +185,7 @@ impl AppServiceMatrixDriver {
             return Ok(());
         }
 
-        let path = format!("_matrix/client/v3/rooms/{}/join", urlencode(room_id));
+        let path = format!("_matrix/client/v3/rooms/{}/join", percent_encode(room_id));
         let resp = self
             .request(reqwest::Method::POST, &path, Some(virtual_user))
             .send()
@@ -231,8 +231,8 @@ impl AppServiceMatrixDriver {
     async fn is_joined(&self, room_id: &str, virtual_user: &str) -> bool {
         let member_path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.member/{}",
-            urlencode(room_id),
-            urlencode(virtual_user)
+            percent_encode(room_id),
+            percent_encode(virtual_user)
         );
         let resp = match self
             .request(reqwest::Method::GET, &member_path, None)
@@ -312,7 +312,7 @@ impl AppServiceMatrixDriver {
 
         let path = format!(
             "_matrix/client/v3/profile/{}/displayname",
-            urlencode(virtual_user)
+            percent_encode(virtual_user)
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, Some(virtual_user))
@@ -353,7 +353,7 @@ impl AppServiceMatrixDriver {
         });
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/{}",
-            urlencode(room_id),
+            percent_encode(room_id),
             ROOM_METADATA_EVENT_TYPE
         );
         let resp = self
@@ -380,7 +380,7 @@ impl AppServiceMatrixDriver {
     async fn fetch_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/{}",
-            urlencode(room_id),
+            percent_encode(room_id),
             ROOM_METADATA_EVENT_TYPE
         );
         let resp = self
@@ -406,7 +406,7 @@ impl AppServiceMatrixDriver {
 
     /// Whether the room was created as a Matrix Space (`m.room.create` with
     /// `type: "m.space"`).
-    async fn room_is_space(&self, room_id: &str) -> Result<bool> {
+    async fn is_space_room(&self, room_id: &str) -> Result<bool> {
         Ok(match self.get_room_create(room_id).await? {
             Some(create) => {
                 create
@@ -423,7 +423,7 @@ impl AppServiceMatrixDriver {
     async fn get_room_create(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.create",
-            urlencode(room_id)
+            percent_encode(room_id)
         );
         let resp = self
             .request(reqwest::Method::GET, &path, None)
@@ -505,7 +505,7 @@ impl AppServiceMatrixDriver {
     async fn get_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.power_levels",
-            urlencode(room_id)
+            percent_encode(room_id)
         );
         let resp = self
             .request(reqwest::Method::GET, &path, None)
@@ -532,7 +532,7 @@ impl AppServiceMatrixDriver {
     async fn write_power_levels(&self, room_id: &str, content: &serde_json::Value) -> Result<()> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.power_levels",
-            urlencode(room_id)
+            percent_encode(room_id)
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, None)
@@ -608,7 +608,7 @@ impl AppServiceMatrixDriver {
 
     /// Resolve a room ID from its alias via the homeserver directory.
     async fn resolve_room_by_alias(&self, alias: &str) -> Result<Option<String>> {
-        let path = format!("_matrix/client/v3/directory/room/{}", urlencode(alias));
+        let path = format!("_matrix/client/v3/directory/room/{}", percent_encode(alias));
         let resp = self
             .request(reqwest::Method::GET, &path, None)
             .send()
@@ -654,8 +654,8 @@ impl AppServiceMatrixDriver {
         let child_content = serde_json::json!({ "via": [self.server_name] });
         let space_path = format!(
             "_matrix/client/v3/rooms/{}/state/m.space.child/{}",
-            urlencode(space_id),
-            urlencode(room_id)
+            percent_encode(space_id),
+            percent_encode(room_id)
         );
         let child_resp = self
             .request(reqwest::Method::PUT, &space_path, None)
@@ -682,8 +682,8 @@ impl AppServiceMatrixDriver {
 
         let parent_path = format!(
             "_matrix/client/v3/rooms/{}/state/m.space.parent/{}",
-            urlencode(room_id),
-            urlencode(space_id)
+            percent_encode(room_id),
+            percent_encode(space_id)
         );
         let parent_content = serde_json::json!({
             "via": [self.server_name],
@@ -783,7 +783,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let alias = site_space_alias(&self.server_name, site_id_str);
             match self.resolve_room_by_alias(&alias).await? {
                 Some(room_id) => {
-                    if !self.room_is_space(&room_id).await? {
+                    if !self.is_space_room(&room_id).await? {
                         warn!(
                             "Refusing to adopt room {} as site space: not created as m.space",
                             room_id
@@ -1035,7 +1035,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let txn_id = self.txn_id("post", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-            urlencode(room_id),
+            percent_encode(room_id),
             txn_id
         );
         let resp = self
@@ -1108,7 +1108,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let txn_id = self.txn_id("update", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-            urlencode(room_id),
+            percent_encode(room_id),
             txn_id
         );
         let resp = self
@@ -1150,8 +1150,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let txn_id = self.txn_id("delete", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/redact/{}/{}",
-            urlencode(room_id),
-            urlencode(event_id),
+            percent_encode(room_id),
+            percent_encode(event_id),
             txn_id
         );
         let body = build_redaction_body(proof);
@@ -1180,8 +1180,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/event/{}",
-            urlencode(room_id),
-            urlencode(event_id)
+            percent_encode(room_id),
+            percent_encode(event_id)
         );
         let resp = self
             .request(reqwest::Method::GET, &path, None)
@@ -1214,11 +1214,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
     ) -> Result<RoomEventPage> {
         let mut path = format!(
             "_matrix/client/v3/rooms/{}/messages?dir=b&limit={}",
-            urlencode(room_id),
+            percent_encode(room_id),
             limit
         );
         if let Some(from) = from {
-            path.push_str(&format!("&from={}", urlencode(from)));
+            path.push_str(&format!("&from={}", percent_encode(from)));
         }
 
         let resp = self
@@ -1245,7 +1245,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         Ok(RoomEventPage {
             events: data.chunk,
             next_token: Some(data.end.clone()),
-            done: data.start == data.end,
+            has_more: data.start != data.end,
         })
     }
 
@@ -1282,7 +1282,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
     async fn get_room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.canonical_alias",
-            urlencode(room_id)
+            percent_encode(room_id)
         );
         let resp = self
             .request(reqwest::Method::GET, &path, None)

@@ -255,7 +255,7 @@ pub(crate) fn build_redaction_body(proof: Option<&serde_json::Value>) -> serde_j
 /// Percent-encode a string for safe use in URL path segments.
 /// Matrix room IDs contain `!` and `:` — these are technically safe in
 /// URL paths, but we encode them for correctness.
-pub(crate) fn urlencode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for byte in s.bytes() {
         match byte {
@@ -398,12 +398,12 @@ mod tests {
     }
 
     #[test]
-    fn urlencode_encodes_alias_hash_and_colon() {
+    fn percent_encode_encodes_alias_hash_and_colon() {
         assert_eq!(
-            urlencode("#_cumments_my-blog:example.com"),
+            percent_encode("#_cumments_my-blog:example.com"),
             "%23_cumments_my-blog%3Aexample.com"
         );
-        assert_eq!(urlencode("!abc:example.com"), "%21abc%3Aexample.com");
+        assert_eq!(percent_encode("!abc:example.com"), "%21abc%3Aexample.com");
     }
 
     #[test]

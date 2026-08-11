@@ -62,7 +62,7 @@ impl Backfiller {
         let mut rooms = Vec::new();
 
         for room_id in self.driver.get_joined_rooms().await? {
-            match self.discover_room(&room_id).await {
+            match self.discover_comment_room(&room_id).await {
                 Ok(Some(room_id)) => rooms.push(room_id),
                 Ok(None) => {}
                 Err(e) => warn!(
@@ -96,7 +96,7 @@ impl Backfiller {
     ///
     /// Errors are returned per room so the caller can log and continue; one
     /// broken room must not abort the whole discovery pass.
-    async fn discover_room(&self, room_id: &str) -> anyhow::Result<Option<String>> {
+    async fn discover_comment_room(&self, room_id: &str) -> anyhow::Result<Option<String>> {
         let meta = match self.driver.get_room_metadata(room_id).await {
             Ok(meta) => meta,
             Err(e) => {
@@ -249,7 +249,7 @@ impl Backfiller {
                 .await?;
             pages += 1;
             collected.extend(page.events);
-            done = page.done;
+            done = !page.has_more;
             match page.next_token {
                 Some(next) => {
                     last_batch = Some(next.clone());

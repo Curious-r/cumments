@@ -177,9 +177,8 @@ pub struct RoomEventPage {
     pub events: Vec<serde_json::Value>,
     /// Token to continue fetching older history, if more is available.
     pub next_token: Option<String>,
-    /// `true` when the homeserver reported the start/end boundary (no more
-    /// history in this direction).
-    pub done: bool,
+    /// `true` when the homeserver reported more history in this direction.
+    pub has_more: bool,
 }
 
 /// Identity of a Cumments room, extracted from metadata or alias.

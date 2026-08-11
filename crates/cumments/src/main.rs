@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     // 6. Validate mode and extract validated AppService settings
     // ─────────────────────────────────────────────────────────────
-    if settings.matrix.mode == Mode::Appservice
+    if settings.matrix.mode == Mode::AppService
         && let Some(appservice) = &settings.matrix.appservice
     {
         match &appservice.registration_file {
@@ -150,7 +150,7 @@ async fn main() -> Result<()> {
     }
 
     let appservice = match settings.matrix.mode {
-        Mode::Appservice => Some(settings.matrix.appservice_runtime()?),
+        Mode::AppService => Some(settings.matrix.appservice_runtime()?),
         Mode::Logging => None,
     };
     tracing::info!("Matrix mode: {:?}", settings.matrix.mode);
