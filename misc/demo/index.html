@@ -2046,7 +2046,7 @@
                     chal.prefix,
                 ]);
                 const res = await fetch(
-                    `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${comment.event_id}`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}`,
                     {
                         method: "PATCH",
                         headers: { "Content-Type": "application/json" },
@@ -2075,7 +2075,7 @@
                         chal.prefix,
                     ]);
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(commentId)}`,
                         {
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
