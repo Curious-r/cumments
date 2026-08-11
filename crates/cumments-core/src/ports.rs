@@ -201,6 +201,18 @@ pub trait SiteAuthStore: Send + Sync {
     /// Stores the site's HMAC key and switches the site to secret auth.
     /// The key is needed in plain form to verify HMAC signatures.
     async fn store_site_secret(&self, site_id: &str, secret: &str) -> Result<()>;
+
+    /// Lists every database-tracked site with its authentication state.
+    async fn list_site_auth(&self) -> Result<Vec<SiteAuthInfo>>;
+
+    /// Removes a verified origin. Returns `false` when the origin was not
+    /// present; when the last origin is removed the site falls back to
+    /// `unverified`.
+    async fn revoke_verified_origin(&self, site_id: &str, origin: &Origin) -> Result<bool>;
+
+    /// Removes the HMAC key and switches the site back to origin auth.
+    /// Returns `false` when the site does not exist.
+    async fn clear_site_secret(&self, site_id: &str) -> Result<bool>;
 }
 
 /// Defines the atomic actions that can be performed on the Matrix network.

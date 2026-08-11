@@ -266,6 +266,21 @@ impl OriginPattern {
             }
         }
     }
+
+    /// The config-style string form of this pattern, for display and export.
+    pub fn as_pattern_string(&self) -> String {
+        match self {
+            Self::Exact(origin) => origin.as_str().to_string(),
+            Self::Wildcard {
+                scheme,
+                host_suffix,
+                port,
+            } => match port {
+                Some(port) => format!("{scheme}://*.{host_suffix}:{port}"),
+                None => format!("{scheme}://*.{host_suffix}"),
+            },
+        }
+    }
 }
 
 fn split_port(host_and_port: &str) -> Option<(String, Option<u16>)> {
@@ -367,6 +382,9 @@ pub struct SiteAuthInfo {
     /// The site's HMAC key. Stored in the local database (the HMAC verifier
     /// needs the key itself); never logged or returned by the API.
     pub secret: Option<String>,
+    /// Stored hash of the claim token, if the site was API-registered.
+    pub claim_token_hash: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// A site registered through the API, with its one-time claim token.
@@ -381,6 +399,7 @@ pub struct RegisteredSite {
 #[serde(rename_all = "lowercase")]
 pub enum VerificationMethod {
     /// `/.well-known/cumments.json` on the site's origin.
+    #[serde(rename = "well-known")]
     WellKnown,
     /// `_cumments.<host>` TXT record.
     Dns,

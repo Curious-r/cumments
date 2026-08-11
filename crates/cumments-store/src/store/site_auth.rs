@@ -12,6 +12,7 @@ use cumments_core::site_auth::{
     VerificationToken,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use std::collections::HashMap;
 
 #[async_trait]
 impl SiteAuthStore for DbStore {
@@ -64,6 +65,8 @@ impl SiteAuthStore for DbStore {
             verified_origins: origins,
             verified_at: site.verified_at,
             secret: site.secret,
+            claim_token_hash: site.claim_token_hash,
+            updated_at: site.updated_at,
         }))
     }
 
@@ -184,6 +187,99 @@ impl SiteAuthStore for DbStore {
             .exec(&self.db)
             .await?;
         Ok(())
+    }
+
+    async fn list_site_auth(&self) -> Result<Vec<SiteAuthInfo>> {
+        let sites = sites::Entity::find().all(&self.db).await?;
+        let origin_rows = site_verified_origins::Entity::find().all(&self.db).await?;
+        let mut origins_by_site: HashMap<String, Vec<String>> = HashMap::new();
+        for row in origin_rows {
+            origins_by_site
+                .entry(row.site_id)
+                .or_default()
+                .push(row.origin);
+        }
+
+        sites
+            .into_iter()
+            .map(|site| {
+                let verified_origins = origins_by_site
+                    .remove(&site.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|origin| Origin::parse(&origin))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(SiteAuthInfo {
+                    site_id: site.id,
+                    auth_mode: core_auth_mode(site.auth_mode),
+                    verification_status: core_verification_status(site.verification_status),
+                    verified_origins,
+                    verified_at: site.verified_at,
+                    secret: site.secret,
+                    claim_token_hash: site.claim_token_hash,
+                    updated_at: site.updated_at,
+                })
+            })
+            .collect()
+    }
+
+    async fn revoke_verified_origin(&self, site_id: &str, origin: &Origin) -> Result<bool> {
+        let transaction = self.db.begin().await?;
+        let deleted = site_verified_origins::Entity::delete_many()
+            .filter(site_verified_origins::Column::SiteId.eq(site_id))
+            .filter(site_verified_origins::Column::Origin.eq(origin.as_str()))
+            .exec(&transaction)
+            .await?;
+        if deleted.rows_affected == 0 {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+
+        let remaining = site_verified_origins::Entity::find()
+            .filter(site_verified_origins::Column::SiteId.eq(site_id))
+            .all(&transaction)
+            .await?;
+        if remaining.is_empty() {
+            sites::Entity::update_many()
+                .col_expr(
+                    sites::Column::VerificationStatus,
+                    sea_orm::sea_query::Expr::value(DbVerificationStatus::Unverified),
+                )
+                .col_expr(
+                    sites::Column::VerifiedAt,
+                    sea_orm::sea_query::Expr::value(None::<chrono::DateTime<chrono::Utc>>),
+                )
+                .col_expr(
+                    sites::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::value(Some(Utc::now())),
+                )
+                .filter(sites::Column::Id.eq(site_id))
+                .exec(&transaction)
+                .await?;
+        }
+
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    async fn clear_site_secret(&self, site_id: &str) -> Result<bool> {
+        let result = sites::Entity::update_many()
+            .col_expr(
+                sites::Column::Secret,
+                sea_orm::sea_query::Expr::value(None::<String>),
+            )
+            .col_expr(
+                sites::Column::AuthMode,
+                sea_orm::sea_query::Expr::value(DbAuthMode::Origin),
+            )
+            .col_expr(
+                sites::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(Some(Utc::now())),
+            )
+            .filter(sites::Column::Id.eq(site_id))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected == 1)
     }
 }
 

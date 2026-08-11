@@ -381,6 +381,8 @@ mod tests {
             verified_origins: origins.iter().map(|raw| origin(raw)).collect(),
             verified_at: None,
             secret: None,
+            claim_token_hash: None,
+            updated_at: None,
         })
     }
 

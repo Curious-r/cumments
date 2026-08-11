@@ -103,6 +103,74 @@ async fn site_lifecycle_register_verify_secret() {
 }
 
 #[tokio::test]
+async fn admin_operations_list_revoke_and_clear_secret() {
+    let store = DbStore::connect(&test_db_url("site-auth-admin"))
+        .await
+        .expect("connect db");
+    let site_id = "c3d4e5f60718a1b2c3d4e5f60718a1b2";
+    store
+        .register_site(site_id, &token_hash("claim"))
+        .await
+        .expect("register site");
+
+    let origin = Origin::parse("https://blog.example.com").expect("valid origin");
+    store
+        .add_verified_origin(site_id, &origin)
+        .await
+        .expect("add origin");
+
+    let listed = store.list_site_auth().await.expect("list sites");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].site_id, site_id);
+    assert_eq!(listed[0].verified_origins, vec![origin.clone()]);
+    assert!(listed[0].claim_token_hash.is_some());
+
+    assert!(
+        !store
+            .revoke_verified_origin(site_id, &Origin::parse("https://nope.example.com").unwrap())
+            .await
+            .expect("missing origin is a no-op")
+    );
+    assert!(
+        store
+            .revoke_verified_origin(site_id, &origin)
+            .await
+            .expect("revoke origin")
+    );
+    let auth = store
+        .get_site_auth(site_id)
+        .await
+        .expect("query auth")
+        .expect("site exists");
+    assert_eq!(auth.verification_status, SiteVerificationStatus::Unverified);
+    assert!(auth.verified_origins.is_empty());
+
+    assert!(
+        store
+            .clear_site_secret(site_id)
+            .await
+            .expect("clear secret on site without one")
+    );
+    store
+        .store_site_secret(site_id, "some-hmac-key")
+        .await
+        .expect("store secret");
+    assert!(
+        store
+            .clear_site_secret(site_id)
+            .await
+            .expect("clear secret")
+    );
+    let auth = store
+        .get_site_auth(site_id)
+        .await
+        .expect("query auth")
+        .expect("site exists");
+    assert_eq!(auth.auth_mode, SiteAuthMode::Origin);
+    assert_eq!(auth.secret, None);
+}
+
+#[tokio::test]
 async fn expired_verification_tokens_are_not_found() {
     let store = DbStore::connect(&test_db_url("site-auth-expiry"))
         .await
