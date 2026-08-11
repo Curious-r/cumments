@@ -2,9 +2,10 @@
 
 use crate::ApiState;
 use crate::error::AppError;
+use crate::rate_limit::client_key;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -16,8 +17,14 @@ use cumments_core::site_auth::{
     start_site_verification, token_hash, well_known_proofs_match,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::time::Duration;
 use validator::Validate;
+
+/// How many times each proof location is probed before giving up.
+const PROOF_ATTEMPTS: usize = 3;
+/// Delay between proof attempts, allowing transient failures to clear.
+const PROOF_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Request / response DTOs
@@ -79,7 +86,15 @@ pub struct IssueSecretResponse {
 
 pub(crate) async fn register_site_handler(
     State(state): State<ApiState>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0));
+    if !state.registration_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "site registration is rate limited; try again later".to_string(),
+        ));
+    }
     let registered = register_site(&*state.store)
         .await
         .map_err(|e| AppError::Internal(format!("failed to register site: {e}")))?;
@@ -96,8 +111,15 @@ pub(crate) async fn start_verification_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     headers: HeaderMap,
+    connect: ConnectInfo<SocketAddr>,
     Json(req): Json<StartVerificationRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0));
+    if !state.verification_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "verification issuance is rate limited; try again later".to_string(),
+        ));
+    }
     req.validate().map_err(AppError::Validation)?;
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let origins = req
@@ -292,21 +314,27 @@ async fn verify_origin_proof(
     stored: &VerificationToken,
 ) -> Result<bool, AppError> {
     for method in &stored.methods {
-        let matched = match method {
-            VerificationMethod::WellKnown => {
-                fetch_well_known_proof(origin, site_id.as_str(), token).await?
+        for attempt in 0..PROOF_ATTEMPTS {
+            let matched = match method {
+                VerificationMethod::WellKnown => {
+                    fetch_well_known_proof(origin, site_id.as_str(), token).await?
+                }
+                VerificationMethod::Dns => query_dns_proof(origin, site_id.as_str(), token).await?,
+            };
+            if matched {
+                return Ok(true);
             }
-            VerificationMethod::Dns => query_dns_proof(origin, site_id.as_str(), token).await?,
-        };
-        if matched {
-            return Ok(true);
+            tracing::info!(
+                site_id = site_id.as_str(),
+                origin = origin.as_str(),
+                method = method.as_str(),
+                attempt = attempt + 1,
+                "verification proof not found yet"
+            );
+            if attempt + 1 < PROOF_ATTEMPTS {
+                tokio::time::sleep(PROOF_RETRY_DELAY).await;
+            }
         }
-        tracing::info!(
-            site_id = site_id.as_str(),
-            origin = origin.as_str(),
-            method = method.as_str(),
-            "verification proof not found yet"
-        );
     }
     Ok(false)
 }

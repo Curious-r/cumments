@@ -55,6 +55,9 @@ pub struct Security {
     /// Instance-wide policy for site verification.
     #[serde(default)]
     pub site_verification: SiteVerificationPolicy,
+    /// Operator token for the admin API. When unset, admin routes return 403.
+    #[serde(default)]
+    pub admin_token: Option<String>,
 }
 
 /// Operator-declared trust for one site.
@@ -277,6 +280,23 @@ fn warn_http_non_loopback(site_id: &str, origin: &Origin) {
             origin.as_str()
         );
     }
+}
+
+/// Validates the admin token and returns its SHA-256 hash for comparison.
+pub fn admin_token_hash(security: &Security) -> Result<Option<String>> {
+    let Some(token) = &security.admin_token else {
+        return Ok(None);
+    };
+    if token.trim().is_empty() {
+        bail!("`security.admin_token` must not be empty");
+    }
+    if token.len() < 16 {
+        bail!("`security.admin_token` must be at least 16 characters");
+    }
+    if matches!(token.as_str(), "change-me" | "admin-token") {
+        bail!("`security.admin_token` uses a known example value; generate a real random token");
+    }
+    Ok(Some(cumments_core::site_auth::token_hash(token)))
 }
 
 /// Known example/placeholder secrets shipped in the repository. They are
@@ -943,6 +963,7 @@ mode = "logging"
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
+            admin_token: None,
         };
 
         let mut sites = HashMap::new();
@@ -984,6 +1005,7 @@ mode = "logging"
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
+            admin_token: None,
         };
 
         let mut sites = HashMap::new();
@@ -1029,5 +1051,36 @@ mode = "logging"
             },
         );
         assert!(build_site_auth_policy(&security, &sites).is_err());
+    }
+
+    #[test]
+    fn admin_token_hash_validates_and_hashes() {
+        let security = Security {
+            pow_secret: "secret".to_string(),
+            pow_difficulty: 4,
+            site_verification: SiteVerificationPolicy::Optional,
+            admin_token: None,
+        };
+        assert!(
+            admin_token_hash(&security)
+                .expect("no token yields none")
+                .is_none()
+        );
+
+        let mut security = security;
+        security.admin_token = Some("short".to_string());
+        assert!(admin_token_hash(&security).is_err());
+
+        security.admin_token = Some("change-me".to_string());
+        assert!(admin_token_hash(&security).is_err());
+
+        security.admin_token = Some("a-very-long-admin-token".to_string());
+        let hash = admin_token_hash(&security)
+            .expect("valid token")
+            .expect("some hash");
+        assert_eq!(
+            hash,
+            cumments_core::site_auth::token_hash("a-very-long-admin-token")
+        );
     }
 }

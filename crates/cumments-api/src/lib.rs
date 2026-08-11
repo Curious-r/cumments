@@ -1,3 +1,7 @@
+use crate::routes::admin::{
+    config_snippet_handler, list_admin_sites_handler, require_admin, revoke_secret_handler,
+    revoke_verified_origin_handler, rotate_secret_handler,
+};
 use crate::routes::comments::{
     delete_comment_handler, post_comment_handler, query_comments_handler, update_comment_handler,
 };
@@ -23,6 +27,7 @@ use tower_http::trace::TraceLayer;
 
 pub mod error;
 pub mod pow;
+pub mod rate_limit;
 pub mod request;
 pub mod routes;
 pub mod site_auth;
@@ -43,6 +48,12 @@ pub struct ApiState {
     /// Instance-wide site verification policy plus the operator-declared
     /// per-site overlay.
     pub site_auth_policy: Arc<SiteAuthPolicy>,
+    /// SHA-256 hash of the operator admin token, when enabled.
+    pub admin_token_hash: Option<String>,
+    /// Anti-spam limiter for open site registration.
+    pub registration_limiter: Arc<rate_limit::RateLimiter>,
+    /// Anti-spam limiter for verification token issuance.
+    pub verification_limiter: Arc<rate_limit::RateLimiter>,
 }
 
 /// Builds the Axum router for the API.
@@ -85,9 +96,33 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/health", get(health_handler))
         .layer(middleware::from_fn(public_cors));
 
+    let admin_router = Router::new()
+        .route(
+            "/api/v1/admin/sites",
+            axum::routing::get(list_admin_sites_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}/origins/revoke",
+            axum::routing::post(revoke_verified_origin_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}/secret/rotate",
+            axum::routing::post(rotate_secret_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}/secret",
+            axum::routing::delete(revoke_secret_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}/config-snippet",
+            axum::routing::get(config_snippet_handler),
+        )
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
+
     Router::new()
         .merge(comment_router)
         .merge(public_router)
+        .merge(admin_router)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

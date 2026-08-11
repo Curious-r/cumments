@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
         config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
     config::validate_legacy_cors(&settings.server)?;
+    let admin_token_hash = config::admin_token_hash(&settings.security)?;
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
     {
@@ -356,6 +357,15 @@ async fn main() -> Result<()> {
         event_bus,
         reconciler_notify,
         site_auth_policy,
+        admin_token_hash,
+        registration_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            10,
+            std::time::Duration::from_secs(3600),
+        )),
+        verification_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            20,
+            std::time::Duration::from_secs(3600),
+        )),
     };
     let api_router = cumments_api::build_router(api_state);
 
@@ -392,9 +402,12 @@ async fn main() -> Result<()> {
                 )
             })?;
     tracing::info!("Server listening on {}", listener.local_addr()?);
-    axum::serve(listener, final_router.into_make_service())
-        .await
-        .map_err(|e| anyhow::anyhow!("HTTP server error: {:#}", e))?;
+    axum::serve(
+        listener,
+        final_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("HTTP server error: {:#}", e))?;
 
     Ok(())
 }

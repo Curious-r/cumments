@@ -27,6 +27,7 @@ pub enum AppError {
     NotManageable(String),
     BadRequest(String),
     Conflict(String),
+    TooManyRequests(String),
     SiteVerificationRequired(String),
     SiteOriginDenied(String),
     SiteSignatureInvalid(String),
@@ -65,6 +66,9 @@ impl IntoResponse for AppError {
             ),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST", None),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg, "CONFLICT", None),
+            AppError::TooManyRequests(msg) => {
+                (StatusCode::TOO_MANY_REQUESTS, msg, "RATE_LIMITED", None)
+            }
             AppError::SiteVerificationRequired(msg) => (
                 StatusCode::FORBIDDEN,
                 msg,
