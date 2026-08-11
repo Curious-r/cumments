@@ -17,6 +17,7 @@ use cumments_core::{
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
     models::{AuthorType, PostSlug, SiteId},
 };
+use ruma_common::EventId;
 use validator::Validate;
 
 pub(crate) static QUERY_METHOD: std::sync::LazyLock<Method> =
@@ -31,10 +32,22 @@ fn challenge_prefix(challenge_response: &str) -> &str {
     challenge_response.split('|').next().unwrap_or("")
 }
 
+/// Error returned when `reply_to` cannot be a Matrix event ID.
+const REPLY_TO_FORMAT_ERROR: &str =
+    "reply_to must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
+
 /// Basic shape check for a Matrix event ID used as a reply target.
+///
+/// Event IDs are opaque by spec, but their shape depends on the room version:
+/// v1/v2 use `$opaque_id:server_name`, v3 uses a bare unpadded-Base64 hash
+/// (which may contain `/` or `+`), and v4+ uses URL-safe unpadded Base64. We
+/// parse with ruma, the reference Matrix identifier implementation, then
+/// enforce the invariants every room version shares: a non-empty localpart
+/// and at most 255 bytes.
 fn validate_reply_to_format(reply_to: &str) -> Result<(), &'static str> {
-    if reply_to.len() > 255 || !reply_to.starts_with('$') || !reply_to.contains(':') {
-        return Err("reply_to must be a Matrix event ID (e.g. \"$event:server\")");
+    let event_id = EventId::parse(reply_to).map_err(|_| REPLY_TO_FORMAT_ERROR)?;
+    if event_id.localpart().is_empty() || reply_to.len() > 255 {
+        return Err(REPLY_TO_FORMAT_ERROR);
     }
     Ok(())
 }
@@ -424,10 +437,19 @@ mod tests {
 
     #[test]
     fn reply_to_format_validation_accepts_event_ids_and_rejects_garbage() {
+        // Legacy room v1/v2 form (localpart:server).
         assert!(validate_reply_to_format("$event:server").is_ok());
         assert!(validate_reply_to_format("$a:hs").is_ok());
+        // Room v3 form: unpadded Base64 hash (may contain `/`).
+        assert!(validate_reply_to_format("$acR1l0raoZnm60CBwAVgqbZqoO/mYU81xysh1u7XcJk").is_ok());
+        // Room v4+ form: URL-safe unpadded Base64 hash.
+        assert!(validate_reply_to_format("$Rqnc-F-dvnEYJTyHq_iKxU2bZ1CI92-kuZq3a5lr5Zg").is_ok());
+        // A real-world tuwunel event ID.
+        assert!(validate_reply_to_format("$rCeBvRcif7pRbHMIiPRWcA3m5kKpbLg1p7qfWp73lhM").is_ok());
         assert!(validate_reply_to_format("not-an-event").is_err());
-        assert!(validate_reply_to_format("$no-server").is_err());
+        assert!(validate_reply_to_format("$").is_err());
+        assert!(validate_reply_to_format("$:server").is_err());
+        assert!(validate_reply_to_format("$x:bad server").is_err());
         assert!(validate_reply_to_format(&format!("${}", "x".repeat(300))).is_err());
     }
 }

@@ -103,8 +103,11 @@ Signature message:
 POST\n{site_id}\n{post_slug}\n{content}\n{display_name}\n{reply_to}\n{challenge_prefix}
 ```
 
-`reply_to` is the Matrix event ID of the parent comment, or an empty line when
-the comment is not a reply.
+`reply_to` is the exact Matrix event ID of the parent comment as returned by
+the API, or an empty line when the comment is not a reply. Event IDs are
+opaque strings by spec; legacy v1/v2 IDs look like `$localpart:server` while
+room v3+ IDs are bare hashes (v3 may even contain `/`). When an event ID is
+used in a request path (edit/delete), clients must percent-encode it.
 
 ### Edit a comment
 
