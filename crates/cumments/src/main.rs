@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use cumments_core::ports::MatrixDriver;
 use cumments_core::site_service::SiteService;
+use std::io::IsTerminal;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -33,7 +34,13 @@ async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Logs go to stderr so machine-readable CLI output (e.g. the
+    // registration YAML on stdout) stays clean when redirected.
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .init();
 
     tracing::info!("Starting Cumments v{}...", env!("CARGO_PKG_VERSION"));
 
