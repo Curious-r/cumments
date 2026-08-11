@@ -299,8 +299,8 @@ repository root (note the trailing `.`). Do not run `docker build misc/docker`.
 Prebuilt images are published to GHCR from version tags:
 
 ```bash
-docker pull ghcr.io/curious-r/cumments:0.17.0
-docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
+docker pull ghcr.io/curious-r/cumments:0.18.0
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.18.0
 ```
 
 `latest` follows the newest `v*` tag. The image is also built for validation on
@@ -313,7 +313,7 @@ To use your own config file, mount it over the bundled one:
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
-  ghcr.io/curious-r/cumments:0.17.0
+  ghcr.io/curious-r/cumments:0.18.0
 ```
 
 Alternatively, mount it anywhere and point `--config` at it:
@@ -321,7 +321,7 @@ Alternatively, mount it anywhere and point `--config` at it:
 ```bash
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/srv/cumments/cumments.toml:ro \
-  ghcr.io/curious-r/cumments:0.17.0 \
+  ghcr.io/curious-r/cumments:0.18.0 \
   --config /srv/cumments/cumments.toml
 ```
 
@@ -559,6 +559,9 @@ frontend's inline scripts with `node --check`.
   are not implemented yet.
 - Matrix-native comments bypass the API's PoW by design; spam in that path is
   governed by Matrix room moderation (power levels, bans, etc.).
+- `m.space.child` events only refresh rooms already known to the local
+  registry; unknown rooms linked through a Space are picked up by the
+  reconciler or `backfill` instead of being auto-registered.
 - `backfill` has unit tests, but end-to-end validation against a real Synapse
   deployment is still pending.
 

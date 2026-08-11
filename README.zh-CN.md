@@ -280,8 +280,8 @@ Dockerfile 位于 `misc/docker` 下，构建上下文必须是仓库根目录（
 发布镜像只在 `v*` 版本 tag 时推送到 GHCR：
 
 ```bash
-docker pull ghcr.io/curious-r/cumments:0.17.0
-docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
+docker pull ghcr.io/curious-r/cumments:0.18.0
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.18.0
 ```
 
 `latest` 跟随最新的 `v*` tag；`main` 分支和 PR 在 Docker 相关文件变更时也会
@@ -293,7 +293,7 @@ docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
-  ghcr.io/curious-r/cumments:0.17.0
+  ghcr.io/curious-r/cumments:0.18.0
 ```
 
 也可以挂载到任意位置，再用 `--config` 指定：
@@ -301,7 +301,7 @@ docker run -p 7931:7931 \
 ```bash
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/srv/cumments/cumments.toml:ro \
-  ghcr.io/curious-r/cumments:0.17.0 \
+  ghcr.io/curious-r/cumments:0.18.0 \
   --config /srv/cumments/cumments.toml
 ```
 
@@ -523,6 +523,8 @@ GitHub Actions 会执行同样的命令，另外用 `node --check` 校验验证�
 - 速率限制、多实例/Postgres、运维监控尚未实现。
 - Matrix 原生评论按设计不受 API 的 PoW 约束；该路径的刷屏交由 Matrix 房间治理
   （权力级别、禁言、封禁等）处理。
+- `m.space.child` 事件只会刷新本地注册表已认识的房间；通过 Space 挂入的未知
+  房间由 reconciler 或 `backfill` 发现，而不是自动注册。
 - `backfill` 已有单元测试，但尚未在真实 Synapse 上做端到端验证。
 
 ## License
