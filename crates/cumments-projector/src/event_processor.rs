@@ -49,7 +49,7 @@ pub struct ParsedRoomMessage {
     /// The PoW challenge prefix embedded in the event, if any.
     pub author_challenge: Option<String>,
     /// Whether the sender is one of our exclusive AS virtual users.
-    pub is_virtual_sender: bool,
+    pub is_virtual_user_sender: bool,
     /// Correlation hint: the intent queue row ID that produced this event,
     /// if the message was sent by Cumments.
     pub intent_id: Option<i64>,
@@ -342,7 +342,7 @@ impl EventProcessor {
             // Guest edits must carry a valid Cumments identity block and
             // signature; Matrix-native edits are governed by the sender check
             // above.
-            if event.is_virtual_sender {
+            if event.is_virtual_user_sender {
                 let valid = match (
                     &event.author_public_key,
                     &event.author_signature,
@@ -423,7 +423,7 @@ impl EventProcessor {
         // Guest posts must carry a valid Cumments identity block and
         // signature. Matrix-native posts skip this path entirely: their
         // identity is the Matrix sender itself.
-        if event.is_virtual_sender {
+        if event.is_virtual_user_sender {
             let valid = match (
                 &event.author_public_key,
                 &event.author_signature,
@@ -460,7 +460,7 @@ impl EventProcessor {
         }
 
         // Handle Original Posts
-        let is_matrix_native = !event.is_virtual_sender;
+        let is_matrix_native = !event.is_virtual_user_sender;
         let comment = Comment {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),

@@ -254,8 +254,8 @@ pub(crate) async fn process_single_event(
 
 /// Structured Cumments content takes precedence over the message body.
 /// External Matrix messages (no structured block) use the plain body.
-fn extract_message_content(body: &str, structured: Option<&str>) -> String {
-    if let Some(c) = structured {
+fn extract_message_content(body: &str, structured_content: Option<&str>) -> String {
+    if let Some(c) = structured_content {
         return c.to_string();
     }
     body.to_string()
@@ -263,7 +263,7 @@ fn extract_message_content(body: &str, structured: Option<&str>) -> String {
 
 /// Read a string field from the Cumments content block, falling back to the
 /// block inside the standard `m.new_content` replacement payload.
-fn content_string<'a>(content: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+fn namespaced_string<'a>(content: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     content
         .get(MESSAGE_CONTENT_KEY)
         .and_then(|ns| ns.get(key))
@@ -277,7 +277,7 @@ fn content_string<'a>(content: &'a serde_json::Value, key: &str) -> Option<&'a s
 }
 
 /// Read an integer field from the same Cumments content block locations.
-fn content_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
+fn namespaced_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
     content
         .get(MESSAGE_CONTENT_KEY)
         .and_then(|ns| ns.get(key))
@@ -337,11 +337,11 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     // Structured Cumments fields are only trusted for our virtual users.
     // Matrix-native senders may copy a block into their event; it must be
     // ignored so it cannot be used to impersonate a guest identity.
-    let author_public_key = content_string(content, "public_key").map(|s| s.to_string());
-    let author_signature = content_string(content, "signature").map(|s| s.to_string());
-    let author_challenge = content_string(content, "challenge").map(|s| s.to_string());
-    let structured_content = content_string(content, "content");
-    let structured_displayname = content_string(content, "displayname");
+    let author_public_key = namespaced_string(content, "public_key").map(|s| s.to_string());
+    let author_signature = namespaced_string(content, "signature").map(|s| s.to_string());
+    let author_challenge = namespaced_string(content, "challenge").map(|s| s.to_string());
+    let structured_content = namespaced_string(content, "content");
+    let structured_displayname = namespaced_string(content, "displayname");
 
     let trusted_block = is_virtual_sender
         && author_public_key.is_some()
@@ -426,9 +426,9 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         } else {
             None
         },
-        is_virtual_sender,
+        is_virtual_user_sender: is_virtual_sender,
         intent_id: if trusted_block {
-            content_i64(content, "intent_id")
+            namespaced_i64(content, "intent_id")
         } else {
             None
         },
@@ -828,7 +828,7 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse native message");
-        assert!(!parsed.is_virtual_sender);
+        assert!(!parsed.is_virtual_user_sender);
         assert_eq!(parsed.content, "plain body");
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
@@ -855,7 +855,7 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse guest message");
-        assert!(parsed.is_virtual_sender);
+        assert!(parsed.is_virtual_user_sender);
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
