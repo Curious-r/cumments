@@ -9,11 +9,11 @@ use axum::{
     routing::{delete, get, post},
 };
 use cumments_core::{
-    events::ProjectorEvent,
     identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
     models::{AuthorType, Comment, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, SiteStore},
+    projector_events::ProjectorEvent,
 };
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, sync::Arc};

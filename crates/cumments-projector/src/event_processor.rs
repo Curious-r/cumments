@@ -8,13 +8,13 @@
 
 use anyhow::Result;
 use cumments_core::{
-    events::ProjectorEvent,
     identity::{
         derive_guest_id_from_public_key, post_signature_message, signature_message,
         verify_signature,
     },
     models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
+    projector_events::ProjectorEvent,
     protocol::REDACTION_PROOF_KEY,
 };
 use serde::Deserialize;
