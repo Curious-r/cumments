@@ -11,14 +11,24 @@ impl MigrationTrait for Migration {
         let builder = manager.get_database_backend();
         let schema = sea_orm::Schema::new(builder);
         manager
-            .create_table(schema.create_table_from_entity(backfill_cursors::Entity))
+            .create_table(
+                schema
+                    .create_table_from_entity(backfill_cursors::Entity)
+                    .if_not_exists()
+                    .to_owned(),
+            )
             .await?;
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(backfill_cursors::Entity).to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(backfill_cursors::Entity)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         Ok(())
     }

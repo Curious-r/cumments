@@ -5,14 +5,14 @@ pub use sea_orm_migration::MigratorTrait;
 
 pub mod m20260531_000001_initial_schema;
 pub mod m20260619_000002_virtual_users;
-pub mod m20260808_000003_comment_owner_hash;
+pub mod m20260808_000003_comments_owner_hash;
 pub mod m20260808_000004_intent_retry;
 pub mod m20260808_000005_intent_room_id;
 pub mod m20260808_000006_public_key_identity;
-pub mod m20260808_000007_backfill_cursor;
+pub mod m20260808_000007_backfill_cursors_create;
 pub mod m20260808_000008_author_challenge;
-pub mod m20260808_000009_comment_reply_to;
-pub mod m20260811_000010_author_type;
+pub mod m20260808_000009_comments_reply_to;
+pub mod m20260811_000010_comments_author_type;
 pub mod m20260811_000011_virtual_users_public_key;
 pub mod m20260811_000012_comments_sender_mxid;
 pub mod m20260811_000013_comments_author_displayname;
@@ -54,14 +54,14 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260531_000001_initial_schema::Migration),
             Box::new(m20260619_000002_virtual_users::Migration),
-            Box::new(m20260808_000003_comment_owner_hash::Migration),
+            Box::new(m20260808_000003_comments_owner_hash::Migration),
             Box::new(m20260808_000004_intent_retry::Migration),
             Box::new(m20260808_000005_intent_room_id::Migration),
             Box::new(m20260808_000006_public_key_identity::Migration),
-            Box::new(m20260808_000007_backfill_cursor::Migration),
+            Box::new(m20260808_000007_backfill_cursors_create::Migration),
             Box::new(m20260808_000008_author_challenge::Migration),
-            Box::new(m20260808_000009_comment_reply_to::Migration),
-            Box::new(m20260811_000010_author_type::Migration),
+            Box::new(m20260808_000009_comments_reply_to::Migration),
+            Box::new(m20260811_000010_comments_author_type::Migration),
             Box::new(m20260811_000011_virtual_users_public_key::Migration),
             Box::new(m20260811_000012_comments_sender_mxid::Migration),
             Box::new(m20260811_000013_comments_author_displayname::Migration),
