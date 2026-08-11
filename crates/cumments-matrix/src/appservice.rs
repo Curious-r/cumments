@@ -7,7 +7,7 @@ use cumments_core::{
     identity::derive_visitor_id_from_public_key,
     models::{PostSlug, RoomEventPage, SiteId},
     ports::{MatrixDriver, VirtualUserStore},
-    protocol::{MESSAGE_CONTENT_KEY, METADATA_EVENT_TYPE},
+    protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE},
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -174,7 +174,7 @@ fn has_state_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bo
         .unwrap_or(0);
     let required = power_levels
         .get("events")
-        .and_then(|e| e.get(METADATA_EVENT_TYPE))
+        .and_then(|e| e.get(ROOM_METADATA_EVENT_TYPE))
         .and_then(|v| v.as_i64())
         .or_else(|| power_levels.get("state_default").and_then(|v| v.as_i64()))
         .unwrap_or(50);
@@ -582,7 +582,7 @@ impl AppServiceMatrixDriver {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/{}",
             urlencode(room_id),
-            METADATA_EVENT_TYPE
+            ROOM_METADATA_EVENT_TYPE
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, None)
@@ -609,7 +609,7 @@ impl AppServiceMatrixDriver {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/{}",
             urlencode(room_id),
-            METADATA_EVENT_TYPE
+            ROOM_METADATA_EVENT_TYPE
         );
         let resp = self
             .request(reqwest::Method::GET, &path, None)
@@ -960,7 +960,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             },
             "initial_state": [
                 {
-                    "type": METADATA_EVENT_TYPE,
+                    "type": ROOM_METADATA_EVENT_TYPE,
                     "state_key": "",
                     "content": {
                         "site_id": site_id_str,
@@ -1118,7 +1118,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 "room_alias_name": alias_localpart,
                 "initial_state": [
                     {
-                        "type": METADATA_EVENT_TYPE,
+                        "type": ROOM_METADATA_EVENT_TYPE,
                         "state_key": "",
                         "content": {
                             "site_id": site_id.as_str(),
@@ -1687,7 +1687,7 @@ mod tests {
         let pl = json!({
             "users": { "@_cumments_bot:example.com": 50 },
             "state_default": 50,
-            "events": { METADATA_EVENT_TYPE: 100 }
+            "events": { ROOM_METADATA_EVENT_TYPE: 100 }
         });
         assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
     }
@@ -1856,7 +1856,7 @@ mod tests {
     #[test]
     fn redaction_body_embeds_proof_as_reason() {
         let proof = json!({
-            "host.curious.cumments": {
+            "host.curious.cumments.redaction": {
                 "public_key": "pk",
                 "signature": "sig",
                 "challenge": "chal",

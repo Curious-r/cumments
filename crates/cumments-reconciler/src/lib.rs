@@ -1,6 +1,7 @@
 use anyhow::Result;
 use cumments_core::{
     ports::{CommentStore, IntentStore, MatrixDriver, RegistryStore},
+    protocol::REDACTION_PROOF_KEY,
     site_service::SiteService,
 };
 use std::sync::Arc;
@@ -254,7 +255,7 @@ impl Reconciler {
 
                 // 2. Hands: Perform the redaction
                 let proof = serde_json::json!({
-                    "host.curious.cumments": {
+                    (REDACTION_PROOF_KEY): {
                         "site_id": intent.site_id.as_str(),
                         "post_slug": intent.post_slug.as_str(),
                         "target_event_id": intent.event_id.as_str(),

@@ -628,7 +628,7 @@ mod tests {
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
-                "reason": "{\"host.curious.cumments\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\"}}",
+                "reason": "{\"host.curious.cumments.redaction\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\"}}",
                 "redacts": "$target:hs",
             })),
             redacts: None,
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(parsed.redacts.as_deref(), Some("$target:hs"));
         let proof = parsed.proof.expect("proof parsed from reason");
         assert_eq!(
-            proof["host.curious.cumments"]["site_id"].as_str(),
+            proof["host.curious.cumments.redaction"]["site_id"].as_str(),
             Some("my-blog")
         );
     }
@@ -694,7 +694,7 @@ mod tests {
                 "body": " * **Alice**: edited",
                 "m.new_content": {
                     "body": "**Alice**: edited",
-                    "host.curious.cumments": {
+                    "host.curious.cumments.message": {
                         "visitor_id": "abcd",
                         "public_key": "pubkey",
                         "signature": "sig",
@@ -744,7 +744,7 @@ mod tests {
             content: Some(serde_json::json!({
                 "msgtype": "m.text",
                 "body": "**Alice**: hello",
-                "host.curious.cumments": {
+                "host.curious.cumments.message": {
                     "visitor_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
@@ -784,7 +784,7 @@ mod tests {
                         "event_id": "$parent:hs",
                     }
                 },
-                "host.curious.cumments": {
+                "host.curious.cumments.message": {
                     "visitor_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
@@ -815,7 +815,7 @@ mod tests {
             content: Some(serde_json::json!({
                 "msgtype": "m.text",
                 "body": "plain body",
-                "host.curious.cumments": {
+                "host.curious.cumments.message": {
                     "visitor_id": "abcd",
                     "public_key": "fake-pubkey",
                     "signature": "fake-signature",

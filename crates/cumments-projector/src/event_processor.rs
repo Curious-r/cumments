@@ -15,7 +15,7 @@ use cumments_core::{
     },
     models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
-    protocol::MESSAGE_CONTENT_KEY,
+    protocol::REDACTION_PROOF_KEY,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -185,7 +185,7 @@ fn verify_delete_proof(
     post_slug: &str,
     author_public_key: Option<&str>,
 ) -> bool {
-    let Some(block) = proof.get(MESSAGE_CONTENT_KEY) else {
+    let Some(block) = proof.get(REDACTION_PROOF_KEY) else {
         return false;
     };
     let field = |key: &str| block.get(key).and_then(|v| v.as_str());
@@ -762,7 +762,7 @@ mod tests {
         let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
 
         let proof = serde_json::json!({
-            "host.curious.cumments": {
+            "host.curious.cumments.redaction": {
                 "site_id": "my-blog",
                 "post_slug": "hello",
                 "target_event_id": "$target:hs",
@@ -810,7 +810,7 @@ mod tests {
             Some(&public_key),
         ));
         assert!(!verify_delete_proof(
-            &serde_json::json!({ "host.curious.cumments": { "site_id": "my-blog" } }),
+            &serde_json::json!({ "host.curious.cumments.redaction": { "site_id": "my-blog" } }),
             "$target:hs",
             "my-blog",
             "hello",
