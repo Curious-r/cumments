@@ -280,8 +280,8 @@ Dockerfile 位于 `misc/docker` 下，构建上下文必须是仓库根目录（
 发布镜像只在 `v*` 版本 tag 时推送到 GHCR：
 
 ```bash
-docker pull ghcr.io/curious-r/cumments:0.18.0
-docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.18.0
+docker pull ghcr.io/curious-r/cumments:0.18.1
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.18.1
 ```
 
 `latest` 跟随最新的 `v*` tag；`main` 分支和 PR 在 Docker 相关文件变更时也会
@@ -293,7 +293,7 @@ docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
-  ghcr.io/curious-r/cumments:0.18.0
+  ghcr.io/curious-r/cumments:0.18.1
 ```
 
 也可以挂载到任意位置，再用 `--config` 指定：
@@ -301,7 +301,7 @@ docker run -p 7931:7931 \
 ```bash
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/srv/cumments/cumments.toml:ro \
-  ghcr.io/curious-r/cumments:0.18.0 \
+  ghcr.io/curious-r/cumments:0.18.1 \
   --config /srv/cumments/cumments.toml
 ```
 
@@ -316,7 +316,7 @@ docker run -p 7931:7931 \
 docker run -p 7931:7931 \
   -e PUID=$(id -u) -e PGID=$(id -g) \
   -v $(pwd)/data:/srv/cumments \
-  ghcr.io/curious-r/cumments:0.18.0
+  ghcr.io/curious-r/cumments:0.18.1
 ```
 
 镜像默认以 `logging` 模式启动；生产环境用环境变量覆盖，例如：
