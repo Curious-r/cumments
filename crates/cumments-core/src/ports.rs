@@ -197,6 +197,11 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
         site_id: &SiteId,
         reply_to: Option<&str>,
+        // The plain-text body and sender MXID of the replied-to event, used to
+        // build the rich-reply fallback quote for clients without relation
+        // support. `None` when the original event is unknown.
+        reply_to_body: Option<&str>,
+        reply_to_sender: Option<&str>,
         // Correlation hint: the intent queue row ID, published in the event so
         // the projector can close the loop even if the push arrives before the
         // reconciler's write-back.

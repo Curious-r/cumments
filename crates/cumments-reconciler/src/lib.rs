@@ -148,6 +148,18 @@ impl Reconciler {
                     .register_room(&room_id, &intent.site_id, &intent.post_slug)
                     .await?;
 
+                // 3c. Resolve the replied-to comment from the read model so
+                // the Matrix message can carry a rich-reply fallback quote.
+                // Unknown originals (e.g. replies to a not-yet-projected
+                // event) simply skip the quote.
+                let (reply_to_body, reply_to_sender) = match intent.reply_to.as_deref() {
+                    Some(event_id) => match self.comment_store.get_comment(event_id).await? {
+                        Some(comment) => (Some(comment.content), Some(comment.author_mxid)),
+                        None => (None, None),
+                    },
+                    None => (None, None),
+                };
+
                 // 4. Hands: Post the actual message
                 let event_id = match self
                     .driver
@@ -160,6 +172,8 @@ impl Reconciler {
                         &intent.author_challenge,
                         &intent.site_id,
                         intent.reply_to.as_deref(),
+                        reply_to_body.as_deref(),
+                        reply_to_sender.as_deref(),
                         Some(id),
                     )
                     .await

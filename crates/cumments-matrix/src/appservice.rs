@@ -181,6 +181,31 @@ fn has_state_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bo
     user_power >= required
 }
 
+/// Build the rich-reply fallback body following the pre-v1.13 spec format:
+/// each line of the original body is prefixed with `> `, the first line also
+/// carries the original sender's MXID, followed by a blank line and the reply
+/// content. Returns `None` when there is nothing useful to quote.
+fn reply_fallback_body(sender_mxid: &str, original: &str, content: &str) -> Option<String> {
+    if original.is_empty() {
+        return None;
+    }
+    let mut quoted = original
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                format!("> <{}> {}", sender_mxid, line)
+            } else {
+                format!("> {}", line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    quoted.push_str("\n\n");
+    quoted.push_str(content);
+    Some(quoted)
+}
+
 /// Build the `m.room.message` content for a new Cumments comment.
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 fn build_message_body(
@@ -192,12 +217,21 @@ fn build_message_body(
     visitor_id: &str,
     intent_id: Option<i64>,
     reply_to: Option<&str>,
+    reply_to_body: Option<&str>,
+    reply_to_sender: Option<&str>,
 ) -> serde_json::Value {
+    // The body is the pure comment text unless a rich-reply fallback is
+    // available: the quoted original is only for clients without relation
+    // support. The structured block always carries the pure content.
+    let body = match (reply_to, reply_to_body, reply_to_sender) {
+        (Some(_), Some(original), Some(sender)) => {
+            reply_fallback_body(sender, original, content).unwrap_or_else(|| content.to_string())
+        }
+        _ => content.to_string(),
+    };
     let mut message_body = serde_json::json!({
         "msgtype": "m.text",
-        // The body is the pure comment text; the commenter's nickname lives
-        // in the virtual user's display name and in the structured block.
-        "body": content,
+        "body": body,
     });
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
         "visitor_id": visitor_id,
@@ -1189,6 +1223,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_challenge: &str,
         site_id: &SiteId,
         reply_to: Option<&str>,
+        reply_to_body: Option<&str>,
+        reply_to_sender: Option<&str>,
         intent_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user via the store (includes site_id)
@@ -1216,6 +1252,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
             &visitor_id,
             intent_id,
             reply_to,
+            reply_to_body,
+            reply_to_sender,
         );
 
         let txn_id = self.txn_id("post", intent_id);
@@ -1694,6 +1732,8 @@ mod tests {
             "abcd",
             Some(7),
             None,
+            None,
+            None,
         );
 
         assert_eq!(body["msgtype"].as_str(), Some("m.text"));
@@ -1725,14 +1765,52 @@ mod tests {
             "abcd",
             Some(7),
             Some("$parent:hs"),
+            Some("original line one\noriginal line two"),
+            Some("@alice:hs"),
         );
 
+        assert_eq!(
+            body["body"].as_str(),
+            Some("> <@alice:hs> original line one\n> original line two\n\nhello")
+        );
+        // The structured block still carries only the pure reply content.
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"].as_str(), Some("hello"));
         assert_eq!(
             body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
             Some("$parent:hs")
         );
         assert!(body["m.relates_to"].get("rel_type").is_none());
         assert!(body.get(MESSAGE_CONTENT_KEY).is_some());
+    }
+
+    #[test]
+    fn reply_without_known_original_keeps_pure_body() {
+        let body = build_message_body(
+            "hello",
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+            Some("$parent:hs"),
+            None,
+            None,
+        );
+        assert_eq!(body["body"].as_str(), Some("hello"));
+        assert_eq!(
+            body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
+            Some("$parent:hs")
+        );
+    }
+
+    #[test]
+    fn reply_fallback_quotes_multiline_original() {
+        assert_eq!(
+            reply_fallback_body("@alice:hs", "first\nsecond", "reply").as_deref(),
+            Some("> <@alice:hs> first\n> second\n\nreply")
+        );
+        assert_eq!(reply_fallback_body("@alice:hs", "", "reply"), None);
     }
 
     #[test]
