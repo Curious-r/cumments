@@ -1139,6 +1139,18 @@ impl VirtualUserStore for DbStore {
             server_name
         );
 
+        // The mapping is stable per (public key, site): return the stored
+        // virtual user even when the current server_name differs (e.g. after
+        // a domain migration), so edits keep matching the original sender.
+        if let Some(existing) = virtual_users::Entity::find()
+            .filter(virtual_users::Column::Fingerprint.eq(author_public_key))
+            .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
+            .one(&self.db)
+            .await?
+        {
+            return Ok(existing.virtual_user_id);
+        }
+
         // 2. Try to insert – on conflict (fingerprint + site_id already exists), do nothing
         let active_model = virtual_users::ActiveModel {
             fingerprint: Set(author_public_key.to_owned()),
@@ -1159,6 +1171,17 @@ impl VirtualUserStore for DbStore {
             )
             .exec(&self.db)
             .await?;
+
+        // Re-read after the insert: a concurrent request may have won the
+        // race, and the winner's stored ID is authoritative.
+        if let Some(existing) = virtual_users::Entity::find()
+            .filter(virtual_users::Column::Fingerprint.eq(author_public_key))
+            .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
+            .one(&self.db)
+            .await?
+        {
+            return Ok(existing.virtual_user_id);
+        }
 
         Ok(virtual_user_id)
     }

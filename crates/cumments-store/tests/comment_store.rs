@@ -1,6 +1,6 @@
 use chrono::Utc;
 use cumments_core::models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId};
-use cumments_core::ports::CommentStore;
+use cumments_core::ports::{CommentStore, VirtualUserStore};
 use cumments_store::DbStore;
 
 /// Unique SQLite file per test to avoid shared in-memory state.
@@ -203,4 +203,25 @@ async fn matrix_native_comment_roundtrip() {
     assert!(stored.author.public_key.is_none());
     assert_eq!(stored.author.mxid.as_deref(), Some("@alice:hs"));
     assert_eq!(stored.author_mxid, "@alice:hs");
+}
+
+#[tokio::test]
+async fn virtual_user_mapping_is_stable_across_server_name_changes() {
+    let store = DbStore::connect(&test_db_url("virtual-user-stable"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+
+    let first = store
+        .get_or_create_virtual_user("key1", &site, "hs")
+        .await
+        .expect("create virtual user");
+    let second = store
+        .get_or_create_virtual_user("key1", &site, "other.hs")
+        .await
+        .expect("reuse virtual user");
+
+    assert_eq!(first, second);
+    assert!(first.starts_with("@_cumments_my-blog_"));
+    assert!(first.ends_with(":hs"));
 }
