@@ -201,3 +201,110 @@ async fn expired_verification_tokens_are_not_found() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn one_challenge_with_multiple_origins_inserts_distinct_tokens() {
+    let store = DbStore::connect(&test_db_url("site-auth-multi-origin"))
+        .await
+        .expect("connect db");
+    let site_id = "d4e5f60718a1b2c3d4e5f60718a1b2c3";
+    store
+        .register_site(site_id, &token_hash("claim"))
+        .await
+        .expect("register site");
+
+    let token_hash = token_hash("shared-proof-token");
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+    store
+        .insert_verification_tokens(&[
+            NewVerificationToken {
+                site_id: site_id.to_string(),
+                origin: Origin::parse("https://a.example.com").expect("origin"),
+                token_hash: token_hash.clone(),
+                methods: vec![VerificationMethod::WellKnown],
+                expires_at,
+            },
+            NewVerificationToken {
+                site_id: site_id.to_string(),
+                origin: Origin::parse("https://b.example.com").expect("origin"),
+                token_hash: token_hash.clone(),
+                methods: vec![VerificationMethod::WellKnown],
+                expires_at,
+            },
+        ])
+        .await
+        .expect("insert multiple tokens for one challenge");
+
+    assert!(
+        store
+            .find_verification_token(
+                site_id,
+                &Origin::parse("https://a.example.com").expect("origin"),
+                &token_hash,
+            )
+            .await
+            .expect("query token")
+            .is_some()
+    );
+    assert!(
+        store
+            .find_verification_token(
+                site_id,
+                &Origin::parse("https://b.example.com").expect("origin"),
+                &token_hash,
+            )
+            .await
+            .expect("query token")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn complete_verification_is_atomic_and_idempotent() {
+    let store = DbStore::connect(&test_db_url("site-auth-complete"))
+        .await
+        .expect("connect db");
+    let site_id = "e5f60718a1b2c3d4e5f60718a1b2c3d4";
+    store
+        .register_site(site_id, &token_hash("claim"))
+        .await
+        .expect("register site");
+
+    let origin = Origin::parse("https://blog.example.com").expect("valid origin");
+    store
+        .insert_verification_tokens(&[NewVerificationToken {
+            site_id: site_id.to_string(),
+            origin: origin.clone(),
+            token_hash: token_hash("proof-token"),
+            methods: vec![VerificationMethod::WellKnown],
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        }])
+        .await
+        .expect("insert token");
+    let token = store
+        .find_verification_token(site_id, &origin, &token_hash("proof-token"))
+        .await
+        .expect("find token")
+        .expect("token exists");
+
+    assert!(
+        store
+            .complete_verification(site_id, &origin, token.id)
+            .await
+            .expect("first completion wins")
+    );
+    assert!(
+        !store
+            .complete_verification(site_id, &origin, token.id)
+            .await
+            .expect("second completion is a no-op")
+    );
+
+    let auth = store
+        .get_site_auth(site_id)
+        .await
+        .expect("query auth")
+        .expect("site exists");
+    assert_eq!(auth.verification_status, SiteVerificationStatus::Verified);
+    assert_eq!(auth.verified_origins, vec![origin]);
+}

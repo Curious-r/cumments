@@ -11,7 +11,7 @@ use cumments_core::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteAuthMode, SiteVerificationStatus,
     VerificationToken,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, NotSet, QueryFilter, Set, TransactionTrait};
 use std::collections::HashMap;
 
 #[async_trait]
@@ -82,7 +82,7 @@ impl SiteAuthStore for DbStore {
         let models = tokens
             .iter()
             .map(|token| verification_tokens::ActiveModel {
-                id: Set(0),
+                id: NotSet,
                 site_id: Set(token.site_id.clone()),
                 origin: Set(token.origin.as_str().to_owned()),
                 token_hash: Set(token.token_hash.clone()),
@@ -142,7 +142,10 @@ impl SiteAuthStore for DbStore {
                 site_verified_origins::Column::SiteId,
                 site_verified_origins::Column::Origin,
             ])
-            .do_nothing()
+            // Upsert instead of DO NOTHING: sea-orm reports a conflicting
+            // insert as an error, and idempotent completion must not fail
+            // when a concurrent confirmation already recorded the origin.
+            .update_column(site_verified_origins::Column::CreatedAt)
             .to_owned(),
         )
         .exec(&transaction)
@@ -167,6 +170,62 @@ impl SiteAuthStore for DbStore {
 
         transaction.commit().await?;
         Ok(())
+    }
+
+    async fn complete_verification(
+        &self,
+        site_id: &str,
+        origin: &Origin,
+        token_id: i64,
+    ) -> Result<bool> {
+        let transaction = self.db.begin().await?;
+
+        let consumed = verification_tokens::Entity::update_many()
+            .col_expr(
+                verification_tokens::Column::ConsumedAt,
+                sea_orm::sea_query::Expr::value(Utc::now()),
+            )
+            .filter(verification_tokens::Column::Id.eq(token_id))
+            .filter(verification_tokens::Column::ConsumedAt.is_null())
+            .exec(&transaction)
+            .await?;
+        let first_consumption = consumed.rows_affected == 1;
+
+        site_verified_origins::Entity::insert(site_verified_origins::ActiveModel {
+            site_id: Set(site_id.to_owned()),
+            origin: Set(origin.as_str().to_owned()),
+            created_at: Set(Utc::now()),
+        })
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::columns([
+                site_verified_origins::Column::SiteId,
+                site_verified_origins::Column::Origin,
+            ])
+            .update_column(site_verified_origins::Column::CreatedAt)
+            .to_owned(),
+        )
+        .exec(&transaction)
+        .await?;
+
+        sites::Entity::update_many()
+            .col_expr(
+                sites::Column::VerificationStatus,
+                sea_orm::sea_query::Expr::value(DbVerificationStatus::Verified),
+            )
+            .col_expr(
+                sites::Column::VerifiedAt,
+                sea_orm::sea_query::Expr::value(Utc::now()),
+            )
+            .col_expr(
+                sites::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(Some(Utc::now())),
+            )
+            .filter(sites::Column::Id.eq(site_id))
+            .exec(&transaction)
+            .await?;
+
+        transaction.commit().await?;
+        Ok(first_consumption)
     }
 
     async fn store_site_secret(&self, site_id: &str, secret: &str) -> Result<()> {
@@ -303,7 +362,8 @@ fn core_verification_token(row: verification_tokens::Model) -> Result<Verificati
         site_id: row.site_id,
         origin: Origin::parse(&row.origin)?,
         token_hash: row.token_hash,
-        methods: serde_json::from_str(&row.methods).unwrap_or_default(),
+        methods: serde_json::from_str(&row.methods)
+            .map_err(|e| anyhow::anyhow!("invalid verification methods: {e}"))?,
         expires_at: row.expires_at,
         consumed_at: row.consumed_at,
         created_at: row.created_at,

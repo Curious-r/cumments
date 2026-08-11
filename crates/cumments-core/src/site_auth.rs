@@ -18,6 +18,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use subtle::ConstantTimeEq;
 use url::Url;
 
@@ -37,6 +38,8 @@ pub const CLAIM_TOKEN_HEADER: &str = "X-Cumments-Claim-Token";
 pub const SITE_SIGNATURE_MAX_SKEW_SECONDS: i64 = 300;
 /// Validity window of a verification challenge.
 pub const VERIFICATION_TOKEN_TTL_HOURS: i64 = 1;
+/// Maximum origins accepted in one verification challenge.
+pub const MAX_ORIGINS_PER_CHALLENGE: usize = 10;
 /// Minimum length of a site secret (32 random bytes, hex-encoded = 64 chars).
 pub const SITE_SECRET_MIN_LENGTH: usize = 32;
 /// Known placeholder values that must never be used as a real site secret.
@@ -571,8 +574,19 @@ pub async fn start_site_verification(
     if origins.is_empty() {
         bail!("at least one origin is required");
     }
+    if origins.len() > MAX_ORIGINS_PER_CHALLENGE {
+        bail!("at most {MAX_ORIGINS_PER_CHALLENGE} origins per verification challenge");
+    }
     if methods.is_empty() {
         bail!("at least one verification method is required");
+    }
+
+    let mut seen = HashSet::new();
+    let mut unique_origins = Vec::with_capacity(origins.len());
+    for origin in origins {
+        if seen.insert(origin.as_str().to_string()) {
+            unique_origins.push(origin.clone());
+        }
     }
 
     let stored_hash = store
@@ -592,7 +606,7 @@ pub async fn start_site_verification(
     let raw_token = generate_token();
     let hash = token_hash(&raw_token);
     let expires_at = Utc::now() + Duration::hours(VERIFICATION_TOKEN_TTL_HOURS);
-    let tokens = origins
+    let tokens = unique_origins
         .iter()
         .map(|origin| NewVerificationToken {
             site_id: site_id.as_str().to_string(),

@@ -198,6 +198,16 @@ pub trait SiteAuthStore: Send + Sync {
     /// Records a verified origin and marks the site verified.
     async fn add_verified_origin(&self, site_id: &str, origin: &Origin) -> Result<()>;
 
+    /// Atomically consumes a verification token and records the verified
+    /// origin. Returns `false` when the token was already consumed (for
+    /// example by a concurrent confirmation); the origin is still recorded.
+    async fn complete_verification(
+        &self,
+        site_id: &str,
+        origin: &Origin,
+        token_id: i64,
+    ) -> Result<bool>;
+
     /// Stores the site's HMAC key and switches the site to secret auth.
     /// The key is needed in plain form to verify HMAC signatures.
     async fn store_site_secret(&self, site_id: &str, secret: &str) -> Result<()>;
