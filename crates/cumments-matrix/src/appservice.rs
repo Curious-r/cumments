@@ -49,6 +49,9 @@ struct JoinedRoomsResponse {
 /// user and alias namespaces begin with `_` after the sigil, e.g.
 /// `@_irc_.*` / `#_irc_.*`.
 const ALIAS_PREFIX: &str = "_cumments_";
+/// Upper bound for the joined-room cache. Membership changes are rare; when
+/// the cap is hit the cache is reset and rebuilt from homeserver state.
+const JOINED_CACHE_MAX: usize = 10_000;
 
 fn site_space_alias_localpart(site_id: &str) -> String {
     format!("{}{}", ALIAS_PREFIX, site_id)
@@ -327,12 +330,7 @@ impl AppServiceMatrixDriver {
     /// Ensure a virtual user is joined to a room.
     async fn ensure_joined(&self, room_id: &str, virtual_user: &str) -> Result<()> {
         let cache_key = (room_id.to_owned(), virtual_user.to_owned());
-        if self
-            .joined_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&cache_key)
-        {
+        if self.is_joined_cached(&cache_key) {
             return Ok(());
         }
 
@@ -352,10 +350,7 @@ impl AppServiceMatrixDriver {
                 if let Ok(content) = resp.json::<serde_json::Value>().await
                     && content.get("membership").and_then(|v| v.as_str()) == Some("join")
                 {
-                    self.joined_cache
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(cache_key);
+                    self.cache_joined(cache_key);
                     return Ok(());
                 }
             }
@@ -383,6 +378,7 @@ impl AppServiceMatrixDriver {
             if errcode == "M_FORBIDDEN" {
                 // M_FORBIDDEN commonly means "already joined"; the send below
                 // remains the authoritative check.
+                self.invalidate_joined(&cache_key);
                 warn!(
                     "Virtual user {} join room {} returned M_FORBIDDEN ({}): {}",
                     virtual_user, room_id, status, body
@@ -394,12 +390,31 @@ impl AppServiceMatrixDriver {
                 );
             }
         } else {
-            self.joined_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(cache_key);
+            self.cache_joined(cache_key);
         }
         Ok(())
+    }
+
+    fn is_joined_cached(&self, cache_key: &(String, String)) -> bool {
+        self.joined_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(cache_key)
+    }
+
+    fn cache_joined(&self, cache_key: (String, String)) {
+        let mut cache = self.joined_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= JOINED_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(cache_key);
+    }
+
+    fn invalidate_joined(&self, cache_key: &(String, String)) {
+        self.joined_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(cache_key);
     }
 
     /// Set Cumments metadata on a room (state event
@@ -1018,6 +1033,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if body.contains("M_FORBIDDEN") || body.contains("M_NOT_FOUND") {
+                self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
+            }
             return Err(anyhow!("Failed to post message ({}): {}", status, body));
         }
 
@@ -1079,6 +1097,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if body.contains("M_FORBIDDEN") || body.contains("M_NOT_FOUND") {
+                self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
+            }
             return Err(anyhow!("Failed to update message ({}): {}", status, body));
         }
 

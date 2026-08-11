@@ -6,6 +6,11 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
+/// Upper bound for the in-memory site caches. The caches are pure
+/// accelerators; the store remains the source of truth, so resetting them is
+/// always safe.
+const MAX_CACHE_ENTRIES: usize = 4096;
+
 /// A Domain Service that manages the lifecycle of Matrix Spaces for sites.
 /// This is the "Brain" for site-related logic.
 pub struct SiteService {
@@ -35,11 +40,14 @@ impl SiteService {
     ) -> Result<String> {
         let site_id_str = site_id.as_str();
 
-        // Serialize concurrent first-use per site. The lock map entry is
-        // intentionally never removed: the Arc keeps the guard valid for any
-        // waiter even after the holder drops the map entry.
+        // Serialize concurrent first-use per site. Entries are only dropped
+        // once idle and the map exceeds its cap; active or waiting locks keep
+        // their Arc alive so the guard stays valid for waiters.
         let site_lock = {
             let mut inflight = self.inflight.lock().await;
+            if inflight.len() > MAX_CACHE_ENTRIES {
+                inflight.retain(|_, lock| Arc::strong_count(lock) > 1);
+            }
             inflight
                 .entry(site_id_str.to_string())
                 .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -59,10 +67,8 @@ impl SiteService {
         if let Some(site) = self.store.get_site(site_id).await? {
             let space_id = site.matrix_space_id;
             // Update cache
-            self.cache
-                .write()
-                .await
-                .insert(site_id_str.to_string(), space_id.clone());
+            self.cache_put(site_id_str.to_string(), space_id.clone())
+                .await;
             return Ok(space_id);
         }
 
@@ -83,11 +89,17 @@ impl SiteService {
         self.store.save_site(&new_site).await?;
 
         // 5. Update memory cache
-        self.cache
-            .write()
-            .await
-            .insert(site_id_str.to_string(), space_id.clone());
+        self.cache_put(site_id_str.to_string(), space_id.clone())
+            .await;
 
         Ok(space_id)
+    }
+
+    async fn cache_put(&self, key: String, value: String) {
+        let mut cache = self.cache.write().await;
+        if cache.len() >= MAX_CACHE_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, value);
     }
 }
