@@ -9,6 +9,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Upper bound on tracked keys; beyond it, new keys are refused instead of
+/// growing memory without limit (keys are client-controlled via XFF).
+const MAX_KEYS: usize = 10_000;
+
 /// Best-effort client key: the first `X-Forwarded-For` value when present
 /// (set by a trusted reverse proxy), otherwise the peer address.
 pub fn client_key(headers: &axum::http::HeaderMap, addr: Option<std::net::SocketAddr>) -> String {
@@ -45,8 +49,14 @@ impl RateLimiter {
     pub fn allow(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut hits = self.hits.lock().expect("rate limiter mutex poisoned");
+        hits.retain(|_, bucket| {
+            bucket.retain(|hit| now.duration_since(*hit) < self.window);
+            !bucket.is_empty()
+        });
+        if !hits.contains_key(key) && hits.len() >= MAX_KEYS {
+            return false;
+        }
         let bucket = hits.entry(key.to_string()).or_default();
-        bucket.retain(|hit| now.duration_since(*hit) < self.window);
         if bucket.len() >= self.max_requests {
             return false;
         }
@@ -69,5 +79,15 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(60));
         assert!(limiter.allow("a"));
+    }
+
+    #[test]
+    fn key_cap_refuses_new_keys_instead_of_growing_memory() {
+        let limiter = RateLimiter::new(1000, Duration::from_secs(3600));
+        for i in 0..MAX_KEYS {
+            assert!(limiter.allow(&format!("key-{i}")));
+        }
+        assert!(!limiter.allow("new-key"));
+        assert!(limiter.allow("key-0"), "existing keys keep working");
     }
 }

@@ -54,6 +54,8 @@ pub struct ApiState {
     pub registration_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-spam limiter for verification token issuance.
     pub verification_limiter: Arc<rate_limit::RateLimiter>,
+    /// Anti-brute-force limiter for the admin API.
+    pub admin_limiter: Arc<rate_limit::RateLimiter>,
 }
 
 /// Builds the Axum router for the API.

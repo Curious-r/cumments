@@ -50,6 +50,7 @@ async fn test_state(
         admin_token_hash: admin_token.map(token_hash),
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        admin_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
     };
     (state, store)
 }

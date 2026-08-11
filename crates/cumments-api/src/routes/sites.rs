@@ -19,12 +19,15 @@ use cumments_core::site_auth::{
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
+use tokio_stream::StreamExt;
 use validator::Validate;
 
 /// How many times each proof location is probed before giving up.
-const PROOF_ATTEMPTS: usize = 3;
+const PROOF_ATTEMPTS: usize = 2;
 /// Delay between proof attempts, allowing transient failures to clear.
 const PROOF_RETRY_DELAY: Duration = Duration::from_secs(2);
+/// Upper bound for a downloaded well-known document (proofs are tiny).
+const MAX_WELL_KNOWN_BYTES: usize = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Request / response DTOs
@@ -188,16 +191,18 @@ pub(crate) async fn confirm_verification_handler(
         ));
     }
 
-    state
+    let first_consumption = state
         .store
-        .consume_verification_token(token.id)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to consume verification token: {e}")))?;
-    state
-        .store
-        .add_verified_origin(site_id.as_str(), &origin)
+        .complete_verification(site_id.as_str(), &origin, token.id)
         .await
         .map_err(|e| AppError::Internal(format!("failed to record verified origin: {e}")))?;
+    if !first_consumption {
+        tracing::warn!(
+            site_id = site_id.as_str(),
+            origin = origin.as_str(),
+            "verification token was already consumed by a concurrent confirmation"
+        );
+    }
 
     let auth = state
         .store
@@ -270,13 +275,18 @@ fn build_instructions(challenge: &VerificationChallenge) -> serde_json::Value {
     for method in &challenge.methods {
         match method {
             VerificationMethod::WellKnown => {
+                let locations = challenge
+                    .origins
+                    .iter()
+                    .map(|origin| format!("{}/.well-known/cumments.json", origin.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 instructions.insert(
                     "well-known".to_string(),
                     serde_json::json!({
                         "description": format!(
-                            "Publish the document below at {}/.well-known/cumments.json \
-                             (the JSON file is static, so any SSG build can include it)",
-                            challenge.origins[0].as_str()
+                            "Publish the document below at: {locations} \
+                             (the JSON file is static, so any SSG build can include it)"
                         ),
                         "document": {
                             "site_id": challenge.site_id,
@@ -286,16 +296,18 @@ fn build_instructions(challenge: &VerificationChallenge) -> serde_json::Value {
                 );
             }
             VerificationMethod::Dns => {
-                let host = challenge
+                let records = challenge
                     .origins
-                    .first()
-                    .and_then(|origin| origin.host())
-                    .unwrap_or_default();
+                    .iter()
+                    .filter_map(|origin| origin.host())
+                    .map(|host| format!("_cumments.{host}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 instructions.insert(
                     "dns".to_string(),
                     serde_json::json!({
                         "description": format!(
-                            "Add a TXT record for `_cumments.{host}` with this value"
+                            "Add a TXT record for each of: {records} with this value"
                         ),
                         "value": format!("site_id={},token={}", challenge.site_id, challenge.token),
                     }),
@@ -346,7 +358,7 @@ async fn fetch_well_known_proof(
 ) -> Result<bool, AppError> {
     let url = format!("{}/.well-known/cumments.json", origin.as_str());
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::Internal(format!("failed to build HTTP client: {e}")))?;
@@ -358,11 +370,22 @@ async fn fetch_well_known_proof(
     if !response.status().is_success() {
         return Ok(false);
     }
-    let body = response
-        .text()
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to read well-known document: {e}")))?;
-    let proofs = parse_well_known_proofs(&body)
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|e| AppError::Internal(format!("failed to read well-known document: {e}")))?;
+        if body.len() + chunk.len() > MAX_WELL_KNOWN_BYTES {
+            tracing::warn!(
+                origin = origin.as_str(),
+                "well-known document exceeds the size limit; treating as no proof"
+            );
+            return Ok(false);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let body = String::from_utf8_lossy(&body);
+    let proofs = parse_well_known_proofs(body.as_ref())
         .map_err(|e| AppError::BadRequest(format!("invalid well-known document: {e}")))?;
     Ok(well_known_proofs_match(&proofs, site_id, token))
 }

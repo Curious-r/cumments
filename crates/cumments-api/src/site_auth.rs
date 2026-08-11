@@ -18,6 +18,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
+use cumments_core::models::ID_REGEX;
 use cumments_core::site_auth::{
     Origin, OriginPattern, SITE_SIGNATURE_HEADER, SITE_SIGNATURE_MAX_SKEW_SECONDS,
     SITE_TIMESTAMP_HEADER, SiteAuthInfo, SiteAuthMode, SitePolicyEntry, SiteVerificationPolicy,
@@ -45,6 +46,9 @@ pub async fn enforce_site_auth(
     let Some(site_id) = site_id_from_path(req.uri().path()) else {
         return next.run(req).await;
     };
+    if !ID_REGEX.is_match(&site_id) {
+        return AppError::BadRequest(format!("invalid site id `{site_id}`")).into_response();
+    }
 
     let (parts, body) = req.into_parts();
     let bytes = match to_bytes(body, BODY_LIMIT).await {

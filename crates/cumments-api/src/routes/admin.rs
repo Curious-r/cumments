@@ -6,6 +6,7 @@
 
 use crate::ApiState;
 use crate::error::AppError;
+use crate::rate_limit::client_key;
 use axum::extract::Request;
 use axum::{
     Json,
@@ -79,6 +80,11 @@ pub struct ConfigSnippetResponse {
 // ---------------------------------------------------------------------------
 
 pub async fn require_admin(State(state): State<ApiState>, req: Request, next: Next) -> Response {
+    let key = client_key(req.headers(), None);
+    if !state.admin_limiter.allow(&key) {
+        return AppError::TooManyRequests("admin API is rate limited; try again later".to_string())
+            .into_response();
+    }
     let Some(expected) = &state.admin_token_hash else {
         return AppError::Unauthorized(
             "admin API is not enabled; set `security.admin_token`".to_string(),
@@ -187,6 +193,16 @@ pub(crate) async fn rotate_secret_handler(
         return Err(AppError::BadRequest(
             "site secret is configured in `[sites]`; edit the config file to rotate it".to_string(),
         ));
+    }
+
+    if state
+        .store
+        .get_site_auth(site_id.as_str())
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load site: {e}")))?
+        .is_none()
+    {
+        return Err(AppError::NotFound("site not found".to_string()));
     }
 
     let secret = generate_token();

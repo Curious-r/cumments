@@ -366,6 +366,10 @@ async fn main() -> Result<()> {
             20,
             std::time::Duration::from_secs(3600),
         )),
+        admin_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            60,
+            std::time::Duration::from_secs(60),
+        )),
     };
     let api_router = cumments_api::build_router(api_state);
 
