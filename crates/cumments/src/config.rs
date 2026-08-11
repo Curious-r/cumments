@@ -127,7 +127,6 @@ pub struct AppServiceRuntime {
     pub owner_id: String,
     pub listen_host: String,
     pub listen_port: u16,
-    pub appservice_url: String,
 }
 
 fn require_non_empty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
@@ -230,7 +229,6 @@ impl Matrix {
             owner_id: owner_id.to_string(),
             listen_host: listen_host.to_string(),
             listen_port: appservice.listen_port,
-            appservice_url: appservice_url.to_string(),
         })
     }
 }

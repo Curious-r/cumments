@@ -131,9 +131,9 @@ cumments backfill
 
 中断的跑批会从持久化的游标处续跑。
 
-`cumments backfill --max-pages N` 将每个房间的历史限制在 `N` 页（每页约 100
-个事件），避免大房间占用过多内存；游标会保存，之后可断点续跑。`0` 表示不限
-（默认 500）。
+`cumments backfill --max-pages N` 限制每个房间抓取的历史页数（每页约 100 条
+事件）。抓取到的事件会先缓存在内存中，以便按时间顺序回放时让编辑/删除落在其
+目标之后；游标会保存，之后可断点续跑。`0` 表示不限制（默认 500）。
 
 ### Backup（快照）
 
@@ -143,7 +143,8 @@ cumments backup --output data/cumments.backup.db
 
 先执行 WAL checkpoint，再用 `VACUUM INTO` 生成一致的单文件 SQLite 快照。
 目标文件必须不存在。快照属于便利机制；读模型丢失时的权威恢复路径仍是
-`cumments backfill`。
+`cumments backfill`。打开源数据库时会先执行待应用的迁移，因此备份命令可能
+会顺带升级源库。
 
 ## Crate 结构
 

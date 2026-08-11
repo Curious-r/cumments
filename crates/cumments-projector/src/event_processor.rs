@@ -101,14 +101,6 @@ struct RoomMetadata {
     post_slug: Option<String>,
 }
 
-/// Extract just the site_id from a Cumments room's (or Space's) metadata JSON.
-/// Unlike `parse_room_identity`, this works for Spaces where `post_slug` is None.
-pub fn parse_site_id_from_metadata(metadata_json: &str) -> Option<String> {
-    serde_json::from_str::<RoomMetadata>(metadata_json)
-        .ok()
-        .map(|m| m.site_id)
-}
-
 /// Resolve a `RoomIdentity` from optional metadata JSON and optional
 /// canonical alias, using the same two-phase strategy as the original
 /// `get_room_identity`:  (1) metadata state event, (2) alias fallback.

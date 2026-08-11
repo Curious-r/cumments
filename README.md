@@ -142,9 +142,10 @@ It requires an AppService configuration connected to a reachable homeserver:
 3. replays events in `(origin_server_ts, event_id)` order through the same
    idempotent projection used for live pushes.
 
-`cumments backfill --max-pages N` caps history at `N` pages (~100 events each)
-per room to bound memory on large rooms; the cursor is saved so a later run
-resumes where it stopped. `0` disables the cap (default: 500).
+`cumments backfill --max-pages N` caps how much history is fetched per room
+(~100 events each). Fetched events are buffered in memory so the chronological
+replay can apply edits/redactions after their targets; the cursor is saved so
+a later run resumes where it stopped. `0` disables the cap (default: 500).
 
 Interrupted runs resume from persisted per-room cursors.
 
@@ -156,7 +157,9 @@ cumments backup --output data/cumments.backup.db
 
 Runs a WAL checkpoint and writes a consistent single-file SQLite snapshot via
 `VACUUM INTO`. The destination must not already exist. Snapshots are a
-convenience; `backfill` is the authoritative recovery path.
+convenience; `backfill` is the authoritative recovery path. Opening the source
+database runs any pending migrations first, so the source may be upgraded by
+the backup command.
 
 ## Crates
 
