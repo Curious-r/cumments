@@ -47,6 +47,6 @@ sea-orm = { version = "2.0.0", features = ["sqlx-sqlite", "runtime-tokio-rustls"
 sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 tower-http = { version = "0.7.0", features = ["trace"] }
-hickory-resolver = { version = "0.24.4", features = ["tokio", "system-config"] }
+hickory-resolver = { version = "0.26.1", features = ["tokio", "system-config"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

@@ -16,6 +16,7 @@ use cumments_core::site_auth::{
     VerificationToken, dns_proofs_match, issue_site_secret, parse_well_known_proofs, register_site,
     start_site_verification, token_hash, well_known_proofs_match,
 };
+use hickory_resolver::proto::rr::RData;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -398,19 +399,25 @@ async fn query_dns_proof(origin: &Origin, site_id: &str, token: &str) -> Result<
         )));
     };
     let name = format!("_cumments.{host}");
-    let resolver = hickory_resolver::TokioAsyncResolver::tokio_from_system_conf()
+    let resolver = hickory_resolver::TokioResolver::builder_tokio()
+        .and_then(|builder| builder.build())
         .map_err(|e| AppError::Internal(format!("failed to initialize DNS resolver: {e}")))?;
     let lookup = resolver
         .txt_lookup(name)
         .await
         .map_err(|e| AppError::Internal(format!("DNS TXT lookup failed: {e}")))?;
     let records = lookup
+        .answers()
         .iter()
-        .flat_map(|txt| {
-            txt.txt_data()
-                .iter()
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .filter_map(|record| match &record.data {
+            RData::TXT(txt) => Some(
+                txt.txt_data
+                    .iter()
+                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            ),
+            _ => None,
         })
+        .flatten()
         .collect::<Vec<_>>();
     Ok(dns_proofs_match(&records, site_id, token))
 }
