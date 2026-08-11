@@ -26,6 +26,10 @@ pub enum AppError {
     Unauthorized(String),
     NotManageable(String),
     BadRequest(String),
+    Conflict(String),
+    SiteVerificationRequired(String),
+    SiteOriginDenied(String),
+    SiteSignatureInvalid(String),
     Internal(String),
 }
 
@@ -60,6 +64,19 @@ impl IntoResponse for AppError {
                 None,
             ),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "BAD_REQUEST", None),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg, "CONFLICT", None),
+            AppError::SiteVerificationRequired(msg) => (
+                StatusCode::FORBIDDEN,
+                msg,
+                "SITE_VERIFICATION_REQUIRED",
+                None,
+            ),
+            AppError::SiteOriginDenied(msg) => {
+                (StatusCode::FORBIDDEN, msg, "SITE_ORIGIN_DENIED", None)
+            }
+            AppError::SiteSignatureInvalid(msg) => {
+                (StatusCode::FORBIDDEN, msg, "SITE_SIGNATURE_INVALID", None)
+            }
             AppError::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 msg,

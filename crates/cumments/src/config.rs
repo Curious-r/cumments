@@ -1,5 +1,10 @@
 use anyhow::{Result, anyhow, bail};
+use cumments_core::site_auth::{
+    KNOWN_SECRET_PLACEHOLDERS, Origin, OriginPattern, SITE_SECRET_MIN_LENGTH, SiteAuthMode,
+    SiteAuthPolicy, SitePolicyEntry, SiteVerificationPolicy,
+};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -10,6 +15,9 @@ pub struct Settings {
     pub database: Database,
     pub security: Security,
     pub matrix: Matrix,
+    /// Operator-declared trust for individual sites (the config overlay).
+    #[serde(default)]
+    pub sites: HashMap<String, SiteConfig>,
 }
 
 #[derive(Deserialize)]
@@ -17,7 +25,10 @@ pub struct Settings {
 pub struct Server {
     pub host: String,
     pub port: u16,
-    pub cors_origins: String,
+    /// Accepted for one release only so the startup error can explain the
+    /// replacement; never used by the running server.
+    #[serde(rename = "cors_origins", default)]
+    pub legacy_cors_origins: Option<String>,
 }
 
 impl Default for Server {
@@ -25,7 +36,7 @@ impl Default for Server {
         Self {
             host: "localhost".to_string(),
             port: 7931,
-            cors_origins: "*".to_string(),
+            legacy_cors_origins: None,
         }
     }
 }
@@ -41,6 +52,23 @@ pub struct Database {
 pub struct Security {
     pub pow_secret: String,
     pub pow_difficulty: u32,
+    /// Instance-wide policy for site verification.
+    #[serde(default)]
+    pub site_verification: SiteVerificationPolicy,
+}
+
+/// Operator-declared trust for one site.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SiteConfig {
+    /// How this site authenticates write requests (`origin` or `secret`).
+    pub auth_mode: Option<SiteAuthMode>,
+    /// Exact origins or `https://*.example.com` subdomain wildcards that are
+    /// trusted without online verification.
+    pub allowed_origins: Vec<String>,
+    /// HMAC secret for `auth_mode = "secret"`. Prefer injecting this through
+    /// `CUMMENTS__SITES__<site_id>__SECRET`; never commit it.
+    pub secret: Option<String>,
 }
 
 /// Operation mode of the Matrix integration.
@@ -138,6 +166,116 @@ fn require_non_empty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str>
     match value {
         Some(v) if !v.trim().is_empty() => Ok(v),
         _ => bail!("`{field}` must not be empty"),
+    }
+}
+
+/// Rejects the removed `server.cors_origins` key with an explicit message.
+pub fn validate_legacy_cors(server: &Server) -> Result<()> {
+    if let Some(value) = &server.legacy_cors_origins {
+        bail!(
+            "`server.cors_origins` has been removed (value `{value}`): CORS is now derived \
+             from site verification and the `[sites]` allowlist. Remove the key from your \
+             configuration."
+        );
+    }
+    Ok(())
+}
+
+/// Builds the effective site-auth policy from the configuration, validating
+/// and normalizing every operator-declared entry.
+pub fn build_site_auth_policy(
+    security: &Security,
+    sites: &HashMap<String, SiteConfig>,
+) -> Result<SiteAuthPolicy> {
+    let mut policy = SiteAuthPolicy {
+        verification: security.site_verification,
+        sites: HashMap::new(),
+    };
+
+    for (site_id, config) in sites {
+        let allowed_origins = config
+            .allowed_origins
+            .iter()
+            .map(|raw| {
+                OriginPattern::parse(raw).map_err(|e| {
+                    anyhow!("`sites.{site_id}.allowed_origins` entry `{raw}` is invalid: {e}")
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let secret = match (&config.auth_mode, &config.secret) {
+            (Some(SiteAuthMode::Secret), Some(secret)) => {
+                if secret.len() < SITE_SECRET_MIN_LENGTH {
+                    bail!(
+                        "`sites.{site_id}.secret` must be at least {SITE_SECRET_MIN_LENGTH} \
+                         characters (it is an HMAC key, not a label)"
+                    );
+                }
+                if KNOWN_SECRET_PLACEHOLDERS.contains(&secret.as_str()) {
+                    bail!(
+                        "`sites.{site_id}.secret` uses the known example value `{secret}`; \
+                         generate a real random secret"
+                    );
+                }
+                Some(secret.clone())
+            }
+            (Some(SiteAuthMode::Secret), None) => {
+                bail!(
+                    "`sites.{site_id}.auth_mode = \"secret\"` requires a secret; set \
+                     `CUMMENTS__SITES__{site_id}__SECRET` or add `secret` to the site config"
+                );
+            }
+            (None | Some(SiteAuthMode::Origin), Some(_)) => {
+                bail!(
+                    "`sites.{site_id}.secret` is set but `auth_mode` is not `\"secret\"`; \
+                     the secret would be ignored"
+                );
+            }
+            (None | Some(SiteAuthMode::Origin), None) => None,
+        };
+
+        if config.auth_mode == Some(SiteAuthMode::Secret) && !allowed_origins.is_empty() {
+            tracing::warn!(
+                "`sites.{site_id}.allowed_origins` is ignored because \
+                 `auth_mode = \"secret\"` authenticates with the HMAC key"
+            );
+        }
+
+        for pattern in &allowed_origins {
+            if let OriginPattern::Exact(origin) = pattern {
+                warn_http_non_loopback(site_id, origin);
+            }
+        }
+
+        policy.sites.insert(
+            site_id.clone(),
+            SitePolicyEntry {
+                auth_mode: config.auth_mode,
+                allowed_origins,
+                secret,
+            },
+        );
+    }
+
+    Ok(policy)
+}
+
+/// Warns about plain-HTTP origins that are not loopback addresses.
+fn warn_http_non_loopback(site_id: &str, origin: &Origin) {
+    let Ok(url) = origin.as_str().parse::<url::Url>() else {
+        return;
+    };
+    if url.scheme() == "http"
+        && !matches!(
+            url.host_str(),
+            Some("localhost") | Some("127.0.0.1") | Some("::1")
+        )
+    {
+        tracing::warn!(
+            "`sites.{site_id}.allowed_origins` allows plain HTTP origin `{}`; \
+             use HTTPS in production",
+            origin.as_str()
+        );
     }
 }
 
@@ -458,7 +596,6 @@ mod tests {
 [server]
 host = "0.0.0.0"
 port = 7931
-cors_origins = "*"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -506,7 +643,6 @@ owner_id = "@admin:example.com"
 [server]
 host = "0.0.0.0"
 port = 7931
-cors_origins = "*"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -532,7 +668,7 @@ mode = "logging"
 [server]
 host = "0.0.0.0"
 port = 7931
-cors_origins = "*"
+bogus_option = "x"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -561,7 +697,6 @@ owner_id = "@admin:example.com"
 [server]
 host = "0.0.0.0"
 port = 7931
-cors_origins = "*"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -695,7 +830,6 @@ namespaces:
 [server]
 host = "0.0.0.0"
 port = 7931
-cors_origins = "*"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -757,5 +891,143 @@ owner_id = "@admin:example.com"
         // The runnable example stays usable in logging mode.
         assert!(validate_pow_secret("change-me", Mode::Logging).is_ok());
         assert!(validate_pow_secret("a-real-secret", Mode::AppService).is_ok());
+    }
+
+    #[test]
+    fn legacy_cors_origins_is_rejected_with_an_explicit_message() {
+        let server = Server {
+            host: "localhost".to_string(),
+            port: 7931,
+            legacy_cors_origins: Some("*".to_string()),
+        };
+        let err = validate_legacy_cors(&server).expect_err("legacy key must fail");
+        assert!(err.to_string().contains("cors_origins"));
+        assert!(err.to_string().contains("removed"));
+    }
+
+    #[test]
+    fn site_verification_policy_parses_all_values() {
+        let toml = r#"
+[server]
+host = "localhost"
+port = 7931
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+site_verification = "required"
+
+[matrix]
+mode = "logging"
+"#;
+        let settings = parse(toml).expect("parse settings");
+        assert_eq!(
+            settings.security.site_verification,
+            cumments_core::site_auth::SiteVerificationPolicy::Required
+        );
+
+        let missing = toml.replace("site_verification = \"required\"\n", "");
+        let settings = parse(&missing).expect("policy defaults to optional");
+        assert_eq!(
+            settings.security.site_verification,
+            cumments_core::site_auth::SiteVerificationPolicy::Optional
+        );
+    }
+
+    #[test]
+    fn site_policy_build_normalizes_origins_and_validates_secrets() {
+        let security = Security {
+            pow_secret: "secret".to_string(),
+            pow_difficulty: 4,
+            site_verification: SiteVerificationPolicy::Optional,
+        };
+
+        let mut sites = HashMap::new();
+        sites.insert(
+            "my-blog".to_string(),
+            SiteConfig {
+                auth_mode: None,
+                allowed_origins: vec![
+                    "https://Blog.Example.com".to_string(),
+                    "https://*.example.net".to_string(),
+                ],
+                secret: None,
+            },
+        );
+        let policy = build_site_auth_policy(&security, &sites).expect("valid policy");
+        let entry = policy.entry("my-blog").expect("entry exists");
+        assert_eq!(entry.allowed_origins.len(), 2);
+
+        sites.insert(
+            "secret-site".to_string(),
+            SiteConfig {
+                auth_mode: Some(SiteAuthMode::Secret),
+                allowed_origins: vec![],
+                secret: Some("a".repeat(SITE_SECRET_MIN_LENGTH)),
+            },
+        );
+        let policy = build_site_auth_policy(&security, &sites).expect("secret site valid");
+        assert_eq!(
+            policy
+                .entry("secret-site")
+                .and_then(|e| e.secret.as_deref()),
+            Some("a".repeat(SITE_SECRET_MIN_LENGTH).as_str())
+        );
+    }
+
+    #[test]
+    fn site_policy_build_rejects_invalid_combinations() {
+        let security = Security {
+            pow_secret: "secret".to_string(),
+            pow_difficulty: 4,
+            site_verification: SiteVerificationPolicy::Optional,
+        };
+
+        let mut sites = HashMap::new();
+        sites.insert(
+            "bad-origin".to_string(),
+            SiteConfig {
+                auth_mode: None,
+                allowed_origins: vec!["https://example.com/path".to_string()],
+                secret: None,
+            },
+        );
+        assert!(build_site_auth_policy(&security, &sites).is_err());
+
+        sites.clear();
+        sites.insert(
+            "no-secret".to_string(),
+            SiteConfig {
+                auth_mode: Some(SiteAuthMode::Secret),
+                allowed_origins: vec![],
+                secret: None,
+            },
+        );
+        assert!(build_site_auth_policy(&security, &sites).is_err());
+
+        sites.clear();
+        sites.insert(
+            "short-secret".to_string(),
+            SiteConfig {
+                auth_mode: Some(SiteAuthMode::Secret),
+                allowed_origins: vec![],
+                secret: Some("short".to_string()),
+            },
+        );
+        assert!(build_site_auth_policy(&security, &sites).is_err());
+
+        sites.clear();
+        sites.insert(
+            "ignored-secret".to_string(),
+            SiteConfig {
+                auth_mode: Some(SiteAuthMode::Origin),
+                allowed_origins: vec![],
+                secret: Some("a".repeat(SITE_SECRET_MIN_LENGTH)),
+            },
+        );
+        assert!(build_site_auth_policy(&security, &sites).is_err());
     }
 }

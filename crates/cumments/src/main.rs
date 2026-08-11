@@ -59,6 +59,9 @@ async fn main() -> Result<()> {
             cli::Commands::Backup(_) => {
                 // Handled after the database is connected.
             }
+            cli::Commands::Sites(_) => {
+                // Handled after the database is connected.
+            }
         }
     }
 
@@ -72,6 +75,7 @@ async fn main() -> Result<()> {
     let settings =
         config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
+    config::validate_legacy_cors(&settings.server)?;
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
     {
@@ -82,6 +86,10 @@ async fn main() -> Result<()> {
         );
     }
     tracing::info!("Configuration loaded successfully.");
+    let site_auth_policy = Arc::new(config::build_site_auth_policy(
+        &settings.security,
+        &settings.sites,
+    )?);
 
     // ─────────────────────────────────────────────────────────────
     // 2. Initialize database Store
@@ -92,6 +100,12 @@ async fn main() -> Result<()> {
             .expect("Failed to connect to database."),
     );
     tracing::info!("Database initialized.");
+
+    // Handle CLI subcommands that only need the database.
+    if let Some(cli::Commands::Sites(sites_args)) = &args.command {
+        cli::handle_sites_command(&db_store, sites_args).await?;
+        return Ok(());
+    }
 
     // Handle backup before any Matrix/driver setup: it only needs SQLite.
     if let Some(cli::Commands::Backup(args)) = &args.command {
@@ -202,6 +216,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             cli::Commands::Backup(_) => unreachable!("handled earlier"),
+            cli::Commands::Sites(_) => unreachable!("handled earlier"),
         }
     }
 
@@ -340,8 +355,9 @@ async fn main() -> Result<()> {
         pow: Arc::new(pow),
         event_bus,
         reconciler_notify,
+        site_auth_policy,
     };
-    let api_router = cumments_api::build_router(api_state, &settings.server.cors_origins);
+    let api_router = cumments_api::build_router(api_state);
 
     // ─────────────────────────────────────────────────────────────
     // 12. Assemble final router (merge push routes if shared port)

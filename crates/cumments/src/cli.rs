@@ -2,6 +2,9 @@
 
 use anyhow::Result;
 use clap::Subcommand;
+use cumments_core::models::SiteId;
+use cumments_core::ports::SiteAuthStore;
+use cumments_core::site_auth::{register_site, token_hash};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -50,6 +53,28 @@ pub struct BackupArgs {
     pub output: PathBuf,
 }
 
+/// Site management subcommands.
+#[derive(clap::Args, Debug)]
+pub struct SitesArgs {
+    #[command(subcommand)]
+    pub command: SitesCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SitesCommand {
+    /// Register a site and print its id and one-time claim token
+    #[command(name = "register")]
+    Register(RegisterSiteArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RegisterSiteArgs {
+    /// Optional explicit site id (operator-chosen). Without it, a random,
+    /// unguessable id is generated.
+    #[arg(long)]
+    pub site_id: Option<String>,
+}
+
 /// All CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -62,6 +87,9 @@ pub enum Commands {
     /// Create a consistent single-file SQLite backup
     #[command(name = "backup")]
     Backup(BackupArgs),
+    /// Manage sites registered through the API
+    #[command(name = "sites")]
+    Sites(SitesArgs),
 }
 
 /// The registration data model (serialised to YAML).
@@ -96,6 +124,43 @@ fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
+}
+
+/// Handles `cumments sites register`.
+pub async fn handle_sites_command(store: &cumments_store::DbStore, args: &SitesArgs) -> Result<()> {
+    match &args.command {
+        SitesCommand::Register(register_args) => {
+            let claim_token = generate_token();
+            match &register_args.site_id {
+                Some(site_id) => {
+                    let site_id = SiteId::new(site_id.clone())
+                        .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+                    store
+                        .register_site(site_id.as_str(), &token_hash(&claim_token))
+                        .await?;
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "site_id": site_id.as_str(),
+                            "claim_token": claim_token,
+                        })
+                    );
+                }
+                None => {
+                    let registered = register_site(store).await?;
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "site_id": registered.site_id,
+                            "claim_token": registered.claim_token,
+                        })
+                    );
+                }
+            }
+            eprintln!("Keep the claim token private: it proves ownership of this site.");
+            Ok(())
+        }
+    }
 }
 
 /// Handle the `generate-registration` subcommand.

@@ -1,33 +1,37 @@
 use crate::routes::comments::{
-    QUERY_METHOD, delete_comment_handler, post_comment_handler, query_comments_handler,
-    update_comment_handler,
+    delete_comment_handler, post_comment_handler, query_comments_handler, update_comment_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
+use crate::routes::sites::{
+    confirm_verification_handler, issue_secret_handler, register_site_handler,
+    start_verification_handler,
+};
 use crate::routes::sse::sse_handler;
+use crate::site_auth::{enforce_site_auth, public_cors};
 use axum::{
-    Router,
-    http::{HeaderName, HeaderValue, Method},
+    Router, middleware,
     routing::{delete, get, post},
 };
 use cumments_core::{
-    ports::{CommentStore, IntentStore, SiteStore},
+    ports::{CommentStore, IntentStore, SiteAuthStore, SiteStore},
     projector_events::ProjectorEvent,
+    site_auth::SiteAuthPolicy,
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, broadcast};
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 pub mod error;
 pub mod pow;
 pub mod request;
 pub mod routes;
+pub mod site_auth;
 
 // ----------------------
 
 // Define a new trait that combines the store traits for API use.
-pub trait ApiStore: CommentStore + IntentStore + SiteStore + Send + Sync {}
-impl<T: CommentStore + IntentStore + SiteStore + Send + Sync> ApiStore for T {}
+pub trait ApiStore: CommentStore + IntentStore + SiteStore + SiteAuthStore + Send + Sync {}
+impl<T: CommentStore + IntentStore + SiteStore + SiteAuthStore + Send + Sync> ApiStore for T {}
 
 // The shared state for our API.
 #[derive(Clone)]
@@ -36,70 +40,56 @@ pub struct ApiState {
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub reconciler_notify: Arc<Notify>,
-}
-
-/// `"*"` keeps permissive behavior; an empty list disables cross-origin
-/// support (no CORS headers are sent); any other value restricts
-/// `Access-Control-Allow-Origin` to the listed origins and explicitly allows
-/// the methods and headers used by the API (including the custom `QUERY`
-/// method).
-fn cors_layer(cors_origins: &str) -> Option<CorsLayer> {
-    let origins: Vec<&str> = cors_origins
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if origins.is_empty() {
-        return None;
-    }
-    if origins.contains(&"*") {
-        return Some(CorsLayer::permissive());
-    }
-
-    let allowed: Vec<HeaderValue> = origins
-        .iter()
-        .filter_map(|o| HeaderValue::from_str(o).ok())
-        .collect();
-    Some(
-        CorsLayer::new()
-            .allow_origin(allowed)
-            .allow_methods([
-                Method::GET,
-                Method::POST,
-                Method::PATCH,
-                Method::DELETE,
-                (*QUERY_METHOD).clone(),
-            ])
-            .allow_headers([HeaderName::from_static("content-type")]),
-    )
+    /// Instance-wide site verification policy plus the operator-declared
+    /// per-site overlay.
+    pub site_auth_policy: Arc<SiteAuthPolicy>,
 }
 
 /// Builds the Axum router for the API.
-pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
-    let router = Router::new()
+pub fn build_router(state: ApiState) -> Router {
+    // Comment routes: writes are gated by site auth; QUERY reads stay public
+    // and get `Access-Control-Allow-Origin: *`.
+    let comment_router = Router::new()
         .route(
-            "/api/sites/{site_id}/posts/{post_slug}/comments",
+            "/api/v1/sites/{site_id}/posts/{post_slug}/comments",
             // POST for writing intents, fallback handles QUERY for reading.
             post(post_comment_handler).fallback(query_comments_handler),
         )
         .route(
-            "/api/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
+            "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
             delete(delete_comment_handler).patch(update_comment_handler),
         )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_site_auth,
+        ));
+
+    // Public routes: comments are public data, registration and verification
+    // are self-service, and `/health` is an infrastructure endpoint.
+    let public_router = Router::new()
         .route(
-            "/api/sites/{site_id}/posts/{post_slug}/sse",
+            "/api/v1/sites/{site_id}/posts/{post_slug}/sse",
             get(sse_handler),
         )
-        .route("/api/challenge", get(get_challenge_handler))
+        .route("/api/v1/challenge", get(get_challenge_handler))
+        .route("/api/v1/sites", post(register_site_handler))
+        .route(
+            "/api/v1/sites/{site_id}/verifications",
+            post(start_verification_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/verifications/confirm",
+            post(confirm_verification_handler),
+        )
+        .route("/api/v1/sites/{site_id}/secret", post(issue_secret_handler))
         .route("/health", get(health_handler))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .layer(middleware::from_fn(public_cors));
 
-    match cors_layer(cors_origins) {
-        Some(cors) => router.layer(cors),
-        None => router,
-    }
+    Router::new()
+        .merge(comment_router)
+        .merge(public_router)
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 
 #[cfg(test)]
@@ -112,6 +102,12 @@ mod tests {
     use cumments_core::models::AuthorType;
     use cumments_core::models::{Comment, CommentAuthor};
     use validator::Validate;
+
+    #[test]
+    fn api_state_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ApiState>();
+    }
 
     #[test]
     fn pagination_page_is_bounded() {
@@ -132,14 +128,6 @@ mod tests {
             per_page: None,
         };
         assert!(zero.validate().is_err());
-    }
-
-    #[test]
-    fn empty_cors_list_disables_cross_origin_layer() {
-        assert!(cors_layer("").is_none());
-        assert!(cors_layer("  , , ").is_none());
-        assert!(cors_layer("*").is_some());
-        assert!(cors_layer("https://blog.example.com").is_some());
     }
 
     #[test]
