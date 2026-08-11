@@ -172,6 +172,7 @@ async fn main() -> Result<()> {
             as_conf.sender_localpart.clone(),
             as_conf.owner_id.clone(),
             virtual_user_store,
+            as_conf.room_version.clone(),
         ))
     } else {
         tracing::info!("Using 'logging' mode driver.");

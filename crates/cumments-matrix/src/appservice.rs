@@ -45,6 +45,16 @@ struct JoinedRoomsResponse {
     joined_rooms: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct CapabilitiesResponse {
+    room_versions: Option<RoomVersions>,
+}
+
+#[derive(Deserialize)]
+struct RoomVersions {
+    default: String,
+}
+
 /// Preferred alias localpart prefix. The Matrix spec recommends exclusive
 /// user and alias namespaces begin with `_` after the sigil, e.g.
 /// `@_irc_.*` / `#_irc_.*`.
@@ -82,6 +92,38 @@ fn metadata_matches(meta: &serde_json::Value, site_id: &str, post_slug: Option<&
         None => matches!(meta.get("post_slug"), None | Some(serde_json::Value::Null)),
     };
     site_ok && slug_ok
+}
+
+/// Whether a room version still requires the room creator to be listed in
+/// `m.room.power_levels.users`.
+///
+/// Room versions 1-11 explicitly privilege the creator through the power
+/// levels event (and allow that power to be changed). From version 12 onward
+/// the creator is never listed in the event and instead holds immutable
+/// infinite power. Unknown/absent versions are treated conservatively as
+/// explicit (the pre-v12 behaviour).
+fn room_requires_explicit_creator(version: Option<&str>) -> bool {
+    let major = version
+        .and_then(|v| v.split(['.', '-']).next())
+        .and_then(|v| v.parse::<u32>().ok());
+    major.is_none_or(|v| v < 12)
+}
+
+/// Build the `m.room.power_levels` content used when creating a Cumments room.
+/// Omitted fields take the room-version defaults; the owner always receives
+/// admin power, and the AS sender is only listed when the room version needs
+/// an explicit creator entry.
+fn initial_power_levels(
+    sender_user_id: &str,
+    owner_id: &str,
+    include_sender: bool,
+) -> serde_json::Value {
+    let mut users = serde_json::Map::new();
+    if include_sender {
+        users.insert(sender_user_id.to_string(), 100.into());
+    }
+    users.insert(owner_id.to_string(), 100.into());
+    serde_json::json!({ "users": users })
 }
 
 /// Returns a copy of a room's `m.room.power_levels` content with the owner
@@ -229,6 +271,10 @@ pub struct AppServiceMatrixDriver {
     virtual_user_store: Arc<dyn VirtualUserStore>,
     joined_cache: Mutex<HashSet<(String, String)>>,
     displayname_cache: Mutex<HashMap<String, String>>,
+    /// Explicit room version from configuration, if any.
+    room_version_override: Option<String>,
+    /// Cached `m.room_versions.default` from `/capabilities`.
+    default_room_version: Mutex<Option<String>>,
 }
 
 impl AppServiceMatrixDriver {
@@ -239,6 +285,7 @@ impl AppServiceMatrixDriver {
         sender_localpart: String,
         owner_id: String,
         virtual_user_store: Arc<dyn VirtualUserStore>,
+        room_version: Option<String>,
     ) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -254,6 +301,8 @@ impl AppServiceMatrixDriver {
             virtual_user_store,
             joined_cache: Mutex::new(HashSet::new()),
             displayname_cache: Mutex::new(HashMap::new()),
+            room_version_override: room_version,
+            default_room_version: Mutex::new(None),
         }
     }
 
@@ -552,6 +601,20 @@ impl AppServiceMatrixDriver {
     /// Whether the room was created as a Matrix Space (`m.room.create` with
     /// `type: "m.space"`).
     async fn room_is_space(&self, room_id: &str) -> Result<bool> {
+        Ok(match self.get_room_create(room_id).await? {
+            Some(create) => {
+                create
+                    .get("content")
+                    .and_then(|c| c.get("type"))
+                    .and_then(|v| v.as_str())
+                    == Some("m.space")
+            }
+            None => false,
+        })
+    }
+
+    /// Fetch the room's `m.room.create` event, if the room exists.
+    async fn get_room_create(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.create",
             urlencode(room_id)
@@ -563,10 +626,9 @@ impl AppServiceMatrixDriver {
             .map_err(|e| anyhow!("Failed to query room create state: {}", e))?;
 
         if resp.status().is_success() {
-            let content: serde_json::Value = resp.json().await?;
-            Ok(content.get("type").and_then(|v| v.as_str()) == Some("m.space"))
+            Ok(Some(resp.json().await?))
         } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            Ok(false)
+            Ok(None)
         } else {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -576,6 +638,61 @@ impl AppServiceMatrixDriver {
                 body
             ))
         }
+    }
+
+    /// The room version used for newly created rooms: the explicit
+    /// configuration value if set, otherwise the homeserver's default from
+    /// `/capabilities` (cached after the first lookup). `None` means unknown;
+    /// callers then assume the pre-v12 behaviour.
+    async fn effective_room_version(&self) -> Option<String> {
+        if let Some(version) = &self.room_version_override {
+            return Some(version.clone());
+        }
+        if let Some(version) = self
+            .default_room_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Some(version);
+        }
+
+        let resp = match self
+            .request(reqwest::Method::GET, "_matrix/client/v3/capabilities", None)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!("Failed to query homeserver capabilities: {:#}", e);
+                return None;
+            }
+        };
+        if !resp.status().is_success() {
+            warn!(
+                "Failed to query homeserver capabilities ({}): {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
+            return None;
+        }
+
+        let version = match resp.json::<CapabilitiesResponse>().await {
+            Ok(caps) => caps
+                .room_versions
+                .and_then(|r| (!r.default.is_empty()).then_some(r.default)),
+            Err(e) => {
+                warn!("Failed to parse homeserver capabilities: {:#}", e);
+                return None;
+            }
+        };
+        if let Some(version) = &version {
+            *self
+                .default_room_version
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(version.clone());
+        }
+        version
     }
 
     /// Read a room's current `m.room.power_levels` content, if any.
@@ -629,6 +746,21 @@ impl AppServiceMatrixDriver {
     /// Whether the AS sender can write state events in the room. Reading the
     /// power levels doubles as a membership check: non-members get an error.
     async fn sender_can_write_state(&self, room_id: &str) -> Result<bool> {
+        // Room version 12+ gives the creator immutable infinite power without
+        // listing them in `m.room.power_levels.users`; account for that before
+        // falling back to the power-levels check.
+        if let Some(create) = self.get_room_create(room_id).await? {
+            let creator = create.get("sender").and_then(|v| v.as_str());
+            let version = create
+                .get("content")
+                .and_then(|c| c.get("room_version"))
+                .and_then(|v| v.as_str());
+            if !room_requires_explicit_creator(version)
+                && creator == Some(self.sender_user_id().as_str())
+            {
+                return Ok(true);
+            }
+        }
         Ok(match self.get_power_levels(room_id).await? {
             Some(power_levels) => has_state_power(&power_levels, &self.sender_user_id()),
             // No power-levels event: Matrix defaults apply and leave the
@@ -781,6 +913,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         info!("Creating new space for site {} via AppService", site_id_str);
 
+        let include_sender =
+            room_requires_explicit_creator(self.effective_room_version().await.as_deref());
+        let power_levels =
+            initial_power_levels(&self.sender_user_id(), &self.owner_id, include_sender);
+
         let mut body = serde_json::json!({
             "name": format!("Comments: {}", site_id_str),
             "room_alias_name": alias_localpart,
@@ -799,21 +936,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 {
                     "type": "m.room.power_levels",
                     "state_key": "",
-                    "content": {
-                        "users": {}
-                    }
+                    "content": power_levels
                 }
             ],
             "invite": [self.owner_id.clone()],
             "preset": "public_chat",
         });
 
-        // Inject power levels with sender and owner as admins
-        if let Some(pl) = body.pointer_mut("/initial_state/1/content/users")
-            && let Some(obj) = pl.as_object_mut()
-        {
-            obj.insert(self.sender_user_id(), 100.into());
-            obj.insert(self.owner_id.clone(), 100.into());
+        if let Some(version) = &self.room_version_override {
+            body["room_version"] = serde_json::json!(version);
         }
 
         let resp = self
@@ -943,6 +1074,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let alias_localpart =
                 comment_room_alias_localpart(site_id.as_str(), post_slug.as_str());
 
+            let include_sender =
+                room_requires_explicit_creator(self.effective_room_version().await.as_deref());
+            let power_levels =
+                initial_power_levels(&self.sender_user_id(), &self.owner_id, include_sender);
+
             let mut body = serde_json::json!({
                 "name": format!("Comments: {}/{}", site_id.as_str(), post_slug.as_str()),
                 "room_alias_name": alias_localpart,
@@ -958,21 +1094,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
                     {
                         "type": "m.room.power_levels",
                         "state_key": "",
-                        "content": {
-                            "users": {}
-                        }
+                        "content": power_levels
                     }
                 ],
                 "invite": [self.owner_id.clone()],
                 "preset": "public_chat",
             });
 
-            // Inject power levels with sender and owner as admins
-            if let Some(pl) = body.pointer_mut("/initial_state/1/content/users")
-                && let Some(obj) = pl.as_object_mut()
-            {
-                obj.insert(self.sender_user_id(), 100.into());
-                obj.insert(self.owner_id.clone(), 100.into());
+            if let Some(version) = &self.room_version_override {
+                body["room_version"] = serde_json::json!(version);
             }
 
             let resp = self
@@ -1682,5 +1812,52 @@ mod tests {
         assert!(a.starts_with("cumments_post_"));
         assert!(b.starts_with("cumments_post_"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn explicit_creator_required_only_below_room_version_12() {
+        assert!(room_requires_explicit_creator(None));
+        assert!(room_requires_explicit_creator(Some("1")));
+        assert!(room_requires_explicit_creator(Some("11")));
+        assert!(room_requires_explicit_creator(Some("1.2")));
+        assert!(!room_requires_explicit_creator(Some("12")));
+        assert!(!room_requires_explicit_creator(Some("13")));
+        assert!(!room_requires_explicit_creator(Some("12.1")));
+    }
+
+    #[test]
+    fn initial_power_levels_omits_sender_for_implicit_creator_versions() {
+        let explicit =
+            initial_power_levels("@_cumments_bot:example.com", "@owner:example.com", true);
+        assert_eq!(explicit["users"]["@_cumments_bot:example.com"], 100);
+        assert_eq!(explicit["users"]["@owner:example.com"], 100);
+
+        let implicit =
+            initial_power_levels("@_cumments_bot:example.com", "@owner:example.com", false);
+        assert!(
+            implicit["users"]
+                .get("@_cumments_bot:example.com")
+                .is_none()
+        );
+        assert_eq!(implicit["users"]["@owner:example.com"], 100);
+    }
+
+    #[test]
+    fn capabilities_response_parses_default_room_version() {
+        let caps: CapabilitiesResponse = serde_json::from_value(json!({
+            "room_versions": {
+                "default": "12",
+                "available": { "11": "stable", "12": "stable" }
+            }
+        }))
+        .expect("capabilities parse");
+        assert_eq!(
+            caps.room_versions.map(|r| r.default),
+            Some("12".to_string())
+        );
+
+        let no_versions: CapabilitiesResponse =
+            serde_json::from_value(json!({})).expect("empty capabilities parse");
+        assert!(no_versions.room_versions.is_none());
     }
 }

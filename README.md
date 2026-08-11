@@ -229,6 +229,9 @@ sender_localpart = "_cumments_bot"
 # hs_token = "<hs_token from registration.yaml>"
 # Optional: verify at startup that this config matches registration.yaml
 # registration_file = "registration.yaml"
+# Optional: Matrix room version to request when creating rooms (e.g. "12").
+# When unset, the homeserver's configured default is used.
+# room_version = "12"
 
 [matrix.moderation]
 owner_id = "@admin:your_server.tld"

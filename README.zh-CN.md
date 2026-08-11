@@ -214,6 +214,9 @@ sender_localpart = "_cumments_bot"
 # hs_token = "<hs_token from registration.yaml>"
 # 可选：启动时校验本配置与 registration.yaml 是否一致
 # registration_file = "registration.yaml"
+# 可选：创建房间时显式请求的 Matrix 房间版本（例如 "12"）。
+# 不设置时使用 homeserver 的默认房间版本。
+# room_version = "12"
 
 [matrix.moderation]
 owner_id = "@admin:your_server.tld"

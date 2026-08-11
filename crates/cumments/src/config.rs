@@ -91,6 +91,9 @@ pub struct AppService {
     /// Optional path to registration.yaml; when set, startup validates that
     /// id/url/tokens/sender/namespaces match this configuration.
     pub registration_file: Option<String>,
+    /// Room version to request when creating rooms, e.g. `"12"`.
+    /// When unset, the homeserver's configured default is used.
+    pub room_version: Option<String>,
 }
 
 impl Default for AppService {
@@ -104,6 +107,7 @@ impl Default for AppService {
             as_token: None,
             hs_token: None,
             registration_file: None,
+            room_version: None,
         }
     }
 }
@@ -127,6 +131,7 @@ pub struct AppServiceRuntime {
     pub owner_id: String,
     pub listen_host: String,
     pub listen_port: u16,
+    pub room_version: Option<String>,
 }
 
 fn require_non_empty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
@@ -205,6 +210,25 @@ impl Matrix {
             );
         }
 
+        let room_version = appservice
+            .room_version
+            .as_deref()
+            .map(|v| {
+                if v.is_empty()
+                    || v.chars().count() > 32
+                    || !v.chars().all(|c| {
+                        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-')
+                    })
+                {
+                    bail!(
+                        "`matrix.appservice.room_version` must be a valid Matrix room version \
+                         (1-32 chars from a-z, 0-9, '.', '-')"
+                    );
+                }
+                Ok(v.to_string())
+            })
+            .transpose()?;
+
         if let Some(path) = &appservice.registration_file {
             validate_registration_file(
                 path,
@@ -229,6 +253,7 @@ impl Matrix {
             owner_id: owner_id.to_string(),
             listen_host: listen_host.to_string(),
             listen_port: appservice.listen_port,
+            room_version,
         })
     }
 }
