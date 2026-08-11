@@ -296,8 +296,8 @@ repository root (note the trailing `.`). Do not run `docker build misc/docker`.
 Prebuilt images are published to GHCR from version tags:
 
 ```bash
-docker pull ghcr.io/curious-r/cumments:0.17.0
-docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
+docker pull ghcr.io/curious-r/cumments:0.18.0
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.18.0
 ```
 
 `latest` follows the newest `v*` tag. The image is also built for validation on
@@ -310,7 +310,7 @@ To use your own config file, mount it over the bundled one:
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
-  ghcr.io/curious-r/cumments:0.17.0
+  ghcr.io/curious-r/cumments:0.18.0
 ```
 
 Alternatively, mount it anywhere and point `--config` at it:

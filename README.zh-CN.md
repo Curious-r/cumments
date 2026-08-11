@@ -279,8 +279,8 @@ Dockerfile 位于 `misc/docker` 下，构建上下文必须是仓库根目录（
 发布镜像只在 `v*` 版本 tag 时推送到 GHCR：
 
 ```bash
-docker pull ghcr.io/curious-r/cumments:0.17.0
-docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.17.0
+docker pull ghcr.io/curious-r/cumments:0.18.0
+docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:0.18.0
 ```
 
 `latest` 跟随最新的 `v*` tag；`main` 分支和 PR 在 Docker 相关文件变更时也会
@@ -292,7 +292,7 @@ docker run -p 7931:7931 -v $(pwd)/data:/srv/cumments ghcr.io/curious-r/cumments:
 docker run -p 7931:7931 \
   -v $(pwd)/cumments.toml:/etc/cumments/cumments.toml:ro \
   -v $(pwd)/data:/srv/cumments \
-  ghcr.io/curious-r/cumments:0.17.0
+  ghcr.io/curious-r/cumments:0.18.0
 ```
 
 也可以挂载到任意位置，再用 `--config` 指定：
