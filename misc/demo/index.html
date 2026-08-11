@@ -643,7 +643,9 @@
                     status_signing: "签名中…",
                     status_submitting: "提交中…",
                     status_submitted: "提交成功，等待 Matrix 同步…",
+                    status_synced: "已同步到 Matrix",
                     comment_submitted: "评论已提交，等待同步",
+                    comment_synced: "评论已同步到 Matrix",
                     status_failed: "发送失败",
                     publish_failed: "发布失败：",
                     err_content_empty_edit: "评论内容不能为空",
@@ -768,7 +770,9 @@
                     status_signing: "Signing…",
                     status_submitting: "Submitting…",
                     status_submitted: "Submitted; waiting for Matrix sync…",
+                    status_synced: "Synced to Matrix",
                     comment_submitted: "Comment submitted; waiting for sync",
+                    comment_synced: "Comment synced to Matrix",
                     status_failed: "Send failed",
                     publish_failed: "Publish failed: ",
                     err_content_empty_edit: "Comment content cannot be empty",
@@ -838,7 +842,11 @@
                         : t("sse_disconnected");
                 }
                 const powStatus = document.getElementById("powStatus");
-                if (powStatus) powStatus.textContent = t("pow_ready");
+                if (powStatus) {
+                    powStatus.textContent = state.pendingComment
+                        ? t("status_submitted")
+                        : t("pow_ready");
+                }
                 if (state.meta) updatePagination(state.meta);
                 updateReplyBanner();
                 updateComposerAvatar();
@@ -865,12 +873,16 @@
                 mineComments: [],
                 mineTotal: 0,
                 replyingTo: null,
+                pendingComment: null,
             };
 
             let identity = null;
             let pendingIdentity = null;
             let mnemonicModalMode = "backup";
             let currentMnemonic = null;
+            let pendingPollTimer = null;
+            const PENDING_POLL_INTERVAL_MS = 2000;
+            const PENDING_POLL_LIMIT = 15;
 
             // ==========================================
             // 初始化
@@ -1490,6 +1502,53 @@
                 );
             }
 
+            // Once the comment we just submitted appears in the read model
+            // (via SSE or a list refresh), move the composer status from
+            // "waiting for Matrix sync" to "synced".
+            function markPendingSynced(comments) {
+                const pending = state.pendingComment;
+                if (!pending) return;
+                const synced = comments.some(
+                    (c) =>
+                        c.author &&
+                        c.author.type === "guest" &&
+                        c.author.public_key === pending.publicKey &&
+                        c.content === pending.content,
+                );
+                if (synced) {
+                    state.pendingComment = null;
+                    stopPendingSyncPoll();
+                    const status = document.getElementById("powStatus");
+                    if (status) status.textContent = t("status_synced");
+                    toast(t("comment_synced"));
+                }
+            }
+
+            // SSE can be temporarily unavailable; poll a few times so the
+            // composer status never stays stuck on "waiting for Matrix sync".
+            function startPendingSyncPoll() {
+                stopPendingSyncPoll();
+                let attempts = 0;
+                const poll = () => {
+                    if (!state.pendingComment) return;
+                    attempts += 1;
+                    loadList();
+                    if (attempts < PENDING_POLL_LIMIT) {
+                        pendingPollTimer = setTimeout(poll, PENDING_POLL_INTERVAL_MS);
+                    } else {
+                        pendingPollTimer = null;
+                    }
+                };
+                pendingPollTimer = setTimeout(poll, PENDING_POLL_INTERVAL_MS);
+            }
+
+            function stopPendingSyncPoll() {
+                if (pendingPollTimer !== null) {
+                    clearTimeout(pendingPollTimer);
+                    pendingPollTimer = null;
+                }
+            }
+
             function authorName(comment) {
                 const author = comment.author || {};
                 if (author.type === "matrix") {
@@ -1590,6 +1649,7 @@
                 state.meta = json.meta;
                 state.mineTotal = 0;
                 renderComments(json.data);
+                markPendingSynced(json.data);
                 updateHeader(json.meta.total);
                 updatePagination(json.meta);
             }
@@ -1634,6 +1694,7 @@
                     total_pages: totalPages,
                 };
                 renderComments(items);
+                markPendingSynced(items);
                 updateHeader(collected.length);
                 updatePagination(meta);
             }
@@ -1912,6 +1973,8 @@
                 const btn = document.getElementById("submitBtn");
                 const status = document.getElementById("powStatus");
                 btn.disabled = true;
+                state.pendingComment = null;
+                stopPendingSyncPoll();
 
                 try {
                     status.textContent = t("status_fetch_challenge");
@@ -1954,9 +2017,14 @@
                     document.getElementById("composerContent").value = "";
                     state.replyingTo = null;
                     updateReplyBanner();
+                    state.pendingComment = {
+                        publicKey,
+                        content,
+                    };
                     status.textContent = t("status_submitted");
                     toast(t("comment_submitted"));
                     setTimeout(() => loadList(), 1200);
+                    startPendingSyncPoll();
                 } catch (e) {
                     status.textContent = t("status_failed");
                     toast(t("publish_failed") + e.message, "error");
@@ -2068,6 +2136,7 @@
                     const payload = JSON.parse(event.data).payload;
                     const comment = payload.comment;
                     toast(t("sse_new_comment") + authorName(comment), "success");
+                    markPendingSynced([comment]);
                     loadList();
                 });
 
