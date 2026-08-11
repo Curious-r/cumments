@@ -4,7 +4,7 @@
 use crate::wire::{
     build_edit_body, build_message_body, build_redaction_body, comment_room_alias,
     comment_room_alias_localpart, format_txn_id, has_state_power, initial_power_levels,
-    metadata_matches, percent_encode, power_levels_with_owner, room_requires_explicit_creator,
+    metadata_matches, percent_encode, power_levels_with_admin, room_requires_explicit_creator,
     site_space_alias, site_space_alias_localpart,
 };
 use anyhow::{Result, anyhow};
@@ -73,7 +73,7 @@ pub struct AppServiceMatrixDriver {
     as_token: String,
     server_name: String,
     sender_localpart: String,
-    owner_id: String,
+    admin_id: String,
     virtual_user_store: Arc<dyn VirtualUserStore>,
     joined_cache: Mutex<HashSet<(String, String)>>,
     display_name_cache: Mutex<HashMap<String, String>>,
@@ -89,7 +89,7 @@ impl AppServiceMatrixDriver {
         as_token: String,
         server_name: String,
         sender_localpart: String,
-        owner_id: String,
+        admin_id: String,
         virtual_user_store: Arc<dyn VirtualUserStore>,
         room_version: Option<String>,
     ) -> Self {
@@ -103,7 +103,7 @@ impl AppServiceMatrixDriver {
             as_token,
             server_name,
             sender_localpart,
-            owner_id,
+            admin_id,
             virtual_user_store,
             joined_cache: Mutex::new(HashSet::new()),
             display_name_cache: Mutex::new(HashMap::new()),
@@ -726,7 +726,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let include_sender =
             room_requires_explicit_creator(self.effective_room_version().await.as_deref());
         let power_levels =
-            initial_power_levels(&self.sender_user_id(), &self.owner_id, include_sender);
+            initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
 
         let mut body = serde_json::json!({
             "name": format!("Comments: {}", site_id_str),
@@ -749,7 +749,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                     "content": power_levels
                 }
             ],
-            "invite": [self.owner_id.clone()],
+            "invite": [self.admin_id.clone()],
             "preset": "public_chat",
         });
 
@@ -811,7 +811,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                             );
                         }
                     }
-                    self.ensure_owner_admin(&room_id).await;
+                    self.ensure_admin(&room_id).await;
                     Ok(room_id)
                 }
                 None => Err(anyhow!(
@@ -871,7 +871,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                         );
                     }
                 }
-                self.ensure_owner_admin(&room_id).await;
+                self.ensure_admin(&room_id).await;
                 target_room_id = Some(room_id);
             }
         }
@@ -887,7 +887,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let include_sender =
                 room_requires_explicit_creator(self.effective_room_version().await.as_deref());
             let power_levels =
-                initial_power_levels(&self.sender_user_id(), &self.owner_id, include_sender);
+                initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
 
             let mut body = serde_json::json!({
                 "name": format!("Comments: {}/{}", site_id.as_str(), post_slug.as_str()),
@@ -907,7 +907,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                         "content": power_levels
                     }
                 ],
-                "invite": [self.owner_id.clone()],
+                "invite": [self.admin_id.clone()],
                 "preset": "public_chat",
             });
 
@@ -961,7 +961,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                             }
                         }
                         self.link_room_to_space(space_id, &room_id).await;
-                        self.ensure_owner_admin(&room_id).await;
+                        self.ensure_admin(&room_id).await;
                         Ok(room_id)
                     }
                     None => Err(anyhow!(
@@ -1310,16 +1310,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    async fn ensure_owner_admin(&self, room_id: &str) {
+    async fn ensure_admin(&self, room_id: &str) {
         // Best-effort: failures are logged here and never fail the caller.
         let updated = match self.get_power_levels(room_id).await {
-            Ok(Some(content)) => match power_levels_with_owner(&content, &self.owner_id) {
+            Ok(Some(content)) => match power_levels_with_admin(&content, &self.admin_id) {
                 Some(updated) => updated,
-                None => return, // owner already has admin power
+                None => return, // admin already has admin power
             },
             // No power-levels event: room defaults apply, so create one that
-            // grants the owner admin.
-            Ok(None) => serde_json::json!({ "users": { self.owner_id.clone(): 100 } }),
+            // grants the admin power.
+            Ok(None) => serde_json::json!({ "users": { self.admin_id.clone(): 100 } }),
             Err(e) => {
                 warn!("Failed to read power levels for room {}: {:#}", room_id, e);
                 return;
@@ -1327,8 +1327,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         };
 
         match self.write_power_levels(room_id, &updated).await {
-            Ok(()) => info!("Granted owner admin power in room {}", room_id),
-            Err(e) => warn!("Failed to grant owner admin in room {}: {:#}", room_id, e),
+            Ok(()) => info!("Granted admin power in room {}", room_id),
+            Err(e) => warn!("Failed to grant admin power in room {}: {:#}", room_id, e),
         }
     }
 }

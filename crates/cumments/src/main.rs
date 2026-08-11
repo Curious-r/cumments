@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
             as_conf.as_token.clone(),
             as_conf.server_name.clone(),
             as_conf.sender_localpart.clone(),
-            as_conf.owner_id.clone(),
+            as_conf.admin_id.clone(),
             virtual_user_store,
             as_conf.room_version.clone(),
         ))
@@ -243,7 +243,7 @@ async fn main() -> Result<()> {
     tracing::info!("Reconciler started in background.");
 
     // ─────────────────────────────────────────────────────────────
-    // 9b. Ensure the human owner keeps admin power in every known
+    // 9b. Ensure the human admin keeps admin power in every known
     //     Cumments room (appservice mode, best-effort)
     // ─────────────────────────────────────────────────────────────
     if appservice.is_some() {
@@ -265,14 +265,14 @@ async fn main() -> Result<()> {
                         retries += 1;
                         if retries > SWEEP_MAX_RETRIES {
                             tracing::warn!(
-                                "Owner admin sweep: giving up after {} retries: {:?}",
+                                "Admin sweep: giving up after {} retries: {:?}",
                                 retries - 1,
                                 e
                             );
                             return;
                         }
                         tracing::warn!(
-                            "Owner admin sweep: failed to list joined rooms (retry {}/{}): {:?}",
+                            "Admin sweep: failed to list joined rooms (retry {}/{}): {:?}",
                             retries,
                             SWEEP_MAX_RETRIES,
                             e
@@ -284,12 +284,12 @@ async fn main() -> Result<()> {
             for room_id in rooms {
                 match sweep_driver.get_room_metadata(&room_id).await {
                     Ok(Some(meta)) if meta.get("site_id").and_then(|v| v.as_str()).is_some() => {
-                        sweep_driver.ensure_owner_admin(&room_id).await;
+                        sweep_driver.ensure_admin(&room_id).await;
                     }
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(
-                            "Owner admin sweep: failed to read metadata for {}: {:?}",
+                            "Admin sweep: failed to read metadata for {}: {:?}",
                             room_id,
                             e
                         );

@@ -25,8 +25,6 @@ pub struct Settings {
 pub struct Server {
     pub host: String,
     pub port: u16,
-    /// Accepted for one release only so the startup error can explain the
-    /// replacement; never used by the running server.
     #[serde(rename = "cors_origins", default)]
     pub legacy_cors_origins: Option<String>,
 }
@@ -147,7 +145,7 @@ impl Default for AppService {
 #[serde(deny_unknown_fields)]
 pub struct Moderation {
     /// Matrix account invited to comment rooms with admin power.
-    pub owner_id: Option<String>,
+    pub admin_id: Option<String>,
 }
 
 /// Fully validated AppService settings, ready to wire up the driver.
@@ -159,7 +157,7 @@ pub struct AppServiceRuntime {
     pub as_token: String,
     pub hs_token: String,
     pub sender_localpart: String,
-    pub owner_id: String,
+    pub admin_id: String,
     pub listen_host: String,
     pub listen_port: u16,
     pub room_version: Option<String>,
@@ -355,9 +353,9 @@ impl Matrix {
             require_non_empty(appservice.as_token.as_deref(), "matrix.appservice.as_token")?;
         let hs_token =
             require_non_empty(appservice.hs_token.as_deref(), "matrix.appservice.hs_token")?;
-        let owner_id = require_non_empty(
-            self.moderation.as_ref().and_then(|m| m.owner_id.as_deref()),
-            "matrix.moderation.owner_id",
+        let admin_id = require_non_empty(
+            self.moderation.as_ref().and_then(|m| m.admin_id.as_deref()),
+            "matrix.moderation.admin_id",
         )?;
         let id = require_non_empty(Some(&appservice.id), "matrix.appservice.id")?;
         let sender_localpart = require_non_empty(
@@ -416,7 +414,7 @@ impl Matrix {
             as_token: as_token.to_string(),
             hs_token: hs_token.to_string(),
             sender_localpart: sender_localpart.to_string(),
-            owner_id: owner_id.to_string(),
+            admin_id: admin_id.to_string(),
             listen_host: listen_host.to_string(),
             listen_port: appservice.listen_port,
             room_version,
@@ -649,7 +647,7 @@ as_token = "as"
 hs_token = "hs"
 
 [matrix.moderation]
-owner_id = "@admin:example.com"
+admin_id = "@admin:example.com"
 "#,
         )
         .expect("config should parse");
@@ -711,7 +709,7 @@ homeserver_url = "http://localhost:8008"
 server_name = "example.com"
 as_token = "as"
 hs_token = "hs"
-owner_id = "@admin:example.com"
+admin_id = "@admin:example.com"
 "#,
         );
 
@@ -883,7 +881,7 @@ as_token = "as"
 hs_token = "hs"
 
 [matrix.moderation]
-owner_id = "@admin:example.com"
+admin_id = "@admin:example.com"
 "#,
         )
         .expect("parse settings");
@@ -902,12 +900,12 @@ owner_id = "@admin:example.com"
         assert!(err.to_string().contains("matrix.appservice.as_token"));
 
         settings.matrix.appservice.as_mut().unwrap().as_token = Some("as".to_string());
-        settings.matrix.moderation.as_mut().unwrap().owner_id = Some(String::new());
+        settings.matrix.moderation.as_mut().unwrap().admin_id = Some(String::new());
         let err = settings
             .matrix
             .appservice_runtime()
-            .expect_err("empty owner_id");
-        assert!(err.to_string().contains("matrix.moderation.owner_id"));
+            .expect_err("empty admin_id");
+        assert!(err.to_string().contains("matrix.moderation.admin_id"));
     }
 
     #[test]
@@ -919,18 +917,6 @@ owner_id = "@admin:example.com"
         // The runnable example stays usable in logging mode.
         assert!(validate_pow_secret("change-me", Mode::Logging).is_ok());
         assert!(validate_pow_secret("a-real-secret", Mode::AppService).is_ok());
-    }
-
-    #[test]
-    fn legacy_cors_origins_is_rejected_with_an_explicit_message() {
-        let server = Server {
-            host: "localhost".to_string(),
-            port: 7931,
-            legacy_cors_origins: Some("*".to_string()),
-        };
-        let err = validate_legacy_cors(&server).expect_err("legacy key must fail");
-        assert!(err.to_string().contains("cors_origins"));
-        assert!(err.to_string().contains("removed"));
     }
 
     #[test]

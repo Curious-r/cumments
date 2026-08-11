@@ -145,7 +145,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(None)
     }
 
-    async fn ensure_owner_admin(&self, room_id: &str) {
-        info!("LOGGING: Ensure owner admin for room {} (no-op)", room_id);
+    async fn ensure_admin(&self, room_id: &str) {
+        info!("LOGGING: Ensure admin for room {} (no-op)", room_id);
     }
 }

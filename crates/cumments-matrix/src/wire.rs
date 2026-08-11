@@ -60,31 +60,31 @@ pub(crate) fn room_requires_explicit_creator(version: Option<&str>) -> bool {
     major.is_none_or(|v| v < 12)
 }
 /// Build the `m.room.power_levels` content used when creating a Cumments room.
-/// Omitted fields take the room-version defaults; the owner always receives
+/// Omitted fields take the room-version defaults; the admin always receives
 /// admin power, and the AS sender is only listed when the room version needs
 /// an explicit creator entry.
 pub(crate) fn initial_power_levels(
     sender_user_id: &str,
-    owner_id: &str,
+    admin_id: &str,
     include_sender: bool,
 ) -> serde_json::Value {
     let mut users = serde_json::Map::new();
     if include_sender {
         users.insert(sender_user_id.to_string(), 100.into());
     }
-    users.insert(owner_id.to_string(), 100.into());
+    users.insert(admin_id.to_string(), 100.into());
     serde_json::json!({ "users": users })
 }
-/// Returns a copy of a room's `m.room.power_levels` content with the owner
+/// Returns a copy of a room's `m.room.power_levels` content with the admin
 /// raised to admin (100), preserving every other field. Returns `None` when
-/// the owner already has at least admin power.
-pub(crate) fn power_levels_with_owner(
+/// the admin already has at least admin power.
+pub(crate) fn power_levels_with_admin(
     content: &serde_json::Value,
-    owner_id: &str,
+    admin_id: &str,
 ) -> Option<serde_json::Value> {
     let level = content
         .get("users")
-        .and_then(|u| u.get(owner_id))
+        .and_then(|u| u.get(admin_id))
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     if level >= 100 {
@@ -98,12 +98,12 @@ pub(crate) fn power_levels_with_owner(
         .and_then(|u| u.as_object_mut())
     {
         Some(users) => {
-            users.insert(owner_id.to_string(), 100.into());
+            users.insert(admin_id.to_string(), 100.into());
         }
         None => {
             let obj = updated.as_object_mut()?;
             let mut users = serde_json::Map::new();
-            users.insert(owner_id.to_string(), 100.into());
+            users.insert(admin_id.to_string(), 100.into());
             obj.insert("users".to_string(), serde_json::Value::Object(users));
         }
     }
@@ -317,44 +317,44 @@ mod tests {
     }
 
     #[test]
-    fn power_levels_owner_already_admin_is_unchanged() {
+    fn power_levels_existing_admin_is_unchanged() {
         let content = json!({
             "ban": 50,
-            "users": { "@owner:example.com": 100, "@other:example.com": 0 }
+            "users": { "@admin:example.com": 100, "@other:example.com": 0 }
         });
-        assert!(power_levels_with_owner(&content, "@owner:example.com").is_none());
+        assert!(power_levels_with_admin(&content, "@admin:example.com").is_none());
     }
 
     #[test]
-    fn power_levels_raises_owner_to_admin_and_preserves_rest() {
+    fn power_levels_raises_admin_to_admin_and_preserves_rest() {
         let content = json!({
             "ban": 50,
             "state_default": 50,
-            "users": { "@owner:example.com": 50, "@other:example.com": 0 }
+            "users": { "@admin:example.com": 50, "@other:example.com": 0 }
         });
-        let updated = power_levels_with_owner(&content, "@owner:example.com")
-            .expect("owner should be raised to admin");
-        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        let updated = power_levels_with_admin(&content, "@admin:example.com")
+            .expect("admin should be raised to admin");
+        assert_eq!(updated["users"]["@admin:example.com"], 100);
         assert_eq!(updated["users"]["@other:example.com"], 0);
         assert_eq!(updated["ban"], 50);
         assert_eq!(updated["state_default"], 50);
     }
 
     #[test]
-    fn power_levels_adds_missing_owner_entry() {
+    fn power_levels_adds_missing_admin_entry() {
         let content = json!({ "users": { "@other:example.com": 0 } });
         let updated =
-            power_levels_with_owner(&content, "@owner:example.com").expect("owner should be added");
-        assert_eq!(updated["users"]["@owner:example.com"], 100);
+            power_levels_with_admin(&content, "@admin:example.com").expect("admin should be added");
+        assert_eq!(updated["users"]["@admin:example.com"], 100);
         assert_eq!(updated["users"]["@other:example.com"], 0);
     }
 
     #[test]
     fn power_levels_creates_users_map_when_missing() {
         let content = json!({ "ban": 50 });
-        let updated = power_levels_with_owner(&content, "@owner:example.com")
+        let updated = power_levels_with_admin(&content, "@admin:example.com")
             .expect("users map should be created");
-        assert_eq!(updated["users"]["@owner:example.com"], 100);
+        assert_eq!(updated["users"]["@admin:example.com"], 100);
         assert_eq!(updated["ban"], 50);
     }
 
@@ -603,17 +603,17 @@ mod tests {
     #[test]
     fn initial_power_levels_omits_sender_for_implicit_creator_versions() {
         let explicit =
-            initial_power_levels("@_cumments_bot:example.com", "@owner:example.com", true);
+            initial_power_levels("@_cumments_bot:example.com", "@admin:example.com", true);
         assert_eq!(explicit["users"]["@_cumments_bot:example.com"], 100);
-        assert_eq!(explicit["users"]["@owner:example.com"], 100);
+        assert_eq!(explicit["users"]["@admin:example.com"], 100);
 
         let implicit =
-            initial_power_levels("@_cumments_bot:example.com", "@owner:example.com", false);
+            initial_power_levels("@_cumments_bot:example.com", "@admin:example.com", false);
         assert!(
             implicit["users"]
                 .get("@_cumments_bot:example.com")
                 .is_none()
         );
-        assert_eq!(implicit["users"]["@owner:example.com"], 100);
+        assert_eq!(implicit["users"]["@admin:example.com"], 100);
     }
 }
