@@ -227,6 +227,14 @@ fn challenge_prefix(challenge_response: &str) -> &str {
     challenge_response.split('|').next().unwrap_or("")
 }
 
+/// Basic shape check for a Matrix event ID used as a reply target.
+fn validate_reply_to_format(reply_to: &str) -> Result<(), &'static str> {
+    if reply_to.len() > 255 || !reply_to.starts_with('$') || !reply_to.contains(':') {
+        return Err("reply_to must be a Matrix event ID (e.g. \"$event:server\")");
+    }
+    Ok(())
+}
+
 /// Builds the Axum router for the API.
 pub fn build_router(state: ApiState, cors_origins: &str) -> Router {
     let router = Router::new()
@@ -368,6 +376,11 @@ async fn post_comment_handler(
             "reply_to must not be empty when provided.".to_string(),
         ));
     }
+    if let Some(reply_to) = req.reply_to.as_deref()
+        && let Err(msg) = validate_reply_to_format(reply_to)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
 
     // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
@@ -386,6 +399,29 @@ async fn post_comment_handler(
     );
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
+    }
+
+    // The reply target must belong to the same site/post when it is already
+    // visible in the read model. Unknown targets are accepted so a fast reply
+    // does not depend on projection timing; Matrix relation semantics still
+    // apply.
+    if let Some(reply_to) = req.reply_to.as_deref() {
+        match state.store.get_comment(reply_to).await {
+            Ok(Some(parent)) => {
+                if parent.site_id != site_id || parent.post_slug != post_slug {
+                    return Err(AppError::BadRequest(
+                        "reply_to must reference a comment in the same site and post.".to_string(),
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("Failed to validate reply target: {:?}", e);
+                return Err(AppError::Internal(
+                    "Failed to validate reply target.".to_string(),
+                ));
+            }
+        }
     }
 
     // 3. Create the business intent
@@ -720,5 +756,14 @@ mod tests {
         assert_eq!(json["author"]["public_key"], "pk");
         assert!(json.get("author_mxid").is_none());
         assert!(json.get("room_id").is_none());
+    }
+
+    #[test]
+    fn reply_to_format_validation_accepts_event_ids_and_rejects_garbage() {
+        assert!(validate_reply_to_format("$event:server").is_ok());
+        assert!(validate_reply_to_format("$a:hs").is_ok());
+        assert!(validate_reply_to_format("not-an-event").is_err());
+        assert!(validate_reply_to_format("$no-server").is_err());
+        assert!(validate_reply_to_format(&format!("${}", "x".repeat(300))).is_err());
     }
 }
