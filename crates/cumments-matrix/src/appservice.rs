@@ -210,7 +210,7 @@ fn reply_fallback_body(sender_mxid: &str, original: &str, content: &str) -> Opti
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 fn build_message_body(
     content: &str,
-    nickname: &str,
+    displayname: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
@@ -239,9 +239,9 @@ fn build_message_body(
         "signature": author_signature,
         "challenge": author_challenge,
         // Structured fields so the projector can store the pure content
-        // and nickname instead of parsing them back out of the body.
+        // and displayname instead of parsing them back out of the body.
         "content": content,
-        "displayname": nickname,
+        "displayname": displayname,
         "intent_id": intent_id,
     });
     if let Some(parent_event_id) = reply_to {
@@ -259,7 +259,7 @@ fn build_message_body(
 fn build_edit_body(
     event_id: &str,
     new_content: &str,
-    nickname: &str,
+    displayname: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
@@ -276,7 +276,7 @@ fn build_edit_body(
         "signature": author_signature,
         "challenge": author_challenge,
         "content": new_content,
-        "displayname": nickname,
+        "displayname": displayname,
         "intent_id": intent_id,
     });
     serde_json::json!({
@@ -525,15 +525,15 @@ impl AppServiceMatrixDriver {
     }
 
     /// Best-effort: keep the virtual user's display name in sync with the
-    /// commenter's nickname so Matrix clients show the nickname instead of
+    /// commenter's display name so Matrix clients show it instead of
     /// the localpart. Failures only warn; the message send still proceeds.
-    async fn ensure_displayname(&self, virtual_user: &str, nickname: &str) -> Result<()> {
+    async fn ensure_displayname(&self, virtual_user: &str, displayname: &str) -> Result<()> {
         {
             let cache = self
                 .displayname_cache
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if cache.get(virtual_user).map(String::as_str) == Some(nickname) {
+            if cache.get(virtual_user).map(String::as_str) == Some(displayname) {
                 return Ok(());
             }
         }
@@ -544,7 +544,7 @@ impl AppServiceMatrixDriver {
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, Some(virtual_user))
-            .json(&serde_json::json!({ "displayname": nickname }))
+            .json(&serde_json::json!({ "displayname": displayname }))
             .send()
             .await
             .map_err(|e| anyhow!("set displayname request failed: {}", e))?;
@@ -562,7 +562,7 @@ impl AppServiceMatrixDriver {
         self.displayname_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(virtual_user.to_owned(), nickname.to_owned());
+            .insert(virtual_user.to_owned(), displayname.to_owned());
         Ok(())
     }
 
@@ -1215,7 +1215,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         &self,
         room_id: &str,
         content: &str,
-        nickname: &str,
+        displayname: &str,
         // Public key and signature are published in the event so ownership
         // stays verifiable from Matrix alone.
         author_public_key: &str,
@@ -1237,15 +1237,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // 2. Ensure the virtual user is in the room (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
 
-        // 2b. Keep the display name in sync with the nickname (best-effort)
-        if let Err(e) = self.ensure_displayname(&virtual_user, nickname).await {
+        // 2b. Keep the display name in sync (best-effort)
+        if let Err(e) = self.ensure_displayname(&virtual_user, displayname).await {
             warn!("Failed to set display name for {}: {:#}", virtual_user, e);
         }
 
         // 3. Send the message as the virtual user
         let message_body = build_message_body(
             content,
-            nickname,
+            displayname,
             author_public_key,
             author_signature,
             author_challenge,
@@ -1291,7 +1291,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         room_id: &str,
         event_id: &str,
         new_content: &str,
-        nickname: &str,
+        displayname: &str,
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
@@ -1308,8 +1308,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // 2. Ensure joined (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
 
-        // 2b. Keep the display name in sync with the nickname (best-effort)
-        if let Err(e) = self.ensure_displayname(&virtual_user, nickname).await {
+        // 2b. Keep the display name in sync (best-effort)
+        if let Err(e) = self.ensure_displayname(&virtual_user, displayname).await {
             warn!("Failed to set display name for {}: {:#}", virtual_user, e);
         }
 
@@ -1317,7 +1317,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let message_body = build_edit_body(
             event_id,
             new_content,
-            nickname,
+            displayname,
             author_public_key,
             author_signature,
             author_challenge,

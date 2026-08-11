@@ -13,7 +13,7 @@ pub struct Model {
     pub post_slug: String,
     pub sender_mxid: String,
     pub author_type: String,
-    pub author_nickname: Option<String>,
+    pub author_displayname: Option<String>,
     pub content: String,
     pub timestamp: DateTimeUtc,
     pub reply_to: Option<String>,

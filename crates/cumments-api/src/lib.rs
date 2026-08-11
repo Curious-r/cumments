@@ -148,7 +148,7 @@ pub struct PostCommentRequest {
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
     #[validate(length(min = 1, max = 50))]
-    pub nickname: String,
+    pub displayname: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
     pub author_public_key: String,
     /// Ed25519 signature over the canonical POST message.
@@ -393,7 +393,7 @@ async fn post_comment_handler(
         &site_id,
         &post_slug,
         &req.content,
-        &req.nickname,
+        &req.displayname,
         req.reply_to.as_deref(),
         challenge,
     );
@@ -432,7 +432,7 @@ async fn post_comment_handler(
         site_id: site_id_val,
         post_slug: post_slug_val,
         content: req.content,
-        nickname: req.nickname,
+        displayname: req.displayname,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
         author_challenge: challenge.to_string(),
@@ -741,7 +741,7 @@ mod tests {
             post_slug: "hello".to_string(),
             author: CommentAuthor {
                 kind: AuthorType::Guest,
-                nickname: Some("Alice".to_string()),
+                displayname: Some("Alice".to_string()),
                 public_key: Some("pk".to_string()),
                 mxid: None,
             },

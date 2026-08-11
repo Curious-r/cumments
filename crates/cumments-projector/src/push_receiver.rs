@@ -406,7 +406,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
                 None
             },
         ),
-        author_display_name: if is_virtual_sender {
+        displayname: if is_virtual_sender {
             structured_displayname.map(|s| s.to_string())
         } else {
             None
@@ -712,7 +712,7 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse edit");
-        assert_eq!(parsed.author_display_name.as_deref(), Some("Alice"));
+        assert_eq!(parsed.displayname.as_deref(), Some("Alice"));
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert_eq!(parsed.content, "edited");
@@ -757,7 +757,7 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse comment");
-        assert_eq!(parsed.author_display_name.as_deref(), Some("Alice"));
+        assert_eq!(parsed.displayname.as_deref(), Some("Alice"));
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert_eq!(parsed.content, "hello");
@@ -833,7 +833,7 @@ mod tests {
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
-        assert!(parsed.author_display_name.is_none());
+        assert!(parsed.displayname.is_none());
         assert!(parsed.intent_id.is_none());
     }
 

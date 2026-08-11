@@ -156,7 +156,7 @@ impl AuthorType {
 pub struct CommentAuthor {
     #[serde(rename = "type")]
     pub kind: AuthorType,
-    pub nickname: Option<String>,
+    pub displayname: Option<String>,
     pub public_key: Option<String>,
     pub mxid: Option<String>,
 }

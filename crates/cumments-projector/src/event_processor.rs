@@ -41,7 +41,7 @@ pub struct ParsedRoomMessage {
     /// The plain-text body of the message.
     pub content: String,
     /// The resolved display name of the author, if available.
-    pub author_display_name: Option<String>,
+    pub displayname: Option<String>,
     /// The author's Ed25519 public key embedded in the event, if any.
     pub author_public_key: Option<String>,
     /// The author's Ed25519 signature embedded in the event, if any.
@@ -428,7 +428,7 @@ impl EventProcessor {
                 &event.author_public_key,
                 &event.author_signature,
                 &event.author_challenge,
-                &event.author_display_name,
+                &event.displayname,
             ) {
                 (Some(pk), Some(sig), Some(chal), Some(nick)) => {
                     let message = post_signature_message(
@@ -471,7 +471,7 @@ impl EventProcessor {
                 } else {
                     AuthorType::Guest
                 },
-                nickname: event.author_display_name.clone(),
+                displayname: event.displayname.clone(),
                 public_key: event.author_public_key.clone(),
                 mxid: if is_matrix_native {
                     Some(event.sender.clone())

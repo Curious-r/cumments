@@ -871,7 +871,7 @@ impl CommentStore for DbStore {
             post_slug: Set(comment.post_slug.clone()),
             sender_mxid: Set(sender.to_owned()),
             author_type: Set(comment.author.kind.as_str().to_string()),
-            author_nickname: Set(comment.author.nickname.clone()),
+            author_displayname: Set(comment.author.displayname.clone()),
             author_public_key: Set(comment.author.public_key.clone()),
             content: Set(comment.content.clone()),
             timestamp: Set(comment.timestamp),
@@ -890,7 +890,7 @@ impl CommentStore for DbStore {
                         comments::Column::PostSlug,
                         comments::Column::SenderMxid,
                         comments::Column::AuthorType,
-                        comments::Column::AuthorNickname,
+                        comments::Column::AuthorDisplayname,
                         comments::Column::AuthorPublicKey,
                         comments::Column::Content,
                         comments::Column::Timestamp,
@@ -931,13 +931,13 @@ impl CommentStore for DbStore {
         Ok(result.rows_affected > 0)
     }
 
-    async fn get_author_nickname(&self, event_id: &str) -> Result<Option<String>> {
+    async fn get_author_displayname(&self, event_id: &str) -> Result<Option<String>> {
         let model = comments::Entity::find()
             .filter(comments::COLUMN.event_id.eq(event_id))
             .one(&self.db)
             .await?;
 
-        Ok(model.and_then(|m| m.author_nickname))
+        Ok(model.and_then(|m| m.author_displayname))
     }
 
     async fn get_comment_author_public_key(&self, event_id: &str) -> Result<Option<String>> {
@@ -1101,7 +1101,7 @@ impl From<comments::Model> for Comment {
             post_slug: model.post_slug,
             author: CommentAuthor {
                 kind: AuthorType::from_db(&model.author_type, model.author_public_key.is_some()),
-                nickname: model.author_nickname,
+                displayname: model.author_displayname,
                 public_key: model.author_public_key,
                 mxid: if model.author_type == "matrix" {
                     Some(model.sender_mxid.clone())
