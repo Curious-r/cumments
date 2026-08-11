@@ -269,14 +269,34 @@ fn content_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
 
 /// Whether a Matrix sender is one of our exclusive AS virtual users.
 ///
-/// The AppService registration reserves the `@_cumments_.*` user namespace,
-/// so a localpart starting with `_cumments_` can only belong to Cumments.
+/// Virtual user localparts follow `_cumments_{site_id}_{visitor_id}`, where
+/// the site is `[a-z0-9-]{1,64}` and the visitor is 16 lowercase hex digits.
+/// Matching the exact shape (rather than the broader `@_cumments_.*`
+/// namespace) excludes the AS sender account itself (`@_cumments_bot`) and
+/// any other Cumments-reserved lookalikes from being treated as visitors.
 fn is_virtual_user_sender(sender: &str) -> bool {
-    sender
+    let Some(localpart) = sender
         .strip_prefix('@')
-        .and_then(|s| s.split_once(':'))
-        .map(|(localpart, _)| localpart.starts_with("_cumments_"))
-        .unwrap_or(false)
+        .and_then(|s| s.split_once(':').map(|(localpart, _)| localpart))
+    else {
+        return false;
+    };
+    let Some(rest) = localpart.strip_prefix("_cumments_") else {
+        return false;
+    };
+    let Some((site_id, visitor_id)) = rest.rsplit_once('_') else {
+        return false;
+    };
+    let site_ok = !site_id.is_empty()
+        && site_id.len() <= 64
+        && site_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let visitor_ok = visitor_id.len() == 16
+        && visitor_id
+            .chars()
+            .all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    site_ok && visitor_ok
 }
 
 // ── Push event parsers ────────────────────────────────────────────
@@ -531,6 +551,42 @@ mod tests {
     }
 
     #[test]
+    fn virtual_user_sender_matches_exact_namespace_shape() {
+        assert!(is_virtual_user_sender(
+            "@_cumments_my-blog_3282f2a21b4a1e6b:example.com"
+        ));
+        assert!(is_virtual_user_sender(
+            "@_cumments_a_3282f2a21b4a1e6b:example.com"
+        ));
+        assert!(is_virtual_user_sender(
+            "@_cumments_my-blog_3282f2a21b4a1e6b:other.com"
+        ));
+    }
+
+    #[test]
+    fn virtual_user_sender_rejects_as_sender_and_lookalikes() {
+        // The AS sender account lives inside the exclusive namespace but is
+        // not a visitor virtual user.
+        assert!(!is_virtual_user_sender("@_cumments_bot:example.com"));
+        // Wrong visitor length or alphabet.
+        assert!(!is_virtual_user_sender(
+            "@_cumments_my-blog_abcd:example.com"
+        ));
+        assert!(!is_virtual_user_sender(
+            "@_cumments_my-blog_3282F2A21B4A1E6B:example.com"
+        ));
+        // Site ids cannot contain underscores.
+        assert!(!is_virtual_user_sender(
+            "@_cumments_my_blog_3282f2a21b4a1e6b:example.com"
+        ));
+        // Non-Cumments senders.
+        assert!(!is_virtual_user_sender("@alice:example.com"));
+        assert!(!is_virtual_user_sender(
+            "_cumments_my-blog_3282f2a21b4a1e6b"
+        ));
+    }
+
+    #[test]
     fn structured_content_takes_precedence() {
         assert_eq!(
             extract_message_content("**Alice**: old body", Some("pure markdown content")),
@@ -556,7 +612,7 @@ mod tests {
             event_type: "m.room.message".to_string(),
             event_id: Some("$edit:hs".to_string()),
             room_id: Some("!room:hs".to_string()),
-            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            sender: Some("@_cumments_my-blog_3282f2a21b4a1e6b:hs".to_string()),
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
@@ -607,7 +663,7 @@ mod tests {
             event_type: "m.room.message".to_string(),
             event_id: Some("$comment:hs".to_string()),
             room_id: Some("!room:hs".to_string()),
-            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            sender: Some("@_cumments_my-blog_3282f2a21b4a1e6b:hs".to_string()),
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
@@ -642,7 +698,7 @@ mod tests {
             event_type: "m.room.message".to_string(),
             event_id: Some("$reply:hs".to_string()),
             room_id: Some("!room:hs".to_string()),
-            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            sender: Some("@_cumments_my-blog_3282f2a21b4a1e6b:hs".to_string()),
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
@@ -714,7 +770,7 @@ mod tests {
             event_type: "m.room.message".to_string(),
             event_id: Some("$guest:hs".to_string()),
             room_id: Some("!room:hs".to_string()),
-            sender: Some("@_cumments_my-blog_abcd:hs".to_string()),
+            sender: Some("@_cumments_my-blog_3282f2a21b4a1e6b:hs".to_string()),
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
