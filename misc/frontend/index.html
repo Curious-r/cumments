@@ -12,8 +12,8 @@
                 generateMnemonic,
                 mnemonicToSeedSync,
                 validateMnemonic,
-            } from "https://cdn.jsdelivr.net/npm/@metamask/scure-bip39@2.1.1/+esm";
-            import { wordlist } from "https://cdn.jsdelivr.net/npm/@metamask/scure-bip39@2.1.1/dist/wordlists/english/+esm";
+            } from "https://cdn.jsdelivr.net/npm/@scure/bip39@2.3.0/+esm";
+            import { wordlist } from "https://cdn.jsdelivr.net/npm/@scure/bip39@2.3.0/wordlists/english/+esm";
             window.bip39 = { generateMnemonic, mnemonicToSeedSync, validateMnemonic };
             window.bip39Wordlist = wordlist;
         </script>
@@ -692,8 +692,9 @@
                 return !!(window.bip39 && window.bip39Wordlist);
             }
 
-            // scure-bip39 v2 的 generateMnemonic 返回 Uint8Array（底层是
-            // Uint16Array 词索引），这里统一转成空格分隔的字符串。
+            // @scure/bip39 v2.3 的 generateMnemonic 返回字符串；旧版
+            // @metamask fork 可能返回 Uint8Array（Uint16Array 词索引），
+            // 这里统一转成空格分隔的字符串。
             function mnemonicToString(mnemonic) {
                 if (typeof mnemonic === "string") return mnemonic;
                 const words = [];
