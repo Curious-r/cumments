@@ -98,7 +98,7 @@ curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
 
 The response contains `user_id`, `device_id`, and `access_token`. If you pick a
 different username, update
-`CUMMENTS__MATRIX__MODERATION__OWNER_ID` (default
+`CUMMENTS__MATRIX__MODERATION__ADMIN_ID` (default
 `@admin:localhost:8008`) in the compose file and restart Cumments:
 
 ```bash

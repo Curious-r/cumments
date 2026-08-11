@@ -193,8 +193,8 @@ allowed_origins = [
 
 Validation rules (fail fast at startup):
 
-- `deny_unknown_fields` stays; `cors_origins` produces an explicit error
-  explaining the replacement instead of being silently accepted.
+- `deny_unknown_fields` stays; the removed `cors_origins` key is rejected as
+  an unknown field instead of being silently accepted.
 - Origins are parsed and normalized; only `http(s)` schemes, no path/query/
   fragment; the only wildcard form is `https://*.example.com`.
 - `auth_mode = "secret"` requires a non-empty, non-placeholder secret of
@@ -228,8 +228,8 @@ operator-authenticated admin API or CLI.
 commonly injected as `CUMMENTS__SECURITY__ADMIN_TOKEN`, sent in
 `Authorization: Bearer`). Rationale:
 it is simple, standard, works in `logging` mode and when the homeserver is
-down, and is easy to rotate. Matrix owner identity (`matrix.moderation.
-owner_id`) remains a possible future *alternative login* so admin actions can
+down, and is easy to rotate. Matrix admin identity (`matrix.moderation.
+admin_id`) remains a possible future *alternative login* so admin actions can
 be attributed to a Matrix account, but it is not the v1 mechanism: it depends
 on homeserver availability and requires a signed-request or access-token
 scheme that adds complexity without changing the authorization model.
@@ -237,13 +237,13 @@ scheme that adds complexity without changing the authorization model.
 If Matrix identity is ever added, the realistic bridges are:
 
 - **Access-token validation**: the admin client logs in to the homeserver as
-  the owner and presents the Matrix access token; Cumments calls
+  the admin and presents the Matrix access token; Cumments calls
   `/_matrix/client/v3/account/whoami` (as the appservice) to verify the token
-  and that the user id equals `owner_id`.
-- **Command messages through the appservice**: the owner sends bot commands
+  and that the user id equals `admin_id`.
+- **Command messages through the appservice**: the admin sends bot commands
   (`!cumments sites list`) into a management room; the homeserver vouches for
   the sender via push events, so Cumments only needs to compare the sender
-  mxid with `owner_id`. No HTTP credential involved.
+  mxid with `admin_id`. No HTTP credential involved.
 
 Both are heavier than a static operator token; neither is in v1.
 
@@ -375,7 +375,7 @@ Resolved decisions:
   persistent configuration, but `start` accepts a `methods` list and `confirm`
   retries them in order, so a second proof acts as an automatic fallback
   (see §3.4).
-- Admin transport uses an operator token; Matrix owner identity is a
+- Admin transport uses an operator token; Matrix admin identity is a
   possible future alternative login (see §3.8).
 - Secret-mode credentials: HMAC only, no bearer token; issuance in Phase 3,
   request verification in Phase 4, rotation in Phase 5.

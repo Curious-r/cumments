@@ -71,7 +71,7 @@ sender_localpart = "_cumments_bot"
 # room_version = "12"
 
 [matrix.moderation]
-owner_id = "@admin:your_server.tld"
+admin_id = "@admin:your_server.tld"
 ```
 
 For local development, set `mode = "logging"`; no `matrix.homeserver`,
@@ -95,7 +95,7 @@ For local development, set `mode = "logging"`; no `matrix.homeserver`,
   being silently ignored.
 - `server.cors_origins` has been **removed**: CORS headers are now derived
   from the site registry (see below). A config file that still contains the
-  key fails startup with an explicit message pointing here.
+  key fails startup because unknown keys are rejected.
 - `security.admin_token` enables the admin API (see [api.md](api.md)).
   Placeholder values and tokens shorter than 32 characters are rejected at
   startup.

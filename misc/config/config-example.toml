@@ -94,4 +94,4 @@ mode = "logging"
 #
 # [matrix.moderation]
 # # Your personal Matrix account ID, granted Admin in comment rooms.
-# owner_id = "@admin:example.com"
+# admin_id = "@admin:example.com"
