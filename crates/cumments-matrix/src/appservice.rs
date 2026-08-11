@@ -165,7 +165,7 @@ fn build_message_body(
         // Structured fields so the projector can store the pure content
         // and nickname instead of parsing them back out of the body.
         "content": content,
-        "nickname": nickname,
+        "displayname": nickname,
         "intent_id": intent_id,
     });
     if let Some(parent_event_id) = reply_to {
@@ -200,7 +200,7 @@ fn build_edit_body(
         "signature": author_signature,
         "challenge": author_challenge,
         "content": new_content,
-        "nickname": nickname,
+        "displayname": nickname,
         "intent_id": intent_id,
     });
     serde_json::json!({
@@ -1525,7 +1525,7 @@ mod tests {
         assert_eq!(ns["signature"].as_str(), Some("sig"));
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("hello <b>"));
-        assert_eq!(ns["nickname"].as_str(), Some("Alice"));
+        assert_eq!(ns["displayname"].as_str(), Some("Alice"));
         assert_eq!(ns["intent_id"].as_i64(), Some(7));
 
         assert!(body.get("cumments_visitor_id").is_none());
@@ -1586,7 +1586,7 @@ mod tests {
         assert_eq!(ns["signature"].as_str(), Some("sig"));
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("edited <b>"));
-        assert_eq!(ns["nickname"].as_str(), Some("Alice"));
+        assert_eq!(ns["displayname"].as_str(), Some("Alice"));
         assert_eq!(ns["intent_id"].as_i64(), Some(42));
 
         assert!(body.get(MESSAGE_CONTENT_KEY).is_none());

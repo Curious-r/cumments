@@ -184,17 +184,11 @@ pub(crate) async fn process_single_event(
 
 // ── Push event helpers ────────────────────────────────────────────
 
-/// Structured Cumments content takes precedence. Otherwise, for
-/// Cumments-generated (legacy) messages, strip the `**nickname**: ` prefix
-/// from the body; external Matrix messages are treated as plain content.
-fn extract_message_content(body: &str, is_cumments: bool, structured: Option<&str>) -> String {
+/// Structured Cumments content takes precedence over the message body.
+/// External Matrix messages (no structured block) use the plain body.
+fn extract_message_content(body: &str, structured: Option<&str>) -> String {
     if let Some(c) = structured {
         return c.to_string();
-    }
-    if is_cumments
-        && let Some((_, rest)) = body.strip_prefix("**").and_then(|s| s.split_once("**: "))
-    {
-        return rest.to_string();
     }
     body.to_string()
 }
@@ -261,16 +255,14 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     let author_signature = content_string(content, "signature").map(|s| s.to_string());
     let author_challenge = content_string(content, "challenge").map(|s| s.to_string());
     let structured_content = content_string(content, "content");
-    let structured_nickname = content_string(content, "nickname");
-    let visitor_id =
-        content_string(content, "visitor_id").or_else(|| content_string(content, "public_key"));
+    let structured_displayname = content_string(content, "displayname");
 
     let trusted_block = is_virtual_sender
         && author_public_key.is_some()
         && author_signature.is_some()
         && author_challenge.is_some()
         && structured_content.is_some()
-        && structured_nickname.is_some();
+        && structured_displayname.is_some();
 
     // Extract the standard rich-reply relation, if any.
     let reply_to = content
@@ -295,10 +287,8 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             let nc_structured = nc_namespace
                 .and_then(|ns| ns.get("content"))
                 .and_then(|v| v.as_str());
-            let nc_is_cumments = nc_namespace.is_some();
             Some(extract_message_content(
                 nc_body,
-                is_virtual_sender && nc_is_cumments,
                 if is_virtual_sender {
                     nc_structured
                 } else {
@@ -324,7 +314,6 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         sender: sender.clone(),
         content: extract_message_content(
             body,
-            is_virtual_sender && visitor_id.is_some(),
             if is_virtual_sender {
                 structured_content
             } else {
@@ -332,7 +321,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             },
         ),
         author_display_name: if is_virtual_sender {
-            structured_nickname.map(|s| s.to_string())
+            structured_displayname.map(|s| s.to_string())
         } else {
             None
         },
@@ -454,29 +443,19 @@ mod tests {
     #[test]
     fn structured_content_takes_precedence() {
         assert_eq!(
-            extract_message_content("**Alice**: old body", true, Some("pure markdown content")),
+            extract_message_content("**Alice**: old body", Some("pure markdown content")),
             "pure markdown content"
-        );
-    }
-
-    #[test]
-    fn legacy_cumments_body_strips_nickname_prefix() {
-        assert_eq!(
-            extract_message_content("**Alice**: hello world", true, None),
-            "hello world"
         );
     }
 
     #[test]
     fn external_message_body_is_plain_content() {
         assert_eq!(
-            extract_message_content("just a comment", false, None),
+            extract_message_content("just a comment", None),
             "just a comment"
         );
-        // An external message that happens to start with bold markup must not
-        // be treated as a Cumments legacy body.
         assert_eq!(
-            extract_message_content("**bold** start", false, None),
+            extract_message_content("**bold** start", None),
             "**bold** start"
         );
     }
@@ -500,7 +479,7 @@ mod tests {
                         "signature": "sig",
                         "challenge": "chal",
                         "content": "edited",
-                        "nickname": "Alice",
+                        "displayname": "Alice",
                         "intent_id": 42,
                     }
                 },
@@ -550,7 +529,7 @@ mod tests {
                     "signature": "sig",
                     "challenge": "chal",
                     "content": "hello",
-                    "nickname": "Alice",
+                    "displayname": "Alice",
                     "intent_id": 7,
                 }
             })),
@@ -590,7 +569,7 @@ mod tests {
                     "signature": "sig",
                     "challenge": "chal",
                     "content": "hello",
-                    "nickname": "Alice",
+                    "displayname": "Alice",
                     "intent_id": 7,
                 }
             })),
@@ -621,7 +600,7 @@ mod tests {
                     "signature": "fake-signature",
                     "challenge": "fake-challenge",
                     "content": "spoofed content",
-                    "nickname": "Spoofed",
+                    "displayname": "Spoofed",
                     "intent_id": 42,
                 }
             })),
