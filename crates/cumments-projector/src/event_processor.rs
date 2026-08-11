@@ -329,12 +329,12 @@ impl EventProcessor {
                 .comment_store
                 .get_comment(&relation.target_event_id)
                 .await?
-                && !existing.author_mxid.is_empty()
-                && existing.author_mxid != event.sender
+                && !existing.sender_mxid.is_empty()
+                && existing.sender_mxid != event.sender
             {
                 warn!(
                     "Rejecting edit for {} from {}: sender does not match original author {}",
-                    relation.target_event_id, event.sender, existing.author_mxid
+                    relation.target_event_id, event.sender, existing.sender_mxid
                 );
                 return Ok(());
             }
@@ -484,7 +484,7 @@ impl EventProcessor {
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
             reply_to: event.reply_to.clone(),
             room_id: event.room_id.clone(),
-            author_mxid: event.sender.clone(),
+            sender_mxid: event.sender.clone(),
         };
 
         self.comment_store

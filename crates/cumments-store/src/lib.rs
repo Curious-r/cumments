@@ -869,7 +869,7 @@ impl CommentStore for DbStore {
             room_id: Set(room_id.to_owned()),
             site_id: Set(comment.site_id.clone()),
             post_slug: Set(comment.post_slug.clone()),
-            author_mxid: Set(sender.to_owned()),
+            sender_mxid: Set(sender.to_owned()),
             author_type: Set(comment.author.kind.as_str().to_string()),
             author_nickname: Set(comment.author.nickname.clone()),
             author_public_key: Set(comment.author.public_key.clone()),
@@ -888,7 +888,7 @@ impl CommentStore for DbStore {
                         comments::Column::RoomId,
                         comments::Column::SiteId,
                         comments::Column::PostSlug,
-                        comments::Column::AuthorMxid,
+                        comments::Column::SenderMxid,
                         comments::Column::AuthorType,
                         comments::Column::AuthorNickname,
                         comments::Column::AuthorPublicKey,
@@ -1104,7 +1104,7 @@ impl From<comments::Model> for Comment {
                 nickname: model.author_nickname,
                 public_key: model.author_public_key,
                 mxid: if model.author_type == "matrix" {
-                    Some(model.author_mxid.clone())
+                    Some(model.sender_mxid.clone())
                 } else {
                     None
                 },
@@ -1113,7 +1113,7 @@ impl From<comments::Model> for Comment {
             timestamp: model.timestamp,
             reply_to: model.reply_to,
             room_id: model.room_id,
-            author_mxid: model.author_mxid,
+            sender_mxid: model.sender_mxid,
         }
     }
 }

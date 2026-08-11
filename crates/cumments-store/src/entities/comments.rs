@@ -11,7 +11,7 @@ pub struct Model {
     pub room_id: String,
     pub site_id: String,
     pub post_slug: String,
-    pub author_mxid: String,
+    pub sender_mxid: String,
     pub author_type: String,
     pub author_nickname: Option<String>,
     pub content: String,

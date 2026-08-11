@@ -36,7 +36,7 @@ async fn save_comment_records_original_sender() {
         timestamp: Utc::now(),
         reply_to: Some("$parent:hs".to_string()),
         room_id: "!room:hs".to_string(),
-        author_mxid: String::new(),
+        sender_mxid: String::new(),
     };
 
     store
@@ -56,7 +56,7 @@ async fn save_comment_records_original_sender() {
         .expect("get comment")
         .expect("comment exists");
     assert_eq!(stored.room_id, "!room:hs");
-    assert_eq!(stored.author_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
+    assert_eq!(stored.sender_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
     assert_eq!(stored.author.kind, AuthorType::Guest);
     assert_eq!(
         stored.author.public_key.as_deref(),
@@ -87,7 +87,7 @@ async fn update_comment_preserves_reply_to() {
         timestamp: Utc::now(),
         reply_to: Some("$parent:hs".to_string()),
         room_id: "!room:hs".to_string(),
-        author_mxid: String::new(),
+        sender_mxid: String::new(),
     };
 
     store
@@ -141,7 +141,7 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             timestamp: ts,
             reply_to: None,
             room_id: "!room:hs".to_string(),
-            author_mxid: String::new(),
+            sender_mxid: String::new(),
         };
         store
             .save_comment(
@@ -186,7 +186,7 @@ async fn matrix_native_comment_roundtrip() {
         timestamp: Utc::now(),
         reply_to: None,
         room_id: "!room:hs".to_string(),
-        author_mxid: "@alice:hs".to_string(),
+        sender_mxid: "@alice:hs".to_string(),
     };
 
     store
@@ -202,7 +202,7 @@ async fn matrix_native_comment_roundtrip() {
     assert_eq!(stored.author.kind, AuthorType::Matrix);
     assert!(stored.author.public_key.is_none());
     assert_eq!(stored.author.mxid.as_deref(), Some("@alice:hs"));
-    assert_eq!(stored.author_mxid, "@alice:hs");
+    assert_eq!(stored.sender_mxid, "@alice:hs");
 }
 
 #[tokio::test]

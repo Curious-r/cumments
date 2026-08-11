@@ -14,6 +14,7 @@ pub mod m20260808_000008_author_challenge;
 pub mod m20260808_000009_comment_reply_to;
 pub mod m20260811_000010_author_type;
 pub mod m20260811_000011_virtual_users_public_key;
+pub mod m20260811_000012_comments_sender_mxid;
 
 pub struct Migrator;
 
@@ -60,6 +61,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260808_000009_comment_reply_to::Migration),
             Box::new(m20260811_000010_author_type::Migration),
             Box::new(m20260811_000011_virtual_users_public_key::Migration),
+            Box::new(m20260811_000012_comments_sender_mxid::Migration),
         ]
     }
 }

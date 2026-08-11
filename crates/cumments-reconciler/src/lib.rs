@@ -155,7 +155,7 @@ impl Reconciler {
                 // event) simply skip the quote.
                 let (reply_to_body, reply_to_sender) = match intent.reply_to.as_deref() {
                     Some(event_id) => match self.comment_store.get_comment(event_id).await? {
-                        Some(comment) => (Some(comment.content), Some(comment.author_mxid)),
+                        Some(comment) => (Some(comment.content), Some(comment.sender_mxid)),
                         None => (None, None),
                     },
                     None => (None, None),

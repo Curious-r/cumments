@@ -110,7 +110,7 @@ pub struct Comment {
     /// Matrix sender of the original event. Internal integrity check for
     /// edits (m.replace) and never exposed through the API/SSE.
     #[serde(skip)]
-    pub author_mxid: String,
+    pub sender_mxid: String,
 }
 
 /// Which identity model a comment belongs to.

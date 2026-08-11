@@ -749,13 +749,13 @@ mod tests {
             timestamp: chrono::Utc::now(),
             reply_to: None,
             room_id: "!room:hs".to_string(),
-            author_mxid: "@_cumments_my-blog_abcd:hs".to_string(),
+            sender_mxid: "@_cumments_my-blog_abcd:hs".to_string(),
         };
 
         let json = serde_json::to_value(&comment).expect("serialize comment");
         assert_eq!(json["author"]["type"], "guest");
         assert_eq!(json["author"]["public_key"], "pk");
-        assert!(json.get("author_mxid").is_none());
+        assert!(json.get("sender_mxid").is_none());
         assert!(json.get("room_id").is_none());
     }
 
