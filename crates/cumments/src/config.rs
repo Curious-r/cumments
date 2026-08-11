@@ -25,8 +25,6 @@ pub struct Settings {
 pub struct Server {
     pub host: String,
     pub port: u16,
-    #[serde(rename = "cors_origins", default)]
-    pub legacy_cors_origins: Option<String>,
 }
 
 impl Default for Server {
@@ -34,7 +32,6 @@ impl Default for Server {
         Self {
             host: "localhost".to_string(),
             port: 7931,
-            legacy_cors_origins: None,
         }
     }
 }
@@ -168,18 +165,6 @@ fn require_non_empty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str>
         Some(v) if !v.trim().is_empty() => Ok(v),
         _ => bail!("`{field}` must not be empty"),
     }
-}
-
-/// Rejects the removed `server.cors_origins` key with an explicit message.
-pub fn validate_legacy_cors(server: &Server) -> Result<()> {
-    if let Some(value) = &server.legacy_cors_origins {
-        bail!(
-            "`server.cors_origins` has been removed (value `{value}`): CORS is now derived \
-             from site verification and the `[sites]` allowlist. Remove the key from your \
-             configuration."
-        );
-    }
-    Ok(())
 }
 
 /// Builds the effective site-auth policy from the configuration, validating

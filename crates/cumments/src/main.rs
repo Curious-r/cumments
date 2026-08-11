@@ -75,7 +75,6 @@ async fn main() -> Result<()> {
     let settings =
         config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
-    config::validate_legacy_cors(&settings.server)?;
     let admin_token_hash = config::admin_token_hash(&settings.security)?;
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
