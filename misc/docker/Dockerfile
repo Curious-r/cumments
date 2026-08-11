@@ -32,8 +32,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Runtime stage
 FROM alpine:3.22
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates sqlite-libs && \
+# Install runtime dependencies. su-exec lets the entrypoint drop from root
+# to the unprivileged service user after fixing volume ownership.
+RUN apk --no-cache add ca-certificates sqlite-libs su-exec && \
     addgroup -S cumments && \
     adduser -S -G cumments cumments && \
     mkdir -p /etc/cumments
@@ -42,11 +43,11 @@ RUN apk --no-cache add ca-certificates sqlite-libs && \
 COPY --from=builder /usr/src/app/target/release/cumments /usr/local/bin/cumments
 # Copy the runnable example configuration as the default config
 COPY --from=builder /usr/src/app/misc/config/config-example.toml /etc/cumments/cumments.toml
+# Entrypoint fixes /srv/cumments ownership, then drops privileges.
+COPY --chmod=0755 misc/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Create the service data directory
-RUN mkdir -p /srv/cumments && chown -R cumments:cumments /srv/cumments
-
-USER cumments
+RUN mkdir -p /srv/cumments
 
 WORKDIR /srv/cumments
 
@@ -58,4 +59,5 @@ ENV RUST_LOG=info
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:7931/health || exit 1
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["cumments"]

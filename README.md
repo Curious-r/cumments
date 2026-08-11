@@ -325,8 +325,21 @@ docker run -p 7931:7931 \
   --config /srv/cumments/cumments.toml
 ```
 
-The container runs as a non-root user, so the mounted file must be readable by
-that user.
+The container starts as root only long enough to fix the ownership of the
+data directory, then drops to the unprivileged `cumments` user. Bind-mounted
+directories created by the Docker daemon (owned by root) are fixed
+automatically, so no manual `chown` is needed. The mounted config file only
+needs to be readable by the process user.
+
+To make the data files owned by your host user instead of the bundled
+`cumments` user, set `PUID`/`PGID` to your host uid/gid (`id -u` / `id -g`):
+
+```bash
+docker run -p 7931:7931 \
+  -e PUID=$(id -u) -e PGID=$(id -g) \
+  -v $(pwd)/data:/srv/cumments \
+  ghcr.io/curious-r/cumments:0.18.0
+```
 
 The image starts in `logging` mode by default. Override it for production with
 environment variables, e.g.:

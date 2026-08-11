@@ -305,7 +305,19 @@ docker run -p 7931:7931 \
   --config /srv/cumments/cumments.toml
 ```
 
-容器以非 root 用户运行，挂载的配置文件需要对该用户可读。
+容器会先以 root 启动，仅用于修正数据目录的所有权，然后降权到非特权的
+`cumments` 用户运行服务。Docker daemon 创建的 bind mount 目录（root 所有）
+会被自动修正，无需手动 `chown`。挂载的配置文件只需要对运行用户可读。
+
+如果希望数据文件归属于宿主用户而不是内置的 `cumments` 用户，设置
+`PUID`/`PGID` 为宿主用户 id（`id -u` / `id -g`）：
+
+```bash
+docker run -p 7931:7931 \
+  -e PUID=$(id -u) -e PGID=$(id -g) \
+  -v $(pwd)/data:/srv/cumments \
+  ghcr.io/curious-r/cumments:0.18.0
+```
 
 镜像默认以 `logging` 模式启动；生产环境用环境变量覆盖，例如：
 
