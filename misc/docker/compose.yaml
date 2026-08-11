@@ -1,23 +1,24 @@
+# Cumments AppService service, using the official published image.
+#
+# Add this block to the compose project that also defines the `tuwunel`
+# service, or adjust the network/depends_on names for your homeserver.
+# Paths are relative to this compose file; see docs/installation.md.
 services:
   cumments:
-    build:
-      context: ../..
-      dockerfile: misc/docker/Dockerfile
-    ports:
-      - "7931:7931"
-    volumes:
-      - cumments_data:/srv/cumments
-      # Mount your configuration file over the default:
-      # - ./cumments.toml:/etc/cumments/cumments.toml:ro
-    environment:
-      - RUST_LOG=info
+    # Official image; `latest` tracks the newest version tag.
+    image: ghcr.io/curious-r/cumments:latest
+    # Temporary: build from repository main instead of the published image.
+    # build:
+    #   context: ../..
+    #   dockerfile: misc/docker/Dockerfile
+    env_file: cumments.env
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7931/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-volumes:
-  cumments_data:
+    volumes:
+      # Read-only config directory (cumments.toml + registration.yaml).
+      - ./cumments/config/:/etc/cumments/:ro
+      # Writable SQLite data directory.
+      - ./cumments/data/:/srv/cumments/:rw
+    depends_on:
+      - tuwunel
+    networks:
+      - tuwunel
