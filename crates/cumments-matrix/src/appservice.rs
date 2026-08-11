@@ -11,7 +11,7 @@ use cumments_core::{
 };
 use rand::Rng;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, instrument, warn};
@@ -151,16 +151,11 @@ fn build_message_body(
     intent_id: Option<i64>,
     reply_to: Option<&str>,
 ) -> serde_json::Value {
-    let formatted_body = format!(
-        "<strong>{}</strong>: {}",
-        html_escape(nickname),
-        html_escape(content)
-    );
     let mut message_body = serde_json::json!({
         "msgtype": "m.text",
-        "body": format!("**{}**: {}", nickname, content),
-        "format": "org.matrix.custom.html",
-        "formatted_body": formatted_body,
+        // The body is the pure comment text; the commenter's nickname lives
+        // in the virtual user's display name and in the structured block.
+        "body": content,
     });
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
         "visitor_id": visitor_id,
@@ -195,16 +190,9 @@ fn build_edit_body(
     visitor_id: &str,
     intent_id: Option<i64>,
 ) -> serde_json::Value {
-    let formatted_content = format!("**{}**: {}", nickname, new_content);
     let mut new_content_obj = serde_json::json!({
         "msgtype": "m.text",
-        "body": formatted_content,
-        "format": "org.matrix.custom.html",
-        "formatted_body": format!(
-            "<strong>{}</strong>: {}",
-            html_escape(nickname),
-            html_escape(new_content)
-        ),
+        "body": new_content,
     });
     new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
         "visitor_id": visitor_id,
@@ -217,7 +205,8 @@ fn build_edit_body(
     });
     serde_json::json!({
         "msgtype": "m.text",
-        "body": format!("* {}", formatted_content),
+        // Matrix edits require a fallback body starting with "* ".
+        "body": format!("* {}", new_content),
         "m.new_content": new_content_obj,
         "m.relates_to": {
             "rel_type": "m.replace",
@@ -239,6 +228,7 @@ pub struct AppServiceMatrixDriver {
     owner_id: String,
     virtual_user_store: Arc<dyn VirtualUserStore>,
     joined_cache: Mutex<HashSet<(String, String)>>,
+    displayname_cache: Mutex<HashMap<String, String>>,
 }
 
 impl AppServiceMatrixDriver {
@@ -263,6 +253,7 @@ impl AppServiceMatrixDriver {
             owner_id,
             virtual_user_store,
             joined_cache: Mutex::new(HashSet::new()),
+            displayname_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -415,6 +406,48 @@ impl AppServiceMatrixDriver {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(cache_key);
+    }
+
+    /// Best-effort: keep the virtual user's display name in sync with the
+    /// commenter's nickname so Matrix clients show the nickname instead of
+    /// the localpart. Failures only warn; the message send still proceeds.
+    async fn ensure_displayname(&self, virtual_user: &str, nickname: &str) -> Result<()> {
+        {
+            let cache = self
+                .displayname_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if cache.get(virtual_user).map(String::as_str) == Some(nickname) {
+                return Ok(());
+            }
+        }
+
+        let path = format!(
+            "_matrix/client/v3/profile/{}/displayname",
+            urlencode(virtual_user)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, Some(virtual_user))
+            .json(&serde_json::json!({ "displayname": nickname }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("set displayname request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "set displayname for {} failed ({}): {}",
+                virtual_user,
+                status,
+                body
+            ));
+        }
+        self.displayname_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(virtual_user.to_owned(), nickname.to_owned());
+        Ok(())
     }
 
     /// Set Cumments metadata on a room (state event
@@ -719,7 +752,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             "name": format!("Comments: {}", site_id_str),
             "room_alias_name": alias_localpart,
             "creation_content": {
-                "room_type": "m.space"
+                "type": "m.space"
             },
             "initial_state": [
                 {
@@ -1005,6 +1038,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
         // 2. Ensure the virtual user is in the room (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
 
+        // 2b. Keep the display name in sync with the nickname (best-effort)
+        if let Err(e) = self.ensure_displayname(&virtual_user, nickname).await {
+            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
+        }
+
         // 3. Send the message as the virtual user
         let message_body = build_message_body(
             content,
@@ -1068,6 +1106,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         // 2. Ensure joined (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
+
+        // 2b. Keep the display name in sync with the nickname (best-effort)
+        if let Err(e) = self.ensure_displayname(&virtual_user, nickname).await {
+            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
+        }
 
         // 3. Send m.replace as the virtual user
         let message_body = build_edit_body(
@@ -1329,22 +1372,6 @@ fn urlencode(s: &str) -> String {
     result
 }
 
-/// Escape a string for safe inclusion in Matrix `formatted_body` HTML.
-fn html_escape(s: &str) -> String {
-    let mut escaped = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1475,15 +1502,6 @@ mod tests {
     }
 
     #[test]
-    fn html_escape_escapes_special_characters() {
-        assert_eq!(
-            html_escape("<b onclick=\"x\">a & b</b>"),
-            "&lt;b onclick=&quot;x&quot;&gt;a &amp; b&lt;/b&gt;"
-        );
-        assert_eq!(html_escape("plain text"), "plain text");
-    }
-
-    #[test]
     fn message_body_uses_namespaced_content_block() {
         let body = build_message_body(
             "hello <b>",
@@ -1497,12 +1515,9 @@ mod tests {
         );
 
         assert_eq!(body["msgtype"].as_str(), Some("m.text"));
-        assert_eq!(body["body"].as_str(), Some("**Alice**: hello <b>"));
-        assert_eq!(body["format"].as_str(), Some("org.matrix.custom.html"));
-        assert_eq!(
-            body["formatted_body"].as_str(),
-            Some("<strong>Alice</strong>: hello &lt;b&gt;")
-        );
+        assert_eq!(body["body"].as_str(), Some("hello <b>"));
+        assert!(body.get("format").is_none());
+        assert!(body.get("formatted_body").is_none());
 
         let ns = body.get(MESSAGE_CONTENT_KEY).expect("namespaced block");
         assert_eq!(ns["visitor_id"].as_str(), Some("abcd"));
@@ -1552,7 +1567,7 @@ mod tests {
         );
 
         assert_eq!(body["msgtype"].as_str(), Some("m.text"));
-        assert_eq!(body["body"].as_str(), Some("* **Alice**: edited <b>"));
+        assert_eq!(body["body"].as_str(), Some("* edited <b>"));
         assert_eq!(body["m.relates_to"]["rel_type"].as_str(), Some("m.replace"));
         assert_eq!(
             body["m.relates_to"]["event_id"].as_str(),
@@ -1560,7 +1575,9 @@ mod tests {
         );
 
         let new_content = body.get("m.new_content").expect("new content");
-        assert_eq!(new_content["body"].as_str(), Some("**Alice**: edited <b>"));
+        assert_eq!(new_content["body"].as_str(), Some("edited <b>"));
+        assert!(new_content.get("format").is_none());
+        assert!(new_content.get("formatted_body").is_none());
         let ns = new_content
             .get(MESSAGE_CONTENT_KEY)
             .expect("namespaced block");
