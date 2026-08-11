@@ -271,7 +271,7 @@ pub trait BackfillCursorStore: Send + Sync {
     async fn get_cursor(&self, room_id: &str) -> Result<Option<String>>;
 
     /// Persist the next pagination token for a room.
-    async fn save_cursor(&self, room_id: &str, next_batch: &str) -> Result<()>;
+    async fn save_cursor(&self, room_id: &str, next_token: &str) -> Result<()>;
 }
 
 /// Port for virtual user identity management (AppService mode).

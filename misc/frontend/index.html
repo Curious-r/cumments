@@ -1719,7 +1719,7 @@
                 sse.onopen = () => updateSseStatus(true);
                 sse.onerror = () => updateSseStatus(false);
 
-                sse.addEventListener("new_comment", (event) => {
+                sse.addEventListener("comment_created", (event) => {
                     const payload = JSON.parse(event.data).payload;
                     const comment = payload.comment;
                     toast(

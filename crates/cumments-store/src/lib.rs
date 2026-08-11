@@ -1201,13 +1201,13 @@ impl BackfillCursorStore for DbStore {
         let model = backfill_cursors::Entity::find_by_id(room_id.to_owned())
             .one(&self.db)
             .await?;
-        Ok(model.and_then(|m| m.next_batch))
+        Ok(model.and_then(|m| m.next_token))
     }
 
-    async fn save_cursor(&self, room_id: &str, next_batch: &str) -> Result<()> {
+    async fn save_cursor(&self, room_id: &str, next_token: &str) -> Result<()> {
         let active_model = backfill_cursors::ActiveModel {
             room_id: Set(room_id.to_owned()),
-            next_batch: Set(Some(next_batch.to_owned())),
+            next_token: Set(Some(next_token.to_owned())),
             updated_at: Set(chrono::Utc::now()),
         };
 
@@ -1215,7 +1215,7 @@ impl BackfillCursorStore for DbStore {
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(backfill_cursors::Column::RoomId)
                     .update_columns([
-                        backfill_cursors::Column::NextBatch,
+                        backfill_cursors::Column::NextToken,
                         backfill_cursors::Column::UpdatedAt,
                     ])
                     .to_owned(),

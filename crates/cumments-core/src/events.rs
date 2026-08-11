@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", content = "payload")]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectorEvent {
-    NewComment {
+    CommentCreated {
         site_id: String,
         post_slug: String,
         comment: Comment,

@@ -513,7 +513,7 @@ impl EventProcessor {
                     .await?
             }
         };
-        let _ = self.event_bus.send(ProjectorEvent::NewComment {
+        let _ = self.event_bus.send(ProjectorEvent::CommentCreated {
             site_id,
             post_slug,
             comment,

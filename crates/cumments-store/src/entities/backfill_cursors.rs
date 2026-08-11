@@ -6,7 +6,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub room_id: String,
-    pub next_batch: Option<String>,
+    pub next_token: Option<String>,
     pub updated_at: DateTimeUtc,
 }
 

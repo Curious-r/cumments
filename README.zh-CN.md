@@ -21,7 +21,7 @@ SQLite 是随时可丢弃的本地读模型，可通过 `cumments backfill` 从 
 - **PoW 防刷** —— 游客评论需要解决带签名的 proof-of-work 挑战，无需登录/账号体系。
 - **回复树** —— 回复使用 Matrix rich replies（`m.in_reply_to`），Matrix
   客户端可直接渲染，验证页也提供嵌套树状展示。
-- **SSE 实时更新** —— 提供 `new_comment` / `comment_updated` / `comment_deleted` 事件。
+- **SSE 实时更新** —— 提供 `comment_created` / `comment_updated` / `comment_deleted` 事件。
 
 ## 架构
 
@@ -475,12 +475,12 @@ DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}
 事件格式为 `{ "type": "...", "payload": { ... } }`：
 
 ```text
-type: new_comment
+type: comment_created
 type: comment_updated
 type: comment_deleted
 ```
 
-`new_comment` 与 `comment_updated` 的 payload 包含完整 `Comment` 对象；
+`comment_created` 与 `comment_updated` 的 payload 包含完整 `Comment` 对象；
 `comment_deleted` 包含被删除的 `event_id`。
 
 ## 前端集成

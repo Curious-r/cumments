@@ -673,14 +673,14 @@ async fn sse_handler(
         while let Ok(event) = rx.recv().await {
             // Filter events by site_id and post_slug
             let matches = match &event {
-                ProjectorEvent::NewComment { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                ProjectorEvent::CommentCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
                 ProjectorEvent::CommentUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
                 ProjectorEvent::CommentDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
             };
 
             if matches && let Ok(json) = serde_json::to_string(&event) {
                 let event_name = match &event {
-                    ProjectorEvent::NewComment { .. } => "new_comment",
+                    ProjectorEvent::CommentCreated { .. } => "comment_created",
                     ProjectorEvent::CommentUpdated { .. } => "comment_updated",
                     ProjectorEvent::CommentDeleted { .. } => "comment_deleted",
                 };

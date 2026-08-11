@@ -24,7 +24,7 @@ Matrix history with `cumments backfill`.
   challenge; no login or account system.
 - **Reply trees** — replies use Matrix rich replies (`m.in_reply_to`), so any
   Matrix client can render them, and the demo page shows nested threads.
-- **Real-time SSE updates** — `new_comment`, `comment_updated`, and
+- **Real-time SSE updates** — `comment_created`, `comment_updated`, and
   `comment_deleted` events.
 
 ## Architecture
@@ -501,12 +501,12 @@ DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}
 Server-sent events use the shape `{ "type": "...", "payload": { ... } }`:
 
 ```text
-type: new_comment
+type: comment_created
 type: comment_updated
 type: comment_deleted
 ```
 
-The `new_comment` and `comment_updated` payloads contain the full `Comment`
+The `comment_created` and `comment_updated` payloads contain the full `Comment`
 object; `comment_deleted` contains the deleted `event_id`.
 
 ## Frontend Integration

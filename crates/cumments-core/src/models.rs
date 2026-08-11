@@ -176,7 +176,7 @@ pub struct RoomEventPage {
     /// Raw Matrix room events (`m.room.message`, `m.room.redaction`, ...).
     pub events: Vec<serde_json::Value>,
     /// Token to continue fetching older history, if more is available.
-    pub next_batch: Option<String>,
+    pub next_token: Option<String>,
     /// `true` when the homeserver reported the start/end boundary (no more
     /// history in this direction).
     pub done: bool,

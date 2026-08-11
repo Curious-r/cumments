@@ -1472,7 +1472,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             .map_err(|e| anyhow!("Failed to parse messages response: {}", e))?;
         Ok(RoomEventPage {
             events: data.chunk,
-            next_batch: Some(data.end.clone()),
+            next_token: Some(data.end.clone()),
             done: data.start == data.end,
         })
     }

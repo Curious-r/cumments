@@ -250,7 +250,7 @@ impl Backfiller {
             pages += 1;
             collected.extend(page.events);
             done = page.done;
-            match page.next_batch {
+            match page.next_token {
                 Some(next) => {
                     last_batch = Some(next.clone());
                     from = Some(next);
