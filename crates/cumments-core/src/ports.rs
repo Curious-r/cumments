@@ -245,13 +245,13 @@ pub trait MatrixDriver: Send + Sync {
 
     /// Rooms the service account has joined. Used by backfill to discover
     /// Cumments rooms after a local DB reset.
-    async fn joined_rooms(&self) -> Result<Vec<String>>;
+    async fn get_joined_rooms(&self) -> Result<Vec<String>>;
 
     /// Read a room's `host.curious.cumments.metadata` state event, if any.
-    async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
+    async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
 
     /// Read a room's canonical alias (`m.room.canonical_alias`), if any.
-    async fn room_canonical_alias(&self, room_id: &str) -> Result<Option<String>>;
+    async fn get_room_canonical_alias(&self, room_id: &str) -> Result<Option<String>>;
 
     /// Checks whether an event exists on the homeserver. Used to decide if a
     /// timed-out `waiting_for_sync` intent can be safely resent.

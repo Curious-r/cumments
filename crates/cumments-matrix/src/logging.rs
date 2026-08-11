@@ -124,12 +124,12 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(RoomEventPage::default())
     }
 
-    async fn joined_rooms(&self) -> Result<Vec<String>> {
+    async fn get_joined_rooms(&self) -> Result<Vec<String>> {
         info!("LOGGING: Joined rooms (no real homeserver)");
         Ok(Vec::new())
     }
 
-    async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+    async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         info!(
             "LOGGING: Room metadata for {} (no real homeserver)",
             room_id
@@ -137,7 +137,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(None)
     }
 
-    async fn room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
+    async fn get_room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
         info!(
             "LOGGING: Canonical alias for {} (no real homeserver)",
             room_id

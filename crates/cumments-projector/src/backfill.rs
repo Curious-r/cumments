@@ -3,7 +3,7 @@
 //! Since ownership is publicly verifiable (Ed25519 keys in events), a room's
 //! history is sufficient to rebuild its comments completely. The backfiller:
 //!
-//! 1. discovers Cumments rooms via `joined_rooms` + room metadata (works even
+//! 1. discovers Cumments rooms via `get_joined_rooms` + room metadata (works even
 //!    after a full local DB reset, rebuilding sites and the room registry),
 //! 2. fetches each comment room's history page by page (`/messages`, newest
 //!    first), persisting a pagination cursor for interrupted runs,
@@ -61,7 +61,7 @@ impl Backfiller {
     pub async fn run(&self, max_pages: u32) -> anyhow::Result<BackfillSummary> {
         let mut rooms = Vec::new();
 
-        for room_id in self.driver.joined_rooms().await? {
+        for room_id in self.driver.get_joined_rooms().await? {
             match self.discover_room(&room_id).await {
                 Ok(Some(room_id)) => rooms.push(room_id),
                 Ok(None) => {}
@@ -97,7 +97,7 @@ impl Backfiller {
     /// Errors are returned per room so the caller can log and continue; one
     /// broken room must not abort the whole discovery pass.
     async fn discover_room(&self, room_id: &str) -> anyhow::Result<Option<String>> {
-        let meta = match self.driver.room_metadata(room_id).await {
+        let meta = match self.driver.get_room_metadata(room_id).await {
             Ok(meta) => meta,
             Err(e) => {
                 warn!(
@@ -173,7 +173,7 @@ impl Backfiller {
     /// register it as a comment room. Returns `true` when the room was
     /// registered. Read-only with respect to Matrix.
     async fn register_legacy_room_by_alias(&self, room_id: &str) -> anyhow::Result<bool> {
-        let alias = match self.driver.room_canonical_alias(room_id).await {
+        let alias = match self.driver.get_room_canonical_alias(room_id).await {
             Ok(alias) => alias,
             Err(e) => {
                 warn!(

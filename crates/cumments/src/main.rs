@@ -243,7 +243,7 @@ async fn main() -> Result<()> {
 
             let mut retries = 0;
             let rooms = loop {
-                match sweep_driver.joined_rooms().await {
+                match sweep_driver.get_joined_rooms().await {
                     Ok(rooms) => break rooms,
                     Err(e) => {
                         retries += 1;
@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
                 }
             };
             for room_id in rooms {
-                match sweep_driver.room_metadata(&room_id).await {
+                match sweep_driver.get_room_metadata(&room_id).await {
                     Ok(Some(meta)) if meta.get("site_id").and_then(|v| v.as_str()).is_some() => {
                         sweep_driver.ensure_owner_admin(&room_id).await;
                     }

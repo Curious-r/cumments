@@ -377,7 +377,7 @@ impl AppServiceMatrixDriver {
     }
 
     /// Query a room's metadata state event.
-    async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+    async fn fetch_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/{}",
             urlencode(room_id),
@@ -642,7 +642,7 @@ impl AppServiceMatrixDriver {
         site_id: &SiteId,
         post_slug: Option<&PostSlug>,
     ) -> Result<bool> {
-        Ok(match self.get_room_metadata(room_id).await? {
+        Ok(match self.fetch_room_metadata(room_id).await? {
             Some(meta) => metadata_matches(&meta, site_id.as_str(), post_slug.map(|s| s.as_str())),
             None => false,
         })
@@ -835,7 +835,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         // ── PHASE 0: O(1) DISCOVERY (Check Candidate) ──
         if let Some(candidate) = candidate_room_id
-            && let Ok(Some(meta)) = self.get_room_metadata(candidate).await
+            && let Ok(Some(meta)) = self.fetch_room_metadata(candidate).await
             && metadata_matches(&meta, site_id.as_str(), Some(post_slug.as_str()))
         {
             target_room_id = Some(candidate.to_string());
@@ -1250,7 +1250,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    async fn joined_rooms(&self) -> Result<Vec<String>> {
+    async fn get_joined_rooms(&self) -> Result<Vec<String>> {
         let resp = self
             .request(reqwest::Method::GET, "_matrix/client/v3/joined_rooms", None)
             .send()
@@ -1274,12 +1274,12 @@ impl MatrixDriver for AppServiceMatrixDriver {
         Ok(data.joined_rooms)
     }
 
-    async fn room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
-        self.get_room_metadata(room_id).await
+    async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+        self.fetch_room_metadata(room_id).await
     }
 
     #[instrument(skip(self))]
-    async fn room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
+    async fn get_room_canonical_alias(&self, room_id: &str) -> Result<Option<String>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.canonical_alias",
             urlencode(room_id)
