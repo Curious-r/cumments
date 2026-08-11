@@ -83,10 +83,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         room_id: &str,
         event_id: &str,
         intent_id: Option<i64>,
+        proof: Option<&serde_json::Value>,
     ) -> Result<()> {
         info!(
-            "LOGGING: Redact message {} in room={} (intent={:?})",
-            event_id, room_id, intent_id
+            "LOGGING: Redact message {} in room={} (intent={:?}, proof={})",
+            event_id,
+            room_id,
+            intent_id,
+            proof.is_some()
         );
         Ok(())
     }

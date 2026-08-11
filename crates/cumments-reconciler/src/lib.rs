@@ -239,8 +239,18 @@ impl Reconciler {
                 })?;
 
                 // 2. Hands: Perform the redaction
+                let proof = serde_json::json!({
+                    "host.curious.cumments": {
+                        "site_id": intent.site_id.as_str(),
+                        "post_slug": intent.post_slug.as_str(),
+                        "target_event_id": intent.event_id.as_str(),
+                        "public_key": intent.author_public_key.as_str(),
+                        "signature": intent.author_signature.as_str(),
+                        "challenge": intent.author_challenge.as_str(),
+                    }
+                });
                 self.driver
-                    .redact_message(&room_id, &intent.event_id, Some(id))
+                    .redact_message(&room_id, &intent.event_id, Some(id), Some(&proof))
                     .await?;
 
                 // 3. Concepts: Move to waiting_for_sync

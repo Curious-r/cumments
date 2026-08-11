@@ -1095,6 +1095,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         room_id: &str,
         event_id: &str,
         intent_id: Option<i64>,
+        proof: Option<&serde_json::Value>,
     ) -> Result<()> {
         // Redact as the sender user (has admin power level in the room).
         let txn_id = self.txn_id(intent_id);
@@ -1104,9 +1105,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
             urlencode(event_id),
             txn_id
         );
+        let body = build_redaction_body(proof);
         let resp = self
             .request(reqwest::Method::PUT, &path, None)
-            .json(&serde_json::json!({}))
+            .json(&body)
             .send()
             .await
             .map_err(|e| anyhow!("redactMessage request failed: {}", e))?;
@@ -1275,6 +1277,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
             Ok(()) => info!("Granted owner admin power in room {}", room_id),
             Err(e) => warn!("Failed to grant owner admin in room {}: {:#}", room_id, e),
         }
+    }
+}
+
+/// Build the `m.room.redaction` content. When a delete proof is available it
+/// is embedded as a JSON string in `reason` so the event log carries the
+/// authorization independently of the intent queue.
+fn build_redaction_body(proof: Option<&serde_json::Value>) -> serde_json::Value {
+    match proof {
+        Some(proof) => serde_json::json!({ "reason": proof.to_string() }),
+        None => serde_json::json!({}),
     }
 }
 
@@ -1541,5 +1553,19 @@ mod tests {
 
         assert!(body.get(MESSAGE_CONTENT_KEY).is_none());
         assert!(body.get("cumments_intent_id").is_none());
+    }
+
+    #[test]
+    fn redaction_body_embeds_proof_as_reason() {
+        let proof = json!({
+            "host.curious.cumments": {
+                "public_key": "pk",
+                "signature": "sig",
+                "challenge": "chal",
+            }
+        });
+        let body = build_redaction_body(Some(&proof));
+        assert_eq!(body["reason"], proof.to_string());
+        assert_eq!(build_redaction_body(None), json!({}));
     }
 }

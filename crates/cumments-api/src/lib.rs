@@ -533,6 +533,7 @@ async fn delete_comment_handler(
         event_id: comment_id,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
+        author_challenge: challenge.to_string(),
     };
 
     // 4. Save the intent for the reconciler

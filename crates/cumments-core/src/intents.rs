@@ -49,6 +49,11 @@ pub struct DeleteCommentIntent {
     pub author_public_key: String,
     /// Ed25519 signature authorizing this deletion.
     pub author_signature: String,
+    /// PoW challenge prefix included in the signed message. Published in the
+    /// redaction reason so the signature remains independently verifiable
+    /// from the event log.
+    #[serde(default)]
+    pub author_challenge: String,
 }
 
 /// Represents the user's desire to edit/update a comment.

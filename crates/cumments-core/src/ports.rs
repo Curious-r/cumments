@@ -218,11 +218,16 @@ pub trait MatrixDriver: Send + Sync {
     ) -> Result<String>;
 
     /// Redacts a message in a specific room.
+    ///
+    /// `proof` is an optional machine-readable Cumments block published in
+    /// the redaction reason so the delete authorization (public key,
+    /// signature, challenge) stays verifiable from Matrix alone.
     async fn redact_message(
         &self,
         room_id: &str,
         event_id: &str,
         intent_id: Option<i64>,
+        proof: Option<&serde_json::Value>,
     ) -> Result<()>;
 
     /// Fetch one page of room history (CS API `/rooms/{roomId}/messages`).
