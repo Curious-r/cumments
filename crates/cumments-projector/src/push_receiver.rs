@@ -17,7 +17,7 @@ use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::put,
+    routing::{post, put},
 };
 use cumments_core::protocol::MESSAGE_CONTENT_KEY;
 use serde::Deserialize;
@@ -82,7 +82,29 @@ pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Ro
             "/_matrix/app/v1/transactions/{txnId}",
             put(handle_transaction),
         )
+        .route("/transactions/{txnId}", put(handle_transaction))
+        .route("/_matrix/app/v1/ping", post(handle_ping))
         .with_state(state)
+}
+
+/// Handle `POST /_matrix/app/v1/ping` (AppService API v1.7+).
+///
+/// The homeserver uses this to verify reachability and `hs_token` correctness
+/// when an appservice calls `POST /_matrix/client/v1/appservice/{id}/ping`.
+async fn handle_ping(
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    state: axum::extract::State<Arc<PushState>>,
+    Json(_body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if !hs_token_matches(&headers, &query, &state.hs_token) {
+        tracing::warn!("AppService ping rejected: invalid hs_token");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"errcode": "M_FORBIDDEN", "error": "Invalid hs_token"})),
+        );
+    }
+    (StatusCode::OK, Json(serde_json::json!({})))
 }
 
 /// Handle `PUT /_matrix/app/v1/transactions/{txnId}`.
@@ -156,6 +178,11 @@ fn received_hs_token<'a>(
         (None, Some(query)) => Some(query),
         _ => None,
     }
+}
+
+/// Whether the resolved `hs_token` matches the configured value.
+fn hs_token_matches(headers: &HeaderMap, query: &HashMap<String, String>, expected: &str) -> bool {
+    received_hs_token(headers, query) == Some(expected)
 }
 
 // ── Event dispatch ────────────────────────────────────────────────
