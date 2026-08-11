@@ -260,8 +260,8 @@ Configuration notes:
 
 ## Quick Start
 
-Prerequisites: Rust 1.88+ (current stable) and, for AppService mode, server-side
-access to a Matrix homeserver.
+Prerequisites: Rust 1.97 (the workspace pins this via `rust-toolchain.toml`)
+and, for AppService mode, server-side access to a Matrix homeserver.
 
 ```bash
 # Generate an AppService registration file
