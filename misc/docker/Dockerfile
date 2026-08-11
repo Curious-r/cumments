@@ -1,7 +1,7 @@
 # Build context must be the repository root:
 #   docker build -f misc/docker/Dockerfile .
 
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.97.1
 FROM rust:${RUST_VERSION}-alpine AS chef
 
 # Install build dependencies

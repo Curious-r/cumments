@@ -260,7 +260,7 @@ Configuration notes:
 
 ## Quick Start
 
-Prerequisites: Rust 1.97 (the workspace pins this via `rust-toolchain.toml`)
+Prerequisites: Rust 1.97.1 (the workspace pins this via `rust-toolchain.toml`)
 and, for AppService mode, server-side access to a Matrix homeserver.
 
 ```bash

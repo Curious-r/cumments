@@ -242,7 +242,7 @@ owner_id = "@admin:your_server.tld"
 
 ## 快速开始
 
-前置条件：Rust 1.97（workspace 通过 `rust-toolchain.toml` 固定）；AppService 模式还需要 homeserver 的服务端配置权限。
+前置条件：Rust 1.97.1（workspace 通过 `rust-toolchain.toml` 固定）；AppService 模式还需要 homeserver 的服务端配置权限。
 
 ```bash
 # 生成 AppService registration 文件
