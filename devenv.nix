@@ -58,6 +58,13 @@
         allFeatures = true;
       };
     };
+    # Keep the Docker base image in sync with rust-toolchain.toml.
+    toolchain-sync = {
+      enable = true;
+      name = "Toolchain sync";
+      entry = "bash scripts/check-toolchain-sync.sh";
+      pass_filenames = false;
+    };
   };
 
   # See full reference at https://devenv.sh/reference/options/
@@ -69,14 +76,9 @@
     };
     rust = {
       enable = true;
-      channel = "stable";
-      components = [
-        "rustc"
-        "cargo"
-        "clippy"
-        "rustfmt"
-        "rust-analyzer"
-      ];
+      # Single source of truth: derive the toolchain (channel, components,
+      # targets) directly from rust-toolchain.toml.
+      toolchainFile = ./rust-toolchain.toml;
     };
   };
 }
