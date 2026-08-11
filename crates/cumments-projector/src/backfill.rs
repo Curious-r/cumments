@@ -62,74 +62,13 @@ impl Backfiller {
         let mut rooms = Vec::new();
 
         for room_id in self.driver.joined_rooms().await? {
-            let meta = match self.driver.room_metadata(&room_id).await {
-                Ok(meta) => meta,
-                Err(e) => {
-                    warn!(
-                        "Backfill: failed to read metadata for {}: {:?}; skipping",
-                        room_id, e
-                    );
-                    continue;
-                }
-            };
-            let Some(meta) = meta else {
-                // No metadata: legacy rooms (created before the metadata state
-                // event existed) can still be identified from their canonical
-                // alias, which lives in our exclusive `#_cumments_*` namespace.
-                if self.register_legacy_room_by_alias(&room_id).await? {
-                    rooms.push(room_id.clone());
-                }
-                continue;
-            };
-            let Some(site_id) = meta.get("site_id").and_then(|v| v.as_str()) else {
-                if self.register_legacy_room_by_alias(&room_id).await? {
-                    rooms.push(room_id.clone());
-                }
-                continue;
-            };
-
-            match meta.get("post_slug").and_then(|v| v.as_str()) {
-                // Space room: restores the site -> space mapping.
-                None => match SiteId::new(site_id.to_owned()) {
-                    Ok(site_id_val) => {
-                        self.site_store
-                            .ensure_site_exists(site_id_val.as_str(), &room_id)
-                            .await?;
-                        info!(
-                            "Backfill: registered site {} (space {})",
-                            site_id_val.as_str(),
-                            room_id
-                        );
-                    }
-                    Err(_) => warn!(
-                        "Backfill: skipping space {} with invalid site id {}",
-                        room_id, site_id
-                    ),
-                },
-                // Comment room: restore registry entry and backfill it.
-                Some(post_slug) => {
-                    match (
-                        SiteId::new(site_id.to_owned()),
-                        PostSlug::new(post_slug.to_owned()),
-                    ) {
-                        (Ok(site_id_val), Ok(post_slug_val)) => {
-                            self.registry_store
-                                .register_room(&room_id, &site_id_val, &post_slug_val)
-                                .await?;
-                            rooms.push(room_id.clone());
-                            info!(
-                                "Backfill: discovered comment room {} for {}/{}",
-                                room_id,
-                                site_id_val.as_str(),
-                                post_slug_val.as_str()
-                            );
-                        }
-                        _ => warn!(
-                            "Backfill: skipping room {} with invalid identity {}/{}",
-                            room_id, site_id, post_slug
-                        ),
-                    }
-                }
+            match self.discover_room(&room_id).await {
+                Ok(Some(room_id)) => rooms.push(room_id),
+                Ok(None) => {}
+                Err(e) => warn!(
+                    "Backfill: discovery failed for {}: {:#}; skipping",
+                    room_id, e
+                ),
             }
         }
 
@@ -149,6 +88,85 @@ impl Backfiller {
             }
         }
         Ok(summary)
+    }
+
+    /// Rebuild the site/registry entries for one joined room. Returns
+    /// `Some(room_id)` when the room is a comment room that should be
+    /// backfilled, `None` for spaces and non-Cumments rooms.
+    ///
+    /// Errors are returned per room so the caller can log and continue; one
+    /// broken room must not abort the whole discovery pass.
+    async fn discover_room(&self, room_id: &str) -> anyhow::Result<Option<String>> {
+        let meta = match self.driver.room_metadata(room_id).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                warn!(
+                    "Backfill: failed to read metadata for {}: {:?}; skipping",
+                    room_id, e
+                );
+                return Ok(None);
+            }
+        };
+        let Some(meta) = meta else {
+            // No metadata: legacy rooms (created before the metadata state
+            // event existed) can still be identified from their canonical
+            // alias, which lives in our exclusive `#_cumments_*` namespace.
+            if self.register_legacy_room_by_alias(room_id).await? {
+                return Ok(Some(room_id.to_string()));
+            }
+            return Ok(None);
+        };
+        let Some(site_id) = meta.get("site_id").and_then(|v| v.as_str()) else {
+            if self.register_legacy_room_by_alias(room_id).await? {
+                return Ok(Some(room_id.to_string()));
+            }
+            return Ok(None);
+        };
+
+        match meta.get("post_slug").and_then(|v| v.as_str()) {
+            // Space room: restores the site -> space mapping.
+            None => match SiteId::new(site_id.to_owned()) {
+                Ok(site_id_val) => {
+                    self.site_store
+                        .ensure_site_exists(site_id_val.as_str(), room_id)
+                        .await?;
+                    info!(
+                        "Backfill: registered site {} (space {})",
+                        site_id_val.as_str(),
+                        room_id
+                    );
+                }
+                Err(_) => warn!(
+                    "Backfill: skipping space {} with invalid site id {}",
+                    room_id, site_id
+                ),
+            },
+            // Comment room: restore registry entry and backfill it.
+            Some(post_slug) => {
+                match (
+                    SiteId::new(site_id.to_owned()),
+                    PostSlug::new(post_slug.to_owned()),
+                ) {
+                    (Ok(site_id_val), Ok(post_slug_val)) => {
+                        self.registry_store
+                            .register_room(room_id, &site_id_val, &post_slug_val)
+                            .await?;
+                        info!(
+                            "Backfill: discovered comment room {} for {}/{}",
+                            room_id,
+                            site_id_val.as_str(),
+                            post_slug_val.as_str()
+                        );
+                        return Ok(Some(room_id.to_string()));
+                    }
+                    _ => warn!(
+                        "Backfill: skipping room {} with invalid identity {}/{}",
+                        room_id, site_id, post_slug
+                    ),
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Try to identify a metadata-less room from its canonical alias and
