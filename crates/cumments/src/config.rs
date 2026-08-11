@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use cumments_core::site_auth::{
-    KNOWN_SECRET_PLACEHOLDERS, Origin, OriginPattern, SITE_SECRET_MIN_LENGTH, SiteAuthMode,
-    SiteAuthPolicy, SitePolicyEntry, SiteVerificationPolicy,
+    KNOWN_SECRET_PLACEHOLDERS, OriginPattern, SITE_SECRET_MIN_LENGTH, SiteAuthMode, SiteAuthPolicy,
+    SitePolicyEntry, SiteVerificationPolicy,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -245,9 +245,7 @@ pub fn build_site_auth_policy(
         }
 
         for pattern in &allowed_origins {
-            if let OriginPattern::Exact(origin) = pattern {
-                warn_http_non_loopback(site_id, origin);
-            }
+            warn_http_non_loopback(site_id, pattern);
         }
 
         policy.sites.insert(
@@ -263,21 +261,31 @@ pub fn build_site_auth_policy(
     Ok(policy)
 }
 
-/// Warns about plain-HTTP origins that are not loopback addresses.
-fn warn_http_non_loopback(site_id: &str, origin: &Origin) {
-    let Ok(url) = origin.as_str().parse::<url::Url>() else {
-        return;
+/// Warns about plain-HTTP origin patterns that are not loopback addresses.
+fn warn_http_non_loopback(site_id: &str, pattern: &OriginPattern) {
+    let (scheme, host) = match pattern {
+        OriginPattern::Exact(origin) => {
+            let Ok(url) = origin.as_str().parse::<url::Url>() else {
+                return;
+            };
+            (url.scheme().to_string(), url.host_str().map(str::to_owned))
+        }
+        OriginPattern::Wildcard {
+            scheme,
+            host_suffix,
+            ..
+        } => (scheme.clone(), Some(host_suffix.clone())),
     };
-    if url.scheme() == "http"
+    if scheme == "http"
         && !matches!(
-            url.host_str(),
+            host.as_deref(),
             Some("localhost") | Some("127.0.0.1") | Some("::1")
         )
     {
         tracing::warn!(
             "`sites.{site_id}.allowed_origins` allows plain HTTP origin `{}`; \
              use HTTPS in production",
-            origin.as_str()
+            pattern.as_pattern_string()
         );
     }
 }
@@ -290,8 +298,8 @@ pub fn admin_token_hash(security: &Security) -> Result<Option<String>> {
     if token.trim().is_empty() {
         bail!("`security.admin_token` must not be empty");
     }
-    if token.len() < 16 {
-        bail!("`security.admin_token` must be at least 16 characters");
+    if token.len() < 32 {
+        bail!("`security.admin_token` must be at least 32 characters");
     }
     if matches!(token.as_str(), "change-me" | "admin-token") {
         bail!("`security.admin_token` uses a known example value; generate a real random token");
@@ -1074,13 +1082,13 @@ mode = "logging"
         security.admin_token = Some("change-me".to_string());
         assert!(admin_token_hash(&security).is_err());
 
-        security.admin_token = Some("a-very-long-admin-token".to_string());
+        security.admin_token = Some("a-very-long-admin-token-0123456789".to_string());
         let hash = admin_token_hash(&security)
             .expect("valid token")
             .expect("some hash");
         assert_eq!(
             hash,
-            cumments_core::site_auth::token_hash("a-very-long-admin-token")
+            cumments_core::site_auth::token_hash("a-very-long-admin-token-0123456789")
         );
     }
 }
