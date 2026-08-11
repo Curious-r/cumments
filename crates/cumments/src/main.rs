@@ -258,9 +258,6 @@ async fn main() -> Result<()> {
         Some(as_conf) => {
             // PushReceiver – listens for HS push events
             let push_port = as_conf.listen_port;
-            let hs_token = as_conf.hs_token.clone();
-            let push_app =
-                cumments_projector::push_receiver::push_router(event_processor.clone(), hs_token);
 
             if push_port == settings.server.port {
                 tracing::info!(
@@ -271,19 +268,25 @@ async fn main() -> Result<()> {
             } else {
                 tracing::info!("Starting PushReceiver on separate port {}.", push_port);
                 let host = as_conf.listen_host.clone();
+                let listener = tokio::net::TcpListener::bind((host.as_str(), push_port))
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to bind PushReceiver to {}:{}: {}",
+                            host,
+                            push_port,
+                            e
+                        )
+                    })?;
+                tracing::info!("PushReceiver listening on {}", listener.local_addr()?);
+                let push_app = cumments_projector::push_receiver::push_router(
+                    event_processor.clone(),
+                    as_conf.hs_token.clone(),
+                );
                 tokio::spawn(async move {
-                    let listener = tokio::net::TcpListener::bind((host.as_str(), push_port))
-                        .await
-                        .unwrap_or_else(|e| {
-                            panic!("Failed to bind PushReceiver to port {}: {}", push_port, e)
-                        });
-                    tracing::info!(
-                        "PushReceiver listening on {}",
-                        listener.local_addr().unwrap()
-                    );
-                    axum::serve(listener, push_app.into_make_service())
-                        .await
-                        .unwrap();
+                    if let Err(e) = axum::serve(listener, push_app.into_make_service()).await {
+                        tracing::error!("PushReceiver server error: {:#}", e);
+                    }
                 });
             }
         }
@@ -331,16 +334,18 @@ async fn main() -> Result<()> {
     let listener =
         tokio::net::TcpListener::bind((settings.server.host.as_str(), settings.server.port))
             .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "Failed to bind to {}:{}",
-                    settings.server.host, settings.server.port
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to bind to {}:{}: {}",
+                    settings.server.host,
+                    settings.server.port,
+                    e
                 )
-            });
-    tracing::info!("Server listening on {}", listener.local_addr().unwrap());
+            })?;
+    tracing::info!("Server listening on {}", listener.local_addr()?);
     axum::serve(listener, final_router.into_make_service())
         .await
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("HTTP server error: {:#}", e))?;
 
     Ok(())
 }
