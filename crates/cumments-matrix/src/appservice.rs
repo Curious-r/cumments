@@ -408,7 +408,7 @@ impl AppServiceMatrixDriver {
         // Check membership from the AS sender's perspective (it created the
         // room and holds state access) so the result is authoritative for
         // users that are already joined.
-        if self.is_member(room_id, virtual_user).await {
+        if self.is_joined(room_id, virtual_user).await {
             self.cache_joined(cache_key);
             return Ok(());
         }
@@ -422,8 +422,8 @@ impl AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let errcode = serde_json::from_str::<serde_json::Value>(&body)
+            let error_body = resp.text().await.unwrap_or_default();
+            let errcode = serde_json::from_str::<serde_json::Value>(&error_body)
                 .ok()
                 .and_then(|v| v.get("errcode").and_then(|e| e.as_str()).map(str::to_owned))
                 .unwrap_or_default();
@@ -432,19 +432,19 @@ impl AppServiceMatrixDriver {
                 // join rules; do not guess. Re-check membership from the AS
                 // sender's perspective and only treat a confirmed join as
                 // success. Anything else is left for the send to resolve.
-                if self.is_member(room_id, virtual_user).await {
+                if self.is_joined(room_id, virtual_user).await {
                     self.cache_joined(cache_key);
                     return Ok(());
                 }
                 self.invalidate_joined(&cache_key);
                 warn!(
                     "Virtual user {} join room {} returned M_FORBIDDEN and is not joined ({}): {}",
-                    virtual_user, room_id, status, body
+                    virtual_user, room_id, status, error_body
                 );
             } else {
                 warn!(
                     "Virtual user {} join room {} failed ({}): {}",
-                    virtual_user, room_id, status, body
+                    virtual_user, room_id, status, error_body
                 );
             }
         } else {
@@ -456,7 +456,7 @@ impl AppServiceMatrixDriver {
     /// Whether the virtual user has `join` membership in the room, queried as
     /// the AS sender. Errors are logged and treated as "not joined" so the
     /// subsequent `/join` (or the final send) remains the authority.
-    async fn is_member(&self, room_id: &str, virtual_user: &str) -> bool {
+    async fn is_joined(&self, room_id: &str, virtual_user: &str) -> bool {
         let member_path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.member/{}",
             urlencode(room_id),
@@ -551,12 +551,12 @@ impl AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             return Err(anyhow!(
                 "set displayname for {} failed ({}): {}",
                 virtual_user,
                 status,
-                body
+                error_body
             ));
         }
         self.displayname_cache
@@ -593,12 +593,12 @@ impl AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             return Err(anyhow!(
                 "Setting metadata for room {} failed ({}): {}",
                 room_id,
                 status,
-                body
+                error_body
             ));
         }
         Ok(())
@@ -623,11 +623,11 @@ impl AppServiceMatrixDriver {
             Ok(None)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Failed to query room metadata ({}): {}",
                 status,
-                body
+                error_body
             ))
         }
     }
@@ -665,11 +665,11 @@ impl AppServiceMatrixDriver {
             Ok(None)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Failed to query room create state ({}): {}",
                 status,
-                body
+                error_body
             ))
         }
     }
@@ -747,11 +747,11 @@ impl AppServiceMatrixDriver {
             Ok(None)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Failed to query power levels ({}): {}",
                 status,
-                body
+                error_body
             ))
         }
     }
@@ -771,8 +771,12 @@ impl AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("Failed to set power levels ({}): {}", status, body));
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to set power levels ({}): {}",
+                status,
+                error_body
+            ));
         }
         Ok(())
     }
@@ -849,12 +853,12 @@ impl AppServiceMatrixDriver {
             Ok(None)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Alias lookup {} failed ({}): {}",
                 alias,
                 status,
-                body
+                error_body
             ))
         }
     }
@@ -895,10 +899,10 @@ impl AppServiceMatrixDriver {
             }
             Ok(resp) if !resp.status().is_success() => {
                 let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
+                let error_body = resp.text().await.unwrap_or_default();
                 warn!(
                     "Failed to link room {} to space {} ({}): {}",
-                    room_id, space_id, status, body
+                    room_id, space_id, status, error_body
                 );
             }
             _ => {}
@@ -927,10 +931,10 @@ impl AppServiceMatrixDriver {
             }
             Ok(resp) if !resp.status().is_success() => {
                 let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
+                let error_body = resp.text().await.unwrap_or_default();
                 warn!(
                     "Failed to link space {} as parent of room {} ({}): {}",
-                    space_id, room_id, status, body
+                    space_id, room_id, status, error_body
                 );
             }
             _ => {}
@@ -996,10 +1000,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
             Ok(data.room_id)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             warn!(
                 "createRoom failed ({}): {}. Trying alias recovery.",
-                status, body
+                status, error_body
             );
 
             // Recovery: after a local DB reset (or a partial previous run) the
@@ -1041,7 +1045,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                 None => Err(anyhow!(
                     "Failed to create site space ({}): {}",
                     status,
-                    body
+                    error_body
                 )),
             }
         }
@@ -1148,10 +1152,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
             if !resp.status().is_success() {
                 let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
+                let error_body = resp.text().await.unwrap_or_default();
                 warn!(
                     "createRoom failed ({}): {}. Trying alias recovery.",
-                    status, body
+                    status, error_body
                 );
 
                 // Recovery: another attempt may have won the race, or the room
@@ -1191,7 +1195,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
                     None => Err(anyhow!(
                         "Failed to create comment room ({}): {}",
                         status,
-                        body
+                        error_body
                     )),
                 };
             }
@@ -1271,11 +1275,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            if body.contains("M_FORBIDDEN") || body.contains("M_NOT_FOUND") {
+            let error_body = resp.text().await.unwrap_or_default();
+            if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
             }
-            return Err(anyhow!("Failed to post message ({}): {}", status, body));
+            return Err(anyhow!(
+                "Failed to post message ({}): {}",
+                status,
+                error_body
+            ));
         }
 
         let data: SendEventResponse = resp
@@ -1340,11 +1348,15 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            if body.contains("M_FORBIDDEN") || body.contains("M_NOT_FOUND") {
+            let error_body = resp.text().await.unwrap_or_default();
+            if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
             }
-            return Err(anyhow!("Failed to update message ({}): {}", status, body));
+            return Err(anyhow!(
+                "Failed to update message ({}): {}",
+                status,
+                error_body
+            ));
         }
 
         let data: SendEventResponse = resp
@@ -1380,9 +1392,13 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            warn!("Failed to redact message ({}): {}", status, body);
-            return Err(anyhow!("Failed to redact message ({}): {}", status, body));
+            let error_body = resp.text().await.unwrap_or_default();
+            warn!("Failed to redact message ({}): {}", status, error_body);
+            return Err(anyhow!(
+                "Failed to redact message ({}): {}",
+                status,
+                error_body
+            ));
         }
 
         Ok(())
@@ -1407,12 +1423,12 @@ impl MatrixDriver for AppServiceMatrixDriver {
             Ok(false)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Event lookup {} failed ({}): {}",
                 event_id,
                 status,
-                body
+                error_body
             ))
         }
     }
@@ -1441,12 +1457,12 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             return Err(anyhow!(
                 "Failed to fetch room history for {} ({}): {}",
                 room_id,
                 status,
-                body
+                error_body
             ));
         }
 
@@ -1471,11 +1487,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             return Err(anyhow!(
                 "Failed to list joined rooms ({}): {}",
                 status,
-                body
+                error_body
             ));
         }
 
@@ -1512,11 +1528,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
             Ok(None)
         } else {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let error_body = resp.text().await.unwrap_or_default();
             Err(anyhow!(
                 "Failed to query canonical alias ({}): {}",
                 status,
-                body
+                error_body
             ))
         }
     }
