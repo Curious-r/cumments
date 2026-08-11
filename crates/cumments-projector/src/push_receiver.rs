@@ -101,10 +101,24 @@ async fn handle_transaction(
         );
     }
 
+    let mut failed = false;
     for event in txn.events {
         if let Err(e) = process_single_event(&event, &state.processor).await {
             tracing::warn!("Failed to process push event: {:?}", e);
+            failed = true;
         }
+    }
+
+    if failed {
+        // Ask the homeserver to retry the whole transaction instead of
+        // acknowledging events that were never projected.
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "errcode": "M_UNKNOWN",
+                "error": "Failed to process push transaction"
+            })),
+        );
     }
 
     // The AppService protocol requires an empty JSON object response.
@@ -123,24 +137,25 @@ pub(crate) async fn process_single_event(
     match event_type {
         "m.room.message" => {
             if let Some(mut parsed) = parse_push_message(event) {
-                parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await;
-                processor.process_room_message(parsed).await;
+                parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await?;
+                processor.process_room_message(parsed).await?;
             }
         }
         "m.room.redaction" => {
             if let Some(mut parsed) = parse_push_redaction(event) {
-                parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await;
-                processor.process_room_redaction(parsed).await;
+                parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await?;
+                processor.process_room_redaction(parsed).await?;
             }
         }
         "m.space.child" => {
             // Resolve the site_id from the space's room_id in local DB
             if let Some(ref space_room_id) = event.room_id {
-                let site_id = processor.get_site_id_by_space_id(space_room_id).await;
+                let site_id = processor.get_site_id_by_space_id(space_room_id).await?;
                 if let Some(mut parsed) = parse_push_space_child(event, site_id).await {
-                    parsed.child_room_identity =
-                        processor.resolve_room_identity(&parsed.child_room_id).await;
-                    processor.process_space_child(parsed).await;
+                    parsed.child_room_identity = processor
+                        .resolve_room_identity(&parsed.child_room_id)
+                        .await?;
+                    processor.process_space_child(parsed).await?;
                 }
             }
         }

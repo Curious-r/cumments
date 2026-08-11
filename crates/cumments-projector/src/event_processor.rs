@@ -6,6 +6,7 @@
 //! `PushReceiver` (and any future transport) calls into these same
 //! functions.
 
+use anyhow::Result;
 use cumments_core::{
     events::ProjectorEvent,
     identity::{
@@ -207,13 +208,11 @@ impl EventProcessor {
 
     /// Look up the site ID associated with a Matrix Space room ID.
     /// Returns `None` if the space is not in our local database.
-    pub async fn get_site_id_by_space_id(&self, space_id: &str) -> Option<String> {
+    pub async fn get_site_id_by_space_id(&self, space_id: &str) -> Result<Option<String>> {
         self.site_store
             .get_site_by_space_id(space_id)
             .await
-            .ok()
-            .flatten()
-            .map(|s| s.id)
+            .map(|site| site.map(|s| s.id))
     }
 
     /// Resolve the Cumments identity of a room from the local registry.
@@ -222,24 +221,20 @@ impl EventProcessor {
     /// the reconciler writes the room mapping back to the registry when it
     /// creates or adopts a room, so incoming push events can be attributed
     /// without any extra homeserver API call.
-    pub async fn resolve_room_identity(&self, room_id: &str) -> Option<RoomIdentity> {
+    pub async fn resolve_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>> {
         self.registry_store
             .get_registered_room_identity(room_id)
             .await
-            .ok()
-            .flatten()
-            .map(|(site_id, post_slug)| RoomIdentity { site_id, post_slug })
+            .map(|identity| {
+                identity.map(|(site_id, post_slug)| RoomIdentity { site_id, post_slug })
+            })
     }
 
     /// Process a room message (new comment or edit).
     #[instrument(skip(self))]
-    pub async fn process_room_message(&self, event: ParsedRoomMessage) {
+    pub async fn process_room_message(&self, event: ParsedRoomMessage) -> Result<()> {
         // ── PRINCIPLE B: REGISTRY ENFORCEMENT ──
-        let registry_status = self
-            .registry_store
-            .is_room_active(&event.room_id)
-            .await
-            .unwrap_or(None);
+        let registry_status = self.registry_store.is_room_active(&event.room_id).await?;
 
         match registry_status {
             Some(true) => {
@@ -248,7 +243,7 @@ impl EventProcessor {
             Some(false) => {
                 // Room is explicitly INACTIVE (tombstoned).
                 debug!("Ignoring message from deactivated room {}", event.room_id);
-                return;
+                return Ok(());
             }
             None => {
                 // Push events carry no room state, so an unknown room has no
@@ -256,7 +251,7 @@ impl EventProcessor {
                 // event processing by the reconciler, space-child discovery,
                 // or backfill.
                 debug!("Ignoring message from unregistered room {}", event.room_id);
-                return;
+                return Ok(());
             }
         }
 
@@ -273,9 +268,9 @@ impl EventProcessor {
                     "Ignoring message from room {} with invalid identity {}/{}",
                     event.room_id, id.site_id, id.post_slug
                 );
-                return;
+                return Ok(());
             }
-            None => return, // Not a cumments room
+            None => return Ok(()), // Not a cumments room
         };
 
         // Handle Edits (Replacements)
@@ -286,28 +281,18 @@ impl EventProcessor {
             // verify the replacement was sent by the original comment's author
             // virtual user. Legacy rows without a recorded sender are accepted
             // until re-projected by backfill.
-            match self
+            if let Some(existing) = self
                 .comment_store
                 .get_comment(&relation.target_event_id)
-                .await
+                .await?
+                && !existing.author_mxid.is_empty()
+                && existing.author_mxid != event.sender
             {
-                Ok(Some(existing))
-                    if !existing.author_mxid.is_empty() && existing.author_mxid != event.sender =>
-                {
-                    warn!(
-                        "Rejecting edit for {} from {}: sender does not match original author {}",
-                        relation.target_event_id, event.sender, existing.author_mxid
-                    );
-                    return;
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    warn!(
-                        "Failed to load comment {} for edit authorization: {:?}",
-                        relation.target_event_id, e
-                    );
-                    return;
-                }
+                warn!(
+                    "Rejecting edit for {} from {}: sender does not match original author {}",
+                    relation.target_event_id, event.sender, existing.author_mxid
+                );
+                return Ok(());
             }
 
             // Guest edits must carry a valid Cumments identity block and
@@ -344,7 +329,7 @@ impl EventProcessor {
                         "Rejecting guest edit for {} from {}: missing or invalid Cumments identity block",
                         relation.target_event_id, event.sender
                     );
-                    return;
+                    return Ok(());
                 }
             }
 
@@ -352,56 +337,43 @@ impl EventProcessor {
             // event. The correlation ID lets concurrent edits to the same
             // comment close independently; legacy events without it fall back
             // to target-event matching (waiting intents only).
-            let update_closed = match event.intent_id {
+            match event.intent_id {
                 Some(id) => {
                     self.intent_store
                         .mark_update_intent_completed_by_id(id)
-                        .await
+                        .await?
                 }
                 None => {
                     self.intent_store
                         .mark_update_intent_completed(&relation.target_event_id)
-                        .await
+                        .await?
                 }
             };
-            if let Err(e) = update_closed {
-                debug!(
-                    "Failed to mark update intent as completed (normal if no intent): {:?}",
-                    e
-                );
-            }
 
-            match self
+            if self
                 .comment_store
                 .update_comment_content(&relation.target_event_id, &relation.new_content)
-                .await
+                .await?
             {
-                Ok(true) => {
-                    info!("Successfully updated comment {}", relation.target_event_id);
-
-                    // Try to fetch updated comment to emit full object
-                    if let Ok(Some(comment)) = self
-                        .comment_store
-                        .get_comment(&relation.target_event_id)
-                        .await
-                    {
-                        let _ = self.event_bus.send(ProjectorEvent::CommentUpdated {
-                            site_id,
-                            post_slug,
-                            comment,
-                        });
-                    }
+                info!("Successfully updated comment {}", relation.target_event_id);
+                if let Some(comment) = self
+                    .comment_store
+                    .get_comment(&relation.target_event_id)
+                    .await?
+                {
+                    let _ = self.event_bus.send(ProjectorEvent::CommentUpdated {
+                        site_id,
+                        post_slug,
+                        comment,
+                    });
                 }
-                Ok(false) => debug!(
+            } else {
+                debug!(
                     "Edit received for unknown comment {}",
                     relation.target_event_id
-                ),
-                Err(e) => warn!(
-                    "Failed to update comment {}: {:?}",
-                    relation.target_event_id, e
-                ),
+                );
             }
-            return;
+            return Ok(());
         }
 
         // Guest posts must carry a valid Cumments identity block and
@@ -439,7 +411,7 @@ impl EventProcessor {
                     "Rejecting guest post {} from {}: missing or invalid Cumments identity block",
                     event.event_id, event.sender
                 );
-                return;
+                return Ok(());
             }
         }
 
@@ -447,20 +419,18 @@ impl EventProcessor {
         // the correlation ID when present – the push may arrive before the
         // reconciler's write-back, so the event_id is not yet stored on the
         // intent row. Fall back to event_id matching for external messages.
-        let close_loop = match event.intent_id {
-            Some(id) => self.intent_store.mark_post_intent_completed_by_id(id).await,
+        match event.intent_id {
+            Some(id) => {
+                self.intent_store
+                    .mark_post_intent_completed_by_id(id)
+                    .await?
+            }
             None => {
                 self.intent_store
                     .mark_post_intent_completed(&event.event_id)
-                    .await
+                    .await?
             }
         };
-        if let Err(e) = close_loop {
-            debug!(
-                "Failed to mark intent as completed (normal if external msg): {:?}",
-                e
-            );
-        }
 
         // Handle Original Posts
         let is_matrix_native = !event.is_virtual_sender;
@@ -490,8 +460,7 @@ impl EventProcessor {
             author_mxid: event.sender.clone(),
         };
 
-        match self
-            .comment_store
+        self.comment_store
             .save_comment(
                 &comment,
                 &event.room_id,
@@ -499,31 +468,24 @@ impl EventProcessor {
                 &site_id.clone().into(),
                 &post_slug.clone().into(),
             )
-            .await
-        {
-            Ok(_) => {
-                info!("Successfully projected comment event {}", event.event_id);
-                let _ = self.event_bus.send(ProjectorEvent::NewComment {
-                    site_id,
-                    post_slug,
-                    comment,
-                });
-            }
-            Err(e) => debug!(
-                "Failed to project comment event {}: {:?}",
-                event.event_id, e
-            ),
-        }
+            .await?;
+        info!("Successfully projected comment event {}", event.event_id);
+        let _ = self.event_bus.send(ProjectorEvent::NewComment {
+            site_id,
+            post_slug,
+            comment,
+        });
+        Ok(())
     }
 
     /// Process a redaction event (comment deletion).
     #[instrument(skip(self))]
-    pub async fn process_room_redaction(&self, event: ParsedRoomRedaction) {
+    pub async fn process_room_redaction(&self, event: ParsedRoomRedaction) -> Result<()> {
         let target_event_id = match event.redacts {
             Some(ref id) => id.clone(),
             None => {
                 debug!("Redaction event without a target event_id, ignoring");
-                return;
+                return Ok(());
             }
         };
 
@@ -535,12 +497,7 @@ impl EventProcessor {
         // Integrity: only redact a comment that actually lives in the room the
         // redaction arrived from. Fetch before deleting so the check uses the
         // same snapshot the deletion will operate on.
-        let comment = self
-            .comment_store
-            .get_comment(&target_event_id)
-            .await
-            .ok()
-            .flatten();
+        let comment = self.comment_store.get_comment(&target_event_id).await?;
 
         if let Some(c) = &comment {
             if c.room_id != event.room_id {
@@ -548,7 +505,7 @@ impl EventProcessor {
                     "Ignoring redaction for {} in {}: comment lives in {}",
                     target_event_id, event.room_id, c.room_id
                 );
-                return;
+                return Ok(());
             }
             if let Some(ref identity) = event.room_identity
                 && (c.site_id != identity.site_id || c.post_slug != identity.post_slug)
@@ -557,68 +514,58 @@ impl EventProcessor {
                     "Ignoring redaction for {} in {}: comment belongs to {}/{}",
                     target_event_id, event.room_id, c.site_id, c.post_slug
                 );
-                return;
+                return Ok(());
             }
         }
 
         // Closed-loop: Mark delete intent as completed
-        if let Err(e) = self
-            .intent_store
+        self.intent_store
             .mark_delete_intent_completed(&target_event_id)
-            .await
-        {
-            debug!("Failed to mark delete intent as completed: {:?}", e);
-        }
+            .await?;
 
-        match self.comment_store.delete_comment(&target_event_id).await {
-            Ok(true) => {
-                info!("Successfully deleted redacted comment {}", target_event_id);
-                if let Some(c) = comment {
-                    let _ = self.event_bus.send(ProjectorEvent::CommentDeleted {
-                        site_id: c.site_id,
-                        post_slug: c.post_slug,
-                        event_id: target_event_id,
-                    });
-                }
+        if self.comment_store.delete_comment(&target_event_id).await? {
+            info!("Successfully deleted redacted comment {}", target_event_id);
+            if let Some(c) = comment {
+                let _ = self.event_bus.send(ProjectorEvent::CommentDeleted {
+                    site_id: c.site_id,
+                    post_slug: c.post_slug,
+                    event_id: target_event_id,
+                });
             }
-            Ok(false) => debug!(
+        } else {
+            debug!(
                 "Redaction received for unknown or already deleted comment {}",
                 target_event_id
-            ),
-            Err(e) => warn!(
-                "Failed to delete redacted comment {}: {:?}",
-                target_event_id, e
-            ),
+            );
         }
+        Ok(())
     }
 
     /// Process a space child state event (room added/removed from a Space).
     #[instrument(skip(self))]
-    pub async fn process_space_child(&self, event: ParsedSpaceChild) {
+    pub async fn process_space_child(&self, event: ParsedSpaceChild) -> Result<()> {
         let site_id = match event.site_id {
             Some(ref id) => id.clone(),
-            None => return, // Not a managed Space
+            None => return Ok(()), // Not a managed Space
         };
         let Ok(site_id_val) = SiteId::new(site_id.clone()) else {
             warn!("Ignoring space child for invalid site id {}", site_id);
-            return;
+            return Ok(());
         };
 
         // AUTO-DISCOVERY: Ensure the site itself exists in the store
-        let _ = self
-            .site_store
+        self.site_store
             .ensure_site_exists(site_id_val.as_str(), &event.space_room_id)
-            .await;
+            .await?;
 
         if event.is_attached {
             // Register the child room if we know its identity
             if let Some(ref child_identity) = event.child_room_identity {
                 match PostSlug::new(child_identity.post_slug.clone()) {
                     Ok(post_slug) => {
-                        let _ = self
-                            .registry_store
+                        self.registry_store
                             .register_room(&event.child_room_id, &site_id_val, &post_slug)
-                            .await;
+                            .await?;
                         info!(
                             "Registered active room {} for site {}",
                             event.child_room_id, site_id
@@ -639,6 +586,7 @@ impl EventProcessor {
                 event.child_room_id, event.space_room_id
             );
         }
+        Ok(())
     }
 }
 
