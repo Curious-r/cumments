@@ -40,6 +40,10 @@ pow_difficulty = 4
 # or "required" (unverified sites cannot receive comments).
 site_verification = "optional"
 
+# Operator token for the admin API (optional). Unset disables admin routes.
+# Prefer the CUMMENTS__SECURITY__ADMIN_TOKEN environment variable.
+# admin_token = "change-me"
+
 # ── Operator-declared sites ─────────────────────────────────────
 # Sites listed here are trusted without online verification. This is the
 # declarative alternative to the self-service verification API.

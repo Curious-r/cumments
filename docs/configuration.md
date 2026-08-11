@@ -32,6 +32,9 @@ pow_secret = "pow_secret_key"
 pow_difficulty = 4
 # "disabled" | "optional" | "required"
 site_verification = "optional"
+# Operator token for the admin API; unset disables the admin routes.
+# Prefer the CUMMENTS__SECURITY__ADMIN_TOKEN environment variable.
+admin_token = "change-me"
 
 [sites."my-blog"]
 # "origin" (browser Origin, default) or "secret" (HMAC via edge function)
@@ -93,6 +96,9 @@ For local development, set `mode = "logging"`; no `matrix.homeserver`,
 - `server.cors_origins` has been **removed**: CORS headers are now derived
   from the site registry (see below). A config file that still contains the
   key fails startup with an explicit message pointing here.
+- `security.admin_token` enables the admin API (see [api.md](api.md)).
+  Placeholder values and tokens shorter than 16 characters are rejected at
+  startup.
 - SQLite files are created automatically, but the parent directory must exist
   (the repo has a `data/` directory).
 - All timestamps are stored in UTC with millisecond precision.

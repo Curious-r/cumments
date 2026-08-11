@@ -225,6 +225,50 @@ It is used as the HMAC key in edge-function deployments (see
 [site-authentication.md](site-authentication.md)); the same value must be set
 on the site backend and used to sign every write request.
 
+## Admin API
+
+Enabled by setting `security.admin_token`. All admin routes require
+`Authorization: Bearer <token>`.
+
+### List sites
+
+`GET /api/v1/admin/sites`
+
+Returns every database-tracked site merged with the operator-declared
+`[sites]` overlay. Each origin carries a `source` of `"verified"` or
+`"config"`.
+
+### Revoke a verified origin
+
+`POST /api/v1/admin/sites/{site_id}/origins/revoke`
+
+Body: `{ "origin": "https://blog.example.com" }`. Origins declared in the
+config file cannot be revoked here — edit the config instead.
+
+### Rotate / revoke the HMAC secret
+
+`POST /api/v1/admin/sites/{site_id}/secret/rotate` — returns the new secret
+exactly once.
+
+`DELETE /api/v1/admin/sites/{site_id}/secret` — removes the secret and falls
+back to origin auth.
+
+Both refuse to touch sites whose secret is declared in the config file.
+
+### Export an adoption snippet
+
+`GET /api/v1/admin/sites/{site_id}/config-snippet`
+
+Returns a TOML block to paste into `[sites]` when the operator wants to move a
+database-tracked site into declarative config.
+
+## Rate limiting
+
+`POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are
+rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
+`429 RATE_LIMITED`. Behind a reverse proxy, set `X-Forwarded-For` correctly;
+the first value is used as the client key.
+
 ## Validation
 
 ## Validation

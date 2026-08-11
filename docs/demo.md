@@ -12,6 +12,11 @@ comments, pagination, nested replies, SSE live updates, and a "My comments"
 management view. Use it as a reference implementation, not as a reusable
 component.
 
+The demo posts directly to the API, so it works with `origin`-mode sites
+(including unverified sites under the `optional` policy). In strict
+(`secret`) mode the frontend must call its own backend instead — see
+[site-verification.md](site-verification.md) for the edge-function pattern.
+
 ## Running the demo
 
 The demo is a single HTML file with no build step. Open it in a browser and
