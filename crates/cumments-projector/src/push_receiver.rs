@@ -9,9 +9,8 @@
 //! parameter is also accepted for homeservers that use it. When both are
 //! present they must agree, per the spec's compatibility guidance.
 
-use crate::event_processor::{
-    EventProcessor, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
-};
+use crate::event_processor::EventProcessor;
+use crate::parsed::{ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild};
 use axum::{
     Json,
     extract::{Path, Query},

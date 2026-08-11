@@ -1339,7 +1339,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    #[test]
     fn capabilities_response_parses_default_room_version() {
         let caps: CapabilitiesResponse = serde_json::from_value(json!({
             "room_versions": {

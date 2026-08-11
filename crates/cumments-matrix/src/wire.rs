@@ -293,6 +293,8 @@ pub(crate) fn format_txn_id(kind: &str, intent_id: Option<i64>) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
     fn metadata_matches_space() {
         let meta = json!({"site_id": "my-blog", "post_slug": null});
         assert!(metadata_matches(&meta, "my-blog", None));

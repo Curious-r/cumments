@@ -18,7 +18,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::event_processor::EventProcessor;
-use crate::event_processor::parse_room_identity;
+use crate::parsed::parse_room_identity;
 use crate::push_receiver::{PushEvent, process_single_event};
 
 const PAGE_SIZE: u32 = 100;
