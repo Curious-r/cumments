@@ -62,7 +62,7 @@
     toolchain-sync = {
       enable = true;
       name = "Toolchain sync";
-      entry = "bash scripts/check-toolchain-sync.sh";
+      entry = "bash misc/docker/check-toolchain-sync.sh";
       pass_filenames = false;
     };
   };

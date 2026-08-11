@@ -5,8 +5,11 @@ set -euo pipefail
 # rust-toolchain.toml and the Docker base image (the only place a version
 # still has to be written down explicitly).
 
-toolchain_file="${1:-rust-toolchain.toml}"
-dockerfile="${2:-misc/docker/Dockerfile}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+
+toolchain_file="${1:-$repo_root/rust-toolchain.toml}"
+dockerfile="${2:-$repo_root/misc/docker/Dockerfile}"
 
 channel="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$toolchain_file" | head -n1)"
 docker_version="$(sed -n 's/^ARG RUST_VERSION=\(.*\)/\1/p' "$dockerfile" | head -n1)"

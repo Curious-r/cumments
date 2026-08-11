@@ -32,7 +32,7 @@ jobs:
           cache: false
 
       - name: Check toolchain sync
-        run: bash scripts/check-toolchain-sync.sh
+        run: bash misc/docker/check-toolchain-sync.sh
 
       - name: Check formatting
         run: cargo fmt --all -- --check

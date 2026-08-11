@@ -64,7 +64,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Check toolchain sync
-        run: bash scripts/check-toolchain-sync.sh
+        run: bash misc/docker/check-toolchain-sync.sh
 
       - name: Resolve Rust version from rust-toolchain.toml
         id: rust-version
