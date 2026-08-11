@@ -325,29 +325,29 @@ impl EventProcessor {
                 }
             }
 
-            // Closed-loop: complete the exact update intent that produced this
-            // event. The correlation ID lets concurrent edits to the same
-            // comment close independently; legacy events without it fall back
-            // to target-event matching (waiting intents only).
-            match event.intent_id {
-                Some(id) => {
-                    self.intent_store
-                        .mark_update_intent_completed_by_id(id)
-                        .await?
-                }
-                None => {
-                    self.intent_store
-                        .mark_update_intent_completed(&relation.target_event_id)
-                        .await?
-                }
-            };
-
             if self
                 .comment_store
                 .update_comment_content(&relation.target_event_id, &relation.new_content)
                 .await?
             {
                 info!("Successfully updated comment {}", relation.target_event_id);
+                // Closed-loop only after the projection succeeded: the
+                // correlation ID lets concurrent edits close independently;
+                // legacy events fall back to target-event matching (waiting
+                // intents only). A failed projection leaves the intent open
+                // for the timeout/backfill safety net.
+                match event.intent_id {
+                    Some(id) => {
+                        self.intent_store
+                            .mark_update_intent_completed_by_id(id)
+                            .await?
+                    }
+                    None => {
+                        self.intent_store
+                            .mark_update_intent_completed(&relation.target_event_id)
+                            .await?
+                    }
+                };
                 if let Some(comment) = self
                     .comment_store
                     .get_comment(&relation.target_event_id)
@@ -407,23 +407,6 @@ impl EventProcessor {
             }
         }
 
-        // Closed-loop: mark the originating post intent as completed. Prefer
-        // the correlation ID when present – the push may arrive before the
-        // reconciler's write-back, so the event_id is not yet stored on the
-        // intent row. Fall back to event_id matching for external messages.
-        match event.intent_id {
-            Some(id) => {
-                self.intent_store
-                    .mark_post_intent_completed_by_id(id)
-                    .await?
-            }
-            None => {
-                self.intent_store
-                    .mark_post_intent_completed(&event.event_id)
-                    .await?
-            }
-        };
-
         // Handle Original Posts
         let is_matrix_native = !event.is_virtual_sender;
         let comment = Comment {
@@ -462,6 +445,22 @@ impl EventProcessor {
             )
             .await?;
         info!("Successfully projected comment event {}", event.event_id);
+        // Closed-loop only after the projection succeeded. Prefer the
+        // correlation ID when present – the push may arrive before the
+        // reconciler's write-back, so the event_id is not yet stored on the
+        // intent row. Fall back to event_id matching for external messages.
+        match event.intent_id {
+            Some(id) => {
+                self.intent_store
+                    .mark_post_intent_completed_by_id(id)
+                    .await?
+            }
+            None => {
+                self.intent_store
+                    .mark_post_intent_completed(&event.event_id)
+                    .await?
+            }
+        };
         let _ = self.event_bus.send(ProjectorEvent::NewComment {
             site_id,
             post_slug,
@@ -510,13 +509,13 @@ impl EventProcessor {
             }
         }
 
-        // Closed-loop: Mark delete intent as completed
-        self.intent_store
-            .mark_delete_intent_completed(&target_event_id)
-            .await?;
-
         if self.comment_store.delete_comment(&target_event_id).await? {
             info!("Successfully deleted redacted comment {}", target_event_id);
+            // Closed-loop only after the projection succeeded; a failed
+            // delete leaves the intent open for the timeout safety net.
+            self.intent_store
+                .mark_delete_intent_completed(&target_event_id)
+                .await?;
             if let Some(c) = comment {
                 let _ = self.event_bus.send(ProjectorEvent::CommentDeleted {
                     site_id: c.site_id,
