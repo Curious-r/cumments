@@ -403,6 +403,20 @@ impl Reconciler {
                 continue;
             };
 
+            if event_id.is_empty() {
+                error!(
+                    "Post intent [{}] timed out with no event id recorded; dead-lettering",
+                    id
+                );
+                self.intent_store
+                    .dead_letter_post_intent(
+                        id,
+                        "waiting_for_sync timed out; event_id was not recorded, cannot verify the event safely",
+                    )
+                    .await?;
+                continue;
+            }
+
             match self.driver.event_exists(&room_id, &event_id).await {
                 Ok(true) => {
                     error!(

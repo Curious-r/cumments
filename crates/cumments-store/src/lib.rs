@@ -711,10 +711,7 @@ impl IntentStore for DbStore {
 
         Ok(models
             .into_iter()
-            .filter_map(|m| {
-                m.matrix_event_id
-                    .map(|event_id| (m.id, event_id, m.room_id))
-            })
+            .map(|m| (m.id, m.matrix_event_id.unwrap_or_default(), m.room_id))
             .collect())
     }
 
