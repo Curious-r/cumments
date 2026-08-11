@@ -64,6 +64,16 @@ async fn main() -> Result<()> {
     }
     let settings =
         config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
+    config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
+    if settings.matrix.mode == Mode::Logging
+        && config::is_known_pow_placeholder(&settings.security.pow_secret)
+    {
+        tracing::warn!(
+            "`security.pow_secret` is the example value `{}`; \
+             set a real random secret before switching to appservice mode",
+            settings.security.pow_secret
+        );
+    }
     tracing::info!("Configuration loaded successfully.");
 
     // ─────────────────────────────────────────────────────────────

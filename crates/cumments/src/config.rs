@@ -137,6 +137,29 @@ fn require_non_empty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str>
     }
 }
 
+/// Known example/placeholder secrets shipped in the repository. They are
+/// harmless in `logging` mode but would let anyone forge PoW challenges in
+/// production.
+pub fn is_known_pow_placeholder(secret: &str) -> bool {
+    matches!(secret, "change-me" | "pow_secret_key")
+}
+
+/// Validate the PoW secret: it must never be empty, and in AppService mode it
+/// must not be a publicly known placeholder.
+pub fn validate_pow_secret(secret: &str, mode: Mode) -> Result<()> {
+    if secret.trim().is_empty() {
+        bail!("`security.pow_secret` must not be empty");
+    }
+    if mode == Mode::Appservice && is_known_pow_placeholder(secret) {
+        bail!(
+            "`security.pow_secret` uses the known example value `{}`; \
+             set a real random secret before running in appservice mode",
+            secret
+        );
+    }
+    Ok(())
+}
+
 impl Matrix {
     /// Validate all AppService-specific settings and return a ready-to-use bundle.
     pub fn appservice_runtime(&self) -> Result<AppServiceRuntime> {
@@ -700,5 +723,16 @@ owner_id = "@admin:example.com"
             .appservice_runtime()
             .expect_err("empty owner_id");
         assert!(err.to_string().contains("matrix.moderation.owner_id"));
+    }
+
+    #[test]
+    fn pow_secret_validation_rejects_empty_and_placeholders_in_appservice() {
+        assert!(validate_pow_secret("", Mode::Logging).is_err());
+        assert!(validate_pow_secret("   ", Mode::Appservice).is_err());
+        assert!(validate_pow_secret("change-me", Mode::Appservice).is_err());
+        assert!(validate_pow_secret("pow_secret_key", Mode::Appservice).is_err());
+        // The runnable example stays usable in logging mode.
+        assert!(validate_pow_secret("change-me", Mode::Logging).is_ok());
+        assert!(validate_pow_secret("a-real-secret", Mode::Appservice).is_ok());
     }
 }
