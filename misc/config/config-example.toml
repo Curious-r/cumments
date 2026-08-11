@@ -16,11 +16,6 @@ host = "0.0.0.0"
 # Port number for the HTTP server
 port = 7931
 
-# CORS origins allowed to access the API
-# Comma-separated exact origins (e.g. "https://blog.example.com"),
-# "*" for permissive, or empty to send no CORS headers.
-cors_origins = "*"
-
 [database]
 # Database connection URL
 # For the Docker image this is /srv/cumments/cumments.db (the mounted volume).
@@ -40,6 +35,26 @@ pow_secret = "change-me"
 # Adjust based on your spam protection needs (typically 2-6)
 pow_difficulty = 4
 
+# Site verification policy: "disabled" (no checks, dev only),
+# "optional" (unverified sites keep working, verified sites enforced),
+# or "required" (unverified sites cannot receive comments).
+site_verification = "optional"
+
+# ── Operator-declared sites ─────────────────────────────────────
+# Sites listed here are trusted without online verification. This is the
+# declarative alternative to the self-service verification API.
+#
+# [sites."my-blog"]
+# # "origin" (browser Origin, default) or "secret" (HMAC via edge function)
+# auth_mode = "origin"
+# # Exact origins or subdomain wildcards, trusted without proof.
+# allowed_origins = ["https://blog.example.com", "https://*.blog.example.com"]
+#
+# [sites."strict-blog"]
+# auth_mode = "secret"
+# # The HMAC key (at least 32 chars). Prefer the environment variable:
+# # CUMMENTS__SITES__strict-blog__SECRET=...
+# secret = "change-me"
 # ==========================================
 # Matrix Integration
 # ==========================================

@@ -48,7 +48,7 @@ reminds you that mnemonic recovery is unavailable.
 
 ## Proof of work
 
-1. Call `GET /api/challenge`.
+1. Call `GET /api/v1/challenge`.
 2. Find a `nonce` such that `SHA256(prefix + nonce)` starts with `difficulty`
    leading zero hex digits.
 3. Submit `challenge_response = prefix + "|" + nonce`.

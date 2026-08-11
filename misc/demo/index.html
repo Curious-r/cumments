@@ -1523,7 +1523,7 @@
 
             async function queryComments(cfg, page, perPage) {
                 const res = await fetch(
-                    `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
                     {
                         method: "QUERY",
                         headers: { "Content-Type": "application/json" },
@@ -1535,7 +1535,7 @@
             }
 
             async function getChallenge(cfg) {
-                const res = await fetch(`${cfg.api}/api/challenge`);
+                const res = await fetch(`${cfg.api}/api/v1/challenge`);
                 if (!res.ok) throw new Error(await apiError(res));
                 return res.json();
             }
@@ -1933,7 +1933,7 @@
 
                     status.textContent = t("status_submitting");
                     const res = await fetch(
-                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
                         {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -1978,7 +1978,7 @@
                     chal.prefix,
                 ]);
                 const res = await fetch(
-                    `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${comment.event_id}`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${comment.event_id}`,
                     {
                         method: "PATCH",
                         headers: { "Content-Type": "application/json" },
@@ -2007,7 +2007,7 @@
                         chal.prefix,
                     ]);
                     const res = await fetch(
-                        `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${commentId}`,
                         {
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
@@ -2057,7 +2057,7 @@
 
             function connectSse() {
                 const cfg = getSettings();
-                const url = `${cfg.api}/api/sites/${cfg.siteId}/posts/${cfg.slug}/sse`;
+                const url = `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/sse`;
                 const sse = new EventSource(url);
                 state.currentSse = sse;
 

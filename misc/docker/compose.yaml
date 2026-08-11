@@ -56,11 +56,12 @@ services:
     environment:
       CUMMENTS__SERVER__HOST: 0.0.0.0
       CUMMENTS__SERVER__PORT: 7931
-      CUMMENTS__SERVER__CORS_ORIGINS: "*"
       CUMMENTS__DATABASE__URL: sqlite:///srv/cumments/cumments.db
       # Replace with a long random secret before going public.
       CUMMENTS__SECURITY__POW_SECRET: dev-only-secret-0123456789abcdef
       CUMMENTS__SECURITY__POW_DIFFICULTY: 4
+      # Demo-friendly: unverified sites still accept comments.
+      CUMMENTS__SECURITY__SITE_VERIFICATION: optional
       CUMMENTS__MATRIX__MODE: appservice
       CUMMENTS__MATRIX__HOMESERVER__ADDRESS: http://tuwunel:6167
       CUMMENTS__MATRIX__HOMESERVER__DOMAIN: "${MATRIX_DOMAIN:-localhost:8008}"
