@@ -12,6 +12,7 @@ use sea_orm::{
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::path::Path;
+use tracing::warn;
 
 use crate::entities::active_enums::IntentStatus;
 
@@ -307,8 +308,13 @@ impl IntentStore for DbStore {
 
         let mut intents = Vec::new();
         for m in models {
-            let intent: PostCommentIntent = serde_json::from_str(&m.payload)?;
-            intents.push((m.id, intent));
+            match serde_json::from_str::<PostCommentIntent>(&m.payload) {
+                Ok(intent) => intents.push((m.id, intent)),
+                Err(e) => warn!(
+                    "Skipping corrupt post intent {} (will not block the batch): {:#}",
+                    m.id, e
+                ),
+            }
         }
         Ok(intents)
     }
@@ -329,8 +335,13 @@ impl IntentStore for DbStore {
 
         let mut intents = Vec::new();
         for m in models {
-            let intent: DeleteCommentIntent = serde_json::from_str(&m.payload)?;
-            intents.push((m.id, intent));
+            match serde_json::from_str::<DeleteCommentIntent>(&m.payload) {
+                Ok(intent) => intents.push((m.id, intent)),
+                Err(e) => warn!(
+                    "Skipping corrupt delete intent {} (will not block the batch): {:#}",
+                    m.id, e
+                ),
+            }
         }
         Ok(intents)
     }

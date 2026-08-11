@@ -14,3 +14,4 @@ serde_json.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 tokio.workspace = true
+tracing.workspace = true
