@@ -15,6 +15,7 @@ use cumments_core::{
     },
     models::{AuthorType, Comment, CommentAuthor, PostSlug, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
+    protocol::MESSAGE_CONTENT_KEY,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -75,6 +76,9 @@ pub struct ParsedRoomRedaction {
     pub event_id: String,
     /// The event ID being redacted (may be in `redacts` top-level or `.content.redacts`).
     pub redacts: Option<String>,
+    /// The Cumments delete proof embedded in `reason`, if the redaction was
+    /// issued through the Cumments API.
+    pub proof: Option<serde_json::Value>,
     /// The room's Cumments identity, if available.
     pub room_identity: Option<RoomIdentity>,
 }
@@ -165,6 +169,54 @@ fn verify_guest_event(
         return false;
     }
     verify_signature(public_key, message, signature)
+}
+
+/// Verify a Cumments delete proof embedded in a redaction's `reason`.
+///
+/// The proof is the JSON object the API stores under
+/// `host.curious.cumments` when a guest requests deletion: site/post/target
+/// must match the comment being redacted and the Ed25519 signature must cover
+/// the canonical DELETE message. Returns `false` for missing or malformed
+/// proofs so callers can reject the redaction.
+fn verify_delete_proof(
+    proof: &serde_json::Value,
+    target_event_id: &str,
+    site_id: &str,
+    post_slug: &str,
+    author_public_key: Option<&str>,
+) -> bool {
+    let Some(block) = proof.get(MESSAGE_CONTENT_KEY) else {
+        return false;
+    };
+    let field = |key: &str| block.get(key).and_then(|v| v.as_str());
+    let (
+        Some(proof_site),
+        Some(proof_slug),
+        Some(proof_target),
+        Some(public_key),
+        Some(signature),
+        Some(challenge),
+    ) = (
+        field("site_id"),
+        field("post_slug"),
+        field("target_event_id"),
+        field("public_key"),
+        field("signature"),
+        field("challenge"),
+    )
+    else {
+        return false;
+    };
+
+    if proof_site != site_id || proof_slug != post_slug || proof_target != target_event_id {
+        return false;
+    }
+    if author_public_key.is_some_and(|key| key != public_key) {
+        return false;
+    }
+
+    let message = signature_message(&["DELETE", site_id, post_slug, target_event_id, challenge]);
+    verify_signature(public_key, &message, signature)
 }
 
 // ── Core processing functions ─────────────────────────────────────
@@ -507,6 +559,27 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
+
+            // Deletions issued through the Cumments API embed a signed proof
+            // in the redaction's `reason`. When a proof is present it must
+            // verify; redactions without one (e.g. manual moderation from a
+            // Matrix client) remain governed by the homeserver's
+            // authorisation.
+            if let Some(proof) = &event.proof
+                && !verify_delete_proof(
+                    proof,
+                    &target_event_id,
+                    &c.site_id,
+                    &c.post_slug,
+                    c.author.public_key.as_deref(),
+                )
+            {
+                warn!(
+                    "Rejecting redaction for {} from {}: invalid Cumments delete proof",
+                    target_event_id, event.event_id
+                );
+                return Ok(());
+            }
         }
 
         if self.comment_store.delete_comment(&target_event_id).await? {
@@ -674,6 +747,74 @@ mod tests {
             &public_key,
             "AAAA",
             &message,
+        ));
+    }
+
+    #[test]
+    fn delete_proof_verifies_valid_signature_and_rejects_tampering() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[11u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let challenge = "challenge";
+        let message = signature_message(&["DELETE", "my-blog", "hello", "$target:hs", challenge]);
+        let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+
+        let proof = serde_json::json!({
+            "host.curious.cumments": {
+                "site_id": "my-blog",
+                "post_slug": "hello",
+                "target_event_id": "$target:hs",
+                "public_key": public_key,
+                "signature": signature,
+                "challenge": challenge,
+            }
+        });
+
+        assert!(verify_delete_proof(
+            &proof,
+            "$target:hs",
+            "my-blog",
+            "hello",
+            Some(&public_key),
+        ));
+        // Wrong target, site, or stored author key must fail.
+        assert!(!verify_delete_proof(
+            &proof,
+            "$other:hs",
+            "my-blog",
+            "hello",
+            Some(&public_key),
+        ));
+        assert!(!verify_delete_proof(
+            &proof,
+            "$target:hs",
+            "other",
+            "hello",
+            Some(&public_key),
+        ));
+        assert!(!verify_delete_proof(
+            &proof,
+            "$target:hs",
+            "my-blog",
+            "hello",
+            Some("some-other-key"),
+        ));
+        // Missing or malformed proofs are rejected.
+        assert!(!verify_delete_proof(
+            &serde_json::json!({}),
+            "$target:hs",
+            "my-blog",
+            "hello",
+            Some(&public_key),
+        ));
+        assert!(!verify_delete_proof(
+            &serde_json::json!({ "host.curious.cumments": { "site_id": "my-blog" } }),
+            "$target:hs",
+            "my-blog",
+            "hello",
+            Some(&public_key),
         ));
     }
 }

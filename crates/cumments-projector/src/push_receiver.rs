@@ -430,6 +430,14 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
             .and_then(|c| c.get("redacts").and_then(|v| v.as_str().map(String::from)))
     });
 
+    // Cumments deletes embed a signed JSON proof in the redaction's `reason`.
+    let proof = event
+        .content
+        .as_ref()
+        .and_then(|c| c.get("reason"))
+        .and_then(|v| v.as_str())
+        .and_then(|reason| serde_json::from_str(reason).ok());
+
     // Room identity is resolved by the caller from the local registry.
     let room_identity = None;
 
@@ -437,6 +445,7 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
         redacts,
+        proof,
         room_identity,
     })
 }
@@ -584,6 +593,49 @@ mod tests {
         assert!(!is_virtual_user_sender(
             "_cumments_my-blog_3282f2a21b4a1e6b"
         ));
+    }
+
+    #[test]
+    fn redaction_parse_extracts_embedded_delete_proof() {
+        let event = PushEvent {
+            event_type: "m.room.redaction".to_string(),
+            event_id: Some("$redaction:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@_cumments_bot:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({
+                "reason": "{\"host.curious.cumments\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\"}}",
+                "redacts": "$target:hs",
+            })),
+            redacts: None,
+            unsigned: None,
+        };
+
+        let parsed = parse_push_redaction(&event).expect("parse redaction");
+        assert_eq!(parsed.redacts.as_deref(), Some("$target:hs"));
+        let proof = parsed.proof.expect("proof parsed from reason");
+        assert_eq!(
+            proof["host.curious.cumments"]["site_id"].as_str(),
+            Some("my-blog")
+        );
+    }
+
+    #[test]
+    fn redaction_parse_without_proof_yields_none() {
+        let event = PushEvent {
+            event_type: "m.room.redaction".to_string(),
+            event_id: Some("$redaction:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@alice:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({ "reason": "manual moderation" })),
+            redacts: None,
+            unsigned: None,
+        };
+        let parsed = parse_push_redaction(&event).expect("parse redaction");
+        assert!(parsed.proof.is_none());
     }
 
     #[test]
