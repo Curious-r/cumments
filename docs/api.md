@@ -14,6 +14,8 @@ All public endpoints live under `/api/v1`; `/health` is unversioned.
 ```
 
 Challenges expire after 5 minutes.
+Responses are marked `Cache-Control: no-store` (plus `Pragma: no-cache`) so
+intermediaries never serve a stale challenge.
 
 ## Health
 

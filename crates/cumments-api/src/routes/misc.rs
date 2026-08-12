@@ -2,7 +2,12 @@
 
 use crate::ApiState;
 use crate::request::ChallengeResponse;
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderValue, StatusCode, header},
+    response::IntoResponse,
+};
 
 pub(crate) async fn health_handler() -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
@@ -15,5 +20,12 @@ pub(crate) async fn get_challenge_handler(State(state): State<ApiState>) -> impl
         prefix: challenge.prefix,
         difficulty: challenge.difficulty,
     };
-    (StatusCode::OK, Json(response))
+    (
+        StatusCode::OK,
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::PRAGMA, HeaderValue::from_static("no-cache")),
+        ],
+        Json(response),
+    )
 }

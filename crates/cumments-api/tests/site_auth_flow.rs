@@ -853,3 +853,30 @@ async fn admin_lists_blocked_rooms() {
     assert_eq!(filtered_json["data"].as_array().map(Vec::len), Some(0));
     assert_eq!(filtered_json["meta"]["total"], 0);
 }
+
+#[tokio::test]
+async fn challenge_response_is_never_cached() {
+    let (state, _) = test_state("challenge-cache", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state);
+    let response = router
+        .clone()
+        .oneshot(request(Method::GET, "/api/v1/challenge", None, &[]))
+        .await
+        .expect("call router");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::PRAGMA)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-cache")
+    );
+}
