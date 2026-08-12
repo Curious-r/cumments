@@ -1,8 +1,8 @@
 use chrono::Utc;
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageRevision,
-    MessageStatus, PollContent, PollVote, PostSlug, Reaction, SiteId, TextContent, TextStyle,
-    UnknownContent,
+    MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction, SiteId, TextContent,
+    TextStyle, UnknownContent,
 };
 use cumments_core::ports::{MessageStore, VirtualUserStore};
 use cumments_store::DbStore;
@@ -254,7 +254,16 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
     let mut message = guest_message("$poll:hs", "poll placeholder");
     message.content = Content::Poll(PollContent {
         question: "best? ".to_string(),
-        options: vec!["a".to_string(), "b".to_string()],
+        options: vec![
+            PollOption {
+                id: "a".to_string(),
+                text: "A".to_string(),
+            },
+            PollOption {
+                id: "b".to_string(),
+                text: "B".to_string(),
+            },
+        ],
         responses: Vec::new(),
     });
     store
