@@ -1,6 +1,6 @@
 //! CLI subcommands for Cumments.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Subcommand;
 use cumments_core::models::SiteId;
 use cumments_core::ports::SiteAuthStore;
@@ -72,6 +72,24 @@ pub enum SitesCommand {
     /// Register a site and print its id and one-time claim token
     #[command(name = "register")]
     Register(RegisterSiteArgs),
+    /// List managed sites (database rows merged with the `[sites]` overlay)
+    #[command(name = "list")]
+    List(SiteListArgs),
+    /// Revoke a verified origin (config-declared origins cannot be revoked)
+    #[command(name = "revoke-origin")]
+    RevokeOrigin(RevokeOriginArgs),
+    /// Rotate the HMAC secret; the new secret is printed exactly once
+    #[command(name = "rotate-secret")]
+    RotateSecret(SiteIdArg),
+    /// Remove the HMAC secret and fall back to origin auth
+    #[command(name = "revoke-secret")]
+    RevokeSecret(SiteIdArg),
+    /// Export a TOML block to adopt a database-tracked site into `[sites]`
+    #[command(name = "export-config")]
+    ExportConfig(SiteIdArg),
+    /// Rotate the claim token; the new token is printed exactly once
+    #[command(name = "rotate-claim-token")]
+    RotateClaimToken(SiteIdArg),
 }
 
 #[derive(clap::Args, Debug)]
@@ -80,6 +98,72 @@ pub struct RegisterSiteArgs {
     /// unguessable id is generated.
     #[arg(long)]
     pub site_id: Option<String>,
+}
+
+/// Arguments for listing sites (mirrors `QUERY /api/v1/admin/sites`).
+#[derive(clap::Args, Debug)]
+pub struct SiteListArgs {
+    /// Only show this site id
+    #[arg(long)]
+    pub site_id: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    pub page: i64,
+    #[arg(long, default_value_t = 20)]
+    pub per_page: i64,
+    /// Render a human-readable table instead of JSON
+    #[arg(long)]
+    pub table: bool,
+}
+
+/// A single site id.
+#[derive(clap::Args, Debug)]
+pub struct SiteIdArg {
+    pub site_id: String,
+}
+
+/// Arguments for revoking a verified origin.
+#[derive(clap::Args, Debug)]
+pub struct RevokeOriginArgs {
+    pub site_id: String,
+    pub origin: String,
+}
+
+/// Blocked room management subcommands.
+#[derive(clap::Args, Debug)]
+pub struct RoomsArgs {
+    #[command(subcommand)]
+    pub command: RoomsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RoomsCommand {
+    /// List rooms currently blocked from adoption
+    #[command(name = "list-blocked")]
+    ListBlocked(BlockedListArgs),
+    /// Clear a room's blocked state so it can be adopted again
+    #[command(name = "unblock")]
+    Unblock(UnblockRoomArgs),
+}
+
+/// Arguments for listing blocked rooms (mirrors `QUERY /api/v1/admin/rooms/blocked`).
+#[derive(clap::Args, Debug)]
+pub struct BlockedListArgs {
+    /// Only show rooms for this site
+    #[arg(long)]
+    pub site_id: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    pub page: i64,
+    #[arg(long, default_value_t = 20)]
+    pub per_page: i64,
+    /// Render a human-readable table instead of JSON
+    #[arg(long)]
+    pub table: bool,
+}
+
+/// Arguments for unblocking a room.
+#[derive(clap::Args, Debug)]
+pub struct UnblockRoomArgs {
+    pub room_id: String,
 }
 
 /// All CLI subcommands.
@@ -97,6 +181,9 @@ pub enum Commands {
     /// Manage sites registered through the API
     #[command(name = "sites")]
     Sites(SitesArgs),
+    /// Manage blocked comment rooms
+    #[command(name = "rooms")]
+    Rooms(RoomsArgs),
 }
 
 /// The registration data model (serialised to YAML).
@@ -166,6 +253,26 @@ pub async fn handle_sites_command(store: &cumments_store::DbStore, args: &SitesA
             }
             eprintln!("Keep the claim token private: it proves ownership of this site.");
             Ok(())
+        }
+        SitesCommand::List(_)
+        | SitesCommand::RevokeOrigin(_)
+        | SitesCommand::RotateSecret(_)
+        | SitesCommand::RevokeSecret(_)
+        | SitesCommand::ExportConfig(_)
+        | SitesCommand::RotateClaimToken(_) => {
+            bail!("this site subcommand is not implemented yet")
+        }
+    }
+}
+
+/// Handles `cumments rooms ...`.
+pub async fn handle_rooms_command(
+    _store: &cumments_store::DbStore,
+    args: &RoomsArgs,
+) -> Result<()> {
+    match &args.command {
+        RoomsCommand::ListBlocked(_) | RoomsCommand::Unblock(_) => {
+            bail!("this rooms subcommand is not implemented yet")
         }
     }
 }

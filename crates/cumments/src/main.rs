@@ -16,8 +16,8 @@ use config::Mode;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to the configuration file
-    #[arg(short, long)]
+    /// Path to the configuration file (accepted before or after a subcommand)
+    #[arg(short, long, global = true)]
     config: Option<String>,
 
     /// Optional subcommand
@@ -64,6 +64,9 @@ async fn main() -> Result<()> {
             cli::Commands::Sites(_) => {
                 // Handled after the database is connected.
             }
+            cli::Commands::Rooms(_) => {
+                // Handled after the database is connected.
+            }
         }
     }
 
@@ -106,6 +109,10 @@ async fn main() -> Result<()> {
     // Handle CLI subcommands that only need the database.
     if let Some(cli::Commands::Sites(sites_args)) = &args.command {
         cli::handle_sites_command(&db_store, sites_args).await?;
+        return Ok(());
+    }
+    if let Some(cli::Commands::Rooms(rooms_args)) = &args.command {
+        cli::handle_rooms_command(&db_store, rooms_args).await?;
         return Ok(());
     }
 
@@ -219,6 +226,7 @@ async fn main() -> Result<()> {
             }
             cli::Commands::Backup(_) => unreachable!("handled earlier"),
             cli::Commands::Sites(_) => unreachable!("handled earlier"),
+            cli::Commands::Rooms(_) => unreachable!("handled earlier"),
         }
     }
 
