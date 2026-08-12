@@ -41,7 +41,7 @@ one place keeps them consistent.
 ```bash
 docker run --rm --entrypoint cumments \
   ghcr.io/curious-r/cumments:latest \
-  generate-registration \
+  appservice generate-registration \
   --server-name localhost:8008 \
   --url http://cumments:7931 > registration.yaml
 ```

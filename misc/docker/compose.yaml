@@ -5,7 +5,7 @@
 #   1. Generate the AppService registration (run from this directory):
 #        docker run --rm --entrypoint cumments \
 #          ghcr.io/curious-r/cumments:latest \
-#          generate-registration \
+#          appservice generate-registration \
 #          --server-name localhost:8008 \
 #          --url http://cumments:7931 > registration.yaml
 #      The YAML is printed on stdout; as_token and hs_token are printed on
@@ -72,7 +72,7 @@ services:
       CUMMENTS__MATRIX__APPSERVICE__LISTEN_HOST: 0.0.0.0
       CUMMENTS__MATRIX__APPSERVICE__LISTEN_PORT: 7931
       CUMMENTS__MATRIX__APPSERVICE__SENDER_LOCALPART: _cumments_bot
-      # Replace with the values printed by generate-registration (step 1).
+      # Replace with the values printed by appservice generate-registration (step 1).
       CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN: "<as_token>"
       CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN: "<hs_token>"
       CUMMENTS__MATRIX__APPSERVICE__REGISTRATION_FILE: /etc/cumments/registration.yaml

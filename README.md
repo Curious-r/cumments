@@ -35,7 +35,7 @@ mkdir -p ~/cumments-demo && cd ~/cumments-demo
 cp /path/to/cumments/misc/docker/compose.yaml docker-compose.yml
 docker run --rm --entrypoint cumments \
   ghcr.io/curious-r/cumments:latest \
-  generate-registration \
+  appservice generate-registration \
   --server-name localhost:8008 \
   --url http://cumments:7931 > registration.yaml
 # Replace the <as_token>/<hs_token> placeholders in docker-compose.yml, then:

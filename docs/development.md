@@ -19,7 +19,7 @@ CI also runs a syntax check of the demo's inline scripts with
 ## CLI
 
 ```text
-cumments generate-registration [--server-name <domain>] [--url <url>] \
+cumments appservice generate-registration [--server-name <domain>] [--url <url>] \
   [--output registration.yaml] [--quiet]
 cumments backfill
 cumments backup --output <file>

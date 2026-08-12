@@ -25,7 +25,8 @@ locally.
 
 ```text
 cumments
-├── generate-registration [--url ...] [--server-name ...] [--output FILE]
+├── appservice
+│   └── generate-registration [--url ...] [--server-name ...] [--output FILE]
 ├── backfill [--max-pages N]
 ├── backup --output FILE
 ├── sites
@@ -41,6 +42,9 @@ cumments
 │   └── unblock ROOM_ID
 └── completions SHELL
 ```
+
+The top-level `generate-registration` still works as a deprecated hidden
+alias and prints a warning pointing at `appservice generate-registration`.
 
 ## Output conventions
 

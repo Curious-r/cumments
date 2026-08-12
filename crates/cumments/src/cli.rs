@@ -188,11 +188,28 @@ pub struct CompletionsArgs {
     pub shell: clap_complete::Shell,
 }
 
+/// AppService management subcommands.
+#[derive(clap::Args, Debug)]
+pub struct AppserviceArgs {
+    #[command(subcommand)]
+    pub command: AppserviceCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AppserviceCommand {
+    /// Generate a complete registration.yaml for the AppService mode
+    #[command(name = "generate-registration")]
+    GenerateRegistration(GenerateRegistrationArgs),
+}
+
 /// All CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Generate an AppService registration file
-    #[command(name = "generate-registration")]
+    /// AppService management commands
+    #[command(name = "appservice")]
+    Appservice(AppserviceArgs),
+    /// Deprecated alias for `appservice generate-registration`
+    #[command(name = "generate-registration", hide = true)]
     GenerateRegistration(GenerateRegistrationArgs),
     /// Rebuild the read model from Matrix room history
     #[command(name = "backfill")]
@@ -549,7 +566,16 @@ pub fn handle_completions(args: &CompletionsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Handle the `generate-registration` subcommand.
+/// Handles `cumments appservice ...`.
+pub fn handle_appservice_command(args: &AppserviceArgs, config_path: Option<&str>) -> Result<()> {
+    match &args.command {
+        AppserviceCommand::GenerateRegistration(reg_args) => {
+            handle_generate_registration(reg_args, config_path)
+        }
+    }
+}
+
+/// Handle the `appservice generate-registration` subcommand.
 ///
 /// Values are resolved in this order: CLI flag, config file/environment, built-in default.
 /// Only `server_name` has no built-in default: it can come from
@@ -661,7 +687,7 @@ fn build_registration(
     }
 }
 
-/// A partial view of the configuration, used by `generate-registration`.
+/// A partial view of the configuration, used by `appservice generate-registration`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RegistrationSource {
@@ -983,6 +1009,7 @@ mod tests {
             .map(|sub| sub.get_name().to_string())
             .collect::<Vec<_>>();
         for expected in [
+            "appservice",
             "generate-registration",
             "backfill",
             "backup",

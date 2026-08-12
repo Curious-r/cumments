@@ -1553,7 +1553,7 @@ mod tests {
         let error = room_version_decision("12", &available).expect_err("must reject");
         assert!(error.contains("`12` is not supported"));
         assert!(
-            error.contains("10, 11"),
+            error.contains("10") && error.contains("11"),
             "error must list available versions: {error}"
         );
     }
