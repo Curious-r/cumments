@@ -39,7 +39,7 @@ jobs:
 
       - name: Build docs site
         run: |
-          pip install --quiet mkdocs-material==9.7.7
+          pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
           mkdocs build --strict
 
       - uses: actions/upload-pages-artifact@v3

@@ -9,7 +9,7 @@ Every error response uses the RFC 9457 problem details format with
 | `title` | Stable short human-readable name of the type. |
 | `status` | HTTP status code; always identical to the response's real status. |
 | `detail` | Occurrence-specific explanation, intended for the client. |
-| `code` | Short machine-readable slug; identical to the final segment of `type`. |
+| `code` | Short machine-readable slug; identical to the fragment (after `#`) of `type`. |
 | `details` | Optional extension with additional structured data (e.g. validation errors). |
 
 Clients should dispatch on `code` (or the `type` URI); `detail` is for

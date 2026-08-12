@@ -297,7 +297,25 @@ mod tests {
                 "docs/problems/index.md is missing anchor for `{}`",
                 code.slug()
             );
+            assert!(
+                docs.contains(&format!("{}/#{}", PROBLEM_TYPE_BASE, code.slug())),
+                "docs/problems/index.md is missing the canonical type URI for `{}`",
+                code.slug()
+            );
         }
+    }
+
+    #[test]
+    fn problem_type_base_matches_mkdocs_site_url() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mkdocs.yml");
+        let mkdocs = std::fs::read_to_string(path).expect("mkdocs.yml must exist");
+        let site_root = PROBLEM_TYPE_BASE
+            .strip_suffix("/problems")
+            .expect("PROBLEM_TYPE_BASE must end with /problems");
+        assert!(
+            mkdocs.contains(&format!("site_url: {site_root}/")),
+            "mkdocs.yml site_url must match PROBLEM_TYPE_BASE"
+        );
     }
 
     #[test]

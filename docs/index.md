@@ -20,5 +20,5 @@ The documentation is organized as follows:
   [Site verification](site-verification.md) — write-path trust models.
 - [Demo](demo.md) — the standalone browser demo page.
 
-The OpenAPI contract lives at [`openapi.yaml`](openapi.yaml) and is kept in
-sync with the API implementation by CI.
+The OpenAPI contract lives at [`openapi.yaml`](openapi.yaml) and is validated
+by CI (Redocly lint).

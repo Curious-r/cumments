@@ -612,7 +612,7 @@ components:
           description: Occurrence-specific explanation for the client
         code:
           type: string
-          description: Stable machine-readable slug; final segment of `type`
+          description: Stable machine-readable slug; the fragment (after `#`) of `type`
         details:
           type: object
           nullable: true
