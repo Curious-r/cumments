@@ -56,14 +56,6 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     if let Some(cmd) = &args.command {
         match cmd {
-            cli::Commands::GenerateRegistration(reg_args) => {
-                eprintln!(
-                    "warning: `generate-registration` is deprecated; \
-                     use `appservice generate-registration`"
-                );
-                cli::handle_generate_registration(reg_args, args.config.as_deref())?;
-                return Ok(());
-            }
             cli::Commands::Appservice(appservice_args) => {
                 cli::handle_appservice_command(appservice_args, args.config.as_deref())?;
                 return Ok(());
@@ -224,7 +216,6 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     if let Some(cmd) = &args.command {
         match cmd {
-            cli::Commands::GenerateRegistration(_) => unreachable!("handled earlier"),
             cli::Commands::Appservice(_) => unreachable!("handled earlier"),
             cli::Commands::Backfill(args) => {
                 let backfiller = cumments_projector::backfill::Backfiller::new(

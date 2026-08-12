@@ -43,9 +43,6 @@ cumments
 └── completions SHELL
 ```
 
-The top-level `generate-registration` still works as a deprecated hidden
-alias and prints a warning pointing at `appservice generate-registration`.
-
 ## Output conventions
 
 - Machine-readable data (site lists, blocked rooms, secrets, tokens) goes to

@@ -208,9 +208,6 @@ pub enum Commands {
     /// AppService management commands
     #[command(name = "appservice")]
     Appservice(AppserviceArgs),
-    /// Deprecated alias for `appservice generate-registration`
-    #[command(name = "generate-registration", hide = true)]
-    GenerateRegistration(GenerateRegistrationArgs),
     /// Rebuild the read model from Matrix room history
     #[command(name = "backfill")]
     Backfill(BackfillArgs),
@@ -1010,7 +1007,6 @@ mod tests {
             .collect::<Vec<_>>();
         for expected in [
             "appservice",
-            "generate-registration",
             "backfill",
             "backup",
             "sites",
