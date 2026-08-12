@@ -105,7 +105,19 @@ pub async fn require_admin(
     req: Request,
     next: Next,
 ) -> Response {
-    let key = client_key(req.headers(), Some(addr), &state.trusted_proxies);
+    // Key the limiter by the presented token when one exists so an
+    // unauthenticated IP flood cannot starve the real operator's quota, while
+    // requests without a token still share an IP-scoped bucket that bounds
+    // brute-force traffic.
+    let key = match req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    {
+        Some(token) => format!("admin-token:{}", token_hash(token)),
+        None => client_key(req.headers(), Some(addr), &state.trusted_proxies),
+    };
     if !state.admin_limiter.allow(&key) {
         return AppError::TooManyRequests("admin API is rate limited; try again later".to_string())
             .into_response();
