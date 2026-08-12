@@ -8,12 +8,20 @@ pub struct Model {
     pub room_id: String,
     pub site_id: String,
     pub post_slug: String,
-    pub is_active: bool,
+    /// One of `active`, `quarantined`, `superseded`.
+    pub status: String,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
-    /// Why the room is blocked from adoption/use (e.g. governance check
-    /// failed). `None` means the room is not blocked.
-    pub blocked_reason: Option<String>,
+    /// Why the room is quarantined from adoption (e.g. governance check
+    /// failed). `None` when the room is not quarantined.
+    pub quarantine_reason: Option<String>,
+    /// When the room first entered quarantine.
+    pub quarantined_at: Option<DateTimeUtc>,
+    /// Consecutive adoption failures while quarantined.
+    pub adoption_failures: u32,
+    /// Next scheduled automatic adoption attempt; `None` means manual
+    /// attention is required.
+    pub next_attempt_at: Option<DateTimeUtc>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

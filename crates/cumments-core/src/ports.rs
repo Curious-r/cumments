@@ -3,7 +3,8 @@ use crate::intents::{
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
 };
 use crate::models::{
-    BlockedRoom, Comment, CommentPage, PostSlug, RoomEventPage, RoomIdentity, SiteId,
+    Comment, CommentPage, PostSlug, QuarantinedRoom, RoomEventPage, RoomIdentity, RoomStatus,
+    SiteId,
 };
 use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
 use anyhow::Result;
@@ -235,8 +236,8 @@ pub trait RegistryStore: Send + Sync {
         post_slug: &PostSlug,
     ) -> Result<Option<String>>;
 
-    /// Checks if a room is active in the registry.
-    async fn is_room_active(&self, room_id: &str) -> Result<Option<bool>>;
+    /// Returns the lifecycle status of a room, if it is in the registry.
+    async fn get_room_status(&self, room_id: &str) -> Result<Option<RoomStatus>>;
 
     /// Looks up the Cumments identity registered for a room.
     ///
@@ -253,19 +254,28 @@ pub trait RegistryStore: Send + Sync {
         post_slug: &PostSlug,
     ) -> Result<()>;
 
-    /// Invalidates a room in the local registry (e.g. if metadata verification failed).
-    async fn invalidate_room_registry(&self, room_id: &str) -> Result<()>;
+    /// Retires a room from the registry (e.g. the room no longer exists or
+    /// was replaced), keeping the row for projection history.
+    async fn retire_room(&self, room_id: &str) -> Result<()>;
 
-    /// Marks a room as blocked with an operator-visible reason.
-    async fn mark_room_blocked(&self, room_id: &str, reason: &str) -> Result<()>;
+    /// Quarantines a room after an adoption failure. Repeated failures
+    /// increment the counter while preserving the original quarantine time.
+    /// `next_attempt_at` schedules the next automatic adoption attempt;
+    /// `None` means the room needs manual attention (`reinstate_room`).
+    async fn quarantine_room(
+        &self,
+        room_id: &str,
+        reason: &str,
+        next_attempt_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()>;
 
-    /// Clears the blocked state and reactivates a room. Returns `false` when
-    /// the room is not in the registry; clearing an already-unblocked room is
-    /// a successful no-op.
-    async fn unblock_room(&self, room_id: &str) -> Result<bool>;
+    /// Clears a room's quarantine and makes it the canonical room again.
+    /// Returns `false` when the room is not in the registry; reinstating an
+    /// already-active room is a successful no-op.
+    async fn reinstate_room(&self, room_id: &str) -> Result<bool>;
 
-    /// Lists all rooms currently blocked from adoption.
-    async fn get_blocked_rooms(&self) -> Result<Vec<BlockedRoom>>;
+    /// Lists all rooms currently quarantined from adoption.
+    async fn get_quarantined_rooms(&self) -> Result<Vec<QuarantinedRoom>>;
 }
 
 /// Defines the operations for managing sites in the local database.

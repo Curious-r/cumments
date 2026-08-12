@@ -37,12 +37,14 @@ pub struct AdminPage<T> {
 }
 
 #[derive(Debug, Serialize)]
-pub struct AdminBlockedRoom {
+pub struct AdminQuarantinedRoom {
     pub room_id: String,
     pub site_id: String,
     pub post_slug: String,
-    pub reason: String,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub quarantine_reason: String,
+    pub quarantined_at: DateTime<Utc>,
+    pub adoption_failures: u32,
+    pub next_attempt_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,7 +206,7 @@ pub(crate) async fn list_admin_sites_handler(
     ))
 }
 
-pub(crate) async fn list_blocked_rooms_handler(
+pub(crate) async fn list_quarantined_rooms_handler(
     method: Method,
     State(state): State<ApiState>,
     body: String,
@@ -216,9 +218,9 @@ pub(crate) async fn list_blocked_rooms_handler(
 
     let mut rooms = state
         .store
-        .get_blocked_rooms()
+        .get_quarantined_rooms()
         .await
-        .map_err(|e| AppError::Internal(format!("failed to list blocked rooms: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("failed to list quarantined rooms: {e}")))?;
     rooms.sort_by(|a, b| a.site_id.cmp(&b.site_id).then(a.room_id.cmp(&b.room_id)));
     if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
         rooms.retain(|room| room.site_id == site_id);
@@ -230,12 +232,14 @@ pub(crate) async fn list_blocked_rooms_handler(
         .into_iter()
         .skip(start)
         .take(per_page as usize)
-        .map(|room| AdminBlockedRoom {
+        .map(|room| AdminQuarantinedRoom {
             room_id: room.room_id,
             site_id: room.site_id,
             post_slug: room.post_slug,
-            reason: room.reason,
-            updated_at: room.updated_at,
+            quarantine_reason: room.quarantine_reason,
+            quarantined_at: room.quarantined_at,
+            adoption_failures: room.adoption_failures,
+            next_attempt_at: room.next_attempt_at,
         })
         .collect();
     Ok((
@@ -250,20 +254,20 @@ pub(crate) async fn list_blocked_rooms_handler(
     ))
 }
 
-/// Clears a room's blocked state so the reconciler can adopt it again.
+/// Clears a room's quarantine and makes it the canonical room again.
 ///
-/// `DELETE` on the blocked-room subresource is idempotent: unblocking a room
-/// that is already unblocked is a successful no-op. Unknown rooms return 404.
-pub(crate) async fn unblock_room_handler(
+/// `DELETE` on the quarantine subresource is idempotent: reinstating a room
+/// that is already active is a successful no-op. Unknown rooms return 404.
+pub(crate) async fn reinstate_room_handler(
     State(state): State<ApiState>,
     Path(room_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let unblocked = state
+    let reinstated = state
         .store
-        .unblock_room(&room_id)
+        .reinstate_room(&room_id)
         .await
-        .map_err(|e| AppError::Internal(format!("failed to unblock room: {e}")))?;
-    if unblocked {
+        .map_err(|e| AppError::Internal(format!("failed to reinstate room: {e}")))?;
+    if reinstated {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::NotFound("Room not found.".to_string()))

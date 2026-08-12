@@ -197,15 +197,53 @@ pub struct RoomIdentity {
     pub post_slug: String,
 }
 
-/// A room whose adoption was blocked (e.g. governance check failed), for
-/// operator visibility.
+/// Lifecycle state of a room in the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoomStatus {
+    /// The current canonical room for its site/post.
+    Active,
+    /// Adoption failed; the room is isolated and retried on a backoff
+    /// schedule until it recovers or an operator reinstates it.
+    Quarantined,
+    /// Replaced by another room or no longer usable.
+    Superseded,
+}
+
+impl RoomStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RoomStatus::Active => "active",
+            RoomStatus::Quarantined => "quarantined",
+            RoomStatus::Superseded => "superseded",
+        }
+    }
+}
+
+impl std::str::FromStr for RoomStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(RoomStatus::Active),
+            "quarantined" => Ok(RoomStatus::Quarantined),
+            "superseded" => Ok(RoomStatus::Superseded),
+            other => Err(format!("unknown room status `{other}`")),
+        }
+    }
+}
+
+/// A room whose adoption failed and is currently quarantined, for operator
+/// visibility and manual recovery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BlockedRoom {
+pub struct QuarantinedRoom {
     pub room_id: String,
     pub site_id: String,
     pub post_slug: String,
-    pub reason: String,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub quarantine_reason: String,
+    pub quarantined_at: DateTime<Utc>,
+    pub adoption_failures: u32,
+    pub next_attempt_at: Option<DateTime<Utc>>,
 }
 
 /// One page of projected comments for a site/post.

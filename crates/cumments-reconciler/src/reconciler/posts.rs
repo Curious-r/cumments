@@ -51,7 +51,7 @@ impl Reconciler {
                         {
                             let _ = self
                                 .registry_store
-                                .mark_room_blocked(candidate, &e.to_string())
+                                .quarantine_room(candidate, &e.to_string(), None)
                                 .await;
                         }
                         return Err(e);
@@ -108,7 +108,7 @@ impl Reconciler {
                             );
                             let _ = self
                                 .registry_store
-                                .invalidate_room_registry(&room_id)
+                                .retire_room(&room_id)
                                 .await;
                         }
                         return Err(e);

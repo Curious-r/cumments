@@ -1,7 +1,7 @@
 //! Shared stdout helpers for CLI commands.
 
 use anyhow::Result;
-use cumments_api::routes::admin::{AdminBlockedRoom, AdminSite};
+use cumments_api::routes::admin::{AdminQuarantinedRoom, AdminSite};
 use serde::Serialize;
 
 /// Prints one JSON document to stdout (machine-readable CLI output).
@@ -33,16 +33,25 @@ pub(super) fn print_site_table(sites: &[AdminSite]) {
     }
 }
 
-/// Human-readable table for `rooms list-blocked --table`.
-pub(super) fn print_room_table(rooms: &[AdminBlockedRoom]) {
+/// Human-readable table for `rooms list-quarantined --table`.
+pub(super) fn print_room_table(rooms: &[AdminQuarantinedRoom]) {
     println!(
-        "{:<44} {:<16} {:<16} REASON",
-        "ROOM_ID", "SITE_ID", "POST_SLUG"
+        "{:<44} {:<16} {:<16} {:<8} {:<20} REASON",
+        "ROOM_ID", "SITE_ID", "POST_SLUG", "FAILURES", "NEXT ATTEMPT"
     );
     for room in rooms {
+        let next_attempt = room
+            .next_attempt_at
+            .map(|ts| ts.to_rfc3339())
+            .unwrap_or_else(|| "manual".to_string());
         println!(
-            "{:<44} {:<16} {:<16} {}",
-            room.room_id, room.site_id, room.post_slug, room.reason
+            "{:<44} {:<16} {:<16} {:<8} {:<20} {}",
+            room.room_id,
+            room.site_id,
+            room.post_slug,
+            room.adoption_failures,
+            next_attempt,
+            room.quarantine_reason
         );
     }
 }

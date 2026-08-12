@@ -4,15 +4,15 @@ use super::args::{RoomsArgs, RoomsCommand};
 use super::output::{print_json, print_room_table};
 use anyhow::{Result, bail};
 use cumments_api::routes::admin::{
-    AdminBlockedRoom, AdminListQuery, AdminPage, admin_meta, admin_page_bounds,
+    AdminListQuery, AdminPage, AdminQuarantinedRoom, admin_meta, admin_page_bounds,
 };
 use cumments_core::ports::RegistryStore;
 
 /// Handles `cumments rooms ...`.
 pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsArgs) -> Result<()> {
     match &args.command {
-        RoomsCommand::ListBlocked(list_args) => {
-            let mut rooms = store.get_blocked_rooms().await?;
+        RoomsCommand::ListQuarantined(list_args) => {
+            let mut rooms = store.get_quarantined_rooms().await?;
             rooms.sort_by(|a, b| a.site_id.cmp(&b.site_id).then(a.room_id.cmp(&b.room_id)));
             if let Some(site_id) = list_args.site_id.as_deref().filter(|s| !s.is_empty()) {
                 rooms.retain(|room| room.site_id == site_id);
@@ -29,12 +29,14 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
                 .into_iter()
                 .skip(start)
                 .take(per_page as usize)
-                .map(|room| AdminBlockedRoom {
+                .map(|room| AdminQuarantinedRoom {
                     room_id: room.room_id,
                     site_id: room.site_id,
                     post_slug: room.post_slug,
-                    reason: room.reason,
-                    updated_at: room.updated_at,
+                    quarantine_reason: room.quarantine_reason,
+                    quarantined_at: room.quarantined_at,
+                    adoption_failures: room.adoption_failures,
+                    next_attempt_at: room.next_attempt_at,
                 })
                 .collect::<Vec<_>>();
             let page = AdminPage {
@@ -48,14 +50,14 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
             }
             Ok(())
         }
-        RoomsCommand::Unblock(args) => {
-            let unblocked = store.unblock_room(&args.room_id).await?;
-            if !unblocked {
+        RoomsCommand::Reinstate(args) => {
+            let reinstated = store.reinstate_room(&args.room_id).await?;
+            if !reinstated {
                 bail!("room not found in the registry");
             }
             print_json(&serde_json::json!({
                 "room_id": args.room_id,
-                "unblocked": true,
+                "status": "active",
             }))?;
             Ok(())
         }
@@ -64,14 +66,14 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
 
 #[cfg(test)]
 mod tests {
-    use super::super::args::{BlockedListArgs, UnblockRoomArgs};
+    use super::super::args::{QuarantinedListArgs, ReinstateRoomArgs};
     use super::super::test_support::*;
     use super::*;
     use cumments_core::models::{PostSlug, SiteId};
     use cumments_store::DbStore;
 
     #[tokio::test]
-    async fn rooms_list_blocked_and_unblock() {
+    async fn rooms_list_quarantined_and_reinstate() {
         let store = DbStore::connect(&test_db_url("rooms"))
             .await
             .expect("connect db");
@@ -82,12 +84,12 @@ mod tests {
             .await
             .expect("register room");
         store
-            .mark_room_blocked("!room:hs", "Refusing to adopt room")
+            .quarantine_room("!room:hs", "Refusing to adopt room", None)
             .await
-            .expect("mark blocked");
+            .expect("quarantine room");
 
         let list = RoomsArgs {
-            command: RoomsCommand::ListBlocked(BlockedListArgs {
+            command: RoomsCommand::ListQuarantined(QuarantinedListArgs {
                 site_id: None,
                 page: 1,
                 per_page: 20,
@@ -96,27 +98,27 @@ mod tests {
         };
         handle_rooms_command(&store, &list)
             .await
-            .expect("list blocked rooms");
+            .expect("list quarantined rooms");
 
-        let unblock = RoomsArgs {
-            command: RoomsCommand::Unblock(UnblockRoomArgs {
+        let reinstate = RoomsArgs {
+            command: RoomsCommand::Reinstate(ReinstateRoomArgs {
                 room_id: "!room:hs".to_string(),
             }),
         };
-        handle_rooms_command(&store, &unblock)
+        handle_rooms_command(&store, &reinstate)
             .await
-            .expect("unblock room");
+            .expect("reinstate room");
         assert!(
             store
-                .get_blocked_rooms()
+                .get_quarantined_rooms()
                 .await
-                .expect("blocked rooms")
+                .expect("quarantined rooms")
                 .is_empty(),
-            "room must no longer be blocked"
+            "room must no longer be quarantined"
         );
 
         let missing = RoomsArgs {
-            command: RoomsCommand::Unblock(UnblockRoomArgs {
+            command: RoomsCommand::Reinstate(ReinstateRoomArgs {
                 room_id: "!nope:hs".to_string(),
             }),
         };

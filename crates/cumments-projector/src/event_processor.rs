@@ -11,7 +11,7 @@ use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
 use cumments_core::{
     identity::{post_signature_message, signature_message},
-    models::{AuthorType, Comment, CommentAuthor, PostSlug, RoomIdentity, SiteId},
+    models::{AuthorType, Comment, CommentAuthor, PostSlug, RoomIdentity, RoomStatus, SiteId},
     ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
     projector_events::ProjectorEvent,
 };
@@ -75,15 +75,15 @@ impl EventProcessor {
     #[instrument(skip(self))]
     pub async fn process_room_message(&self, event: ParsedRoomMessage) -> Result<()> {
         // ── PRINCIPLE B: REGISTRY ENFORCEMENT ──
-        let registry_status = self.registry_store.is_room_active(&event.room_id).await?;
+        let registry_status = self.registry_store.get_room_status(&event.room_id).await?;
 
         match registry_status {
-            Some(true) => {
+            Some(RoomStatus::Active) => {
                 // Room is active, proceed normally
             }
-            Some(false) => {
-                // Room is explicitly INACTIVE (tombstoned).
-                debug!("Ignoring message from deactivated room {}", event.room_id);
+            Some(_) => {
+                // Room is quarantined, superseded or otherwise not canonical.
+                debug!("Ignoring message from non-active room {}", event.room_id);
                 return Ok(());
             }
             None => {
@@ -354,10 +354,10 @@ impl EventProcessor {
         // Same registry gate as message processing: ignore redactions from
         // deactivated or unregistered rooms so tombstoned rooms cannot keep
         // mutating the read model through live pushes.
-        match self.registry_store.is_room_active(&event.room_id).await? {
-            Some(true) => {}
-            Some(false) => {
-                debug!("Ignoring redaction from deactivated room {}", event.room_id);
+        match self.registry_store.get_room_status(&event.room_id).await? {
+            Some(RoomStatus::Active) => {}
+            Some(_) => {
+                debug!("Ignoring redaction from non-active room {}", event.room_id);
                 return Ok(());
             }
             None => {

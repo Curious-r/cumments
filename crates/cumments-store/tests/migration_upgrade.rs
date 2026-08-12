@@ -124,3 +124,91 @@ async fn comment_updated_at_is_renamed_to_projected_at() {
         "renamed column must preserve the stored value"
     );
 }
+
+#[tokio::test]
+async fn room_quarantine_state_backfills_legacy_encoding() {
+    let url = test_db_url("quarantine-state");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Stop before 000030. Entity-first migrations create the *new* columns on
+    // fresh databases, so reshape the table back into the legacy
+    // `is_active` + `blocked_reason` encoding to simulate an upgraded DB.
+    Migrator::up(&db, Some(29))
+        .await
+        .expect("migrate to 000029");
+    db.execute_unprepared("DROP INDEX IF EXISTS idx_room_registry_active_site_post")
+        .await
+        .expect("drop active index");
+    for column in [
+        "status",
+        "quarantine_reason",
+        "blocked_reason",
+        "quarantined_at",
+        "adoption_failures",
+        "next_attempt_at",
+    ] {
+        db.execute_unprepared(&format!("ALTER TABLE room_registry DROP COLUMN {column}"))
+            .await
+            .expect("drop new column");
+    }
+    db.execute_unprepared(
+        "ALTER TABLE room_registry ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 0",
+    )
+    .await
+    .expect("add legacy is_active");
+    db.execute_unprepared("ALTER TABLE room_registry ADD COLUMN blocked_reason TEXT")
+        .await
+        .expect("add legacy blocked_reason");
+
+    let now = Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO room_registry \
+         (room_id, site_id, post_slug, is_active, blocked_reason, created_at, updated_at) \
+         VALUES \
+         ('!active:hs', 'my-blog', 'active-post', 1, NULL, '{now}', '{now}'), \
+         ('!quarantined:hs', 'my-blog', 'quarantined-post', 0, 'Refusing to adopt room', '{now}', '{now}'), \
+         ('!superseded:hs', 'my-blog', 'superseded-post', 0, NULL, '{now}', '{now}')"
+    ))
+    .await
+    .expect("insert legacy rows");
+
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    // Query the migrated rows and assert the status mapping.
+    let rows = db
+        .query_all_raw(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT room_id, status, quarantine_reason, adoption_failures, next_attempt_at \
+                 FROM room_registry ORDER BY room_id",
+        ))
+        .await
+        .expect("query migrated rows");
+    let by_room = rows
+        .into_iter()
+        .map(|row| {
+            let room_id: String = row.try_get("", "room_id").expect("room_id");
+            let status: String = row.try_get("", "status").expect("status");
+            let quarantine_reason: Option<String> =
+                row.try_get("", "quarantine_reason").expect("reason");
+            let adoption_failures: i64 = row.try_get("", "adoption_failures").expect("failures");
+            (room_id, (status, quarantine_reason, adoption_failures))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    assert_eq!(
+        by_room.get("!active:hs"),
+        Some(&("active".to_string(), None, 0))
+    );
+    assert_eq!(
+        by_room.get("!quarantined:hs"),
+        Some(&(
+            "quarantined".to_string(),
+            Some("Refusing to adopt room".to_string()),
+            1
+        ))
+    );
+    assert_eq!(
+        by_room.get("!superseded:hs"),
+        Some(&("superseded".to_string(), None, 0))
+    );
+}

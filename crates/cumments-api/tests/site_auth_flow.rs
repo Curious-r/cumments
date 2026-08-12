@@ -794,9 +794,9 @@ async fn admin_can_rotate_claim_token() {
 }
 
 #[tokio::test]
-async fn admin_lists_blocked_rooms() {
+async fn admin_lists_quarantined_rooms() {
     let (state, store) = test_state(
-        "blocked-rooms",
+        "quarantined-rooms",
         SiteVerificationPolicy::Disabled,
         Some("token"),
     )
@@ -808,16 +808,16 @@ async fn admin_lists_blocked_rooms() {
         .await
         .expect("register room");
     store
-        .mark_room_blocked("!room:hs", "Refusing to adopt room")
+        .quarantine_room("!room:hs", "Refusing to adopt room", None)
         .await
-        .expect("mark blocked");
+        .expect("quarantine room");
 
     let router = cumments_api::build_router(state);
     let resp = router
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/admin/rooms/blocked",
+            "/api/v1/admin/rooms/quarantined",
             None,
             &[("authorization", "Bearer token".to_string())],
         ))
@@ -830,7 +830,7 @@ async fn admin_lists_blocked_rooms() {
     assert_eq!(json["data"][0]["site_id"], "my-blog");
     assert_eq!(json["meta"]["total"], 1);
     assert!(
-        json["data"][0]["reason"]
+        json["data"][0]["quarantine_reason"]
             .as_str()
             .unwrap()
             .contains("Refusing to adopt")
@@ -840,7 +840,7 @@ async fn admin_lists_blocked_rooms() {
         .clone()
         .oneshot(request_with_body(
             query_method(),
-            "/api/v1/admin/rooms/blocked",
+            "/api/v1/admin/rooms/quarantined",
             None,
             &[("authorization", "Bearer token".to_string())],
             r#"{"site_id":"other"}"#,
@@ -853,37 +853,37 @@ async fn admin_lists_blocked_rooms() {
     assert_eq!(filtered_json["data"].as_array().map(Vec::len), Some(0));
     assert_eq!(filtered_json["meta"]["total"], 0);
 
-    // Unblock is idempotent: 204 both times, and the blocked list empties.
+    // Reinstate is idempotent: 204 both times, and the list empties.
     let auth = [("authorization", "Bearer token".to_string())];
-    let unblocked = router
+    let reinstated = router
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/rooms/blocked/!room:hs",
+            "/api/v1/admin/rooms/quarantined/!room:hs",
             None,
             &auth,
         ))
         .await
         .expect("call router");
-    assert_eq!(unblocked.status(), StatusCode::NO_CONTENT);
+    assert_eq!(reinstated.status(), StatusCode::NO_CONTENT);
 
-    let unblocked_again = router
+    let reinstated_again = router
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/rooms/blocked/!room:hs",
+            "/api/v1/admin/rooms/quarantined/!room:hs",
             None,
             &auth,
         ))
         .await
         .expect("call router");
-    assert_eq!(unblocked_again.status(), StatusCode::NO_CONTENT);
+    assert_eq!(reinstated_again.status(), StatusCode::NO_CONTENT);
 
     let missing = router
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/rooms/blocked/!unknown:hs",
+            "/api/v1/admin/rooms/quarantined/!unknown:hs",
             None,
             &auth,
         ))
@@ -895,7 +895,7 @@ async fn admin_lists_blocked_rooms() {
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/admin/rooms/blocked",
+            "/api/v1/admin/rooms/quarantined",
             None,
             &auth,
         ))

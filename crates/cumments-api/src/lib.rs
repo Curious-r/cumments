@@ -1,7 +1,7 @@
 use crate::routes::admin::{
-    config_snippet_handler, list_admin_sites_handler, list_blocked_rooms_handler, require_admin,
-    revoke_secret_handler, revoke_verified_origin_handler, rotate_claim_token_handler,
-    rotate_secret_handler, unblock_room_handler,
+    config_snippet_handler, list_admin_sites_handler, list_quarantined_rooms_handler,
+    reinstate_room_handler, require_admin, revoke_secret_handler, revoke_verified_origin_handler,
+    rotate_claim_token_handler, rotate_secret_handler,
 };
 use crate::routes::comments::{
     delete_comment_body_handler, delete_comment_handler, post_comment_handler,
@@ -171,12 +171,22 @@ pub fn build_router(state: ApiState) -> Router {
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
+            "/api/v1/admin/rooms/quarantined",
+            axum::routing::get(method_not_allowed_handler).fallback(list_quarantined_rooms_handler),
+        )
+        .route(
+            "/api/v1/admin/rooms/quarantined/{room_id}",
+            axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
+        )
+        // Deprecated aliases kept for one release; remove with the next
+        // breaking change.
+        .route(
             "/api/v1/admin/rooms/blocked",
-            axum::routing::get(method_not_allowed_handler).fallback(list_blocked_rooms_handler),
+            axum::routing::get(method_not_allowed_handler).fallback(list_quarantined_rooms_handler),
         )
         .route(
             "/api/v1/admin/rooms/blocked/{room_id}",
-            axum::routing::delete(unblock_room_handler).fallback(method_not_allowed_handler),
+            axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 

@@ -128,7 +128,7 @@ pub struct RevokeOriginArgs {
     pub origin: String,
 }
 
-/// Blocked room management subcommands.
+/// Quarantined room management subcommands.
 #[derive(clap::Args, Debug)]
 pub struct RoomsArgs {
     #[command(subcommand)]
@@ -137,17 +137,18 @@ pub struct RoomsArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum RoomsCommand {
-    /// List rooms currently blocked from adoption
-    #[command(name = "list-blocked")]
-    ListBlocked(BlockedListArgs),
-    /// Clear a room's blocked state so it can be adopted again
-    #[command(name = "unblock")]
-    Unblock(UnblockRoomArgs),
+    /// List rooms currently quarantined from adoption
+    #[command(name = "list-quarantined", alias = "list-blocked")]
+    ListQuarantined(QuarantinedListArgs),
+    /// Clear a room's quarantine and make it canonical again
+    #[command(name = "reinstate", alias = "unblock")]
+    Reinstate(ReinstateRoomArgs),
 }
 
-/// Arguments for listing blocked rooms (mirrors `QUERY /api/v1/admin/rooms/blocked`).
+/// Arguments for listing quarantined rooms (mirrors
+/// `QUERY /api/v1/admin/rooms/quarantined`).
 #[derive(clap::Args, Debug)]
-pub struct BlockedListArgs {
+pub struct QuarantinedListArgs {
     /// Only show rooms for this site
     #[arg(long)]
     pub site_id: Option<String>,
@@ -160,9 +161,9 @@ pub struct BlockedListArgs {
     pub table: bool,
 }
 
-/// Arguments for unblocking a room.
+/// Arguments for reinstating a room.
 #[derive(clap::Args, Debug)]
-pub struct UnblockRoomArgs {
+pub struct ReinstateRoomArgs {
     pub room_id: String,
 }
 

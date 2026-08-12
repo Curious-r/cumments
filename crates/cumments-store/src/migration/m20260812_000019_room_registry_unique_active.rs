@@ -1,5 +1,9 @@
 use sea_orm_migration::prelude::*;
 
+use crate::migration::column_exists;
+
+const TABLE: &str = "room_registry";
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -8,12 +12,12 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Deactivate duplicates deterministically: keep the oldest row per
-        // (site_id, post_slug), matching the current `get_registered_room`
-        // convention of preferring the first registered room.
-        manager
-            .get_connection()
-            .execute_unprepared(
+        let db = manager.get_connection();
+        if column_exists(manager, TABLE, "is_active").await? {
+            // Legacy `is_active` schema: deactivate duplicates
+            // deterministically (keep the oldest row per site/post), matching
+            // the `get_registered_room` convention, then index active rows.
+            db.execute_unprepared(
                 "UPDATE room_registry SET is_active = 0, \
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
                  WHERE is_active = 1 AND rowid NOT IN ( \
@@ -22,14 +26,20 @@ impl MigrationTrait for Migration {
                  )",
             )
             .await?;
-
-        manager
-            .get_connection()
-            .execute_unprepared(
+            db.execute_unprepared(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_room_registry_active_site_post \
                  ON room_registry(site_id, post_slug) WHERE is_active = 1",
             )
             .await?;
+        } else {
+            // Entity-first fresh schema already has `status`; index the
+            // canonical rows directly.
+            db.execute_unprepared(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_room_registry_active_site_post \
+                 ON room_registry(site_id, post_slug) WHERE status = 'active'",
+            )
+            .await?;
+        }
 
         Ok(())
     }
