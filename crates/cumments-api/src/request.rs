@@ -21,7 +21,7 @@ pub struct PaginatedResponse {
     pub meta: PaginationMeta,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct PaginationMeta {
     pub total: i64,
     pub page: i64,

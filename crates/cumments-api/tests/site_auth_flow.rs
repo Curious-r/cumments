@@ -444,8 +444,11 @@ async fn admin_lifecycle_and_well_known_verification() {
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_json: serde_json::Value =
         serde_json::from_str(&body_text(listed).await).expect("parse response");
-    assert_eq!(listed_json["sites"][0]["site_id"], site_id);
-    assert_eq!(listed_json["sites"][0]["auth_mode"], "origin");
+    assert_eq!(listed_json["data"][0]["site_id"], site_id);
+    assert_eq!(listed_json["data"][0]["auth_mode"], "origin");
+    assert_eq!(listed_json["meta"]["total"], 1);
+    assert_eq!(listed_json["meta"]["page"], 1);
+    assert_eq!(listed_json["meta"]["total_pages"], 1);
 
     // Start verification for a local well-known endpoint and keep the
     // verification token from the response (not the claim token).
@@ -750,12 +753,29 @@ async fn admin_lists_blocked_rooms() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json: serde_json::Value =
         serde_json::from_str(&body_text(resp).await).expect("parse response");
-    assert_eq!(json["rooms"][0]["room_id"], "!room:hs");
-    assert_eq!(json["rooms"][0]["site_id"], "my-blog");
+    assert_eq!(json["data"][0]["room_id"], "!room:hs");
+    assert_eq!(json["data"][0]["site_id"], "my-blog");
+    assert_eq!(json["meta"]["total"], 1);
     assert!(
-        json["rooms"][0]["reason"]
+        json["data"][0]["reason"]
             .as_str()
             .unwrap()
             .contains("Refusing to adopt")
     );
+
+    let filtered = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/admin/rooms/blocked?site_id=other",
+            None,
+            &[("authorization", "Bearer token".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(filtered.status(), StatusCode::OK);
+    let filtered_json: serde_json::Value =
+        serde_json::from_str(&body_text(filtered).await).expect("parse response");
+    assert_eq!(filtered_json["data"].as_array().map(Vec::len), Some(0));
+    assert_eq!(filtered_json["meta"]["total"], 0);
 }

@@ -249,11 +249,13 @@ Admin routes are rate limited (60 requests/minute per client key).
 
 ### List sites
 
-`GET /api/v1/admin/sites`
+`GET /api/v1/admin/sites?page=1&per_page=20&site_id=my-blog`
 
 Returns every database-tracked site merged with the operator-declared
 `[sites]` overlay. Each origin carries a `source` of `"verified"` or
-`"config"`.
+`"config"`. Pagination and filtering use `page`, `per_page` (1-100, default
+20) and optional `site_id`; the response shape is
+`{ "data": [...], "meta": { "total", "page", "per_page", "total_pages" } }`.
 
 ### Revoke a verified origin
 
@@ -288,11 +290,12 @@ Use this when a claim token may have leaked.
 
 ### List blocked rooms
 
-`GET /api/v1/admin/rooms/blocked`
+`GET /api/v1/admin/rooms/blocked?page=1&per_page=20&site_id=my-blog`
 
 Returns rooms whose adoption failed governance/room-version checks, with the
 room id, site/post, reason, and last update. A successful re-registration
-clears the blocked state.
+clears the blocked state. The same pagination/filter parameters and
+`{ "data", "meta" }` shape apply.
 
 ## Rate limiting
 

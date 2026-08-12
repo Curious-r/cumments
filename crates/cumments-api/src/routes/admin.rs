@@ -7,10 +7,11 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
+use crate::request::PaginationMeta;
 use axum::extract::Request;
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::header::AUTHORIZATION,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -29,13 +30,9 @@ use std::collections::HashSet;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
-pub struct AdminSiteList {
-    pub sites: Vec<AdminSite>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AdminBlockedRooms {
-    pub rooms: Vec<AdminBlockedRoom>,
+pub struct AdminPage<T> {
+    pub data: Vec<T>,
+    pub meta: PaginationMeta,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +66,13 @@ pub struct AdminOrigin {
 #[derive(Debug, Deserialize)]
 pub struct RevokeOriginRequest {
     pub origin: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminListQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub site_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,7 +151,8 @@ pub async fn require_admin(
 
 pub(crate) async fn list_admin_sites_handler(
     State(state): State<ApiState>,
-) -> Result<Json<AdminSiteList>, AppError> {
+    Query(query): Query<AdminListQuery>,
+) -> Result<Json<AdminPage<AdminSite>>, AppError> {
     let db_sites = state
         .store
         .list_site_auth()
@@ -168,30 +173,76 @@ pub(crate) async fn list_admin_sites_handler(
         }
     }
     sites.sort_by(|a, b| a.site_id.cmp(&b.site_id));
+    if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
+        sites.retain(|site| site.site_id == site_id);
+    }
 
-    Ok(Json(AdminSiteList { sites }))
+    let (page, per_page) = admin_page_bounds(&query);
+    let total = sites.len() as i64;
+    let start = ((page - 1) * per_page) as usize;
+    let data = sites
+        .into_iter()
+        .skip(start)
+        .take(per_page as usize)
+        .collect();
+    Ok(Json(AdminPage {
+        data,
+        meta: admin_meta(total, page, per_page),
+    }))
 }
 
 pub(crate) async fn list_blocked_rooms_handler(
     State(state): State<ApiState>,
-) -> Result<Json<AdminBlockedRooms>, AppError> {
-    let rooms = state
+    Query(query): Query<AdminListQuery>,
+) -> Result<Json<AdminPage<AdminBlockedRoom>>, AppError> {
+    let mut rooms = state
         .store
         .get_blocked_rooms()
         .await
         .map_err(|e| AppError::Internal(format!("failed to list blocked rooms: {e}")))?;
-    Ok(Json(AdminBlockedRooms {
-        rooms: rooms
-            .into_iter()
-            .map(|room| AdminBlockedRoom {
-                room_id: room.room_id,
-                site_id: room.site_id,
-                post_slug: room.post_slug,
-                reason: room.reason,
-                updated_at: room.updated_at,
-            })
-            .collect(),
+    rooms.sort_by(|a, b| a.site_id.cmp(&b.site_id).then(a.room_id.cmp(&b.room_id)));
+    if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
+        rooms.retain(|room| room.site_id == site_id);
+    }
+    let (page, per_page) = admin_page_bounds(&query);
+    let total = rooms.len() as i64;
+    let start = ((page - 1) * per_page) as usize;
+    let data = rooms
+        .into_iter()
+        .skip(start)
+        .take(per_page as usize)
+        .map(|room| AdminBlockedRoom {
+            room_id: room.room_id,
+            site_id: room.site_id,
+            post_slug: room.post_slug,
+            reason: room.reason,
+            updated_at: room.updated_at,
+        })
+        .collect();
+    Ok(Json(AdminPage {
+        data,
+        meta: admin_meta(total, page, per_page),
     }))
+}
+
+fn admin_page_bounds(query: &AdminListQuery) -> (i64, i64) {
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+    (page, per_page)
+}
+
+fn admin_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
+    let total_pages = if total > 0 {
+        (total + per_page - 1) / per_page
+    } else {
+        0
+    };
+    PaginationMeta {
+        total,
+        page,
+        per_page,
+        total_pages,
+    }
 }
 
 pub(crate) async fn revoke_verified_origin_handler(
