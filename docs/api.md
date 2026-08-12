@@ -375,6 +375,14 @@ room id, site/post, reason, and last update. A successful re-registration
 clears the blocked state. The same pagination/filter fields and
 `{ "data", "meta" }` shape apply.
 
+### Unblock a room
+
+`DELETE /api/v1/admin/rooms/blocked/{room_id}`
+
+Clears a room's blocked state so the reconciler can adopt it again. The
+operation is idempotent: unblocking an already-unblocked room also returns
+`204`; an unknown room returns `404`.
+
 ## Error responses
 
 All error responses use the RFC 9457 problem details format with

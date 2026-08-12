@@ -852,6 +852,58 @@ async fn admin_lists_blocked_rooms() {
         serde_json::from_str(&body_text(filtered).await).expect("parse response");
     assert_eq!(filtered_json["data"].as_array().map(Vec::len), Some(0));
     assert_eq!(filtered_json["meta"]["total"], 0);
+
+    // Unblock is idempotent: 204 both times, and the blocked list empties.
+    let auth = [("authorization", "Bearer token".to_string())];
+    let unblocked = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/admin/rooms/blocked/!room:hs",
+            None,
+            &auth,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(unblocked.status(), StatusCode::NO_CONTENT);
+
+    let unblocked_again = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/admin/rooms/blocked/!room:hs",
+            None,
+            &auth,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(unblocked_again.status(), StatusCode::NO_CONTENT);
+
+    let missing = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/admin/rooms/blocked/!unknown:hs",
+            None,
+            &auth,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let after = router
+        .clone()
+        .oneshot(request(
+            query_method(),
+            "/api/v1/admin/rooms/blocked",
+            None,
+            &auth,
+        ))
+        .await
+        .expect("call router");
+    let after_json: serde_json::Value =
+        serde_json::from_str(&body_text(after).await).expect("parse response");
+    assert_eq!(after_json["meta"]["total"], 0);
 }
 
 #[tokio::test]

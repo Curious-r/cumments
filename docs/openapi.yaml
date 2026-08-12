@@ -529,6 +529,22 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+  /api/v1/admin/rooms/blocked/{room_id}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    delete:
+      tags: [Admin]
+      summary: Unblock a room
+      operationId: unblockBlockedRoom
+      security:
+        - adminToken: []
+      responses:
+        "204":
+          description: Room unblocked (idempotent)
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:
@@ -556,6 +572,13 @@ components:
       schema:
         type: string
         description: Matrix event ID, percent-encoded
+    RoomId:
+      name: room_id
+      in: path
+      required: true
+      schema:
+        type: string
+        description: Matrix room ID, percent-encoded
     IdempotencyKey:
       name: Idempotency-Key
       in: header

@@ -259,6 +259,11 @@ pub trait RegistryStore: Send + Sync {
     /// Marks a room as blocked with an operator-visible reason.
     async fn mark_room_blocked(&self, room_id: &str, reason: &str) -> Result<()>;
 
+    /// Clears the blocked state and reactivates a room. Returns `false` when
+    /// the room is not in the registry; clearing an already-unblocked room is
+    /// a successful no-op.
+    async fn unblock_room(&self, room_id: &str) -> Result<bool>;
+
     /// Lists all rooms currently blocked from adoption.
     async fn get_blocked_rooms(&self) -> Result<Vec<BlockedRoom>>;
 }

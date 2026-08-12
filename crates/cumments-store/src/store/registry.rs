@@ -133,6 +133,26 @@ impl RegistryStore for DbStore {
         Ok(())
     }
 
+    async fn unblock_room(&self, room_id: &str) -> Result<bool> {
+        let result = room_registry::Entity::update_many()
+            .col_expr(
+                room_registry::Column::IsActive,
+                sea_orm::sea_query::Expr::value(true),
+            )
+            .col_expr(
+                room_registry::Column::BlockedReason,
+                sea_orm::sea_query::Expr::value(None::<String>),
+            )
+            .col_expr(
+                room_registry::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(room_registry::COLUMN.room_id.eq(room_id))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
+    }
+
     async fn get_blocked_rooms(&self) -> Result<Vec<BlockedRoom>> {
         let models = room_registry::Entity::find()
             .filter(room_registry::Column::BlockedReason.is_not_null())

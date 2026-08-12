@@ -250,6 +250,26 @@ pub(crate) async fn list_blocked_rooms_handler(
     ))
 }
 
+/// Clears a room's blocked state so the reconciler can adopt it again.
+///
+/// `DELETE` on the blocked-room subresource is idempotent: unblocking a room
+/// that is already unblocked is a successful no-op. Unknown rooms return 404.
+pub(crate) async fn unblock_room_handler(
+    State(state): State<ApiState>,
+    Path(room_id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let unblocked = state
+        .store
+        .unblock_room(&room_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to unblock room: {e}")))?;
+    if unblocked {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound("Room not found.".to_string()))
+    }
+}
+
 /// Parses the optional QUERY body; an empty body means default pagination.
 fn parse_admin_list_query(body: &str) -> Result<AdminListQuery, AppError> {
     if body.is_empty() {
