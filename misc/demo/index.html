@@ -1658,26 +1658,29 @@
                 if (!state.meta) await loadAll();
                 const cfg = getSettings();
                 const collected = [];
+                let mineCount = 0;
                 let backendPage = 1;
                 const maxPage = state.meta ? state.meta.total_pages : 0;
                 let page = state.currentPage;
                 const need = page * state.perPage;
 
-                while (collected.length < need && backendPage <= maxPage) {
+                while (backendPage <= maxPage) {
                     const json = await queryComments(cfg, backendPage, 100);
-                    collected.push(
-                        ...json.data.filter((c) => isOwn(c)),
-                    );
+                    for (const c of json.data) {
+                        if (!isOwn(c)) continue;
+                        mineCount += 1;
+                        if (collected.length < need) collected.push(c);
+                    }
                     if (backendPage >= (json.meta ? json.meta.total_pages : backendPage)) {
                         break;
                     }
                     backendPage += 1;
                 }
 
-                state.mineTotal = collected.length;
+                state.mineTotal = mineCount;
                 const totalPages = Math.max(
                     1,
-                    Math.ceil(collected.length / state.perPage),
+                    Math.ceil(mineCount / state.perPage),
                 );
                 if (page > totalPages) {
                     page = totalPages;
@@ -1688,14 +1691,14 @@
                 state.mineComments = items;
 
                 const meta = {
-                    total: collected.length,
+                    total: mineCount,
                     page,
                     per_page: state.perPage,
                     total_pages: totalPages,
                 };
                 renderComments(items);
                 markPendingSynced(items);
-                updateHeader(collected.length);
+                updateHeader(mineCount);
                 updatePagination(meta);
             }
 
