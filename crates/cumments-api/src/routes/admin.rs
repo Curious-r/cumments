@@ -8,11 +8,12 @@ use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::PaginationMeta;
+use crate::routes::comments::{ACCEPT_QUERY, QUERY_METHOD};
 use axum::extract::Request;
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, Query, State},
-    http::header::AUTHORIZATION,
+    extract::{ConnectInfo, Path, State},
+    http::{Method, StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -150,9 +151,15 @@ pub async fn require_admin(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn list_admin_sites_handler(
+    method: Method,
     State(state): State<ApiState>,
-    Query(query): Query<AdminListQuery>,
-) -> Result<Json<AdminPage<AdminSite>>, AppError> {
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    if method != *QUERY_METHOD {
+        return Err(AppError::MethodNotAllowed);
+    }
+    let query = parse_admin_list_query(&body)?;
+
     let db_sites = state
         .store
         .list_site_auth()
@@ -185,16 +192,28 @@ pub(crate) async fn list_admin_sites_handler(
         .skip(start)
         .take(per_page as usize)
         .collect();
-    Ok(Json(AdminPage {
-        data,
-        meta: admin_meta(total, page, per_page),
-    }))
+    Ok((
+        [(ACCEPT_QUERY.clone(), "application/json")],
+        (
+            StatusCode::OK,
+            Json(AdminPage {
+                data,
+                meta: admin_meta(total, page, per_page),
+            }),
+        ),
+    ))
 }
 
 pub(crate) async fn list_blocked_rooms_handler(
+    method: Method,
     State(state): State<ApiState>,
-    Query(query): Query<AdminListQuery>,
-) -> Result<Json<AdminPage<AdminBlockedRoom>>, AppError> {
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    if method != *QUERY_METHOD {
+        return Err(AppError::MethodNotAllowed);
+    }
+    let query = parse_admin_list_query(&body)?;
+
     let mut rooms = state
         .store
         .get_blocked_rooms()
@@ -219,10 +238,29 @@ pub(crate) async fn list_blocked_rooms_handler(
             updated_at: room.updated_at,
         })
         .collect();
-    Ok(Json(AdminPage {
-        data,
-        meta: admin_meta(total, page, per_page),
-    }))
+    Ok((
+        [(ACCEPT_QUERY.clone(), "application/json")],
+        (
+            StatusCode::OK,
+            Json(AdminPage {
+                data,
+                meta: admin_meta(total, page, per_page),
+            }),
+        ),
+    ))
+}
+
+/// Parses the optional QUERY body; an empty body means default pagination.
+fn parse_admin_list_query(body: &str) -> Result<AdminListQuery, AppError> {
+    if body.is_empty() {
+        return Ok(AdminListQuery {
+            page: None,
+            per_page: None,
+            site_id: None,
+        });
+    }
+    serde_json::from_str(body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))
 }
 
 fn admin_page_bounds(query: &AdminListQuery) -> (i64, i64) {

@@ -27,7 +27,7 @@ pub(crate) static QUERY_METHOD: std::sync::LazyLock<Method> =
     std::sync::LazyLock::new(|| Method::from_bytes(b"QUERY").unwrap());
 
 /// The Accept-Query response header (RFC 10008, Section 3).
-static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
+pub(crate) static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
 
 /// Mandatory `Idempotency-Key` header for POST/PATCH/DELETE intents.

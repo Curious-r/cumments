@@ -374,16 +374,21 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
   /api/v1/admin/sites:
-    get:
+    x-cumments-query:
       tags: [Admin]
-      summary: List managed sites
+      summary: List managed sites (QUERY)
       operationId: listAdminSites
+      description: |
+        Sent as `QUERY /api/v1/admin/sites` with an optional JSON body
+        carrying pagination and the `site_id` filter.
       security:
         - adminToken: []
-      parameters:
-        - $ref: "#/components/parameters/AdminPage"
-        - $ref: "#/components/parameters/AdminPerPage"
-        - $ref: "#/components/parameters/AdminSiteFilter"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminListQuery"
       responses:
         "200":
           description: Paginated sites
@@ -391,6 +396,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdminSitePage"
+        "400":
+          $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
   /api/v1/admin/sites/{site_id}/origins/revoke:
@@ -496,16 +503,21 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
   /api/v1/admin/rooms/blocked:
-    get:
+    x-cumments-query:
       tags: [Admin]
-      summary: List blocked rooms
+      summary: List blocked rooms (QUERY)
       operationId: listBlockedRooms
+      description: |
+        Sent as `QUERY /api/v1/admin/rooms/blocked` with an optional JSON body
+        carrying pagination and the `site_id` filter.
       security:
         - adminToken: []
-      parameters:
-        - $ref: "#/components/parameters/AdminPage"
-        - $ref: "#/components/parameters/AdminPerPage"
-        - $ref: "#/components/parameters/AdminSiteFilter"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminListQuery"
       responses:
         "200":
           description: Paginated blocked rooms
@@ -513,6 +525,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdminBlockedRoomPage"
+        "400":
+          $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
 components:
@@ -562,26 +576,6 @@ components:
       name: X-Cumments-Claim-Token
       in: header
       required: true
-      schema:
-        type: string
-    AdminPage:
-      name: page
-      in: query
-      schema:
-        type: integer
-        minimum: 1
-        default: 1
-    AdminPerPage:
-      name: per_page
-      in: query
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 100
-        default: 20
-    AdminSiteFilter:
-      name: site_id
-      in: query
       schema:
         type: string
   responses:
@@ -869,6 +863,20 @@ components:
             $ref: "#/components/schemas/AdminSite"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
+    AdminListQuery:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        site_id:
+          type: string
     AdminBlockedRoom:
       type: object
       required: [room_id, site_id, post_slug, reason]

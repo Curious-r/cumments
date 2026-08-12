@@ -93,6 +93,16 @@ fn request(
     origin: Option<&str>,
     headers: &[(&str, String)],
 ) -> Request<Body> {
+    request_with_body(method, uri, origin, headers, "{}")
+}
+
+fn request_with_body(
+    method: Method,
+    uri: &str,
+    origin: Option<&str>,
+    headers: &[(&str, String)],
+    body: &str,
+) -> Request<Body> {
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
@@ -103,11 +113,17 @@ fn request(
     for (name, value) in headers {
         builder = builder.header(*name, value.as_str());
     }
-    let mut req = builder.body(Body::from("{}")).expect("build request");
+    let mut req = builder
+        .body(Body::from(body.to_owned()))
+        .expect("build request");
     req.extensions_mut().insert(ConnectInfo(
         "127.0.0.1:45678".parse::<SocketAddr>().unwrap(),
     ));
     req
+}
+
+fn query_method() -> Method {
+    Method::from_bytes(b"QUERY").unwrap()
 }
 
 fn response_origin(response: &axum::response::Response) -> Option<String> {
@@ -483,7 +499,7 @@ async fn admin_lifecycle_and_well_known_verification() {
     // Admin list requires the token.
     let unauthorized = router
         .clone()
-        .oneshot(request(Method::GET, "/api/v1/admin/sites", None, &[]))
+        .oneshot(request(query_method(), "/api/v1/admin/sites", None, &[]))
         .await
         .expect("call router");
     assert_eq!(unauthorized.status(), StatusCode::FORBIDDEN);
@@ -491,7 +507,7 @@ async fn admin_lifecycle_and_well_known_verification() {
     let listed = router
         .clone()
         .oneshot(request(
-            Method::GET,
+            query_method(),
             "/api/v1/admin/sites",
             None,
             &[("authorization", "Bearer test-admin-token".to_string())],
@@ -800,7 +816,7 @@ async fn admin_lists_blocked_rooms() {
     let resp = router
         .clone()
         .oneshot(request(
-            Method::GET,
+            query_method(),
             "/api/v1/admin/rooms/blocked",
             None,
             &[("authorization", "Bearer token".to_string())],
@@ -822,11 +838,12 @@ async fn admin_lists_blocked_rooms() {
 
     let filtered = router
         .clone()
-        .oneshot(request(
-            Method::GET,
-            "/api/v1/admin/rooms/blocked?site_id=other",
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/admin/rooms/blocked",
             None,
             &[("authorization", "Bearer token".to_string())],
+            r#"{"site_id":"other"}"#,
         ))
         .await
         .expect("call router");

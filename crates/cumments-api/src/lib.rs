@@ -147,7 +147,7 @@ pub fn build_router(state: ApiState) -> Router {
     let admin_router = Router::new()
         .route(
             "/api/v1/admin/sites",
-            axum::routing::get(list_admin_sites_handler).fallback(method_not_allowed_handler),
+            axum::routing::get(method_not_allowed_handler).fallback(list_admin_sites_handler),
         )
         .route(
             "/api/v1/admin/sites/{site_id}/origins/revoke",
@@ -172,7 +172,7 @@ pub fn build_router(state: ApiState) -> Router {
         )
         .route(
             "/api/v1/admin/rooms/blocked",
-            axum::routing::get(list_blocked_rooms_handler).fallback(method_not_allowed_handler),
+            axum::routing::get(method_not_allowed_handler).fallback(list_blocked_rooms_handler),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
