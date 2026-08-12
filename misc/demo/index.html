@@ -658,6 +658,12 @@
                     confirm_delete: "确定删除这条评论吗？",
                     comment_deleted: "评论已删除",
                     delete_failed: "删除失败：",
+                    deleted_message: "这条消息已删除",
+                    encrypted_message: "加密消息（无法显示内容）",
+                    unsupported_message: "不支持的消息类型",
+                    download: "下载",
+                    open_map: "在地图中打开",
+                    votes: "票",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -787,6 +793,12 @@
                     confirm_delete: "Delete this comment?",
                     comment_deleted: "Comment deleted",
                     delete_failed: "Delete failed: ",
+                    deleted_message: "This message was deleted",
+                    encrypted_message: "Encrypted message (content unavailable)",
+                    unsupported_message: "Unsupported message type",
+                    download: "Download",
+                    open_map: "Open in map",
+                    votes: "votes",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -1531,7 +1543,9 @@
                         !c.author ||
                         c.author.type !== "guest" ||
                         c.author.public_key !== pending.publicKey ||
-                        c.content !== pending.content
+                        (c.content && c.content.type === "text"
+                            ? c.content.body
+                            : null) !== pending.content
                     ) {
                         return false;
                     }
@@ -1865,8 +1879,13 @@
                         </div>
                     </div>
                     <div class="comment-content markdown-body text-sm text-slate-700 leading-relaxed break-words mt-3 pl-12">
-                        ${renderMarkdown(comment.content)}
+                        ${comment.status === "redacted"
+                            ? `<span class="italic text-slate-400">${t("deleted_message")}</span>`
+                            : renderContent(comment.content)}
                     </div>
+                    ${comment.reactions && comment.reactions.length
+                        ? `<div class="flex gap-1.5 flex-wrap mt-2 pl-12">${renderReactions(comment.reactions)}</div>`
+                        : ""}
                     <div class="edit-box hidden mt-3 pl-12">
                         <textarea class="edit-textarea w-full text-sm border border-slate-200 rounded-lg p-2.5 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none resize-y"
                                   rows="3"></textarea>
@@ -1896,7 +1915,7 @@
                 const textarea = el.querySelector(".edit-textarea");
 
                 editBtn.onclick = () => {
-                    textarea.value = comment.content;
+                    textarea.value = textBody(comment.content);
                     editBox.classList.remove("hidden");
                     contentBox.classList.add("hidden");
                     textarea.focus();
@@ -1915,8 +1934,12 @@
                     }
                     try {
                         await submitEdit(comment, next);
-                        comment.content = next;
-                        contentBox.innerHTML = renderMarkdown(next);
+                        comment.content = {
+                            type: "text",
+                            body: next,
+                            style: "normal",
+                        };
+                        contentBox.innerHTML = renderContent(comment.content);
                         editBox.classList.add("hidden");
                         contentBox.classList.remove("hidden");
                         toast(t("comment_updated"));
@@ -2204,24 +2227,24 @@
                 sse.onopen = () => updateSseStatus(true);
                 sse.onerror = () => updateSseStatus(false);
 
-                sse.addEventListener("comment_created", (event) => {
+                sse.addEventListener("message_created", (event) => {
                     const payload = JSON.parse(event.data).payload;
-                    const comment = payload.comment;
-                    toast(t("sse_new_comment") + authorName(comment), "success");
-                    markPendingSynced([comment]);
+                    const message = payload.message;
+                    toast(t("sse_new_comment") + authorName(message), "success");
+                    markPendingSynced([message]);
                     loadList();
                 });
 
-                sse.addEventListener("comment_updated", (event) => {
+                sse.addEventListener("message_updated", (event) => {
                     const payload = JSON.parse(event.data).payload;
                     toast(
-                        t("sse_comment_updated") + authorName(payload.comment),
+                        t("sse_comment_updated") + authorName(payload.message),
                         "success",
                     );
                     loadList();
                 });
 
-                sse.addEventListener("comment_deleted", () => {
+                sse.addEventListener("message_deleted", () => {
                     toast(t("sse_comment_deleted"), "info");
                     loadList();
                 });
@@ -2270,6 +2293,105 @@
                     .replace(/>/g, "&gt;")
                     .replace(/"/g, "&quot;")
                     .replace(/'/g, "&#39;");
+            }
+
+            function textBody(content) {
+                return content && content.type === "text" ? content.body : "";
+            }
+
+            function renderContent(content) {
+                if (!content || typeof content !== "object") {
+                    return `<span class="text-slate-400">${t("unsupported_message")}</span>`;
+                }
+                switch (content.type) {
+                    case "text":
+                        return renderMarkdown(content.body || "");
+                    case "media":
+                        return renderMedia(content);
+                    case "location":
+                        return renderLocation(content);
+                    case "poll":
+                        return renderPoll(content);
+                    case "encrypted":
+                        return `<span class="italic text-slate-400">${t("encrypted_message")}</span>`;
+                    case "unknown":
+                        return content.fallback
+                            ? renderMarkdown(content.fallback)
+                            : `<span class="italic text-slate-400">${t("unsupported_message")}</span>`;
+                    default:
+                        return `<span class="italic text-slate-400">${t("unsupported_message")}</span>`;
+                }
+            }
+
+            function renderMedia(media) {
+                const url = escapeHtml(media.url || "");
+                const alt = escapeHtml(media.alt_text || media.filename || "");
+                switch (media.kind) {
+                    case "image":
+                        return `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${alt}" class="max-w-full max-h-96 rounded-lg border border-slate-200" loading="lazy"></a>`;
+                    case "sticker":
+                        return `<img src="${url}" alt="${alt}" class="max-w-[180px] rounded-lg" loading="lazy">`;
+                    case "video":
+                        return `<video src="${url}" controls class="max-w-full rounded-lg border border-slate-200"></video>`;
+                    case "audio":
+                        return `<audio src="${url}" controls class="w-full"></audio>`;
+                    case "file":
+                        return `<a href="${url}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 text-sm hover:bg-slate-50">📎 ${escapeHtml(media.filename || media.url)}${media.size ? ` · ${formatBytes(media.size)}` : ""}</a>`;
+                    default:
+                        return `<a href="${url}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 text-sm hover:bg-slate-50">📎 ${escapeHtml(media.filename || media.url)}</a>`;
+                }
+            }
+
+            function renderLocation(location) {
+                const geo = location.geo_uri || "";
+                const match = geo.match(/^geo:([-\d.]+),([-\d.]+)/);
+                const link = match
+                    ? `https://www.openstreetmap.org/?mlat=${match[1]}&mlon=${match[2]}#map=16/${match[1]}/${match[2]}`
+                    : geo;
+                return `<a href="${escapeHtml(link)}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 text-sm hover:bg-slate-50">📍 ${escapeHtml(location.description || t("open_map"))}</a>`;
+            }
+
+            function renderPoll(poll) {
+                const responses = poll.responses || [];
+                const total = responses.reduce((sum, r) => sum + r.count, 0);
+                const rows = (poll.options || [])
+                    .map((option, index) => {
+                        const summary = responses.find(
+                            (r) => r.option_index === index,
+                        );
+                        const count = summary ? summary.count : 0;
+                        const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                        return `<div class="space-y-1">
+                            <div class="flex justify-between text-xs text-slate-600">
+                                <span>${escapeHtml(option.text)}</span>
+                                <span>${count} ${t("votes")}</span>
+                            </div>
+                            <div class="h-2 bg-slate-100 rounded-full">
+                                <div class="h-2 bg-indigo-500 rounded-full" style="width:${pct}%"></div>
+                            </div>
+                        </div>`;
+                    })
+                    .join("");
+                return `<div class="border border-slate-200 rounded-xl p-3 space-y-2 bg-slate-50">
+                    <p class="font-medium text-sm">${escapeHtml(poll.question)}</p>
+                    ${rows}
+                </div>`;
+            }
+
+            function renderReactions(reactions) {
+                return reactions
+                    .map(
+                        (reaction) =>
+                            `<span class="inline-flex items-center gap-1 text-xs bg-slate-100 rounded-full px-2 py-0.5">${escapeHtml(reaction.key)} ${reaction.count}</span>`,
+                    )
+                    .join("");
+            }
+
+            function formatBytes(bytes) {
+                if (!Number.isFinite(bytes)) return "";
+                if (bytes < 1024) return `${bytes} B`;
+                if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+                return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
             }
 
             function formatTime(iso) {
