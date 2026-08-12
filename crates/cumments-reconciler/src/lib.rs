@@ -58,7 +58,6 @@ fn adoption_blocked(err: &anyhow::Error) -> bool {
         || text.contains("Cannot verify governance")
         || text.contains("redact threshold")
         || text.contains("not created as m.space")
-        || text.contains("not in homeserver /capabilities")
 }
 
 /// The Reconciler acts as the Orchestrator of the background process.

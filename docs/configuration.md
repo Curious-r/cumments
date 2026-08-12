@@ -68,6 +68,8 @@ sender_localpart = "_cumments_bot"
 # registration_file = "registration.yaml"
 # Optional: Matrix room version to request when creating rooms (e.g. "12").
 # When unset, the homeserver's configured default is used.
+# Support is checked best-effort before creating a room; if the homeserver
+# cannot confirm (or rejects the check), the homeserver itself decides.
 # room_version = "12"
 
 [matrix.moderation]

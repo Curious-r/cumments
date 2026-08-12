@@ -519,8 +519,15 @@ impl AppServiceMatrixDriver {
         version
     }
 
-    /// Fail fast when the configured `room_version` is not supported by the
-    /// homeserver, instead of failing every createRoom call.
+    /// Best-effort pre-check that the configured `room_version` is supported
+    /// by the homeserver before creating a new room.
+    ///
+    /// The check only fails on a *definitive* answer: a successful
+    /// `/capabilities` response that lists room versions without the
+    /// configured one. Homeservers that reject appservice credentials (401)
+    /// or do not advertise room versions are treated as unknown — the
+    /// authoritative decision is left to `createRoom`, whose error surfaces
+    /// in the intent's `last_error`.
     async fn validate_room_version_override(&self) -> Result<()> {
         let Some(version) = &self.room_version_override else {
             return Ok(());
@@ -528,27 +535,52 @@ impl AppServiceMatrixDriver {
         let resp = self
             .request(reqwest::Method::GET, "_matrix/client/v3/capabilities", None)
             .send()
-            .await
-            .map_err(|e| anyhow!("failed to query homeserver capabilities: {e}"))?;
+            .await;
+        let resp = match resp {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!(
+                    "Cannot verify room_version `{version}` support (capabilities query failed): {e}; \
+                     proceeding and letting createRoom decide"
+                );
+                return Ok(());
+            }
+        };
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "failed to query homeserver capabilities ({}): {}",
-                status,
-                error_body
-            ));
+            warn!(
+                "Cannot verify room_version `{version}` support (capabilities returned {} {}); \
+                 proceeding and letting createRoom decide",
+                status, error_body
+            );
+            return Ok(());
         }
-        let caps: CapabilitiesResponse = resp
-            .json()
-            .await
-            .map_err(|e| anyhow!("failed to parse capabilities: {e}"))?;
+        let caps: CapabilitiesResponse = match resp.json().await {
+            Ok(caps) => caps,
+            Err(e) => {
+                warn!(
+                    "Cannot verify room_version `{version}` support (failed to parse capabilities): {e}; \
+                     proceeding and letting createRoom decide"
+                );
+                return Ok(());
+            }
+        };
         let available = caps.room_versions.map(|r| r.available).unwrap_or_default();
+        if available.is_empty() {
+            warn!(
+                "Homeserver did not advertise room versions; cannot verify room_version `{version}` \
+                 support, proceeding and letting createRoom decide"
+            );
+            return Ok(());
+        }
         if available.contains_key(version) {
             Ok(())
         } else {
             Err(anyhow!(
-                "configured room_version `{version}` is not in homeserver /capabilities"
+                "configured room_version `{version}` is not supported by homeserver /capabilities \
+                 (available: {})",
+                available.keys().cloned().collect::<Vec<_>>().join(", ")
             ))
         }
     }
@@ -958,7 +990,6 @@ impl MatrixDriver for AppServiceMatrixDriver {
         space_id: &str,
         candidate_room_id: Option<&str>,
     ) -> Result<String> {
-        self.validate_room_version_override().await?;
         let mut target_room_id = None;
 
         // ── PHASE 0: O(1) DISCOVERY (Check Candidate) ──
@@ -988,6 +1019,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         let room_id = if let Some(id) = target_room_id {
             id
         } else {
+            self.validate_room_version_override().await?;
             // ── PHASE 1: Create new comment room ──
             info!("No matching room found. Creating new comment room via AppService.");
             let alias_localpart =
