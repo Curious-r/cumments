@@ -6,14 +6,16 @@
 //! `PushReceiver` (and any future transport) calls into these same
 //! functions.
 
-use crate::parsed::{ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild};
+use crate::parsed::{
+    ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
+};
 use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
 use cumments_core::{
     identity::{post_signature_message, signature_message},
     models::{
-        AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PostSlug,
-        RoomIdentity, RoomStatus, SiteId, TextContent, TextStyle,
+        AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PollVote,
+        PostSlug, Reaction, RoomIdentity, RoomStatus, SiteId,
     },
     ports::{IntentStore, MessageStore, RegistryStore, SiteStore},
     projector_events::ProjectorEvent,
@@ -162,22 +164,24 @@ impl EventProcessor {
                     &event.author_challenge,
                 ) {
                     (Some(pk), Some(sig), Some(chal)) => {
-                        let message = signature_message(&[
-                            "PATCH",
-                            &site_id,
-                            &post_slug,
-                            &relation.target_event_id,
-                            &relation.new_content,
-                            chal,
-                        ]);
-                        verify_guest_event(
-                            self.server_name.as_deref(),
-                            &event.sender,
-                            &site_id,
-                            pk,
-                            sig,
-                            &message,
-                        )
+                        relation.signable_content().is_some_and(|new_content| {
+                            let message = signature_message(&[
+                                "PATCH",
+                                &site_id,
+                                &post_slug,
+                                &relation.target_event_id,
+                                new_content,
+                                chal,
+                            ]);
+                            verify_guest_event(
+                                self.server_name.as_deref(),
+                                &event.sender,
+                                &site_id,
+                                pk,
+                                sig,
+                                &message,
+                            )
+                        })
                     }
                     _ => false,
                 };
@@ -199,11 +203,7 @@ impl EventProcessor {
                 );
                 return Ok(());
             };
-            updated.content = Content::Text(TextContent {
-                body: relation.new_content.clone(),
-                formatted_body: None,
-                style: TextStyle::Normal,
-            });
+            updated.content = relation.new_content.clone();
             updated.edited_at = Some(edited_at);
             let revision = MessageRevision {
                 event_id: event.event_id.clone(),
@@ -265,22 +265,24 @@ impl EventProcessor {
                 &event.display_name,
             ) {
                 (Some(pk), Some(sig), Some(chal), Some(nick)) => {
-                    let message = post_signature_message(
-                        &site_id,
-                        &post_slug,
-                        &event.content,
-                        nick,
-                        event.reply_to.as_deref(),
-                        chal,
-                    );
-                    verify_guest_event(
-                        self.server_name.as_deref(),
-                        &event.sender,
-                        &site_id,
-                        pk,
-                        sig,
-                        &message,
-                    )
+                    event.signable_content().is_some_and(|content| {
+                        let message = post_signature_message(
+                            &site_id,
+                            &post_slug,
+                            content,
+                            nick,
+                            event.reply_to.as_deref(),
+                            chal,
+                        );
+                        verify_guest_event(
+                            self.server_name.as_deref(),
+                            &event.sender,
+                            &site_id,
+                            pk,
+                            sig,
+                            &message,
+                        )
+                    })
                 }
                 _ => false,
             };
@@ -314,16 +316,12 @@ impl EventProcessor {
                     None
                 },
             },
-            content: Content::Text(TextContent {
-                body: event.content.clone(),
-                formatted_body: None,
-                style: TextStyle::Normal,
-            }),
+            content: event.content.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
             edited_at: None,
             reply_to: event.reply_to.clone(),
-            thread_root: None,
+            thread_root: event.thread_root.clone(),
             intent_id: event.intent_id,
             status: MessageStatus::Active,
             redacted_at: None,
@@ -331,7 +329,7 @@ impl EventProcessor {
             reactions: Vec::new(),
             room_id: event.room_id.clone(),
             sender_mxid: event.sender.clone(),
-            raw_content: serde_json::Value::Null,
+            raw_content: event.raw_content.clone(),
         };
 
         self.message_store.save_message(&message).await?;
@@ -357,6 +355,89 @@ impl EventProcessor {
             post_slug,
             message,
         });
+        Ok(())
+    }
+
+    /// Process a reaction event (m.reaction) into the annotations store.
+    #[instrument(skip(self))]
+    pub async fn process_reaction(&self, event: ParsedReaction) -> Result<()> {
+        match self.registry_store.get_room_status(&event.room_id).await? {
+            Some(RoomStatus::Active) => {}
+            Some(_) => {
+                debug!("Ignoring reaction from non-active room {}", event.room_id);
+                return Ok(());
+            }
+            None => {
+                debug!("Ignoring reaction from unregistered room {}", event.room_id);
+                return Ok(());
+            }
+        }
+        self.message_store
+            .save_reaction(&Reaction {
+                event_id: event.event_id,
+                message_event_id: event.message_event_id,
+                sender_mxid: event.sender,
+                key: event.key,
+                origin_server_ts: event.origin_server_ts,
+                redacted_at: None,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Process a poll response by mapping answer IDs to option indexes on the
+    /// stored poll, then recording the vote.
+    #[instrument(skip(self))]
+    pub async fn process_poll_vote(&self, event: ParsedPollVote) -> Result<()> {
+        match self.registry_store.get_room_status(&event.room_id).await? {
+            Some(RoomStatus::Active) => {}
+            Some(_) => {
+                debug!("Ignoring poll vote from non-active room {}", event.room_id);
+                return Ok(());
+            }
+            None => {
+                debug!(
+                    "Ignoring poll vote from unregistered room {}",
+                    event.room_id
+                );
+                return Ok(());
+            }
+        }
+
+        let Some(message) = self
+            .message_store
+            .get_message(&event.poll_message_id)
+            .await?
+        else {
+            debug!(
+                "Poll vote for unknown poll {}; ignoring",
+                event.poll_message_id
+            );
+            return Ok(());
+        };
+        let Content::Poll(poll) = &message.content else {
+            debug!(
+                "Poll vote target {} is not a poll; ignoring",
+                event.poll_message_id
+            );
+            return Ok(());
+        };
+        let Some(answer_id) = event.answer_ids.first() else {
+            debug!("Poll vote without answers; ignoring");
+            return Ok(());
+        };
+        let Some(option_index) = poll.options.iter().position(|o| &o.id == answer_id) else {
+            debug!("Poll vote references unknown answer {answer_id}; ignoring");
+            return Ok(());
+        };
+        self.message_store
+            .save_poll_vote(&PollVote {
+                poll_message_id: event.poll_message_id,
+                sender_mxid: event.sender,
+                option_index: option_index as i64,
+                origin_server_ts: event.origin_server_ts,
+            })
+            .await?;
         Ok(())
     }
 

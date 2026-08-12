@@ -303,9 +303,17 @@ pub struct LocationContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollContent {
     pub question: String,
-    pub options: Vec<String>,
+    pub options: Vec<PollOption>,
     #[serde(default)]
     pub responses: Vec<PollResponseSummary>,
+}
+
+/// One selectable poll option. The `id` matches Matrix's answer ID so votes
+/// can be mapped back to an option index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollOption {
+    pub id: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

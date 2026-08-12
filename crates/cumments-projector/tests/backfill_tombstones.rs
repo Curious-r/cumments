@@ -1,4 +1,4 @@
-use cumments_core::models::{PostSlug, RoomIdentity, SiteId};
+use cumments_core::models::{Content, PostSlug, RoomIdentity, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_projector::event_processor::EventProcessor;
 use cumments_projector::parsed::{ParsedRoomMessage, ParsedRoomRedaction};
@@ -40,7 +40,11 @@ fn message(event_id: &str) -> ParsedRoomMessage {
         room_id: "!room:hs".to_string(),
         event_id: event_id.to_string(),
         sender: "@alice:hs".to_string(),
-        content: "resurrected".to_string(),
+        content: Content::Text(TextContent {
+            body: "resurrected".to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
         display_name: None,
         author_public_key: None,
         author_signature: None,
@@ -48,9 +52,11 @@ fn message(event_id: &str) -> ParsedRoomMessage {
         is_virtual_user_sender: false,
         intent_id: None,
         reply_to: None,
+        thread_root: None,
         origin_server_ts: 100,
         relates_to: None,
         room_identity: Some(identity()),
+        raw_content: serde_json::Value::Null,
     }
 }
 

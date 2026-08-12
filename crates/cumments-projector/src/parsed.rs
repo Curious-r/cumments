@@ -1,6 +1,6 @@
 //! Transport-agnostic parsed Matrix event structures.
 
-use cumments_core::models::RoomIdentity;
+use cumments_core::models::{Content, RoomIdentity};
 use serde::Deserialize;
 
 /// A parsed room message event.
@@ -10,8 +10,8 @@ pub struct ParsedRoomMessage {
     pub event_id: String,
     /// The Matrix user ID of the sender.
     pub sender: String,
-    /// The plain-text body of the message.
-    pub content: String,
+    /// The typed, displayable content of the message.
+    pub content: Content,
     /// The resolved display name of the author, if available.
     pub display_name: Option<String>,
     /// The author's Ed25519 public key embedded in the event, if any.
@@ -27,18 +27,69 @@ pub struct ParsedRoomMessage {
     pub intent_id: Option<i64>,
     /// Matrix event ID of the parent comment, if this event is a rich reply.
     pub reply_to: Option<String>,
+    /// Matrix event ID of the thread root, when this event belongs to a
+    /// thread (m.thread).
+    pub thread_root: Option<String>,
     pub origin_server_ts: i64,
     /// If this is an edit (m.replace), the relation details.
     pub relates_to: Option<ParsedRelation>,
     /// The room's Cumments identity, if it could be resolved.
     pub room_identity: Option<RoomIdentity>,
+    /// The raw Matrix event content (forward-compatibility escape hatch).
+    pub raw_content: serde_json::Value,
+}
+
+impl ParsedRoomMessage {
+    /// The canonical text used to verify guest signatures. Only text messages
+    /// are signable today; rich guest messages are future work.
+    pub fn signable_content(&self) -> Option<&str> {
+        match &self.content {
+            Content::Text(text) => Some(&text.body),
+            _ => None,
+        }
+    }
 }
 
 /// A parsed relation (edit) attached to a message.
 #[derive(Debug)]
 pub struct ParsedRelation {
     pub target_event_id: String,
-    pub new_content: String,
+    pub new_content: Content,
+}
+
+impl ParsedRelation {
+    /// The canonical text of the replacement, when it is a text edit.
+    pub fn signable_content(&self) -> Option<&str> {
+        match &self.new_content {
+            Content::Text(text) => Some(&text.body),
+            _ => None,
+        }
+    }
+}
+
+/// A parsed reaction event (m.reaction).
+#[derive(Debug)]
+pub struct ParsedReaction {
+    pub room_id: String,
+    pub event_id: String,
+    pub sender: String,
+    pub message_event_id: String,
+    pub key: String,
+    pub origin_server_ts: i64,
+    pub room_identity: Option<RoomIdentity>,
+}
+
+/// A parsed poll response (msgtype `org.matrix.msc3381.poll.response`).
+#[derive(Debug)]
+pub struct ParsedPollVote {
+    pub room_id: String,
+    pub event_id: String,
+    pub sender: String,
+    pub poll_message_id: String,
+    /// Answer IDs selected by the voter (typically one).
+    pub answer_ids: Vec<String>,
+    pub origin_server_ts: i64,
+    pub room_identity: Option<RoomIdentity>,
 }
 
 /// A parsed redaction event.
