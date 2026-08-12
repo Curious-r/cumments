@@ -22,6 +22,7 @@ pub mod m20260812_000016_site_authentication;
 pub mod m20260812_000017_comments_author_type_fix;
 pub mod m20260812_000018_comments_edit_recency;
 pub mod m20260812_000019_room_registry_unique_active;
+pub mod m20260812_000020_backfill_tombstones;
 
 pub struct Migrator;
 
@@ -76,6 +77,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260812_000017_comments_author_type_fix::Migration),
             Box::new(m20260812_000018_comments_edit_recency::Migration),
             Box::new(m20260812_000019_room_registry_unique_active::Migration),
+            Box::new(m20260812_000020_backfill_tombstones::Migration),
         ]
     }
 }

@@ -114,6 +114,17 @@ impl EventProcessor {
             None => return Ok(()), // Not a cumments room
         };
 
+        // B-04: a redaction may have been seen before its target (capped or
+        // resumed backfill, push retry). Never re-project a tombstoned event.
+        if self
+            .comment_store
+            .has_backfill_tombstone(&event.event_id, &event.room_id)
+            .await?
+        {
+            debug!("Ignoring tombstoned event {}", event.event_id);
+            return Ok(());
+        }
+
         // Handle Edits (Replacements)
         if let Some(ref relation) = event.relates_to {
             info!("Handling edit for event {}", relation.target_event_id);
@@ -386,6 +397,12 @@ impl EventProcessor {
         }
 
         if self.comment_store.delete_comment(&target_event_id).await? {
+            // Keep a persistent tombstone so a later re-delivery of the
+            // original event (push retry, resumed backfill) cannot insert it
+            // again.
+            self.comment_store
+                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                .await?;
             info!("Successfully deleted redacted comment {}", target_event_id);
             // Closed-loop only after the projection succeeded; a failed
             // delete leaves the intent open for the timeout safety net.
@@ -400,8 +417,14 @@ impl EventProcessor {
                 });
             }
         } else {
+            // The target is unknown (not yet projected, or already deleted).
+            // Persist the tombstone so the target cannot resurrect when it is
+            // fetched by a later backfill run.
+            self.comment_store
+                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                .await?;
             debug!(
-                "Redaction received for unknown or already deleted comment {}",
+                "Redaction tombstoned for unknown target {}",
                 target_event_id
             );
         }

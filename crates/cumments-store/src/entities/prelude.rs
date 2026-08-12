@@ -1,3 +1,4 @@
+pub use super::backfill_tombstones::Entity as BackfillTombstones;
 pub use super::comments::Entity as Comments;
 pub use super::intent_queue_delete_comment::Entity as IntentQueueDeleteComment;
 pub use super::intent_queue_post_comment::Entity as IntentQueuePostComment;

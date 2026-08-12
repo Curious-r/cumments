@@ -129,6 +129,19 @@ pub trait CommentStore: Send + Sync {
     /// Returns the stored author public key for a comment, if any. Used to
     /// authorize edit/delete requests by comparing the presented key.
     async fn get_comment_author_public_key(&self, event_id: &str) -> Result<Option<String>>;
+
+    /// Persists a tombstone for a redacted event whose original has not been
+    /// projected yet (or may be re-delivered), so the comment cannot
+    /// resurrect after a capped/resumed backfill or a push retry.
+    async fn record_backfill_tombstone(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        redaction_event_id: &str,
+    ) -> Result<()>;
+
+    /// Whether a tombstone exists for this event in this room.
+    async fn has_backfill_tombstone(&self, event_id: &str, room_id: &str) -> Result<bool>;
 }
 
 /// Port for managing the local room registry cache (Mirror of Space relationships).

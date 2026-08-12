@@ -18,3 +18,4 @@ tracing.workspace = true
 [dev-dependencies]
 base64.workspace = true
 ed25519-dalek.workspace = true
+cumments-store.workspace = true

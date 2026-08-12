@@ -1,4 +1,5 @@
 use super::DbStore;
+use crate::entities::backfill_tombstones;
 use crate::entities::comments;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -174,6 +175,42 @@ impl CommentStore for DbStore {
             .await?;
 
         Ok(model.and_then(|m| m.author_public_key))
+    }
+
+    async fn record_backfill_tombstone(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        redaction_event_id: &str,
+    ) -> Result<()> {
+        let active_model = backfill_tombstones::ActiveModel {
+            event_id: Set(event_id.to_owned()),
+            room_id: Set(room_id.to_owned()),
+            redaction_event_id: Set(redaction_event_id.to_owned()),
+            created_at: Set(chrono::Utc::now()),
+        };
+
+        backfill_tombstones::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(backfill_tombstones::Column::EventId)
+                    .update_column(backfill_tombstones::Column::RoomId)
+                    .update_column(backfill_tombstones::Column::RedactionEventId)
+                    .update_column(backfill_tombstones::Column::CreatedAt)
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn has_backfill_tombstone(&self, event_id: &str, room_id: &str) -> Result<bool> {
+        let found = backfill_tombstones::Entity::find()
+            .filter(backfill_tombstones::COLUMN.event_id.eq(event_id))
+            .filter(backfill_tombstones::COLUMN.room_id.eq(room_id))
+            .one(&self.db)
+            .await?;
+        Ok(found.is_some())
     }
 }
 
