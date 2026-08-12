@@ -130,6 +130,23 @@ pub(crate) fn has_state_power(power_levels: &serde_json::Value, sender_user_id: 
     user_power >= required
 }
 
+/// Whether `sender_user_id` meets the room's `redact` threshold. Redactions
+/// of other users' events require this power, so adopted rooms must satisfy
+/// it or every Cumments delete intent will fail.
+pub(crate) fn has_redact_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
+    let user_power = power_levels
+        .get("users")
+        .and_then(|u| u.get(sender_user_id))
+        .and_then(|v| v.as_i64())
+        .or_else(|| power_levels.get("users_default").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+    let required = power_levels
+        .get("redact")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(50);
+    user_power >= required
+}
+
 /// Build the rich-reply fallback body following the pre-v1.13 spec format:
 /// each line of the original body is prefixed with `> `, the first line also
 /// carries the original sender's MXID, followed by a blank line and the reply
@@ -395,6 +412,21 @@ mod tests {
         assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
         let pl = json!({ "users": { "@_cumments_bot:example.com": 50 } });
         assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
+    }
+
+    #[test]
+    fn redact_power_uses_explicit_or_default_threshold() {
+        let power = json!({
+            "users": { "@bot:example.com": 75 },
+            "redact": 75
+        });
+        assert!(has_redact_power(&power, "@bot:example.com"));
+        assert!(!has_redact_power(&power, "@other:example.com"));
+
+        // Default redact level is 50.
+        let default_power = json!({ "users": { "@bot:example.com": 50 } });
+        assert!(has_redact_power(&default_power, "@bot:example.com"));
+        assert!(!has_redact_power(&json!({}), "@bot:example.com"));
     }
 
     #[test]

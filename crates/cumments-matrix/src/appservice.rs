@@ -3,9 +3,9 @@
 
 use crate::wire::{
     build_edit_body, build_message_body, build_redaction_body, comment_room_alias,
-    comment_room_alias_localpart, format_txn_id, has_state_power, initial_power_levels,
-    metadata_matches, percent_encode, power_levels_with_admin, room_requires_explicit_creator,
-    site_space_alias, site_space_alias_localpart,
+    comment_room_alias_localpart, format_txn_id, has_redact_power, has_state_power,
+    initial_power_levels, metadata_matches, percent_encode, power_levels_with_admin,
+    room_requires_explicit_creator, site_space_alias, site_space_alias_localpart,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -579,6 +579,26 @@ impl AppServiceMatrixDriver {
         })
     }
 
+    /// Whether the AS sender can redact other users' events in the room.
+    async fn sender_can_redact(&self, room_id: &str) -> Result<bool> {
+        if let Some(create) = self.get_room_create(room_id).await? {
+            let creator = create.get("sender").and_then(|v| v.as_str());
+            let version = create
+                .get("content")
+                .and_then(|c| c.get("room_version"))
+                .and_then(|v| v.as_str());
+            if !room_requires_explicit_creator(version)
+                && creator == Some(self.sender_user_id().as_str())
+            {
+                return Ok(true);
+            }
+        }
+        Ok(match self.get_power_levels(room_id).await? {
+            Some(power_levels) => has_redact_power(&power_levels, &self.sender_user_id()),
+            None => false,
+        })
+    }
+
     /// Admission guard before adopting a room found via our exclusive alias
     /// namespace.
     ///
@@ -592,18 +612,57 @@ impl AppServiceMatrixDriver {
     /// uncontrolled room, so we fail loudly instead of silently adopting it.
     async fn ensure_room_adoptable(&self, room_id: &str) -> Result<()> {
         match self.sender_can_write_state(room_id).await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(anyhow!(
-                "Refusing to adopt room {}: AS sender cannot write state \
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(anyhow!(
+                    "Refusing to adopt room {}: AS sender cannot write state \
                  (not a member or insufficient power)",
-                room_id
-            )),
-            Err(e) => Err(anyhow!(
-                "Cannot verify governance of room {} before adoption: {:#}",
-                room_id,
-                e
-            )),
+                    room_id
+                ));
+            }
+            Err(e) => {
+                return Err(anyhow!(
+                    "Cannot verify governance of room {} before adoption: {:#}",
+                    room_id,
+                    e
+                ));
+            }
         }
+        if !self.sender_can_redact(room_id).await? {
+            return Err(anyhow!(
+                "Refusing to adopt room {}: AS sender cannot meet the room's \
+                 redact threshold (delete intents would fail)",
+                room_id
+            ));
+        }
+        Ok(())
+    }
+
+    /// Unified adoption gate for every recovery path. Always verifies the AS
+    /// sender can govern the room before accepting it, then repairs metadata
+    /// when necessary and ensures the operator admin has power.
+    async fn adopt_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+        require_space: bool,
+    ) -> Result<()> {
+        if require_space && !self.is_space_room(room_id).await? {
+            anyhow::bail!(
+                "Refusing to adopt room {} as a site space: not created as m.space",
+                room_id
+            );
+        }
+        self.ensure_room_adoptable(room_id).await?;
+        if !self
+            .room_metadata_matches(room_id, site_id, post_slug)
+            .await?
+        {
+            self.set_room_metadata(room_id, site_id, post_slug).await?;
+        }
+        self.ensure_admin(room_id).await;
+        Ok(())
     }
 
     /// Resolve a room ID from its alias via the homeserver directory.
@@ -648,9 +707,11 @@ impl AppServiceMatrixDriver {
         })
     }
 
-    /// Best-effort, idempotent: link a comment room into its site Space
-    /// (`m.space.child` on the Space, `m.space.parent` on the room).
-    async fn link_room_to_space(&self, space_id: &str, room_id: &str) {
+    /// Idempotently link a comment room into its site Space (`m.space.child`
+    /// on the Space, `m.space.parent` on the room). Errors are returned so
+    /// the caller retries the intent, which re-enters `ensure_comment_room`
+    /// and re-links the room.
+    async fn link_room_to_space(&self, space_id: &str, room_id: &str) -> Result<()> {
         let child_content = serde_json::json!({ "via": [self.server_name] });
         let space_path = format!(
             "_matrix/client/v3/rooms/{}/state/m.space.child/{}",
@@ -664,18 +725,23 @@ impl AppServiceMatrixDriver {
             .await;
         match child_resp {
             Err(e) => {
-                warn!(
+                return Err(anyhow!(
                     "Failed to link room {} to space {}: {}",
-                    room_id, space_id, e
-                );
+                    room_id,
+                    space_id,
+                    e
+                ));
             }
             Ok(resp) if !resp.status().is_success() => {
                 let status = resp.status();
                 let error_body = resp.text().await.unwrap_or_default();
-                warn!(
+                return Err(anyhow!(
                     "Failed to link room {} to space {} ({}): {}",
-                    room_id, space_id, status, error_body
-                );
+                    room_id,
+                    space_id,
+                    status,
+                    error_body
+                ));
             }
             _ => {}
         }
@@ -696,21 +762,27 @@ impl AppServiceMatrixDriver {
             .await;
         match parent_resp {
             Err(e) => {
-                warn!(
+                return Err(anyhow!(
                     "Failed to link space {} as parent of room {}: {}",
-                    space_id, room_id, e
-                );
+                    space_id,
+                    room_id,
+                    e
+                ));
             }
             Ok(resp) if !resp.status().is_success() => {
                 let status = resp.status();
                 let error_body = resp.text().await.unwrap_or_default();
-                warn!(
+                return Err(anyhow!(
                     "Failed to link space {} as parent of room {} ({}): {}",
-                    space_id, room_id, status, error_body
-                );
+                    space_id,
+                    room_id,
+                    status,
+                    error_body
+                ));
             }
             _ => {}
         }
+        Ok(())
     }
 }
 
@@ -783,35 +855,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let alias = site_space_alias(&self.server_name, site_id_str);
             match self.resolve_room_by_alias(&alias).await? {
                 Some(room_id) => {
-                    if !self.is_space_room(&room_id).await? {
-                        warn!(
-                            "Refusing to adopt room {} as site space: not created as m.space",
-                            room_id
-                        );
-                        return Err(anyhow!(
-                            "Alias {} resolved to a non-space room; not adopting",
-                            alias
-                        ));
-                    }
-                    if self.room_metadata_matches(&room_id, site_id, None).await? {
-                        info!(
-                            "Recovered existing site space {} via alias {}",
-                            room_id, alias
-                        );
-                    } else {
-                        self.ensure_room_adoptable(&room_id).await?;
-                        warn!(
-                            "Adopting room {} under alias {} with repaired metadata",
-                            room_id, alias
-                        );
-                        if let Err(e) = self.set_room_metadata(&room_id, site_id, None).await {
-                            warn!(
-                                "Failed to repair space metadata for room {}: {:#}",
-                                room_id, e
-                            );
-                        }
-                    }
-                    self.ensure_admin(&room_id).await;
+                    self.adopt_room(&room_id, site_id, None, true).await?;
+                    info!(
+                        "Recovered existing site space {} via alias {}",
+                        room_id, alias
+                    );
                     Ok(room_id)
                 }
                 None => Err(anyhow!(
@@ -838,6 +886,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
             && let Ok(Some(meta)) = self.fetch_room_metadata(candidate).await
             && metadata_matches(&meta, site_id.as_str(), Some(post_slug.as_str()))
         {
+            self.adopt_room(candidate, site_id, Some(post_slug), false)
+                .await?;
             target_room_id = Some(candidate.to_string());
         }
 
@@ -845,33 +895,12 @@ impl MatrixDriver for AppServiceMatrixDriver {
         if target_room_id.is_none() {
             let alias = comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
             if let Some(room_id) = self.resolve_room_by_alias(&alias).await? {
-                if self
-                    .room_metadata_matches(&room_id, site_id, Some(post_slug))
-                    .await?
-                {
-                    info!(
-                        "Recovered existing comment room {} via alias {}",
-                        room_id, alias
-                    );
-                } else {
-                    // The alias namespace is exclusive to us, so this is a room
-                    // we created before metadata was written; repair it.
-                    self.ensure_room_adoptable(&room_id).await?;
-                    warn!(
-                        "Adopting room {} under alias {} with repaired metadata",
-                        room_id, alias
-                    );
-                    if let Err(e) = self
-                        .set_room_metadata(&room_id, site_id, Some(post_slug))
-                        .await
-                    {
-                        warn!(
-                            "Failed to repair comment room metadata for {}: {:#}",
-                            room_id, e
-                        );
-                    }
-                }
-                self.ensure_admin(&room_id).await;
+                self.adopt_room(&room_id, site_id, Some(post_slug), false)
+                    .await?;
+                info!(
+                    "Recovered existing comment room {} via alias {}",
+                    room_id, alias
+                );
                 target_room_id = Some(room_id);
             }
         }
@@ -936,32 +965,13 @@ impl MatrixDriver for AppServiceMatrixDriver {
                     comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
                 return match self.resolve_room_by_alias(&alias).await? {
                     Some(room_id) => {
-                        if self
-                            .room_metadata_matches(&room_id, site_id, Some(post_slug))
-                            .await?
-                        {
-                            info!(
-                                "Recovered comment room {} after createRoom failure via alias {}",
-                                room_id, alias
-                            );
-                        } else {
-                            self.ensure_room_adoptable(&room_id).await?;
-                            warn!(
-                                "Adopting room {} after createRoom failure via alias {} with repaired metadata",
-                                room_id, alias
-                            );
-                            if let Err(e) = self
-                                .set_room_metadata(&room_id, site_id, Some(post_slug))
-                                .await
-                            {
-                                warn!(
-                                    "Failed to repair comment room metadata for {}: {:#}",
-                                    room_id, e
-                                );
-                            }
-                        }
-                        self.link_room_to_space(space_id, &room_id).await;
-                        self.ensure_admin(&room_id).await;
+                        self.adopt_room(&room_id, site_id, Some(post_slug), false)
+                            .await?;
+                        info!(
+                            "Recovered comment room {} after createRoom failure via alias {}",
+                            room_id, alias
+                        );
+                        self.link_room_to_space(space_id, &room_id).await?;
                         Ok(room_id)
                     }
                     None => Err(anyhow!(
@@ -980,7 +990,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         };
 
         // Keep the room linked to its Space (idempotent, best-effort).
-        self.link_room_to_space(space_id, &room_id).await;
+        self.link_room_to_space(space_id, &room_id).await?;
 
         Ok(room_id)
     }

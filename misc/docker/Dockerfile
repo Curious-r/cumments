@@ -57,7 +57,7 @@ EXPOSE 7931 3001
 ENV RUST_LOG=info
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -q -O /dev/null http://127.0.0.1:7931/health || exit 1
+    CMD wget -q -O /dev/null "http://127.0.0.1:${CUMMENTS__SERVER__PORT:-7931}/health" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["cumments"]

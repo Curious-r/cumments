@@ -304,7 +304,10 @@ pub fn admin_token_hash(security: &Security) -> Result<Option<String>> {
 /// harmless in `logging` mode but would let anyone forge PoW challenges in
 /// production.
 pub fn is_known_pow_placeholder(secret: &str) -> bool {
-    matches!(secret, "change-me" | "pow_secret_key")
+    matches!(
+        secret,
+        "change-me" | "pow_secret_key" | "dev-only-secret-0123456789abcdef"
+    )
 }
 
 /// Validate the PoW secret: it must never be empty, and in AppService mode it

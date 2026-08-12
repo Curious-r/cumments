@@ -280,21 +280,34 @@ impl Reconciler {
             let id = pending.id;
             let intent = pending.intent;
             let process_result = run_intent(async {
-                // 1. Registry: Locate the room ID for this deletion
-                let room_id = self
+                // 1. Brain: Ensure the site space is ready (same as posts).
+                let space_id = self
+                    .site_service
+                    .ensure_space(&intent.site_id, self.driver.as_ref())
+                    .await?;
+
+                // 2. Registry: Locate the room ID for this deletion.
+                let candidate_room_id = self
                     .registry_store
                     .get_registered_room(&intent.site_id, &intent.post_slug)
                     .await?;
 
-                let room_id = room_id.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Room not found in registry for site {} post {}",
-                        intent.site_id.as_str(),
-                        intent.post_slug.as_str()
+                // 3. Hands: Recover/adopt the room when the registry is stale
+                // or missing, mirroring the post/update paths.
+                let room_id = self
+                    .driver
+                    .ensure_comment_room(
+                        &intent.site_id,
+                        &intent.post_slug,
+                        &space_id,
+                        candidate_room_id.as_deref(),
                     )
-                })?;
+                    .await?;
+                self.registry_store
+                    .register_room(&room_id, &intent.site_id, &intent.post_slug)
+                    .await?;
 
-                // 2. Hands: Perform the redaction
+                // 4. Hands: Perform the redaction
                 let proof = serde_json::json!({
                     (REDACTION_PROOF_KEY): {
                         "site_id": intent.site_id.as_str(),
@@ -305,11 +318,30 @@ impl Reconciler {
                         "challenge": intent.author_challenge.as_str(),
                     }
                 });
-                self.driver
+                match self
+                    .driver
                     .redact_message(&room_id, &intent.event_id, Some(id), Some(&proof))
-                    .await?;
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        // The room may have been tombstoned or its alias moved:
+                        // drop the registry hint so the next retry re-discovers.
+                        if room_unavailable(&e) {
+                            warn!(
+                                "Delete intent [{}] failed on room {}; invalidating registry entry: {:#}",
+                                id, room_id, e
+                            );
+                            let _ = self
+                                .registry_store
+                                .invalidate_room_registry(&room_id)
+                                .await;
+                        }
+                        return Err(e);
+                    }
+                }
 
-                // 3. Concepts: Move to waiting_for_sync
+                // 5. Concepts: Move to waiting_for_sync
                 self.intent_store
                     .mark_delete_intent_waiting_for_sync(id, &room_id)
                     .await?;
