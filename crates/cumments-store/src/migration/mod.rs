@@ -26,6 +26,7 @@ pub mod m20260812_000020_backfill_tombstones;
 pub mod m20260812_000021_post_intent_timeout_confirmations;
 pub mod m20260812_000022_verification_token_attempts;
 pub mod m20260812_000023_intent_queue_indexes;
+pub mod m20260812_000024_post_intent_timeout_check_errors;
 
 pub struct Migrator;
 
@@ -84,6 +85,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260812_000021_post_intent_timeout_confirmations::Migration),
             Box::new(m20260812_000022_verification_token_attempts::Migration),
             Box::new(m20260812_000023_intent_queue_indexes::Migration),
+            Box::new(m20260812_000024_post_intent_timeout_check_errors::Migration),
         ]
     }
 }

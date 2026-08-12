@@ -54,6 +54,7 @@ impl IntentStore for DbStore {
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
             timeout_confirmations: Set(0),
+            timeout_check_errors: Set(0),
             author_public_key: Set(Some(intent.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -545,6 +546,7 @@ impl IntentStore for DbStore {
     async fn get_stuck_post_intents(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
     ) -> Result<Vec<StuckPostIntent>> {
         let models = intent_queue_post_comment::Entity::find()
             .filter(
@@ -553,6 +555,7 @@ impl IntentStore for DbStore {
                     .eq(IntentStatus::WaitingForSync),
             )
             .filter(intent_queue_post_comment::Column::UpdatedAt.lte(cutoff))
+            .limit(limit)
             .all(&self.db)
             .await?;
 
@@ -569,6 +572,7 @@ impl IntentStore for DbStore {
     async fn get_stuck_delete_intent_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
     ) -> Result<Vec<i64>> {
         let models = intent_queue_delete_comment::Entity::find()
             .filter(
@@ -577,6 +581,7 @@ impl IntentStore for DbStore {
                     .eq(IntentStatus::WaitingForSync),
             )
             .filter(intent_queue_delete_comment::Column::UpdatedAt.lte(cutoff))
+            .limit(limit)
             .all(&self.db)
             .await?;
 
@@ -586,6 +591,7 @@ impl IntentStore for DbStore {
     async fn get_stuck_update_intent_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
     ) -> Result<Vec<i64>> {
         let models = intent_queue_update_comment::Entity::find()
             .filter(
@@ -594,6 +600,7 @@ impl IntentStore for DbStore {
                     .eq(IntentStatus::WaitingForSync),
             )
             .filter(intent_queue_update_comment::Column::UpdatedAt.lte(cutoff))
+            .limit(limit)
             .all(&self.db)
             .await?;
 
@@ -651,6 +658,31 @@ impl IntentStore for DbStore {
         Ok(())
     }
 
+    async fn increment_post_timeout_error(&self, id: i64) -> Result<u32> {
+        self.db
+            .execute_unprepared(&format!(
+                "UPDATE intent_queue_post_comment \
+                 SET timeout_check_errors = timeout_check_errors + 1 \
+                 WHERE id = {id}"
+            ))
+            .await?;
+        let model = intent_queue_post_comment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| m.timeout_check_errors as u32).unwrap_or(0))
+    }
+
+    async fn reset_post_timeout_errors(&self, id: i64) -> Result<()> {
+        self.db
+            .execute_unprepared(&format!(
+                "UPDATE intent_queue_post_comment \
+                 SET timeout_check_errors = 0 \
+                 WHERE id = {id}"
+            ))
+            .await?;
+        Ok(())
+    }
+
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
         self.transition_status(
             IntentStatus::Completed,
@@ -674,14 +706,30 @@ impl IntentStore for DbStore {
         .await
     }
 
-    async fn mark_update_intent_completed(&self, event_id: &str) -> Result<()> {
+    async fn mark_update_intent_completed(
+        &self,
+        event_id: &str,
+        author_public_key: Option<&str>,
+    ) -> Result<()> {
         self.transition_status(
             IntentStatus::Completed,
             intent_queue_update_comment::Column::Status,
             intent_queue_update_comment::Column::UpdatedAt,
             |query: UpdateMany<intent_queue_update_comment::Entity>| {
+                let query = query.filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id));
+                let query = match author_public_key {
+                    Some(key) => query.filter(
+                        intent_queue_update_comment::COLUMN
+                            .author_public_key
+                            .eq(key),
+                    ),
+                    None => query.filter(
+                        intent_queue_update_comment::COLUMN
+                            .author_public_key
+                            .is_null(),
+                    ),
+                };
                 query
-                    .filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id))
                     // Only close intents that were actually sent; pending rows
                     // must wait for their own `host.curious.cumments.intent_id`
                     // correlation.

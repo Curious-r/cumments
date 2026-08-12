@@ -162,13 +162,13 @@ impl CommentStore for DbStore {
         Ok(result.rows_affected > 0)
     }
 
-    async fn get_author_display_name(&self, event_id: &str) -> Result<Option<String>> {
+    async fn get_author_display_name(&self, event_id: &str) -> Result<Option<Option<String>>> {
         let model = comments::Entity::find()
             .filter(comments::COLUMN.event_id.eq(event_id))
             .one(&self.db)
             .await?;
 
-        Ok(model.and_then(|m| m.author_display_name))
+        Ok(model.map(|m| m.author_display_name))
     }
 
     async fn get_comment_author_public_key(&self, event_id: &str) -> Result<Option<String>> {

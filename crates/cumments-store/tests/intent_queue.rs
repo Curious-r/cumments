@@ -65,14 +65,14 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
 
     // Not stuck yet when the cutoff predates the write.
     let fresh = store
-        .get_stuck_post_intents(Utc::now() - Duration::minutes(10))
+        .get_stuck_post_intents(Utc::now() - Duration::minutes(10), 100)
         .await
         .expect("fresh query");
     assert!(fresh.is_empty());
 
     // Stuck once the cutoff passes the write time, with event_id/room_id.
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1))
+        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert_eq!(stuck.len(), 1);
@@ -86,7 +86,7 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
         .await
         .expect("dead letter");
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1))
+        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck after dead letter");
     assert!(stuck.is_empty());
@@ -199,7 +199,7 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
         .expect("late write-back");
 
     let stuck = store
-        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1))
+        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(
@@ -252,7 +252,10 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
         .await
         .expect("mark first waiting");
     store
-        .mark_update_intent_completed("$original:hs")
+        .mark_update_intent_completed(
+            "$original:hs",
+            Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"),
+        )
         .await
         .expect("complete observed edit");
 
@@ -268,7 +271,7 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
     assert_eq!(pending[0].id, second_id);
 
     let stuck = store
-        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1))
+        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(stuck.is_empty(), "observed edit must not remain waiting");
@@ -319,6 +322,47 @@ async fn timeout_confirmations_increment_and_reset() {
 }
 
 #[tokio::test]
+async fn timeout_check_errors_increment_and_reset() {
+    let store = DbStore::connect(&test_db_url("timeout-errors"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_post_intent(&post_intent())
+        .await
+        .expect("save intent");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
+    let id = pending[0].id;
+    store
+        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .await
+        .expect("mark waiting");
+
+    assert_eq!(
+        store
+            .increment_post_timeout_error(id)
+            .await
+            .expect("increment"),
+        1
+    );
+    assert_eq!(
+        store
+            .increment_post_timeout_error(id)
+            .await
+            .expect("increment again"),
+        2
+    );
+    store.reset_post_timeout_errors(id).await.expect("reset");
+    assert_eq!(
+        store
+            .increment_post_timeout_error(id)
+            .await
+            .expect("increment after reset"),
+        1
+    );
+}
+
+#[tokio::test]
 async fn failed_post_intent_can_complete_when_event_is_observed() {
     let store = DbStore::connect(&test_db_url("failed-complete"))
         .await
@@ -348,7 +392,7 @@ async fn failed_post_intent_can_complete_when_event_is_observed() {
 
     let pending = store.get_pending_post_intents(100).await.expect("pending");
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1))
+        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck");
     assert!(pending.is_empty());

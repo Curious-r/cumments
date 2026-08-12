@@ -23,6 +23,10 @@ pub struct Model {
     /// on the homeserver. Dead-lettering requires several confirmations so a
     /// delayed projection is not treated as a failure.
     pub timeout_confirmations: i64,
+    /// Consecutive timeout passes that failed to check event existence
+    /// (network/homeserver errors). Dead-lettered after a threshold so
+    /// intents cannot sit in limbo forever.
+    pub timeout_check_errors: i64,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

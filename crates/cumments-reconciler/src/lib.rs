@@ -17,6 +17,9 @@ const WAITING_FOR_SYNC_TIMEOUT_MINUTES: i64 = 10;
 /// before the intent is dead-lettered. Projection can be delayed by push
 /// retries or restarts, so a single confirmation is not treated as failure.
 const TIMEOUT_CONFIRMATION_LIMIT: u32 = 3;
+/// Consecutive event-existence check failures before dead-lettering a post
+/// intent; prevents indefinite limbo on persistent homeserver errors.
+const TIMEOUT_ERROR_LIMIT: u32 = 5;
 /// Maximum number of pending intents loaded per queue per pass. Keeps memory
 /// bounded under write floods; `reconcile()` loops until a batch is empty.
 const INTENT_BATCH_SIZE: u64 = 100;
@@ -446,6 +449,7 @@ impl Reconciler {
                     .comment_store
                     .get_author_display_name(&intent.event_id)
                     .await?
+                    .flatten()
                     .unwrap_or_else(|| "Guest".to_string());
 
                 // 5. Hands: Perform the update (m.replace)
@@ -523,52 +527,61 @@ impl Reconciler {
             chrono::Utc::now() - chrono::Duration::minutes(WAITING_FOR_SYNC_TIMEOUT_MINUTES);
         let mut handled = 0u64;
 
-        for stuck in self.intent_store.get_stuck_post_intents(cutoff).await? {
-            let id = stuck.id;
-            let event_id = stuck.event_id;
-            let room_id = stuck.room_id;
-            handled += 1;
+        loop {
+            let stuck_batch = self
+                .intent_store
+                .get_stuck_post_intents(cutoff, INTENT_BATCH_SIZE)
+                .await?;
+            if stuck_batch.is_empty() {
+                break;
+            }
+            for stuck in stuck_batch {
+                let id = stuck.id;
+                let event_id = stuck.event_id;
+                let room_id = stuck.room_id;
+                handled += 1;
 
-            let Some(room_id) = room_id else {
-                error!(
-                    "Post intent [{}] timed out with no room recorded; dead-lettering",
-                    id
-                );
-                self.intent_store
+                let Some(room_id) = room_id else {
+                    error!(
+                        "Post intent [{}] timed out with no room recorded; dead-lettering",
+                        id
+                    );
+                    self.intent_store
                     .dead_letter_post_intent(
                         id,
                         "waiting_for_sync timed out; room_id was not recorded, cannot verify the event safely",
                     )
                     .await?;
-                continue;
-            };
+                    continue;
+                };
 
-            if event_id.is_empty() {
-                error!(
-                    "Post intent [{}] timed out with no event id recorded; dead-lettering",
-                    id
-                );
-                self.intent_store
+                if event_id.is_empty() {
+                    error!(
+                        "Post intent [{}] timed out with no event id recorded; dead-lettering",
+                        id
+                    );
+                    self.intent_store
                     .dead_letter_post_intent(
                         id,
                         "waiting_for_sync timed out; event_id was not recorded, cannot verify the event safely",
                     )
                     .await?;
-                continue;
-            }
+                    continue;
+                }
 
-            match self.driver.event_exists(&room_id, &event_id).await {
-                Ok(true) => {
-                    let confirmations = self
-                        .intent_store
-                        .increment_post_timeout_confirmation(id)
-                        .await?;
-                    if confirmations >= TIMEOUT_CONFIRMATION_LIMIT {
-                        error!(
-                            "Post intent [{}] timed out and event {} exists on the homeserver; dead-lettering after {confirmations} confirmations",
-                            id, event_id
-                        );
-                        self.intent_store
+                match self.driver.event_exists(&room_id, &event_id).await {
+                    Ok(true) => {
+                        self.intent_store.reset_post_timeout_errors(id).await?;
+                        let confirmations = self
+                            .intent_store
+                            .increment_post_timeout_confirmation(id)
+                            .await?;
+                        if confirmations >= TIMEOUT_CONFIRMATION_LIMIT {
+                            error!(
+                                "Post intent [{}] timed out and event {} exists on the homeserver; dead-lettering after {confirmations} confirmations",
+                                id, event_id
+                            );
+                            self.intent_store
                             .dead_letter_post_intent(
                                 id,
                                 &format!(
@@ -577,69 +590,97 @@ impl Reconciler {
                                 ),
                             )
                             .await?;
-                    } else {
+                        } else {
+                            warn!(
+                                "Post intent [{}] event {} exists but projection is delayed; confirmation {confirmations}/{TIMEOUT_CONFIRMATION_LIMIT}",
+                                id, event_id
+                            );
+                        }
+                    }
+                    Ok(false) => {
+                        self.intent_store.reset_post_timeout_errors(id).await?;
                         warn!(
-                            "Post intent [{}] event {} exists but projection is delayed; confirmation {confirmations}/{TIMEOUT_CONFIRMATION_LIMIT}",
+                            "Post intent [{}] timed out and event {} is absent; rescheduling",
                             id, event_id
                         );
+                        self.intent_store
+                            .reset_post_timeout_confirmations(id)
+                            .await?;
+                        let retrying = self
+                            .intent_store
+                            .record_post_intent_failure(
+                                id,
+                                "waiting_for_sync timed out; event absent, resending",
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Post intent [{}] exhausted retries after timeout", id);
+                        }
                     }
-                }
-                Ok(false) => {
-                    warn!(
-                        "Post intent [{}] timed out and event {} is absent; rescheduling",
-                        id, event_id
-                    );
-                    self.intent_store
-                        .reset_post_timeout_confirmations(id)
-                        .await?;
-                    let retrying = self
-                        .intent_store
-                        .record_post_intent_failure(
-                            id,
-                            "waiting_for_sync timed out; event absent, resending",
-                        )
-                        .await?;
-                    if !retrying {
-                        error!("Post intent [{}] exhausted retries after timeout", id);
+                    Err(e) => {
+                        let errors = self.intent_store.increment_post_timeout_error(id).await?;
+                        if errors >= TIMEOUT_ERROR_LIMIT {
+                            error!(
+                                "Post intent [{}] timeout check failed {errors} times; dead-lettering: {:?}",
+                                id, e
+                            );
+                            self.intent_store
+                            .dead_letter_post_intent(
+                                id,
+                                &format!(
+                                    "waiting_for_sync timeout check failed {errors} consecutive times: {e}"
+                                ),
+                            )
+                            .await?;
+                        } else {
+                            warn!(
+                                "Post intent [{}] timeout check failed (error {errors}/{TIMEOUT_ERROR_LIMIT}): {:?}",
+                                id, e
+                            );
+                        }
                     }
-                }
-                Err(e) => {
-                    warn!(
-                        "Post intent [{}] timeout check failed: {:?}; leaving for next pass",
-                        id, e
-                    );
                 }
             }
         }
 
         // Redaction and replacement are idempotent, so rescheduling is safe.
-        for id in self
-            .intent_store
-            .get_stuck_delete_intent_ids(cutoff)
-            .await?
-        {
-            handled += 1;
-            let retrying = self
+        loop {
+            let ids = self
                 .intent_store
-                .record_delete_intent_failure(id, "waiting_for_sync timed out; rescheduling")
+                .get_stuck_delete_intent_ids(cutoff, INTENT_BATCH_SIZE)
                 .await?;
-            if !retrying {
-                error!("Delete intent [{}] exhausted retries after timeout", id);
+            if ids.is_empty() {
+                break;
+            }
+            for id in ids {
+                handled += 1;
+                let retrying = self
+                    .intent_store
+                    .record_delete_intent_failure(id, "waiting_for_sync timed out; rescheduling")
+                    .await?;
+                if !retrying {
+                    error!("Delete intent [{}] exhausted retries after timeout", id);
+                }
             }
         }
 
-        for id in self
-            .intent_store
-            .get_stuck_update_intent_ids(cutoff)
-            .await?
-        {
-            handled += 1;
-            let retrying = self
+        loop {
+            let ids = self
                 .intent_store
-                .record_update_intent_failure(id, "waiting_for_sync timed out; rescheduling")
+                .get_stuck_update_intent_ids(cutoff, INTENT_BATCH_SIZE)
                 .await?;
-            if !retrying {
-                error!("Update intent [{}] exhausted retries after timeout", id);
+            if ids.is_empty() {
+                break;
+            }
+            for id in ids {
+                handled += 1;
+                let retrying = self
+                    .intent_store
+                    .record_update_intent_failure(id, "waiting_for_sync timed out; rescheduling")
+                    .await?;
+                if !retrying {
+                    error!("Update intent [{}] exhausted retries after timeout", id);
+                }
             }
         }
 

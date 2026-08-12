@@ -57,6 +57,8 @@ struct CapabilitiesResponse {
 #[derive(Deserialize)]
 struct RoomVersions {
     default: String,
+    #[serde(default)]
+    available: HashMap<String, String>,
 }
 
 /// Upper bound for the joined-room cache. Membership changes are rare; when
@@ -517,6 +519,40 @@ impl AppServiceMatrixDriver {
         version
     }
 
+    /// Fail fast when the configured `room_version` is not supported by the
+    /// homeserver, instead of failing every createRoom call.
+    async fn validate_room_version_override(&self) -> Result<()> {
+        let Some(version) = &self.room_version_override else {
+            return Ok(());
+        };
+        let resp = self
+            .request(reqwest::Method::GET, "_matrix/client/v3/capabilities", None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("failed to query homeserver capabilities: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "failed to query homeserver capabilities ({}): {}",
+                status,
+                error_body
+            ));
+        }
+        let caps: CapabilitiesResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("failed to parse capabilities: {e}"))?;
+        let available = caps.room_versions.map(|r| r.available).unwrap_or_default();
+        if available.contains_key(version) {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "configured room_version `{version}` is not in homeserver /capabilities"
+            ))
+        }
+    }
+
     /// Read a room's current `m.room.power_levels` content, if any.
     async fn get_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
@@ -832,6 +868,7 @@ impl AppServiceMatrixDriver {
 impl MatrixDriver for AppServiceMatrixDriver {
     #[instrument(skip(self), fields(site_id = %site_id.as_str()))]
     async fn create_site_space(&self, site_id: &SiteId) -> Result<String> {
+        self.validate_room_version_override().await?;
         let site_id_str = site_id.as_str();
         let alias_localpart = site_space_alias_localpart(site_id_str);
 
@@ -921,6 +958,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         space_id: &str,
         candidate_room_id: Option<&str>,
     ) -> Result<String> {
+        self.validate_room_version_override().await?;
         let mut target_room_id = None;
 
         // ── PHASE 0: O(1) DISCOVERY (Check Candidate) ──

@@ -59,18 +59,21 @@ pub trait IntentStore: Send + Sync {
     async fn get_stuck_post_intents(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
     ) -> Result<Vec<StuckPostIntent>>;
 
     /// IDs of delete intents stuck in `waiting_for_sync` since before `cutoff`.
     async fn get_stuck_delete_intent_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
     ) -> Result<Vec<i64>>;
 
     /// IDs of update intents stuck in `waiting_for_sync` since before `cutoff`.
     async fn get_stuck_update_intent_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
     ) -> Result<Vec<i64>>;
 
     /// Moves a post intent to 'failed' without further retries. Used when the
@@ -86,11 +89,24 @@ pub trait IntentStore: Send + Sync {
     /// event was found absent and the intent was rescheduled).
     async fn reset_post_timeout_confirmations(&self, id: i64) -> Result<()>;
 
+    /// Records one more consecutive timeout-pass error (network/homeserver
+    /// failure while checking event existence). Returns the new count.
+    async fn increment_post_timeout_error(&self, id: i64) -> Result<u32>;
+
+    /// Resets the consecutive timeout-error counter after a successful check.
+    async fn reset_post_timeout_errors(&self, id: i64) -> Result<()>;
+
     /// Transitions a delete intent to 'completed' when the projector sees the redaction.
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()>;
 
-    /// Transitions an update intent to 'completed' when the projector sees the replacement.
-    async fn mark_update_intent_completed(&self, event_id: &str) -> Result<()>;
+    /// Transitions update intents for `event_id` to 'completed' when the
+    /// projector sees the replacement. The fallback is scoped to the projected
+    /// author key so an external edit cannot close unrelated queued intents.
+    async fn mark_update_intent_completed(
+        &self,
+        event_id: &str,
+        author_public_key: Option<&str>,
+    ) -> Result<()>;
 }
 
 /// The port for all comment projection storage operations.
@@ -135,7 +151,9 @@ pub trait CommentStore: Send + Sync {
     async fn delete_comment(&self, event_id: &str) -> Result<bool>;
 
     /// Gets the author display name for a specific event.
-    async fn get_author_display_name(&self, event_id: &str) -> Result<Option<String>>;
+    /// `None` means the comment is missing; `Some(None)` means the comment
+    /// exists without a display name; `Some(Some(name))` is a stored name.
+    async fn get_author_display_name(&self, event_id: &str) -> Result<Option<Option<String>>>;
 
     /// Returns the stored author public key for a comment, if any. Used to
     /// authorize edit/delete requests by comparing the presented key.

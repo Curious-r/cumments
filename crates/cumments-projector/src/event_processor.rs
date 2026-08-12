@@ -210,7 +210,10 @@ impl EventProcessor {
                     }
                     None => {
                         self.intent_store
-                            .mark_update_intent_completed(&relation.target_event_id)
+                            .mark_update_intent_completed(
+                                &relation.target_event_id,
+                                event.author_public_key.as_deref(),
+                            )
                             .await?
                     }
                 };
