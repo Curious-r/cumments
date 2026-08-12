@@ -322,6 +322,40 @@ async fn timeout_confirmations_increment_and_reset() {
 }
 
 #[tokio::test]
+async fn timeout_confirmation_enforces_cooldown_between_passes() {
+    let store = DbStore::connect(&test_db_url("timeout-cooldown"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_post_intent(&post_intent())
+        .await
+        .expect("save intent");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
+    let id = pending[0].id;
+    store
+        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .await
+        .expect("mark waiting");
+
+    // A future cutoff makes the intent eligible by age; the first
+    // confirmation must still put it into the cooldown window so the same
+    // reconcile loop cannot select it again immediately.
+    store
+        .increment_post_timeout_confirmation(id)
+        .await
+        .expect("increment");
+    let stuck = store
+        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
+        .await
+        .expect("stuck query");
+    assert!(
+        stuck.is_empty(),
+        "confirmed intent must wait for the next confirmation cooldown"
+    );
+}
+
+#[tokio::test]
 async fn timeout_check_errors_increment_and_reset() {
     let store = DbStore::connect(&test_db_url("timeout-errors"))
         .await

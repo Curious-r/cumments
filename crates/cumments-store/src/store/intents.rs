@@ -22,6 +22,11 @@ const MAX_RETRIES: i64 = 5;
 const BASE_BACKOFF_SECS: i64 = 30;
 /// Upper bound for the backoff delay.
 const MAX_BACKOFF_SECS: i64 = 1800;
+/// Minimum time between two timeout confirmation passes for the same post
+/// intent. Matches the reconciler's 60s fallback interval so the three
+/// confirmations required before dead-lettering are genuinely spread across
+/// reconcile cycles.
+const TIMEOUT_CONFIRMATION_COOLDOWN_MS: i64 = 60_000;
 
 /// Exponential backoff delay for the *next* attempt, based on the number of
 /// failures already recorded.
@@ -55,6 +60,7 @@ impl IntentStore for DbStore {
             retry_count: Set(0),
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
+            last_timeout_confirmation_at: Set(None),
             author_public_key: Set(Some(intent.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -555,6 +561,16 @@ impl IntentStore for DbStore {
                     .eq(IntentStatus::WaitingForSync),
             )
             .filter(intent_queue_post_comment::Column::UpdatedAt.lte(cutoff))
+            .filter(
+                Condition::any()
+                    .add(intent_queue_post_comment::Column::LastTimeoutConfirmationAt.is_null())
+                    .add(
+                        intent_queue_post_comment::Column::LastTimeoutConfirmationAt.lte(
+                            chrono::Utc::now().timestamp_millis()
+                                - TIMEOUT_CONFIRMATION_COOLDOWN_MS,
+                        ),
+                    ),
+            )
             .limit(limit)
             .all(&self.db)
             .await?;
@@ -633,10 +649,12 @@ impl IntentStore for DbStore {
     }
 
     async fn increment_post_timeout_confirmation(&self, id: i64) -> Result<u32> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
         self.db
             .execute_unprepared(&format!(
                 "UPDATE intent_queue_post_comment \
-                 SET timeout_confirmations = timeout_confirmations + 1 \
+                 SET timeout_confirmations = timeout_confirmations + 1, \
+                     last_timeout_confirmation_at = {now_ms} \
                  WHERE id = {id}"
             ))
             .await?;
@@ -651,7 +669,8 @@ impl IntentStore for DbStore {
         self.db
             .execute_unprepared(&format!(
                 "UPDATE intent_queue_post_comment \
-                 SET timeout_confirmations = 0 \
+                 SET timeout_confirmations = 0, \
+                     last_timeout_confirmation_at = NULL \
                  WHERE id = {id}"
             ))
             .await?;

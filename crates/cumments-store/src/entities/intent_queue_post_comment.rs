@@ -23,6 +23,9 @@ pub struct Model {
     /// on the homeserver. Dead-lettering requires several confirmations so a
     /// delayed projection is not treated as a failure.
     pub timeout_confirmations: i64,
+    /// Unix milliseconds of the last timeout confirmation, used to enforce a
+    /// cooldown between confirmation passes.
+    pub last_timeout_confirmation_at: Option<i64>,
     /// Consecutive timeout passes that failed to check event existence
     /// (network/homeserver errors). Dead-lettered after a threshold so
     /// intents cannot sit in limbo forever.
