@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow, bail};
+use cumments_core::models::ID_REGEX;
 use cumments_core::site_auth::{
     KNOWN_SECRET_PLACEHOLDERS, OriginPattern, SITE_SECRET_MIN_LENGTH, SiteAuthMode, SiteAuthPolicy,
     SitePolicyEntry, SiteVerificationPolicy,
@@ -189,6 +190,13 @@ pub fn build_site_auth_policy(
     };
 
     for (site_id, config) in sites {
+        if !ID_REGEX.is_match(site_id) {
+            bail!(
+                "`sites.{site_id}` has an invalid site id; expected 1-64 lowercase \
+                 letters, digits or hyphens"
+            );
+        }
+
         let allowed_origins = config
             .allowed_origins
             .iter()
@@ -239,6 +247,17 @@ pub fn build_site_auth_policy(
 
         for pattern in &allowed_origins {
             warn_http_non_loopback(site_id, pattern);
+        }
+
+        if config.auth_mode != Some(SiteAuthMode::Secret)
+            && allowed_origins.is_empty()
+            && security.site_verification == SiteVerificationPolicy::Required
+        {
+            tracing::warn!(
+                "`sites.{site_id}` has no `allowed_origins`; under `required` \
+                 verification, writes will be rejected unless the site verifies \
+                 an origin through the API"
+            );
         }
 
         policy.sites.insert(
@@ -1004,6 +1023,42 @@ mode = "logging"
                 .and_then(|e| e.secret.as_deref()),
             Some("a".repeat(SITE_SECRET_MIN_LENGTH).as_str())
         );
+    }
+
+    #[test]
+    fn site_policy_build_rejects_invalid_site_ids_and_allows_empty_origins() {
+        let security = Security {
+            pow_secret: "secret".to_string(),
+            pow_difficulty: 4,
+            site_verification: SiteVerificationPolicy::Required,
+            admin_token: None,
+            allow_private_verification_origins: false,
+        };
+
+        let mut sites = HashMap::new();
+        sites.insert(
+            "Bad Site".to_string(),
+            SiteConfig {
+                auth_mode: None,
+                allowed_origins: vec![],
+                secret: None,
+            },
+        );
+        assert!(build_site_auth_policy(&security, &sites).is_err());
+
+        // Empty allowlists remain valid (API-verified origins can still be
+        // added at runtime); the required-mode warning is emitted instead of
+        // failing startup.
+        sites.clear();
+        sites.insert(
+            "my-blog".to_string(),
+            SiteConfig {
+                auth_mode: None,
+                allowed_origins: vec![],
+                secret: None,
+            },
+        );
+        assert!(build_site_auth_policy(&security, &sites).is_ok());
     }
 
     #[test]
