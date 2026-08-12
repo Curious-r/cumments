@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+**Documentation:** <https://curious-r.github.io/cumments/>
+
 Cumments is a decentralized comment system backend built on the **Matrix
 protocol**. Matrix is the **source of truth**: every comment, edit and
 deletion is an immutable Matrix event. SQLite is a disposable local read model
@@ -47,6 +49,7 @@ troubleshooting — is in the [installation guide](docs/installation.md).
 
 | Guide | Description |
 |---|---|
+| [Online documentation](https://curious-r.github.io/cumments/) | Rendered site: API, configuration, problem types |
 | [Installation](docs/installation.md) | Quick start with the official image and a homeserver |
 | [Configuration](docs/configuration.md) | Config discovery, environment variables, full example |
 | [Architecture](docs/architecture.md) | System design, operation modes, recovery, crates |

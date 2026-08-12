@@ -6,6 +6,9 @@ members = ["crates/cumments-core", "crates/cumments-store", "crates/cumments-api
 version = "0.19.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/Curious-r/cumments"
+homepage = "https://curious-r.github.io/cumments/"
+documentation = "https://curious-r.github.io/cumments/"
 
 [workspace.dependencies]
 # Internal crates

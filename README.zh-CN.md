@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+**文档站：** <https://curious-r.github.io/cumments/>
+
 Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Matrix 是**唯一事实来源**：
 每一条评论、编辑和删除都是不可变的 Matrix 事件；SQLite 只是可随时丢弃的本地读模型，
 可以用 `cumments backfill` 从 Matrix 历史重建。
@@ -43,6 +45,7 @@ docker compose up -d
 
 | 指南 | 说明 |
 |---|---|
+| [在线文档](https://curious-r.github.io/cumments/) | 渲染站点：API、配置、错误码 |
 | [安装](docs/installation.md) | 使用官方镜像与 homeserver 的快速开始 |
 | [配置](docs/configuration.md) | 配置发现顺序、环境变量、完整示例 |
 | [架构](docs/architecture.md) | 系统设计、运行模式、恢复、crate 结构 |
