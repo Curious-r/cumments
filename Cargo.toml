@@ -27,6 +27,7 @@ axum = "0.8.8"
 base64 = "0.23.1"
 chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.57", features = ["derive"] }
+clap_complete = "4.5.57"
 config = { version = "0.15.19", features = ["toml"] }
 dotenvy = "0.15.7"
 ed25519-dalek = "3.0.0"

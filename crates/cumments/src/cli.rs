@@ -180,6 +180,14 @@ pub struct UnblockRoomArgs {
     pub room_id: String,
 }
 
+/// Arguments for generating shell completions.
+#[derive(clap::Args, Debug)]
+pub struct CompletionsArgs {
+    /// Target shell
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
+}
+
 /// All CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -198,6 +206,9 @@ pub enum Commands {
     /// Manage blocked comment rooms
     #[command(name = "rooms")]
     Rooms(RoomsArgs),
+    /// Generate a shell completion script
+    #[command(name = "completions")]
+    Completions(CompletionsArgs),
 }
 
 /// The registration data model (serialised to YAML).
@@ -529,6 +540,13 @@ fn print_room_table(rooms: &[AdminBlockedRoom]) {
             room.room_id, room.site_id, room.post_slug, room.reason
         );
     }
+}
+
+/// Handles `cumments completions <shell>`.
+pub fn handle_completions(args: &CompletionsArgs) -> Result<()> {
+    let mut cmd = crate::cli_command();
+    clap_complete::generate(args.shell, &mut cmd, "cumments", &mut std::io::stdout());
+    Ok(())
 }
 
 /// Handle the `generate-registration` subcommand.
@@ -955,5 +973,27 @@ mod tests {
             handle_rooms_command(&store, &missing).await.is_err(),
             "unknown room must fail"
         );
+    }
+
+    #[test]
+    fn completions_command_tree_has_management_groups() {
+        let command = crate::cli_command();
+        let subcommands = command
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_string())
+            .collect::<Vec<_>>();
+        for expected in [
+            "generate-registration",
+            "backfill",
+            "backup",
+            "sites",
+            "rooms",
+            "completions",
+        ] {
+            assert!(
+                subcommands.iter().any(|name| name == expected),
+                "missing subcommand `{expected}`"
+            );
+        }
     }
 }

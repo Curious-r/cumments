@@ -18,6 +18,7 @@ cumments-store.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 config.workspace = true
 dotenvy.workspace = true
 hex.workspace = true

@@ -23,6 +23,7 @@ nav:
   - Architecture: architecture.md
   - Configuration: configuration.md
   - Demo: demo.md
+  - CLI: cli.md
   - Development: development.md
   - Installation: installation.md
   - Site authentication: site-authentication.md

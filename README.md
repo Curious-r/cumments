@@ -55,6 +55,7 @@ troubleshooting — is in the [installation guide](docs/installation.md).
 | [Architecture](docs/architecture.md) | System design, operation modes, recovery, crates |
 | [API](docs/api.md) | Challenge, comments, signatures, SSE |
 | [Site verification](docs/site-verification.md) | Bind an SSG site, well-known/DNS proofs, strict HMAC mode |
+| [CLI](docs/cli.md) | Local administration: sites, rooms, backup, completions |
 | [Demo](docs/demo.md) | Backend-only positioning, demo page, identity, proof of work |
 | [Development](docs/development.md) | Toolchain, CLI, building the image from main |
 

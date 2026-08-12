@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cumments_core::ports::MatrixDriver;
 use cumments_core::site_service::SiteService;
 use std::collections::HashSet;
@@ -12,6 +12,11 @@ pub mod cli;
 pub mod config;
 
 use config::Mode;
+
+/// The complete clap command, used by `cumments completions`.
+pub(crate) fn cli_command() -> clap::Command {
+    Args::command()
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -66,6 +71,10 @@ async fn main() -> Result<()> {
             }
             cli::Commands::Rooms(_) => {
                 // Handled after the database is connected.
+            }
+            cli::Commands::Completions(args) => {
+                cli::handle_completions(args)?;
+                return Ok(());
             }
         }
     }
@@ -227,6 +236,7 @@ async fn main() -> Result<()> {
             cli::Commands::Backup(_) => unreachable!("handled earlier"),
             cli::Commands::Sites(_) => unreachable!("handled earlier"),
             cli::Commands::Rooms(_) => unreachable!("handled earlier"),
+            cli::Commands::Completions(_) => unreachable!("handled earlier"),
         }
     }
 
