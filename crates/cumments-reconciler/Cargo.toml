@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 cumments-core.workspace = true
-cumments-matrix.workspace = true
 
 anyhow.workspace = true
 chrono.workspace = true

@@ -346,6 +346,24 @@ impl EventProcessor {
             }
         };
 
+        // Same registry gate as message processing: ignore redactions from
+        // deactivated or unregistered rooms so tombstoned rooms cannot keep
+        // mutating the read model through live pushes.
+        match self.registry_store.is_room_active(&event.room_id).await? {
+            Some(true) => {}
+            Some(false) => {
+                debug!("Ignoring redaction from deactivated room {}", event.room_id);
+                return Ok(());
+            }
+            None => {
+                debug!(
+                    "Ignoring redaction from unregistered room {}",
+                    event.room_id
+                );
+                return Ok(());
+            }
+        }
+
         info!(
             "Handling redaction for event {} in room {}",
             target_event_id, event.room_id

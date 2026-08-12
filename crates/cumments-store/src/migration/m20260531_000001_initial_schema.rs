@@ -30,9 +30,9 @@ impl MigrationTrait for Migration {
             .create_table(schema.create_table_from_entity(intent_queue_update_comment::Entity))
             .await?;
 
-        // Manual indexes not captured by basic entity derivation (if any)
-        // SeaORM 1.x captures unique and primary keys, but composite indexes might need manual addition
-        // if not specified in the Entity via attributes.
+        // Manual indexes not captured by basic entity derivation: composite
+        // indexes must be added explicitly even though SeaORM derives unique
+        // and primary keys from the entity attributes.
 
         manager
             .create_index(

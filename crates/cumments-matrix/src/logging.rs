@@ -5,7 +5,7 @@ use cumments_core::{
     models::{PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
-use tracing::info;
+use tracing::{debug, info};
 
 pub struct LoggingMatrixDriver;
 
@@ -52,7 +52,7 @@ impl MatrixDriver for LoggingMatrixDriver {
     ) -> Result<String> {
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
-        info!(
+        debug!(
             "LOGGING: Post message to room={}. Author={} (guest={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, intent={:?}): {}",
             room_id,
             display_name,
@@ -63,7 +63,11 @@ impl MatrixDriver for LoggingMatrixDriver {
             intent_id,
             content
         );
-        Ok("log_event_id".to_string())
+        Ok(format!(
+            "log_event_{}_{}",
+            intent_id.unwrap_or(0),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ))
     }
 
     async fn update_message(
@@ -80,7 +84,7 @@ impl MatrixDriver for LoggingMatrixDriver {
     ) -> Result<String> {
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
-        info!(
+        debug!(
             "LOGGING: Update message {} in room={}. Author={} (guest={}, intent={:?}): {}",
             event_id, room_id, display_name, guest_id, intent_id, new_content
         );

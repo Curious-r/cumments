@@ -74,8 +74,8 @@ async fn main() -> Result<()> {
         Some(path) => tracing::info!("Using config file: {}", path.display()),
         None => tracing::info!("No config file found; using defaults and environment variables."),
     }
-    let settings =
-        config::get_configuration(args.config.as_deref()).expect("Failed to read configuration.");
+    let settings = config::get_configuration(args.config.as_deref())
+        .map_err(|e| anyhow::anyhow!("failed to read configuration: {e}"))?;
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
     let admin_token_hash = config::admin_token_hash(&settings.security)?;
     if settings.matrix.mode == Mode::Logging
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     let db_store = Arc::new(
         cumments_store::DbStore::connect(&settings.database.url)
             .await
-            .expect("Failed to connect to database."),
+            .map_err(|e| anyhow::anyhow!("failed to connect to database: {e}"))?,
     );
     tracing::info!("Database initialized.");
 
@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
             as_conf.admin_id.clone(),
             virtual_user_store,
             as_conf.room_version.clone(),
-        ))
+        )?)
     } else {
         tracing::info!("Using 'logging' mode driver.");
         Arc::new(cumments_matrix::logging::LoggingMatrixDriver)

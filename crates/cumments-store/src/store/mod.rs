@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm::{DatabaseConnection, EntityTrait};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use crate::entities::active_enums::IntentStatus;
@@ -66,6 +67,9 @@ impl DbStore {
             .execute_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
             .await?;
 
+        // The snapshot contains site secrets; keep it operator-readable only.
+        std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o600))?;
+
         Ok(())
     }
 }
@@ -87,7 +91,11 @@ fn ensure_sqlite_file_exists(url: &str) -> Result<()> {
 
     let file = std::path::Path::new(path);
     if !file.exists() {
-        std::fs::File::create(file)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(file)?;
     }
     Ok(())
 }

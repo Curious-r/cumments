@@ -62,6 +62,7 @@ struct RoomVersions {
 /// Upper bound for the joined-room cache. Membership changes are rare; when
 /// the cap is hit the cache is reset and rebuilt from homeserver state.
 const JOINED_CACHE_MAX: usize = 10_000;
+const DISPLAY_NAME_CACHE_MAX: usize = 10_000;
 
 /// The AppService-based Matrix driver.
 ///
@@ -92,12 +93,12 @@ impl AppServiceMatrixDriver {
         admin_id: String,
         virtual_user_store: Arc<dyn VirtualUserStore>,
         room_version: Option<String>,
-    ) -> Self {
+    ) -> Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("failed to build HTTP client");
-        Self {
+            .map_err(|e| anyhow!("failed to build HTTP client: {e}"))?;
+        Ok(Self {
             http_client,
             homeserver_url,
             as_token,
@@ -109,7 +110,7 @@ impl AppServiceMatrixDriver {
             display_name_cache: Mutex::new(HashMap::new()),
             room_version_override: room_version,
             default_room_version: Mutex::new(None),
-        }
+        })
     }
 
     // ── Internal helpers ──────────────────────────────────────────
@@ -213,6 +214,17 @@ impl AppServiceMatrixDriver {
                     "Virtual user {} join room {} returned M_FORBIDDEN and is not joined ({}): {}",
                     virtual_user, room_id, status, error_body
                 );
+            } else if status.is_server_error()
+                || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || errcode == "M_LIMIT_EXCEEDED"
+            {
+                return Err(anyhow!(
+                    "Virtual user {} join room {} failed with retryable error ({}): {}",
+                    virtual_user,
+                    room_id,
+                    status,
+                    error_body
+                ));
             } else {
                 warn!(
                     "Virtual user {} join room {} failed ({}): {}",
@@ -331,10 +343,14 @@ impl AppServiceMatrixDriver {
                 error_body
             ));
         }
-        self.display_name_cache
+        let mut cache = self
+            .display_name_cache
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(virtual_user.to_owned(), display_name.to_owned());
+            .unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= DISPLAY_NAME_CACHE_MAX && !cache.contains_key(virtual_user) {
+            cache.clear();
+        }
+        cache.insert(virtual_user.to_owned(), display_name.to_owned());
         Ok(())
     }
 
@@ -661,7 +677,7 @@ impl AppServiceMatrixDriver {
         {
             self.set_room_metadata(room_id, site_id, post_slug).await?;
         }
-        self.ensure_admin(room_id).await;
+        self.ensure_admin_strict(room_id).await?;
         Ok(())
     }
 
@@ -782,6 +798,32 @@ impl AppServiceMatrixDriver {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Grant the operator admin power in a room, propagating failures so
+    /// adoption cannot silently proceed with an unmoderated room.
+    #[instrument(skip(self))]
+    async fn ensure_admin_strict(&self, room_id: &str) -> Result<()> {
+        let updated = match self.get_power_levels(room_id).await {
+            Ok(Some(content)) => match power_levels_with_admin(&content, &self.admin_id) {
+                Some(updated) => updated,
+                None => return Ok(()), // admin already has admin power
+            },
+            // No power-levels event: room defaults apply, so create one that
+            // grants the admin power.
+            Ok(None) => serde_json::json!({ "users": { self.admin_id.clone(): 100 } }),
+            Err(e) => {
+                return Err(anyhow!(
+                    "Failed to read power levels for room {}: {:#}",
+                    room_id,
+                    e
+                ));
+            }
+        };
+
+        self.write_power_levels(room_id, &updated).await?;
+        info!("Granted admin power in room {}", room_id);
         Ok(())
     }
 }
@@ -1319,26 +1361,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
         }
     }
 
-    #[instrument(skip(self))]
     async fn ensure_admin(&self, room_id: &str) {
-        // Best-effort: failures are logged here and never fail the caller.
-        let updated = match self.get_power_levels(room_id).await {
-            Ok(Some(content)) => match power_levels_with_admin(&content, &self.admin_id) {
-                Some(updated) => updated,
-                None => return, // admin already has admin power
-            },
-            // No power-levels event: room defaults apply, so create one that
-            // grants the admin power.
-            Ok(None) => serde_json::json!({ "users": { self.admin_id.clone(): 100 } }),
-            Err(e) => {
-                warn!("Failed to read power levels for room {}: {:#}", room_id, e);
-                return;
-            }
-        };
-
-        match self.write_power_levels(room_id, &updated).await {
-            Ok(()) => info!("Granted admin power in room {}", room_id),
-            Err(e) => warn!("Failed to grant admin power in room {}: {:#}", room_id, e),
+        if let Err(e) = self.ensure_admin_strict(room_id).await {
+            warn!("Failed to ensure admin power in room {}: {:#}", room_id, e);
         }
     }
 }

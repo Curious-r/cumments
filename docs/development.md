@@ -19,10 +19,14 @@ CI also runs a syntax check of the demo's inline scripts with
 ## CLI
 
 ```text
-cumments generate-registration [--server-name <domain>] [--url <url>] [--quiet]
+cumments generate-registration [--server-name <domain>] [--url <url>] \
+  [--output registration.yaml] [--quiet]
 cumments backfill
 cumments backup --output <file>
 ```
+
+`--output` writes the real YAML with 0600 permissions. `--quiet` alone prints
+an unusable `[REDACTED]` YAML and is only meant for demos/audits.
 
 From the source tree, prefix any command with `cargo run -p cumments --`, e.g.
 `cargo run -p cumments -- backfill`.

@@ -5,7 +5,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::models::{AuthorType, Comment, CommentAuthor, CommentPage, PostSlug, SiteId};
 use cumments_core::ports::CommentStore;
-use sea_orm::{ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 
 #[async_trait]
 impl CommentStore for DbStore {
@@ -43,8 +45,9 @@ impl CommentStore for DbStore {
         }
 
         let models = query
-            .paginate(&self.db, limit as u64)
-            .fetch_page((offset / limit) as u64)
+            .offset(offset.max(0) as u64)
+            .limit(limit as u64)
+            .all(&self.db)
             .await?;
 
         let comments = models.into_iter().map(Comment::from).collect();

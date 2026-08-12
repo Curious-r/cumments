@@ -7,6 +7,7 @@ use cumments_core::ports::SiteAuthStore;
 use cumments_core::site_auth::{register_site, token_hash};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use crate::config::{regex_escape, resolve_config_path};
@@ -30,9 +31,15 @@ pub struct GenerateRegistrationArgs {
     #[arg(long)]
     pub id: Option<String>,
 
-    /// Rate-limited output (no as_token/hs_token values in stdout)
+    /// Suppress token hints; stdout carries a `[REDACTED]` YAML for
+    /// demos/audits only. Use `--output` for a real registration file.
     #[arg(long, default_value_t = false)]
     pub quiet: bool,
+
+    /// Write the registration YAML (real tokens) to this file with 0600
+    /// permissions instead of printing it.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 /// Backfill the read model from Matrix room history.
@@ -204,15 +211,33 @@ pub fn handle_generate_registration(
         .or_else(|| source.appservice_id())
         .unwrap_or_else(|| "cumments".to_string());
 
-    let registration = build_registration(&url, &server_name, &sender_localpart, &id, args.quiet);
+    let registration = build_registration(
+        &url,
+        &server_name,
+        &sender_localpart,
+        &id,
+        args.quiet && args.output.is_none(),
+    );
     let yaml = serde_yaml_ng::to_string(&registration)?;
-    println!("{}", yaml);
-
-    if !args.quiet {
-        eprintln!("---");
-        eprintln!("Add these tokens to your cumments.toml under [matrix.appservice]:");
-        eprintln!("  as_token = \"{}\"", registration.as_token);
-        eprintln!("  hs_token = \"{}\"", registration.hs_token);
+    if let Some(output) = &args.output {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(output)
+            .map_err(|e| anyhow::anyhow!("failed to create {}: {e}", output.display()))?;
+        std::fs::write(output, yaml)?;
+        eprintln!("Wrote registration to {}", output.display());
+        if !args.quiet {
+            eprintln!("Add the tokens from that file to cumments.toml under [matrix.appservice].");
+        }
+    } else {
+        println!("{}", yaml);
+        if !args.quiet {
+            eprintln!("---");
+            eprintln!("The YAML above contains tokens; redirect stdout to registration.yaml");
+            eprintln!("and keep the file private.");
+        }
     }
 
     Ok(())

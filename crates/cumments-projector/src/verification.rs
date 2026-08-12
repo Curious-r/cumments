@@ -73,8 +73,11 @@ pub(crate) fn verify_delete_proof(
     if proof_site != site_id || proof_slug != post_slug || proof_target != target_event_id {
         return false;
     }
-    if author_public_key.is_some_and(|key| key != public_key) {
-        return false;
+    match author_public_key {
+        // A delete proof is only meaningful for guest comments with a stored
+        // public key; without one there is nothing to bind the signature to.
+        Some(stored) if stored == public_key => {}
+        _ => return false,
     }
 
     let message = signature_message(&["DELETE", site_id, post_slug, target_event_id, challenge]);

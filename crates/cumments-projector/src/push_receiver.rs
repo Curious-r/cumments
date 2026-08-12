@@ -19,8 +19,12 @@ use axum::{
     routing::{post, put},
 };
 use cumments_core::protocol::MESSAGE_CONTENT_KEY;
+use cumments_core::site_auth::constant_time_eq;
 use serde::Deserialize;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 // ── Shared state ──────────────────────────────────────────────────
 
@@ -28,7 +32,16 @@ use std::{collections::HashMap, sync::Arc};
 pub struct PushState {
     processor: Arc<EventProcessor>,
     hs_token: String,
+    /// Transaction IDs already acknowledged successfully. Prevents a
+    /// homeserver retry of a fully processed transaction from re-broadcasting
+    /// the same events over SSE.
+    processed_txns: Mutex<HashSet<String>>,
 }
+
+/// Upper bound on remembered transaction IDs; beyond it the set is cleared so
+/// memory stays bounded (a cleared ID may be reprocessed once, which is
+/// idempotent at the store layer).
+const MAX_PROCESSED_TXNS: usize = 10_000;
 
 // ── Matrix AppService push event types ────────────────────────────
 
@@ -74,6 +87,7 @@ pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Ro
     let state = Arc::new(PushState {
         processor,
         hs_token,
+        processed_txns: Mutex::new(HashSet::new()),
     });
 
     axum::Router::new()
@@ -117,7 +131,7 @@ async fn handle_ping(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
     state: axum::extract::State<Arc<PushState>>,
-    Json(_body): Json<serde_json::Value>,
+    _body: Option<Json<serde_json::Value>>,
 ) -> impl IntoResponse {
     if !hs_token_matches(&headers, &query, &state.hs_token) {
         tracing::warn!("AppService ping rejected: invalid hs_token");
@@ -131,12 +145,27 @@ async fn handle_ping(
 
 /// Handle `PUT /_matrix/app/v1/transactions/{txnId}`.
 async fn handle_transaction(
-    Path(_txn_id): Path<String>,
+    Path(txn_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
     state: axum::extract::State<Arc<PushState>>,
     Json(txn): Json<Transaction>,
 ) -> impl IntoResponse {
+    if txn_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"errcode": "M_INVALID_PARAM", "error": "txnId required"})),
+        );
+    }
+    if state
+        .processed_txns
+        .lock()
+        .expect("processed txns mutex poisoned")
+        .contains(&txn_id)
+    {
+        return (StatusCode::OK, Json(serde_json::json!({})));
+    }
+
     // ── hs_token verification ──
     let received = received_hs_token(&headers, &query);
     if received != Some(state.hs_token.as_str()) {
@@ -169,6 +198,15 @@ async fn handle_transaction(
             })),
         );
     }
+
+    let mut processed = state
+        .processed_txns
+        .lock()
+        .expect("processed txns mutex poisoned");
+    if processed.len() >= MAX_PROCESSED_TXNS {
+        processed.clear();
+    }
+    processed.insert(txn_id);
 
     // The AppService protocol requires an empty JSON object response.
     (StatusCode::OK, Json(serde_json::json!({})))
@@ -204,7 +242,10 @@ fn received_hs_token<'a>(
 
 /// Whether the resolved `hs_token` matches the configured value.
 fn hs_token_matches(headers: &HeaderMap, query: &HashMap<String, String>, expected: &str) -> bool {
-    received_hs_token(headers, query) == Some(expected)
+    match received_hs_token(headers, query) {
+        Some(received) => constant_time_eq(received.as_bytes(), expected.as_bytes()),
+        None => false,
+    }
 }
 
 // ── Event dispatch ────────────────────────────────────────────────

@@ -974,7 +974,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "cumments-core",
- "cumments-matrix",
  "serde_json",
  "tokio",
  "tracing",

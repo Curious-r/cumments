@@ -509,6 +509,8 @@ struct RegistrationFile {
     as_token: String,
     hs_token: String,
     sender_localpart: String,
+    #[serde(default)]
+    rate_limited: bool,
     namespaces: RegistrationNamespaces,
 }
 
@@ -516,6 +518,8 @@ struct RegistrationFile {
 struct RegistrationNamespaces {
     users: Vec<NamespaceRule>,
     aliases: Vec<NamespaceRule>,
+    #[serde(default)]
+    rooms: Vec<NamespaceRule>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -557,6 +561,10 @@ fn validate_registration_file(path: &str, check: &RegistrationCheck<'_>) -> Resu
         ));
     }
 
+    if registration.rate_limited {
+        errors.push("rate_limited must be false: the Cumments generator does not rate-limit appservice requests".to_string());
+    }
+
     let expected_users = format!("@_cumments_.*:{}", regex_escape(check.server_name));
     match registration.namespaces.users.as_slice() {
         [rule] if rule.regex == expected_users && rule.exclusive => {}
@@ -571,6 +579,12 @@ fn validate_registration_file(path: &str, check: &RegistrationCheck<'_>) -> Resu
         _ => errors.push(format!(
             "aliases namespace must be exactly `{expected_aliases}` with exclusive: true"
         )),
+    }
+
+    if !registration.namespaces.rooms.is_empty() {
+        errors.push(
+            "rooms namespace must be empty: Cumments reserves only users and aliases".to_string(),
+        );
     }
 
     if errors.is_empty() {

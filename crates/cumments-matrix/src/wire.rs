@@ -299,7 +299,7 @@ pub(crate) fn format_txn_id(kind: &str, intent_id: Option<i64>) -> String {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let mut random_bytes = [0u8; 4];
+            let mut random_bytes = [0u8; 16];
             rand::rng().fill_bytes(&mut random_bytes);
             format!("cumments_{}_{}_{}", kind, ts, hex::encode(random_bytes))
         }

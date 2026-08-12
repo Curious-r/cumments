@@ -109,32 +109,59 @@ impl Reconciler {
     async fn reconcile(&self) -> Result<u64> {
         let mut post_count = 0;
         loop {
-            let batch = self.reconcile_posts().await?;
-            post_count += batch;
-            if batch < INTENT_BATCH_SIZE {
-                break;
+            match self.reconcile_posts().await {
+                Ok(batch) => {
+                    post_count += batch;
+                    if batch < INTENT_BATCH_SIZE {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Reconcile posts phase failed: {:#}", e);
+                    break;
+                }
             }
         }
 
         let mut delete_count = 0;
         loop {
-            let batch = self.reconcile_deletions().await?;
-            delete_count += batch;
-            if batch < INTENT_BATCH_SIZE {
-                break;
+            match self.reconcile_deletions().await {
+                Ok(batch) => {
+                    delete_count += batch;
+                    if batch < INTENT_BATCH_SIZE {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Reconcile deletions phase failed: {:#}", e);
+                    break;
+                }
             }
         }
 
         let mut update_count = 0;
         loop {
-            let batch = self.reconcile_updates().await?;
-            update_count += batch;
-            if batch < INTENT_BATCH_SIZE {
-                break;
+            match self.reconcile_updates().await {
+                Ok(batch) => {
+                    update_count += batch;
+                    if batch < INTENT_BATCH_SIZE {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Reconcile updates phase failed: {:#}", e);
+                    break;
+                }
             }
         }
 
-        let timeout_count = self.reconcile_timeouts().await?;
+        let timeout_count = match self.reconcile_timeouts().await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Reconcile timeouts phase failed: {:#}", e);
+                0
+            }
+        };
         Ok(post_count + delete_count + update_count + timeout_count)
     }
 
@@ -422,7 +449,8 @@ impl Reconciler {
                     .unwrap_or_else(|| "Guest".to_string());
 
                 // 5. Hands: Perform the update (m.replace)
-                self.driver
+                match self
+                    .driver
                     .update_message(
                         &room_id,
                         &intent.event_id,
@@ -434,7 +462,23 @@ impl Reconciler {
                         &intent.site_id,
                         Some(id),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        if room_unavailable(&e) {
+                            warn!(
+                                "Update intent [{}] failed on room {}; invalidating registry entry: {:#}",
+                                id, room_id, e
+                            );
+                            let _ = self
+                                .registry_store
+                                .invalidate_room_registry(&room_id)
+                                .await;
+                        }
+                        return Err(e);
+                    }
+                }
 
                 // 6. Closed-loop: Mark as waiting for sync
                 self.intent_store

@@ -19,6 +19,9 @@ PUID="${PUID:-$DEFAULT_UID}"
 PGID="${PGID:-$DEFAULT_GID}"
 
 mkdir -p /srv/cumments
-chown -R "${PUID}:${PGID}" /srv/cumments
+chown "${PUID}:${PGID}" /srv/cumments
+# Only fix top-level files (database, WAL, backups); avoid a recursive chown
+# of a large volume on every container start.
+find /srv/cumments -maxdepth 1 -type f -exec chown "${PUID}:${PGID}" {} +
 
 exec su-exec "${PUID}:${PGID}" "$@"

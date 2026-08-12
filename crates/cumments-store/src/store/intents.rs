@@ -327,7 +327,7 @@ impl IntentStore for DbStore {
         }
 
         if model.retry_count >= MAX_RETRIES {
-            intent_queue_post_comment::Entity::update_many()
+            let result = intent_queue_post_comment::Entity::update_many()
                 .col_expr(
                     intent_queue_post_comment::Column::Status,
                     sea_orm::sea_query::Expr::value(IntentStatus::Failed),
@@ -341,12 +341,17 @@ impl IntentStore for DbStore {
                     sea_orm::sea_query::Expr::value(error),
                 )
                 .filter(intent_queue_post_comment::Column::Id.eq(id))
+                .filter(intent_queue_post_comment::Column::Status.eq(model.status))
+                .filter(intent_queue_post_comment::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
+            if result.rows_affected == 0 {
+                return Ok(false);
+            }
             Ok(false)
         } else {
             let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
-            intent_queue_post_comment::Entity::update_many()
+            let result = intent_queue_post_comment::Entity::update_many()
                 .col_expr(
                     intent_queue_post_comment::Column::Status,
                     sea_orm::sea_query::Expr::value(IntentStatus::Pending),
@@ -368,8 +373,13 @@ impl IntentStore for DbStore {
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .filter(intent_queue_post_comment::Column::Id.eq(id))
+                .filter(intent_queue_post_comment::Column::Status.eq(model.status))
+                .filter(intent_queue_post_comment::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
+            if result.rows_affected == 0 {
+                return Ok(false);
+            }
             Ok(true)
         }
     }
@@ -388,7 +398,7 @@ impl IntentStore for DbStore {
         }
 
         if model.retry_count >= MAX_RETRIES {
-            intent_queue_delete_comment::Entity::update_many()
+            let result = intent_queue_delete_comment::Entity::update_many()
                 .col_expr(
                     intent_queue_delete_comment::Column::Status,
                     sea_orm::sea_query::Expr::value(IntentStatus::Failed),
@@ -402,12 +412,17 @@ impl IntentStore for DbStore {
                     sea_orm::sea_query::Expr::value(error),
                 )
                 .filter(intent_queue_delete_comment::Column::Id.eq(id))
+                .filter(intent_queue_delete_comment::Column::Status.eq(model.status))
+                .filter(intent_queue_delete_comment::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
+            if result.rows_affected == 0 {
+                return Ok(false);
+            }
             Ok(false)
         } else {
             let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
-            intent_queue_delete_comment::Entity::update_many()
+            let result = intent_queue_delete_comment::Entity::update_many()
                 .col_expr(
                     intent_queue_delete_comment::Column::Status,
                     sea_orm::sea_query::Expr::value(IntentStatus::Pending),
@@ -429,8 +444,13 @@ impl IntentStore for DbStore {
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .filter(intent_queue_delete_comment::Column::Id.eq(id))
+                .filter(intent_queue_delete_comment::Column::Status.eq(model.status))
+                .filter(intent_queue_delete_comment::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
+            if result.rows_affected == 0 {
+                return Ok(false);
+            }
             Ok(true)
         }
     }
@@ -449,7 +469,7 @@ impl IntentStore for DbStore {
         }
 
         if model.retry_count >= MAX_RETRIES {
-            intent_queue_update_comment::Entity::update_many()
+            let result = intent_queue_update_comment::Entity::update_many()
                 .col_expr(
                     intent_queue_update_comment::Column::Status,
                     sea_orm::sea_query::Expr::value(IntentStatus::Failed),
@@ -463,12 +483,17 @@ impl IntentStore for DbStore {
                     sea_orm::sea_query::Expr::value(error),
                 )
                 .filter(intent_queue_update_comment::Column::Id.eq(id))
+                .filter(intent_queue_update_comment::Column::Status.eq(model.status))
+                .filter(intent_queue_update_comment::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
+            if result.rows_affected == 0 {
+                return Ok(false);
+            }
             Ok(false)
         } else {
             let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
-            intent_queue_update_comment::Entity::update_many()
+            let result = intent_queue_update_comment::Entity::update_many()
                 .col_expr(
                     intent_queue_update_comment::Column::Status,
                     sea_orm::sea_query::Expr::value(IntentStatus::Pending),
@@ -490,8 +515,13 @@ impl IntentStore for DbStore {
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .filter(intent_queue_update_comment::Column::Id.eq(id))
+                .filter(intent_queue_update_comment::Column::Status.eq(model.status))
+                .filter(intent_queue_update_comment::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
+            if result.rows_affected == 0 {
+                return Ok(false);
+            }
             Ok(true)
         }
     }
