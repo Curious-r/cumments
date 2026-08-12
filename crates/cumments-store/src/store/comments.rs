@@ -80,7 +80,7 @@ impl CommentStore for DbStore {
             reply_to: Set(comment.reply_to.clone()),
             intent_id: Set(comment.intent_id),
             created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
+            projected_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
@@ -99,7 +99,7 @@ impl CommentStore for DbStore {
                         comments::Column::Timestamp,
                         comments::Column::ReplyTo,
                         comments::Column::IntentId,
-                        comments::Column::UpdatedAt,
+                        comments::Column::ProjectedAt,
                     ])
                     .to_owned(),
             )
@@ -135,7 +135,7 @@ impl CommentStore for DbStore {
                 sea_orm::sea_query::Expr::value(content),
             )
             .col_expr(
-                comments::Column::UpdatedAt,
+                comments::Column::ProjectedAt,
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .col_expr(
@@ -221,6 +221,9 @@ impl CommentStore for DbStore {
 
 impl From<comments::Model> for Comment {
     fn from(model: comments::Model) -> Self {
+        let edited_at = model
+            .last_edit_ts
+            .and_then(chrono::DateTime::from_timestamp_millis);
         Comment {
             event_id: model.event_id,
             site_id: model.site_id,
@@ -237,6 +240,7 @@ impl From<comments::Model> for Comment {
             },
             content: model.content,
             timestamp: model.timestamp,
+            edited_at,
             reply_to: model.reply_to,
             intent_id: model.intent_id,
             room_id: model.room_id,

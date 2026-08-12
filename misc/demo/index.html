@@ -576,6 +576,7 @@
                     export_private_key: "导出私钥",
                     restore_mnemonic: "助记词恢复",
                     import_private_key: "导入私钥",
+                    edited: "已编辑",
                     placeholder_mnemonic: "输入 12 个英文助记词（空格分隔）…",
                     restore_identity: "恢复此身份",
                     reset_identity: "重置身份",
@@ -699,6 +700,7 @@
                     export_private_key: "Export private key",
                     restore_mnemonic: "Restore mnemonic",
                     import_private_key: "Import private key",
+                    edited: "edited",
                     placeholder_mnemonic:
                         "Enter the 12-word English mnemonic (space-separated)…",
                     restore_identity: "Restore identity",
@@ -1830,6 +1832,7 @@
                 const avatarStyle = commentAvatarStyle(authorAvatarKey(comment));
                 const initials = authorName(comment)[0].toUpperCase();
                 const time = formatTime(comment.timestamp);
+                const edited = comment.edited_at ? ` · ${t("edited")}` : "";
                 const isGuest =
                     comment.author && comment.author.type === "guest";
                 const badge = isGuest
@@ -1850,7 +1853,7 @@
                                     </span>
                                     ${badge}
                                 </div>
-                                <div class="text-xs text-slate-400 mt-0.5">${time}</div>
+                                <div class="text-xs text-slate-400 mt-0.5">${time}${edited}</div>
                             </div>
                         </div>
                         <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition">

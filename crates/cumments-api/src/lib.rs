@@ -254,6 +254,7 @@ mod tests {
             },
             content: "hi".to_string(),
             timestamp: chrono::Utc::now(),
+            edited_at: None,
             reply_to: None,
             intent_id: Some(42),
             room_id: "!room:hs".to_string(),

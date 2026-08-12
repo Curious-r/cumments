@@ -679,6 +679,11 @@ components:
         timestamp:
           type: string
           format: date-time
+        edited_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Matrix `origin_server_ts` of the last applied edit
         reply_to:
           type: string
           nullable: true

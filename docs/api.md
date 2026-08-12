@@ -66,6 +66,7 @@ Response:
       },
       "content": "...",
       "timestamp": "2026-08-08T00:00:00Z",
+      "edited_at": null,
       "intent_id": 42
     }
   ],

@@ -34,7 +34,7 @@ async fn author_type_backfill_repairs_upgraded_rows() {
     db.execute_unprepared(&format!(
         "INSERT INTO comments \
          (event_id, room_id, site_id, post_slug, sender_mxid, author_display_name, \
-          content, timestamp, created_at, updated_at, author_public_key, reply_to) \
+          content, timestamp, created_at, projected_at, author_public_key, reply_to) \
          VALUES \
          ('$guest', '!room:hs', 'my-blog', 'hello', '', 'Alice', 'hi', '{now}', '{now}', '{now}', 'pk1', NULL), \
          ('$matrix', '!room:hs', 'my-blog', 'hello', '@alice:hs', 'Alice', 'hi', '{now}', '{now}', '{now}', NULL, NULL)"
@@ -82,4 +82,45 @@ async fn author_type_backfill_repairs_upgraded_rows() {
         .collect::<std::collections::HashMap<_, _>>();
     assert_eq!(types.get("$guest"), Some(&"guest"));
     assert_eq!(types.get("$matrix"), Some(&"matrix"));
+}
+
+#[tokio::test]
+async fn comment_updated_at_is_renamed_to_projected_at() {
+    let url = test_db_url("projected-at");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Stop before the rename migration; current entity-first migrations create
+    // `projected_at` on fresh databases, so flip it back to the old name to
+    // simulate a database created before the rename.
+    Migrator::up(&db, Some(28))
+        .await
+        .expect("migrate to 000028");
+    db.execute_unprepared("ALTER TABLE comments RENAME COLUMN projected_at TO updated_at")
+        .await
+        .expect("simulate pre-rename schema");
+
+    let now = Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO comments \
+         (event_id, room_id, site_id, post_slug, sender_mxid, author_display_name, author_type, \
+          content, timestamp, created_at, updated_at, author_public_key, reply_to) \
+         VALUES \
+         ('$guest', '!room:hs', 'my-blog', 'hello', '', 'Alice', 'guest', 'hi', '{now}', '{now}', '{now}', 'pk1', NULL)"
+    ))
+    .await
+    .expect("insert pre-rename row");
+
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let row = comments::Entity::find()
+        .filter(comments::Column::EventId.eq("$guest"))
+        .one(&db)
+        .await
+        .expect("query row")
+        .expect("row must exist after migration");
+    assert_eq!(
+        row.projected_at.to_rfc3339(),
+        now,
+        "renamed column must preserve the stored value"
+    );
 }

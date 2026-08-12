@@ -299,6 +299,7 @@ impl EventProcessor {
             content: event.content.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+            edited_at: None,
             reply_to: event.reply_to.clone(),
             intent_id: event.intent_id,
             room_id: event.room_id.clone(),

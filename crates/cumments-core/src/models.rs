@@ -101,6 +101,10 @@ pub struct Comment {
     pub author: CommentAuthor,
     pub content: String,
     pub timestamp: DateTime<Utc>,
+    /// Matrix `origin_server_ts` of the last applied edit, converted to a
+    /// timestamp. `None` when the comment has never been edited.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edited_at: Option<DateTime<Utc>>,
     /// Matrix event ID of the parent comment, when this comment is a reply.
     pub reply_to: Option<String>,
     /// Queue row ID of the intent that produced this comment, when it was
