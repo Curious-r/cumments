@@ -301,6 +301,10 @@ rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
 `429 RATE_LIMITED`. Verification `confirm` is limited to 30/hour, comment
 writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE connections to
 20/hour with a global cap of 500 concurrent streams.
+SSE reconnects within 30 seconds of a disconnect do not consume the hourly
+new-connection budget (bounded to 20 free reconnects per client per 5-minute
+window), so EventSource auto-reconnect and normal page refreshes do not
+silently exhaust the quota.
 
 Client keys are the peer IP by default. `X-Forwarded-For` is honored only
 when the peer is listed in `server.trusted_proxies`; the first value is then

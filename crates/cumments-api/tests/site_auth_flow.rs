@@ -58,6 +58,9 @@ async fn test_state(
         allow_private_verification_origins: true,
         write_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         sse_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        sse_reconnect: Arc::new(std::sync::Mutex::new(
+            cumments_api::routes::sse::SseReconnectRegistry::default(),
+        )),
         max_sse_connections: 100,
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };

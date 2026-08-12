@@ -11,6 +11,7 @@ use crate::routes::sites::{
     confirm_verification_handler, issue_secret_handler, register_site_handler,
     start_verification_handler,
 };
+use crate::routes::sse::SseReconnectRegistry;
 use crate::routes::sse::sse_handler;
 use crate::site_auth::{enforce_site_auth, public_cors};
 use axum::{
@@ -24,8 +25,8 @@ use cumments_core::{
 };
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Mutex};
 use tokio::sync::{Notify, broadcast};
 use tower_http::trace::TraceLayer;
 
@@ -76,6 +77,9 @@ pub struct ApiState {
     pub write_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for new SSE connections.
     pub sse_limiter: Arc<rate_limit::RateLimiter>,
+    /// Reconnect bookkeeping for SSE, so EventSource reconnects do not count
+    /// against the new-connection budget.
+    pub sse_reconnect: Arc<Mutex<SseReconnectRegistry>>,
     /// Global cap on concurrent SSE connections.
     pub max_sse_connections: usize,
     /// Live SSE connection count.

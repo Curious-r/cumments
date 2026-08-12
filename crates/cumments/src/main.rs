@@ -394,6 +394,9 @@ async fn main() -> Result<()> {
             20,
             std::time::Duration::from_secs(3600),
         )),
+        sse_reconnect: Arc::new(std::sync::Mutex::new(
+            cumments_api::routes::sse::SseReconnectRegistry::default(),
+        )),
         max_sse_connections: 500,
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };

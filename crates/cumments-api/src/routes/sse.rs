@@ -10,16 +10,88 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use cumments_core::projector_events::ProjectorEvent;
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// How long after a disconnect a new SSE connection is treated as a reconnect
+/// instead of consuming the hourly new-connection budget.
+const SSE_RECONNECT_GRACE: Duration = Duration::from_secs(30);
+/// Maximum free reconnects per client per rolling window before new
+/// connections start consuming the hourly budget again.
+const SSE_MAX_FREE_RECONNECTS_PER_WINDOW: u32 = 20;
+/// Rolling window for the free-reconnect counter.
+const SSE_RECONNECT_WINDOW: Duration = Duration::from_secs(300);
+
+/// Per-client reconnect bookkeeping so EventSource auto-reconnects and page
+/// refreshes do not silently exhaust the SSE connection budget.
+#[derive(Default)]
+pub struct SseReconnectRegistry {
+    entries: HashMap<String, SseReconnectEntry>,
+}
+
+#[derive(Default)]
+struct SseReconnectEntry {
+    last_disconnect: Option<Instant>,
+    free_reconnects: u32,
+    window_start: Option<Instant>,
+}
+
+impl SseReconnectRegistry {
+    /// Whether a new connection for `key` may skip the hourly limiter because
+    /// it is a recent reconnect. Records the free reconnect when allowed.
+    pub fn allow_reconnect(&mut self, key: &str, now: Instant) -> bool {
+        let entry = self.entries.entry(key.to_string()).or_default();
+        if entry
+            .window_start
+            .is_none_or(|start| now.duration_since(start) >= SSE_RECONNECT_WINDOW)
+        {
+            entry.window_start = Some(now);
+            entry.free_reconnects = 0;
+        }
+        let within_grace = entry
+            .last_disconnect
+            .is_some_and(|last| now.duration_since(last) <= SSE_RECONNECT_GRACE);
+        if !within_grace || entry.free_reconnects >= SSE_MAX_FREE_RECONNECTS_PER_WINDOW {
+            return false;
+        }
+        entry.free_reconnects += 1;
+        true
+    }
+
+    /// Records that a stream for `key` ended, making a subsequent connection
+    /// eligible for the reconnect grace.
+    pub fn record_disconnect(&mut self, key: &str, now: Instant) {
+        let entry = self.entries.entry(key.to_string()).or_default();
+        entry.last_disconnect = Some(now);
+        self.prune(now);
+    }
+
+    fn prune(&mut self, now: Instant) {
+        self.entries.retain(|_, entry| {
+            entry
+                .last_disconnect
+                .is_some_and(|last| now.duration_since(last) <= SSE_RECONNECT_WINDOW)
+        });
+    }
+}
 
 /// Decrements the global SSE connection counter when the stream ends.
-struct SseConnectionGuard(Arc<AtomicUsize>);
+struct SseConnectionGuard {
+    active: Arc<AtomicUsize>,
+    reconnect: Arc<Mutex<SseReconnectRegistry>>,
+    key: String,
+}
 
 impl Drop for SseConnectionGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.active.fetch_sub(1, Ordering::Relaxed);
+        self.reconnect
+            .lock()
+            .expect("sse reconnect registry mutex poisoned")
+            .record_disconnect(&self.key, Instant::now());
     }
 }
 
@@ -30,7 +102,15 @@ pub(crate) async fn sse_handler(
     Path((site_id, post_slug)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
-    if !state.sse_limiter.allow(&key) {
+    let now = Instant::now();
+    let counted = state.sse_limiter.allow(&key);
+    let allowed = counted
+        || state
+            .sse_reconnect
+            .lock()
+            .expect("sse reconnect registry mutex poisoned")
+            .allow_reconnect(&key, now);
+    if !allowed {
         return Err(AppError::TooManyRequests(
             "SSE connections are rate limited; try again later".to_string(),
         ));
@@ -41,7 +121,11 @@ pub(crate) async fn sse_handler(
         ));
     }
     state.active_sse_connections.fetch_add(1, Ordering::Relaxed);
-    let guard = SseConnectionGuard(state.active_sse_connections.clone());
+    let guard = SseConnectionGuard {
+        active: state.active_sse_connections.clone(),
+        reconnect: state.sse_reconnect.clone(),
+        key,
+    };
 
     let mut rx = state.event_bus.subscribe();
 
@@ -67,4 +151,36 @@ pub(crate) async fn sse_handler(
     };
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_grace_allows_recent_reconnect_but_not_stale_ones() {
+        let mut registry = SseReconnectRegistry::default();
+        let t0 = Instant::now();
+        registry.record_disconnect("client", t0);
+        assert!(registry.allow_reconnect("client", t0 + Duration::from_secs(1)));
+        assert!(!registry.allow_reconnect("client", t0 + Duration::from_secs(31)));
+    }
+
+    #[test]
+    fn reconnect_free_slots_are_bounded_and_reset_per_window() {
+        let mut registry = SseReconnectRegistry::default();
+        let t0 = Instant::now();
+        registry.record_disconnect("client", t0);
+        for i in 0..SSE_MAX_FREE_RECONNECTS_PER_WINDOW {
+            assert!(
+                registry.allow_reconnect("client", t0 + Duration::from_millis(i as u64 + 1)),
+                "free reconnect slot {i}"
+            );
+        }
+        assert!(!registry.allow_reconnect("client", t0 + Duration::from_secs(2)));
+
+        let t1 = t0 + SSE_RECONNECT_WINDOW + Duration::from_secs(1);
+        registry.record_disconnect("client", t1);
+        assert!(registry.allow_reconnect("client", t1 + Duration::from_secs(1)));
+    }
 }
