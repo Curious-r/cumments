@@ -13,14 +13,16 @@ use chrono::Utc;
 use cumments_core::models::SiteId;
 use cumments_core::site_auth::{
     CLAIM_TOKEN_HEADER, Origin, SiteVerificationStatus, VerificationChallenge, VerificationMethod,
-    VerificationToken, dns_proofs_match, issue_site_secret, parse_well_known_proofs, register_site,
-    start_site_verification, token_hash, well_known_proofs_match,
+    VerificationToken, dns_proofs_match, is_private_ip_addr, issue_site_secret,
+    parse_well_known_proofs, register_site, start_site_verification, token_hash,
+    well_known_proofs_match,
 };
 use hickory_resolver::proto::rr::RData;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tokio_stream::StreamExt;
+use url::Url;
 use validator::Validate;
 
 /// How many times each proof location is probed before giving up.
@@ -31,6 +33,76 @@ const PROOF_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_WELL_KNOWN_BYTES: usize = 1024 * 1024;
 /// Maximum confirm attempts per verification token before re-issuance.
 const MAX_VERIFICATION_ATTEMPTS: u32 = 5;
+
+/// Port used to reach an origin's HTTP(S) endpoint, matching the canonical
+/// origin serialization (default ports are omitted by `Origin`).
+fn origin_port(origin: &Origin) -> u16 {
+    Url::parse(origin.as_str())
+        .ok()
+        .and_then(|url| url.port_or_known_default())
+        .unwrap_or(80)
+}
+
+/// Resolves an origin to a concrete address and rejects private targets.
+///
+/// IP literals are checked directly (including IPv4-mapped IPv6). Hostnames
+/// are resolved up front so loopback/private/link-local/cloud-metadata
+/// addresses cannot be used as SSRF targets; the returned address is later
+/// pinned on the HTTP client to avoid DNS rebinding between this check and
+/// the actual request. When `allow_private` is set, no address is rejected.
+async fn resolve_origin_address(
+    origin: &Origin,
+    allow_private: bool,
+) -> Result<Option<SocketAddr>, AppError> {
+    let Some(host) = origin.host() else {
+        return Err(AppError::BadRequest(format!(
+            "origin `{}` has no host",
+            origin.as_str()
+        )));
+    };
+    let port = origin_port(origin);
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !allow_private && is_private_ip_addr(ip) {
+            return Err(AppError::BadRequest(
+                "verification origins must be public; loopback/private/link-local \
+                 IP literals are not allowed"
+                    .to_string(),
+            ));
+        }
+        return Ok(Some(SocketAddr::new(ip, port)));
+    }
+
+    if allow_private {
+        return Ok(None);
+    }
+
+    let resolver = hickory_resolver::TokioResolver::builder_tokio()
+        .and_then(|builder| builder.build())
+        .map_err(|e| AppError::Internal(format!("failed to initialize DNS resolver: {e}")))?;
+    let lookup = resolver.lookup_ip(host.clone()).await.map_err(|e| {
+        AppError::BadRequest(format!("failed to resolve origin host `{host}`: {e}"))
+    })?;
+
+    let mut pinned: Option<SocketAddr> = None;
+    for ip in lookup.iter() {
+        if is_private_ip_addr(ip) {
+            return Err(AppError::BadRequest(format!(
+                "origin `{}` resolves to a private address and cannot be verified",
+                origin.as_str()
+            )));
+        }
+        if pinned.is_none() {
+            pinned = Some(SocketAddr::new(ip, port));
+        }
+    }
+    Ok(Some(pinned.ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "origin `{}` has no resolvable address",
+            origin.as_str()
+        ))
+    })?))
+}
 
 // ---------------------------------------------------------------------------
 // Request / response DTOs
@@ -136,12 +208,8 @@ pub(crate) async fn start_verification_handler(
                 .map_err(|e| AppError::BadRequest(format!("invalid origin `{raw}`: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if !state.allow_private_verification_origins && origins.iter().any(Origin::is_private_ip) {
-        return Err(AppError::BadRequest(
-            "verification origins must be public; loopback/private/link-local \
-             IP literals are not allowed"
-                .to_string(),
-        ));
+    for origin in &origins {
+        resolve_origin_address(origin, state.allow_private_verification_origins).await?;
     }
     let claim_token = claim_token_from_headers(&headers)?;
 
@@ -186,13 +254,7 @@ pub(crate) async fn confirm_verification_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let origin = Origin::parse(&req.origin)
         .map_err(|e| AppError::BadRequest(format!("invalid origin `{}`: {e}", req.origin)))?;
-    if !state.allow_private_verification_origins && origin.is_private_ip() {
-        return Err(AppError::BadRequest(
-            "verification origins must be public; loopback/private/link-local \
-             IP literals are not allowed"
-                .to_string(),
-        ));
-    }
+    resolve_origin_address(&origin, state.allow_private_verification_origins).await?;
     let token_hash = token_hash(&req.token);
 
     let token = state
@@ -224,7 +286,14 @@ pub(crate) async fn confirm_verification_handler(
         ));
     }
 
-    let proof_verified = verify_origin_proof(&site_id, &origin, &req.token, &token).await?;
+    let proof_verified = verify_origin_proof(
+        &site_id,
+        &origin,
+        &req.token,
+        &token,
+        state.allow_private_verification_origins,
+    )
+    .await?;
     if !proof_verified {
         return Err(AppError::BadRequest(
             "proof not found in any requested location; check the published token and retry, \
@@ -366,12 +435,13 @@ async fn verify_origin_proof(
     origin: &Origin,
     token: &str,
     stored: &VerificationToken,
+    allow_private: bool,
 ) -> Result<bool, AppError> {
     for method in &stored.methods {
         for attempt in 0..PROOF_ATTEMPTS {
             let matched = match method {
                 VerificationMethod::WellKnown => {
-                    fetch_well_known_proof(origin, site_id.as_str(), token).await?
+                    fetch_well_known_proof(origin, site_id.as_str(), token, allow_private).await?
                 }
                 VerificationMethod::Dns => query_dns_proof(origin, site_id.as_str(), token).await?,
             };
@@ -397,11 +467,21 @@ async fn fetch_well_known_proof(
     origin: &Origin,
     site_id: &str,
     token: &str,
+    allow_private: bool,
 ) -> Result<bool, AppError> {
     let url = format!("{}/.well-known/cumments.json", origin.as_str());
-    let client = reqwest::Client::builder()
+    let pinned = resolve_origin_address(origin, allow_private).await?;
+    let host = origin.host();
+    let host_is_ip = host
+        .as_deref()
+        .is_some_and(|host| host.parse::<IpAddr>().is_ok());
+    let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::none());
+    if let (Some(addr), Some(host), false) = (pinned, host.as_deref(), host_is_ip) {
+        builder = builder.resolve(host, addr);
+    }
+    let client = builder
         .build()
         .map_err(|e| AppError::Internal(format!("failed to build HTTP client: {e}")))?;
 

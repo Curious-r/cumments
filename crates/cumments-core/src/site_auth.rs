@@ -199,21 +199,35 @@ impl Origin {
         let Ok(ip) = host.parse::<IpAddr>() else {
             return false;
         };
-        match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback()
+        is_private_ip_addr(ip)
+    }
+}
+
+/// Whether an IP address targets loopback, private, link-local (including
+/// cloud metadata), unspecified, multicast, or IPv4-mapped equivalents of
+/// those ranges.
+pub fn is_private_ip_addr(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_loopback()
                     || v4.is_private()
                     || v4.is_link_local()
                     || v4.is_unspecified()
-                    || v4.is_multicast()
+                    || v4.is_multicast();
             }
-            IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || v6.is_unique_local()
-                    || v6.is_unicast_link_local()
-                    || v6.is_multicast()
-            }
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_multicast()
         }
     }
 }
@@ -839,5 +853,18 @@ mod tests {
         for placeholder in KNOWN_SECRET_PLACEHOLDERS {
             assert!(placeholder.len() < SITE_SECRET_MIN_LENGTH);
         }
+    }
+
+    #[test]
+    fn private_ip_detection_covers_ipv4_mapped_ipv6() {
+        assert!(is_private_ip_addr("127.0.0.1".parse().unwrap()));
+        assert!(is_private_ip_addr("::1".parse().unwrap()));
+        assert!(is_private_ip_addr("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(is_private_ip_addr("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(is_private_ip_addr("169.254.169.254".parse().unwrap()));
+        assert!(!is_private_ip_addr("93.184.216.34".parse().unwrap()));
+        assert!(!is_private_ip_addr(
+            "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()
+        ));
     }
 }
