@@ -130,7 +130,9 @@ CORS becomes a derived behavior, not a config value.
 
 **Write methods** (`POST`, `PATCH`, `DELETE`):
 
-- `disabled`: permissive, same as today.
+- `disabled`: permissive, same as today, including opaque `Origin: null`
+  (for example `file://` demo pages); responses use
+  `Access-Control-Allow-Origin: *`.
 - `origin` mode: require exactly one `Origin` header; reject `null` and
   missing; normalize (scheme+host, default port stripped, punycode, lowercase,
   no path); match against effective origins (config ∪ verified); otherwise
@@ -353,7 +355,8 @@ design record.
 
 Security regression tests:
 
-- `Origin: null` is rejected (Next.js CVE-2026-27978 class).
+- `Origin: null` is rejected outside `disabled` (Next.js CVE-2026-27978
+  class); `disabled` explicitly allows it as the dev-only exception.
 - Multiple `Origin` headers rejected; missing `Origin` on writes rejected
   (origin mode).
 - Forged `Origin` via curl rejected in `secret` mode; accepted in `origin`

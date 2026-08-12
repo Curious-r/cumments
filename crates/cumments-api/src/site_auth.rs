@@ -74,7 +74,18 @@ pub async fn enforce_site_auth(
             add_allow_origin(&mut response, &allowed_origin);
             response
         }
-        Ok(None) => next.run(req).await,
+        Ok(None) => {
+            let mut response = next.run(req).await;
+            if state.site_auth_policy.verification == SiteVerificationPolicy::Disabled {
+                // `disabled` is intentionally permissive: opaque origins such
+                // as `file://` pages (serialized as `Origin: null`) are
+                // allowed, and the browser still needs a CORS header to read
+                // the response. Use `*` because `null` is not an http(s)
+                // origin we can echo, and the API does not rely on cookies.
+                add_wildcard_origin(&mut response);
+            }
+            response
+        }
         Err(error) => error.into_response(),
     }
 }
@@ -106,10 +117,12 @@ fn site_id_from_path(path: &str) -> Option<String> {
 
 /// Extracts the single `Origin` header, if any.
 ///
-/// Rejects multiple headers and the opaque `Origin: null` value (see
-/// CVE-2026-27978: null must be treated as an explicit rejection, not as a
-/// missing header).
-fn request_origin(headers: &HeaderMap) -> Result<Option<Origin>, AppError> {
+/// Rejects multiple headers. The opaque `Origin: null` value is rejected
+/// unless the caller explicitly opts in via `allow_null` (see
+/// CVE-2026-27978: null must be treated as an explicit origin value, never as
+/// a missing header). The dev-only `disabled` policy opts in so `file://`
+/// demo pages keep working; `optional` and `required` do not.
+fn request_origin(headers: &HeaderMap, allow_null: bool) -> Result<Option<Origin>, AppError> {
     let values = headers
         .get_all(ORIGIN)
         .iter()
@@ -121,9 +134,13 @@ fn request_origin(headers: &HeaderMap) -> Result<Option<Origin>, AppError> {
                 .to_str()
                 .map_err(|_| AppError::SiteOriginDenied("invalid Origin header".to_string()))?;
             if value == "null" {
-                return Err(AppError::SiteOriginDenied(
-                    "`Origin: null` is not allowed".to_string(),
-                ));
+                return if allow_null {
+                    Ok(None)
+                } else {
+                    Err(AppError::SiteOriginDenied(
+                        "`Origin: null` is not allowed".to_string(),
+                    ))
+                };
             }
             Origin::parse(value)
                 .map(Some)
@@ -139,7 +156,7 @@ fn request_origin(headers: &HeaderMap) -> Result<Option<Origin>, AppError> {
 ///
 /// Returns `Ok(Some(origin))` when the request is allowed in origin mode and
 /// the response should echo that origin; `Ok(None)` when allowed without a
-/// CORS echo (secret mode, or `disabled` with no Origin header).
+/// CORS echo (secret mode, or `disabled` with a missing/opaque Origin header).
 pub async fn authorize_site_write(
     state: &ApiState,
     site_id: &str,
@@ -149,7 +166,8 @@ pub async fn authorize_site_write(
     body: &[u8],
 ) -> Result<Option<Origin>, AppError> {
     let policy = &state.site_auth_policy;
-    let origin = request_origin(headers)?;
+    let allow_null = policy.verification == SiteVerificationPolicy::Disabled;
+    let origin = request_origin(headers, allow_null)?;
 
     if policy.verification == SiteVerificationPolicy::Disabled {
         return Ok(origin);
@@ -353,6 +371,12 @@ fn add_allow_origin(response: &mut Response, origin: &Origin) {
     response
         .headers_mut()
         .insert(VARY, HeaderValue::from_static("origin"));
+}
+
+fn add_wildcard_origin(response: &mut Response) {
+    response
+        .headers_mut()
+        .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
 }
 
 #[cfg(test)]

@@ -143,6 +143,21 @@ async fn write_enforcement_follows_policy_and_origin() {
         Some("https://any.example.com")
     );
 
+    // disabled also allows opaque null origins (file:// demo pages) and must
+    // give the browser a wildcard CORS header so it can read the response.
+    let null_origin = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(null_origin.status(), StatusCode::OK);
+    assert_eq!(response_origin(&null_origin).as_deref(), Some("*"));
+
     // optional: unverified sites keep working
     let (state, _) = test_state("optional", SiteVerificationPolicy::Optional, None).await;
     let router = middleware_router(state);
@@ -157,6 +172,24 @@ async fn write_enforcement_follows_policy_and_origin() {
         .await
         .expect("call router");
     assert_eq!(response.status(), StatusCode::OK);
+
+    // optional still rejects opaque origins (CVE-2026-27978 hardening).
+    let null_optional = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(null_optional.status(), StatusCode::FORBIDDEN);
+    assert!(
+        body_text(null_optional)
+            .await
+            .contains("SITE_ORIGIN_DENIED")
+    );
 
     // required: unknown sites are rejected with verification guidance
     let (state, _) = test_state("required", SiteVerificationPolicy::Required, None).await;

@@ -131,8 +131,10 @@ Per-site trust comes from two sources whose union is the effective rule set:
   to secret auth via the secret endpoint. See [API](api.md).
 
 Origin-mode requests are accepted only when the browser `Origin` matches the
-effective allowlist; `Origin: null` and missing `Origin` are rejected.
-Secret-mode requests must carry `X-Cumments-Timestamp` and
-`X-Cumments-Signature` (HMAC-SHA256 over
+effective allowlist; `Origin: null` and missing `Origin` are rejected. The
+dev-only `disabled` policy is the exception: it accepts every origin,
+including `Origin: null` from `file://` demo pages, and answers with
+`Access-Control-Allow-Origin: *`. Secret-mode requests must carry
+`X-Cumments-Timestamp` and `X-Cumments-Signature` (HMAC-SHA256 over
 `timestamp\nMETHOD\npath\nsha256(body)`), with the timestamp within ±5
 minutes.

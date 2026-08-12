@@ -23,6 +23,11 @@ The demo is a single HTML file with no build step. Open it in a browser and
 set the API URL in the settings drawer (default `http://localhost:7931`). It
 loads Tailwind, Markdown, DOMPurify and BIP39 from CDNs.
 
+If you open the file directly (`file://`), the browser sends `Origin: null`.
+Cumments accepts that only under the dev-only
+`security.site_verification = "disabled"` policy; with `optional` or
+`required`, serve the demo over HTTP(S) instead.
+
 The demo has a built-in language switcher (中文 / EN) in the top bar; the
 choice is remembered in `localStorage` (`cumments_demo_lang`).
 

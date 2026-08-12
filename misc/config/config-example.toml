@@ -39,7 +39,8 @@ pow_secret = "change-me"
 # Adjust based on your spam protection needs (typically 2-6)
 pow_difficulty = 4
 
-# Site verification policy: "disabled" (no checks, dev only),
+# Site verification policy: "disabled" (no checks, dev only; also accepts
+# `Origin: null` from file:// demo pages),
 # "optional" (unverified sites keep working, verified sites enforced),
 # or "required" (unverified sites cannot receive comments).
 site_verification = "optional"
