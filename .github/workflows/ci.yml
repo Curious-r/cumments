@@ -129,3 +129,20 @@ jobs:
             misc/demo/index.html > /tmp/cumments-main.js
           node --check /tmp/cumments-module.mjs
           node --check /tmp/cumments-main.js
+
+  openapi:
+    name: OpenAPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Lint OpenAPI contract
+        run: npx --yes @redocly/cli@latest lint docs/openapi.yaml

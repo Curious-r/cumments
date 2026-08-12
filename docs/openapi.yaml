@@ -1,0 +1,857 @@
+openapi: 3.0.3
+info:
+  title: Cumments API
+  version: 0.19.0
+  description: |
+    Backend-only comment API backed by Matrix. Writes are asynchronous:
+    POST/PATCH/DELETE accept an intent and return `202 { "intent_id" }`;
+    the projected comment later carries the same `intent_id`.
+
+    Comment reads use the RFC 10008 `QUERY` method. OpenAPI does not support
+    custom verbs, so each QUERY operation is represented with the
+    `x-cumments-query` extension and is sent as `QUERY` on the wire.
+servers:
+  - url: http://localhost:7931
+tags:
+  - name: Comments
+    description: Comment reads, writes, and live events
+  - name: Sites
+    description: Site registration and origin verification
+  - name: Admin
+    description: Operator-only management endpoints
+  - name: Meta
+    description: Infrastructure endpoints
+security: []
+paths:
+  /health:
+    get:
+      tags: [Meta]
+      summary: Health check
+      operationId: health
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v1/challenge:
+    get:
+      tags: [Comments]
+      summary: Get a proof-of-work challenge
+      operationId: getChallenge
+      responses:
+        "200":
+          description: Challenge ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChallengeResponse"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/comments:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    post:
+      tags: [Comments]
+      summary: Submit a comment
+      operationId: postComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostCommentRequest"
+      responses:
+        "202":
+          description: Intent accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [Comments]
+      summary: Edit a comment (body carries comment_id)
+      operationId: updateCommentBody
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommentRequest"
+      responses:
+        "202":
+          description: Edit intent accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Comments]
+      summary: Delete a comment (body carries comment_id)
+      operationId: deleteCommentBody
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteCommentRequest"
+      responses:
+        "202":
+          description: Delete intent accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    x-cumments-query:
+      operationId: queryComments
+      summary: List comments (QUERY)
+      description: |
+        Sent as `QUERY /api/v1/sites/{site_id}/posts/{post_slug}/comments`
+        with a JSON body. This custom verb is represented here as an OpenAPI
+        extension because OpenAPI only supports standard HTTP methods.
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/PostSlug"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                page:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                per_page:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 20
+      responses:
+        "200":
+          description: Paginated comments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Comment"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/CommentId"
+    patch:
+      tags: [Comments]
+      summary: Edit a comment (legacy path form)
+      operationId: updateCommentPath
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommentRequest"
+      responses:
+        "202":
+          description: Edit intent accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Comments]
+      summary: Delete a comment (legacy path form)
+      operationId: deleteCommentPath
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteCommentRequest"
+      responses:
+        "202":
+          description: Delete intent accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/sse:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    get:
+      tags: [Comments]
+      summary: Live comment events (SSE)
+      operationId: commentSse
+      responses:
+        "200":
+          description: Server-sent event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites:
+    post:
+      tags: [Sites]
+      summary: Register a site
+      operationId: registerSite
+      responses:
+        "201":
+          description: Site registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterSiteResponse"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/verifications:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Sites]
+      summary: Start origin verification
+      operationId: startVerification
+      parameters:
+        - $ref: "#/components/parameters/ClaimToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartVerificationRequest"
+      responses:
+        "200":
+          description: Verification challenge issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationChallengeResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/verifications/confirm:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Sites]
+      summary: Confirm origin verification
+      operationId: confirmVerification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmVerificationRequest"
+      responses:
+        "200":
+          description: Origin verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmVerificationResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/secret:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Sites]
+      summary: Issue or rotate an HMAC site secret
+      operationId: issueSecret
+      parameters:
+        - $ref: "#/components/parameters/ClaimToken"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueSecretRequest"
+      responses:
+        "200":
+          description: Secret issued once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueSecretResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites:
+    get:
+      tags: [Admin]
+      summary: List managed sites
+      operationId: listAdminSites
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPage"
+        - $ref: "#/components/parameters/AdminPerPage"
+        - $ref: "#/components/parameters/AdminSiteFilter"
+      responses:
+        "200":
+          description: Paginated sites
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSitePage"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}/origins/revoke:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Admin]
+      summary: Revoke a verified origin
+      operationId: revokeVerifiedOrigin
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeOriginRequest"
+      responses:
+        "200":
+          description: Site updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSite"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}/secret/rotate:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Admin]
+      summary: Rotate HMAC secret
+      operationId: rotateSecret
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: New secret issued once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateSecretResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}/secret:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    delete:
+      tags: [Admin]
+      summary: Revoke HMAC secret
+      operationId: revokeSecret
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: Secret revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeSecretResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}/config-snippet:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    get:
+      tags: [Admin]
+      summary: Export config snippet
+      operationId: configSnippet
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: TOML config snippet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigSnippetResponse"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}/claim-token/rotate:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Admin]
+      summary: Rotate claim token
+      operationId: rotateClaimToken
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: New claim token issued once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateClaimTokenResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/rooms/blocked:
+    get:
+      tags: [Admin]
+      summary: List blocked rooms
+      operationId: listBlockedRooms
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPage"
+        - $ref: "#/components/parameters/AdminPerPage"
+        - $ref: "#/components/parameters/AdminSiteFilter"
+      responses:
+        "200":
+          description: Paginated blocked rooms
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminBlockedRoomPage"
+        "403":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+  parameters:
+    SiteId:
+      name: site_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9-]{1,64}$"
+    PostSlug:
+      name: post_slug
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9-]{1,64}$"
+    CommentId:
+      name: comment_id
+      in: path
+      required: true
+      schema:
+        type: string
+        description: Matrix event ID, percent-encoded
+    ClaimToken:
+      name: X-Cumments-Claim-Token
+      in: header
+      required: true
+      schema:
+        type: string
+    AdminPage:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    AdminPerPage:
+      name: per_page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    AdminSiteFilter:
+      name: site_id
+      in: query
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          nullable: true
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    ChallengeResponse:
+      type: object
+      required: [prefix, difficulty]
+      properties:
+        prefix:
+          type: string
+        difficulty:
+          type: integer
+          minimum: 1
+    IntentAccepted:
+      type: object
+      required: [intent_id]
+      properties:
+        intent_id:
+          type: integer
+          format: int64
+    PaginationMeta:
+      type: object
+      required: [total, page, per_page, total_pages]
+      properties:
+        total:
+          type: integer
+          format: int64
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total_pages:
+          type: integer
+    CommentAuthor:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [guest, matrix]
+        display_name:
+          type: string
+          nullable: true
+        public_key:
+          type: string
+          nullable: true
+        mxid:
+          type: string
+          nullable: true
+    Comment:
+      type: object
+      required: [event_id, site_id, post_slug, author, content, timestamp]
+      properties:
+        event_id:
+          type: string
+        site_id:
+          type: string
+        post_slug:
+          type: string
+        author:
+          $ref: "#/components/schemas/CommentAuthor"
+        content:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        reply_to:
+          type: string
+          nullable: true
+        intent_id:
+          type: integer
+          format: int64
+    PostCommentRequest:
+      type: object
+      required: [content, display_name, author_public_key, author_signature, challenge_response]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 50
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        reply_to:
+          type: string
+          nullable: true
+        challenge_response:
+          type: string
+    UpdateCommentRequest:
+      type: object
+      required: [content, author_public_key, author_signature, challenge_response]
+      properties:
+        comment_id:
+          type: string
+          description: Required for the collection endpoint; optional on the path endpoint
+        content:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+    DeleteCommentRequest:
+      type: object
+      required: [author_public_key, author_signature, challenge_response]
+      properties:
+        comment_id:
+          type: string
+          description: Required for the collection endpoint; optional on the path endpoint
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+    RegisterSiteResponse:
+      type: object
+      required: [site_id, claim_token]
+      properties:
+        site_id:
+          type: string
+        claim_token:
+          type: string
+    StartVerificationRequest:
+      type: object
+      required: [origins, methods]
+      properties:
+        origins:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        methods:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [well-known, dns]
+    VerificationChallengeResponse:
+      type: object
+      required: [site_id, token, methods, origins, expires_at, instructions]
+      properties:
+        site_id:
+          type: string
+        token:
+          type: string
+        methods:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+        instructions:
+          type: object
+    ConfirmVerificationRequest:
+      type: object
+      required: [origin, token]
+      properties:
+        origin:
+          type: string
+        token:
+          type: string
+    ConfirmVerificationResponse:
+      type: object
+      required: [site_id, origin, status, verified_origins]
+      properties:
+        site_id:
+          type: string
+        origin:
+          type: string
+        status:
+          type: string
+        verified_origins:
+          type: array
+          items:
+            type: string
+    IssueSecretRequest:
+      type: object
+      properties:
+        rotate:
+          type: boolean
+          default: false
+    IssueSecretResponse:
+      type: object
+      required: [site_id, secret]
+      properties:
+        site_id:
+          type: string
+        secret:
+          type: string
+    AdminOrigin:
+      type: object
+      required: [origin, source]
+      properties:
+        origin:
+          type: string
+        source:
+          type: string
+          enum: [config, verified]
+    AdminSite:
+      type: object
+      required: [site_id, auth_mode, verification_status, origins]
+      properties:
+        site_id:
+          type: string
+        auth_mode:
+          type: string
+          enum: [origin, secret]
+        verification_status:
+          type: string
+          enum: [unverified, verified]
+        origins:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminOrigin"
+        verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        has_secret:
+          type: boolean
+        has_claim_token:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+    AdminSitePage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminSite"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+    AdminBlockedRoom:
+      type: object
+      required: [room_id, site_id, post_slug, reason]
+      properties:
+        room_id:
+          type: string
+        site_id:
+          type: string
+        post_slug:
+          type: string
+        reason:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+    AdminBlockedRoomPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminBlockedRoom"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+    RevokeOriginRequest:
+      type: object
+      required: [origin]
+      properties:
+        origin:
+          type: string
+    RotateSecretResponse:
+      type: object
+      required: [site_id, secret]
+      properties:
+        site_id:
+          type: string
+        secret:
+          type: string
+    RevokeSecretResponse:
+      type: object
+      required: [site_id, auth_mode]
+      properties:
+        site_id:
+          type: string
+        auth_mode:
+          type: string
+          enum: [origin, secret]
+    RotateClaimTokenResponse:
+      type: object
+      required: [site_id, claim_token]
+      properties:
+        site_id:
+          type: string
+        claim_token:
+          type: string
+    ConfigSnippetResponse:
+      type: object
+      required: [site_id, toml]
+      properties:
+        site_id:
+          type: string
+        toml:
+          type: string
