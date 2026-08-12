@@ -103,7 +103,7 @@ async fn update_comment_preserves_reply_to() {
 
     assert!(
         store
-            .update_comment_content("$event:hs", "edited")
+            .update_comment_content("$event:hs", "!room:hs", "edited", 200, "$edit:hs")
             .await
             .expect("update comment")
     );

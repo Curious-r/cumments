@@ -176,7 +176,13 @@ impl EventProcessor {
 
             if self
                 .comment_store
-                .update_comment_content(&relation.target_event_id, &relation.new_content)
+                .update_comment_content(
+                    &relation.target_event_id,
+                    &event.room_id,
+                    &relation.new_content,
+                    event.origin_server_ts,
+                    &event.event_id,
+                )
                 .await?
             {
                 info!("Successfully updated comment {}", relation.target_event_id);
@@ -210,7 +216,7 @@ impl EventProcessor {
                 }
             } else {
                 debug!(
-                    "Edit received for unknown comment {}",
+                    "Edit ignored for {}: target missing, in another room, or stale",
                     relation.target_event_id
                 );
             }

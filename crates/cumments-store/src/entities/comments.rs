@@ -20,6 +20,12 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub author_public_key: Option<String>,
     pub updated_at: DateTimeUtc,
+    /// `origin_server_ts` of the last applied edit; `None` when the comment
+    /// has never been edited.
+    pub last_edit_ts: Option<i64>,
+    /// Event ID of the last applied edit, used as a tie-breaker when two
+    /// edits share a timestamp.
+    pub last_edit_event_id: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

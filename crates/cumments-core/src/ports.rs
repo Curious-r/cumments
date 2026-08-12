@@ -107,8 +107,18 @@ pub trait CommentStore: Send + Sync {
         post_slug: &PostSlug,
     ) -> Result<()>;
 
-    /// Updates only the content of a comment.
-    async fn update_comment_content(&self, event_id: &str, content: &str) -> Result<bool>;
+    /// Updates only the content of a comment, bound to the room the edit
+    /// arrived from and ordered by edit recency. Returns `false` when the
+    /// target is missing, lives in another room, or the edit is older than
+    /// the content already stored.
+    async fn update_comment_content(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        content: &str,
+        edit_ts: i64,
+        edit_event_id: &str,
+    ) -> Result<bool>;
 
     /// Deletes a comment by its event ID.
     async fn delete_comment(&self, event_id: &str) -> Result<bool>;

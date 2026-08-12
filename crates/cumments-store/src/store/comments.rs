@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::models::{AuthorType, Comment, CommentAuthor, CommentPage, PostSlug, SiteId};
 use cumments_core::ports::CommentStore;
-use sea_orm::{EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set};
 
 #[async_trait]
 impl CommentStore for DbStore {
@@ -103,7 +103,26 @@ impl CommentStore for DbStore {
         Ok(())
     }
 
-    async fn update_comment_content(&self, event_id: &str, content: &str) -> Result<bool> {
+    async fn update_comment_content(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        content: &str,
+        edit_ts: i64,
+        edit_event_id: &str,
+    ) -> Result<bool> {
+        // Only apply when the edit is newer than the last applied edit
+        // (missing last_edit means the original is current), with event_id
+        // as the deterministic tie-breaker.
+        let recency = Condition::any()
+            .add(comments::Column::LastEditTs.is_null())
+            .add(comments::Column::LastEditTs.lt(edit_ts))
+            .add(
+                Condition::all()
+                    .add(comments::Column::LastEditTs.eq(edit_ts))
+                    .add(comments::Column::LastEditEventId.lt(edit_event_id)),
+            );
+
         let result = comments::Entity::update_many()
             .col_expr(
                 comments::Column::Content,
@@ -113,7 +132,17 @@ impl CommentStore for DbStore {
                 comments::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
+            .col_expr(
+                comments::Column::LastEditTs,
+                sea_orm::sea_query::Expr::value(edit_ts),
+            )
+            .col_expr(
+                comments::Column::LastEditEventId,
+                sea_orm::sea_query::Expr::value(edit_event_id),
+            )
             .filter(comments::COLUMN.event_id.eq(event_id))
+            .filter(comments::COLUMN.room_id.eq(room_id))
+            .filter(recency)
             .exec(&self.db)
             .await?;
 

@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::models::{PostSlug, RoomIdentity, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteStore};
-use sea_orm::{EntityTrait, QueryFilter, Set};
+use sea_orm::{EntityTrait, QueryFilter, Set, TransactionTrait};
 
 #[async_trait]
 impl RegistryStore for DbStore {
@@ -49,6 +49,26 @@ impl RegistryStore for DbStore {
         site_id: &SiteId,
         post_slug: &PostSlug,
     ) -> Result<()> {
+        let txn = self.db.begin().await?;
+
+        // Enforce a single active room per (site_id, post_slug): deactivate
+        // any superseded active rows before activating the new room.
+        room_registry::Entity::update_many()
+            .col_expr(
+                room_registry::Column::IsActive,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                room_registry::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(room_registry::COLUMN.site_id.eq(site_id.as_str()))
+            .filter(room_registry::COLUMN.post_slug.eq(post_slug.as_str()))
+            .filter(room_registry::COLUMN.is_active.eq(true))
+            .filter(room_registry::COLUMN.room_id.ne(room_id))
+            .exec(&txn)
+            .await?;
+
         let active_model = room_registry::ActiveModel {
             room_id: Set(room_id.to_owned()),
             site_id: Set(site_id.as_str().to_owned()),
@@ -67,8 +87,10 @@ impl RegistryStore for DbStore {
                     .update_column(room_registry::Column::UpdatedAt)
                     .to_owned(),
             )
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
+
+        txn.commit().await?;
 
         Ok(())
     }
