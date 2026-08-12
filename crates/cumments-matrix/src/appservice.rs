@@ -4,8 +4,9 @@
 use crate::wire::{
     build_edit_body, build_message_body, build_redaction_body, comment_room_alias,
     comment_room_alias_localpart, format_txn_id, has_redact_power, has_state_power,
-    initial_power_levels, metadata_matches, percent_encode, power_levels_with_admin,
-    room_requires_explicit_creator, site_space_alias, site_space_alias_localpart,
+    initial_power_levels, is_implicit_creator, metadata_matches, percent_encode,
+    power_levels_with_admin, room_requires_explicit_creator, site_space_alias,
+    site_space_alias_localpart,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -42,6 +43,31 @@ struct MessagesResponse {
     start: String,
     end: String,
     chunk: Vec<serde_json::Value>,
+}
+
+/// The first event(s) of a room's timeline as returned by `/messages`.
+#[derive(Deserialize)]
+struct CreateEventPage {
+    #[serde(default)]
+    chunk: Vec<serde_json::Value>,
+}
+
+/// The `m.room.create` event envelope. Since room version 11 the event
+/// content has no `creator` field: the sender is the room creator.
+#[derive(Deserialize)]
+struct RoomCreateEvent {
+    sender: String,
+    content: RoomCreateEventContent,
+}
+
+#[derive(Deserialize)]
+struct RoomCreateEventContent {
+    /// The room version; absent means version 1.
+    #[serde(default)]
+    room_version: Option<String>,
+    /// Room version 12+: additional user IDs granted creator power.
+    #[serde(default)]
+    additional_creators: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -429,22 +455,20 @@ impl AppServiceMatrixDriver {
     }
 
     /// Whether the room was created as a Matrix Space (`m.room.create` with
-    /// `type: "m.space"`).
+    /// `content.type: "m.space"`).
     async fn is_space_room(&self, room_id: &str) -> Result<bool> {
-        Ok(match self.get_room_create(room_id).await? {
-            Some(create) => {
-                create
-                    .get("content")
-                    .and_then(|c| c.get("type"))
-                    .and_then(|v| v.as_str())
-                    == Some("m.space")
-            }
+        Ok(match self.get_room_create_state(room_id).await? {
+            // `/state` returns the event's *content*: the space marker is a
+            // top-level `type` key there, not an `m.room.create` envelope.
+            Some(create) => create.get("type").and_then(|v| v.as_str()) == Some("m.space"),
             None => false,
         })
     }
 
-    /// Fetch the room's `m.room.create` event, if the room exists.
-    async fn get_room_create(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+    /// Fetch the *content* of the room's `m.room.create` state event (the CS
+    /// API returns the content, e.g. `{"room_version":"12"}`), if the room
+    /// exists.
+    async fn get_room_create_state(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.create",
             percent_encode(room_id)
@@ -468,6 +492,54 @@ impl AppServiceMatrixDriver {
                 error_body
             ))
         }
+    }
+
+    /// Fetch the room's `m.room.create` event envelope (sender + content)
+    /// from the first event of the room's timeline, if the AS sender can see
+    /// it.
+    ///
+    /// `GET /messages?dir=f` without `from` returns events from the first
+    /// visible event (spec v1.3+), which for a room created by the AS sender
+    /// is the create event. When the create event is not the first visible
+    /// event (e.g. history visibility hides it from a later joiner), the CS
+    /// API cannot expose its sender, so `None` is returned and callers fall
+    /// back to the power-levels check.
+    #[instrument(skip(self))]
+    async fn fetch_create_event(&self, room_id: &str) -> Result<Option<RoomCreateEvent>> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/messages?dir=f&limit=1",
+            percent_encode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch room history: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to fetch create event for {} ({}): {}",
+                room_id,
+                status,
+                error_body
+            ));
+        }
+
+        let data: CreateEventPage = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse messages response: {}", e))?;
+        let Some(event) = data.chunk.into_iter().next() else {
+            return Ok(None);
+        };
+        if event.get("type").and_then(|v| v.as_str()) != Some("m.room.create") {
+            return Ok(None);
+        }
+        serde_json::from_value(event)
+            .map(Some)
+            .map_err(|e| anyhow!("Failed to parse create event for {}: {}", room_id, e))
     }
 
     /// The room version used for newly created rooms: the explicit
@@ -654,23 +726,33 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Whether the AS sender is a room creator under the v12+ implicit-power
+    /// rules and is currently joined to the room.
+    async fn sender_has_implicit_creator_power(
+        &self,
+        room_id: &str,
+        create: Option<&RoomCreateEvent>,
+    ) -> bool {
+        let Some(create) = create else {
+            return false;
+        };
+        let sender = self.sender_user_id();
+        is_implicit_creator(
+            create.content.room_version.as_deref(),
+            &create.sender,
+            create.content.additional_creators.as_deref(),
+            &sender,
+        ) && self.is_joined(room_id, &sender).await
+    }
+
     /// Whether the AS sender can write state events in the room. Reading the
     /// power levels doubles as a membership check: non-members get an error.
-    async fn sender_can_write_state(&self, room_id: &str) -> Result<bool> {
-        // Room version 12+ gives the creator immutable infinite power without
-        // listing them in `m.room.power_levels.users`; account for that before
-        // falling back to the power-levels check.
-        if let Some(create) = self.get_room_create(room_id).await? {
-            let creator = create.get("sender").and_then(|v| v.as_str());
-            let version = create
-                .get("content")
-                .and_then(|c| c.get("room_version"))
-                .and_then(|v| v.as_str());
-            if !room_requires_explicit_creator(version)
-                && creator == Some(self.sender_user_id().as_str())
-            {
-                return Ok(true);
-            }
+    async fn sender_can_write_state(&self, room_id: &str, implicit_creator: bool) -> Result<bool> {
+        // Room versions 12+ give the creator immutable infinite power without
+        // listing them in `m.room.power_levels.users`; account for that
+        // before falling back to the power-levels check.
+        if implicit_creator {
+            return Ok(true);
         }
         Ok(match self.get_power_levels(room_id).await? {
             Some(power_levels) => has_state_power(&power_levels, &self.sender_user_id()),
@@ -681,18 +763,9 @@ impl AppServiceMatrixDriver {
     }
 
     /// Whether the AS sender can redact other users' events in the room.
-    async fn sender_can_redact(&self, room_id: &str) -> Result<bool> {
-        if let Some(create) = self.get_room_create(room_id).await? {
-            let creator = create.get("sender").and_then(|v| v.as_str());
-            let version = create
-                .get("content")
-                .and_then(|c| c.get("room_version"))
-                .and_then(|v| v.as_str());
-            if !room_requires_explicit_creator(version)
-                && creator == Some(self.sender_user_id().as_str())
-            {
-                return Ok(true);
-            }
+    async fn sender_can_redact(&self, room_id: &str, implicit_creator: bool) -> Result<bool> {
+        if implicit_creator {
+            return Ok(true);
         }
         Ok(match self.get_power_levels(room_id).await? {
             Some(power_levels) => has_redact_power(&power_levels, &self.sender_user_id()),
@@ -712,7 +785,11 @@ impl AppServiceMatrixDriver {
     /// A room we cannot govern would let a third party steer comments into an
     /// uncontrolled room, so we fail loudly instead of silently adopting it.
     async fn ensure_room_adoptable(&self, room_id: &str) -> Result<()> {
-        match self.sender_can_write_state(room_id).await {
+        let create = self.fetch_create_event(room_id).await?;
+        let implicit_creator = self
+            .sender_has_implicit_creator_power(room_id, create.as_ref())
+            .await;
+        match self.sender_can_write_state(room_id, implicit_creator).await {
             Ok(true) => {}
             Ok(false) => {
                 return Err(anyhow!(
@@ -729,7 +806,7 @@ impl AppServiceMatrixDriver {
                 ));
             }
         }
-        if !self.sender_can_redact(room_id).await? {
+        if !self.sender_can_redact(room_id, implicit_creator).await? {
             return Err(anyhow!(
                 "Refusing to adopt room {}: AS sender cannot meet the room's \
                  redact threshold (delete intents would fail)",
@@ -1556,5 +1633,254 @@ mod tests {
             error.contains("10") && error.contains("11"),
             "error must list available versions: {error}"
         );
+    }
+
+    #[test]
+    fn create_event_parses_v12_envelope_without_creator() {
+        let event: RoomCreateEvent = serde_json::from_value(json!({
+            "type": "m.room.create",
+            "sender": "@_cumments_bot:example.com",
+            "content": { "room_version": "12" }
+        }))
+        .expect("parse create event");
+        assert_eq!(event.sender, "@_cumments_bot:example.com");
+        assert_eq!(event.content.room_version.as_deref(), Some("12"));
+        assert!(event.content.additional_creators.is_none());
+    }
+
+    #[test]
+    fn create_event_parses_space_type_and_additional_creators() {
+        let event: RoomCreateEvent = serde_json::from_value(json!({
+            "type": "m.room.create",
+            "sender": "@_cumments_bot:example.com",
+            "content": {
+                "type": "m.space",
+                "room_version": "12",
+                "additional_creators": ["@someone:example.com"]
+            }
+        }))
+        .expect("parse create event");
+        assert_eq!(
+            event.content.additional_creators.as_deref(),
+            Some(&["@someone:example.com".to_string()][..])
+        );
+        assert_eq!(event.content.room_version.as_deref(), Some("12"));
+    }
+
+    // ── HTTP-level tests against a mock homeserver ─────────────────────
+
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const ROOM_ID: &str = "!room:example.com";
+    const CREATE_EVENTS_PATH: &str = "/_matrix/client/v3/rooms/%21room%3Aexample.com/messages";
+    const MEMBERSHIP_PATH: &str = "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.member/%40_cumments_bot%3Aexample.com";
+    const POWER_LEVELS_PATH: &str =
+        "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.power_levels";
+    const CREATE_STATE_PATH: &str =
+        "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.create";
+
+    struct StubVirtualUserStore;
+
+    #[async_trait]
+    impl VirtualUserStore for StubVirtualUserStore {
+        async fn get_or_create_virtual_user(
+            &self,
+            author_public_key: &str,
+            site_id: &SiteId,
+            server_name: &str,
+        ) -> Result<String> {
+            Ok(format!(
+                "@_cumments_{}_{}:{}",
+                site_id.as_str(),
+                author_public_key,
+                server_name
+            ))
+        }
+    }
+
+    fn test_driver(server: &MockServer) -> AppServiceMatrixDriver {
+        AppServiceMatrixDriver::new(
+            server.uri(),
+            "test-token".to_string(),
+            "example.com".to_string(),
+            "_cumments_bot".to_string(),
+            "@admin:example.com".to_string(),
+            Arc::new(StubVirtualUserStore),
+            None,
+        )
+        .expect("build test driver")
+    }
+
+    async fn mount_create_events(server: &MockServer, first_event: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path(CREATE_EVENTS_PATH))
+            .and(query_param("dir", "f"))
+            .and(query_param("limit", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "start": "s",
+                "end": "e",
+                "chunk": [first_event]
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_joined_membership(server: &MockServer, expected: u64) {
+        Mock::given(method("GET"))
+            .and(path(MEMBERSHIP_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "membership": "join"
+            })))
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_power_levels(server: &MockServer, content: serde_json::Value, expected: u64) {
+        Mock::given(method("GET"))
+            .and(path(POWER_LEVELS_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(content))
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn v12_creator_shortcut_uses_create_event_sender() {
+        let server = MockServer::start().await;
+        mount_create_events(
+            &server,
+            json!({
+                "type": "m.room.create",
+                "sender": "@_cumments_bot:example.com",
+                "content": { "room_version": "12" }
+            }),
+        )
+        .await;
+        mount_joined_membership(&server, 1).await;
+        // The implicit creator must not need (or look up) power levels.
+        mount_power_levels(&server, json!({}), 0).await;
+
+        let driver = test_driver(&server);
+        driver
+            .ensure_room_adoptable(ROOM_ID)
+            .await
+            .expect("v12 creator must be adoptable");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn v12_additional_creators_grant_implicit_power() {
+        let server = MockServer::start().await;
+        mount_create_events(
+            &server,
+            json!({
+                "type": "m.room.create",
+                "sender": "@someone:example.com",
+                "content": {
+                    "room_version": "12",
+                    "additional_creators": ["@_cumments_bot:example.com"]
+                }
+            }),
+        )
+        .await;
+        mount_joined_membership(&server, 1).await;
+        mount_power_levels(&server, json!({}), 0).await;
+
+        let driver = test_driver(&server);
+        driver
+            .ensure_room_adoptable(ROOM_ID)
+            .await
+            .expect("additional creator must be adoptable");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn unverifiable_create_event_falls_back_to_power_levels() {
+        let server = MockServer::start().await;
+        // History visibility hides the create event, so the first visible
+        // event is a message and the creator cannot be confirmed.
+        mount_create_events(
+            &server,
+            json!({
+                "type": "m.room.message",
+                "sender": "@someone:example.com",
+                "content": { "body": "hi" }
+            }),
+        )
+        .await;
+        mount_power_levels(
+            &server,
+            json!({ "users": { "@_cumments_bot:example.com": 100 } }),
+            2,
+        )
+        .await;
+
+        let driver = test_driver(&server);
+        driver
+            .ensure_room_adoptable(ROOM_ID)
+            .await
+            .expect("power-level fallback must decide");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn pre_v12_creator_does_not_skip_power_levels() {
+        let server = MockServer::start().await;
+        mount_create_events(
+            &server,
+            json!({
+                "type": "m.room.create",
+                "sender": "@_cumments_bot:example.com",
+                "content": { "room_version": "11" }
+            }),
+        )
+        .await;
+        mount_power_levels(&server, json!({ "users": {} }), 1).await;
+
+        let driver = test_driver(&server);
+        let error = driver
+            .ensure_room_adoptable(ROOM_ID)
+            .await
+            .expect_err("pre-v12 creator without power must be refused");
+        assert!(
+            error.to_string().contains("cannot write state"),
+            "unexpected error: {error}"
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn is_space_room_reads_type_from_create_state_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(CREATE_STATE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "room_version": "12",
+                "type": "m.space"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        assert!(driver.is_space_room(ROOM_ID).await.unwrap());
+        server.verify().await;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(CREATE_STATE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "room_version": "12"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        assert!(!driver.is_space_room(ROOM_ID).await.unwrap());
+        server.verify().await;
     }
 }

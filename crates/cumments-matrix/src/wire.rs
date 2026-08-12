@@ -59,6 +59,25 @@ pub(crate) fn room_requires_explicit_creator(version: Option<&str>) -> bool {
         .and_then(|v| v.parse::<u32>().ok());
     major.is_none_or(|v| v < 12)
 }
+
+/// Whether `user_id` is a room creator under the v12+ implicit-power rules.
+///
+/// Room versions 12+ define the creators as the `sender` of the
+/// `m.room.create` event plus any `additional_creators` in its content;
+/// either grants infinite power without an entry in
+/// `m.room.power_levels.users`.
+pub(crate) fn is_implicit_creator(
+    room_version: Option<&str>,
+    create_sender: &str,
+    additional_creators: Option<&[String]>,
+    user_id: &str,
+) -> bool {
+    !room_requires_explicit_creator(room_version)
+        && (create_sender == user_id
+            || additional_creators
+                .is_some_and(|creators| creators.iter().any(|creator| creator.as_str() == user_id)))
+}
+
 /// Build the `m.room.power_levels` content used when creating a Cumments room.
 /// Omitted fields take the room-version defaults; the admin always receives
 /// admin power, and the AS sender is only listed when the room version needs
@@ -647,5 +666,35 @@ mod tests {
                 .is_none()
         );
         assert_eq!(implicit["users"]["@admin:example.com"], 100);
+    }
+
+    #[test]
+    fn implicit_creator_uses_sender_or_additional_creators_only_for_v12_plus() {
+        let bot = "@_cumments_bot:example.com";
+        let other = "@other:example.com";
+        let additional: Vec<String> = vec![bot.to_string()];
+
+        // Pre-v12 rooms privilege the creator through the power levels
+        // event, so the create event's sender alone does not imply power.
+        assert!(!is_implicit_creator(Some("11"), bot, None, bot));
+        assert!(!is_implicit_creator(None, bot, None, bot));
+        assert!(!is_implicit_creator(
+            Some("11"),
+            other,
+            Some(&additional),
+            bot
+        ));
+
+        // v12+ defines the sender (and additional_creators) as creators.
+        assert!(is_implicit_creator(Some("12"), bot, None, bot));
+        assert!(is_implicit_creator(Some("13"), bot, None, bot));
+        assert!(is_implicit_creator(
+            Some("12"),
+            other,
+            Some(&additional),
+            bot
+        ));
+        assert!(!is_implicit_creator(Some("12"), other, None, bot));
+        assert!(!is_implicit_creator(Some("12"), bot, None, other));
     }
 }

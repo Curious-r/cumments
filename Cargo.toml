@@ -46,6 +46,7 @@ subtle = "2.6.1"
 thiserror = "2.0.18"
 url = "2.5.4"
 validator = { version = "0.21", features = ["derive"] }
+wiremock = "0.6"
 tokio = { version = "1.49.0", features = ["full"] }
 sea-orm = { version = "2.0.0", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
 sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
