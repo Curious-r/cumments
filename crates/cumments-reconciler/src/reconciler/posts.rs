@@ -99,8 +99,16 @@ impl Reconciler {
                 // Unknown originals (e.g. replies to a not-yet-projected
                 // event) simply skip the quote.
                 let (reply_to_body, reply_to_sender) = match intent.reply_to.as_deref() {
-                    Some(event_id) => match self.comment_store.get_comment(event_id).await? {
-                        Some(comment) => (Some(comment.content), Some(comment.sender_mxid)),
+                    Some(event_id) => match self.message_store.get_message(event_id).await? {
+                        Some(message) => {
+                            let body = match &message.content {
+                                cumments_core::models::Content::Text(text) => {
+                                    Some(text.body.clone())
+                                }
+                                _ => None,
+                            };
+                            (body, Some(message.sender_mxid))
+                        }
                         None => (None, None),
                     },
                     None => (None, None),

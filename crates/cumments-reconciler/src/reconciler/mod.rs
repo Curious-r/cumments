@@ -7,7 +7,7 @@ use anyhow::Result;
 use cumments_core::{
     matrix_error::MatrixError,
     models::{PostSlug, QuarantinedRoom, SiteId},
-    ports::{CommentStore, IntentStore, MatrixDriver, RegistryStore},
+    ports::{IntentStore, MatrixDriver, MessageStore, RegistryStore},
     site_service::SiteService,
 };
 use std::sync::Arc;
@@ -105,7 +105,7 @@ fn quarantine_target(err: &anyhow::Error) -> Option<String> {
 pub struct Reconciler {
     intent_store: Arc<dyn IntentStore>,
     registry_store: Arc<dyn RegistryStore>,
-    comment_store: Arc<dyn CommentStore>,
+    message_store: Arc<dyn MessageStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
     notify: Arc<Notify>,
@@ -115,7 +115,7 @@ impl Reconciler {
     pub fn new(
         intent_store: Arc<dyn IntentStore>,
         registry_store: Arc<dyn RegistryStore>,
-        comment_store: Arc<dyn CommentStore>,
+        message_store: Arc<dyn MessageStore>,
         driver: Arc<dyn MatrixDriver>,
         site_service: Arc<SiteService>,
         notify: Arc<Notify>,
@@ -123,7 +123,7 @@ impl Reconciler {
         Self {
             intent_store,
             registry_store,
-            comment_store,
+            message_store,
             driver,
             site_service,
             notify,

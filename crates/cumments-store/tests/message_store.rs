@@ -1,0 +1,390 @@
+use chrono::Utc;
+use cumments_core::models::{
+    AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageRevision,
+    MessageStatus, PollContent, PollVote, PostSlug, Reaction, SiteId, TextContent, TextStyle,
+    UnknownContent,
+};
+use cumments_core::ports::{MessageStore, VirtualUserStore};
+use cumments_store::DbStore;
+
+/// Unique SQLite file per test to avoid shared in-memory state.
+fn test_db_url(name: &str) -> String {
+    let path = std::path::Path::new("/tmp").join(format!(
+        "cumments-message-test-{}-{}.db",
+        name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    format!("sqlite://{}", path.display())
+}
+
+fn guest_message(event_id: &str, body: &str) -> Message {
+    Message {
+        event_id: event_id.to_string(),
+        site_id: "my-blog".to_string(),
+        post_slug: "hello".to_string(),
+        author: AuthorSnapshot {
+            kind: AuthorKind::Guest,
+            display_name: Some("Alice".to_string()),
+            avatar_url: None,
+            public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
+            mxid: None,
+        },
+        content: Content::Text(TextContent {
+            body: body.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
+        timestamp: Utc::now(),
+        edited_at: None,
+        reply_to: Some("$parent:hs".to_string()),
+        thread_root: None,
+        intent_id: Some(42),
+        status: MessageStatus::Active,
+        redacted_at: None,
+        redacted_by: None,
+        reactions: Vec::new(),
+        room_id: "!room:hs".to_string(),
+        sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718:hs".to_string(),
+        raw_content: serde_json::json!({ "msgtype": "m.text", "body": body }),
+    }
+}
+
+#[tokio::test]
+async fn save_message_records_typed_content_and_internal_fields() {
+    let store = DbStore::connect(&test_db_url("message-sender"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+
+    let message = guest_message("$event:hs", "hello");
+    store.save_message(&message).await.expect("save message");
+
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert_eq!(stored.room_id, "!room:hs");
+    assert_eq!(stored.sender_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
+    assert_eq!(stored.author.kind, AuthorKind::Guest);
+    assert_eq!(
+        stored.author.public_key.as_deref(),
+        Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc")
+    );
+    assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
+    assert_eq!(stored.intent_id, Some(42));
+    assert_eq!(
+        stored.content,
+        Content::Text(TextContent {
+            body: "hello".to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        })
+    );
+    assert_eq!(stored.status, MessageStatus::Active);
+
+    let page = store
+        .get_messages(&site, &slug, 10, 0)
+        .await
+        .expect("query messages");
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].event_id, "$event:hs");
+}
+
+#[tokio::test]
+async fn apply_edit_updates_content_and_records_revision() {
+    let store = DbStore::connect(&test_db_url("message-edit"))
+        .await
+        .expect("connect db");
+    let message = guest_message("$event:hs", "original");
+    store.save_message(&message).await.expect("save message");
+
+    let mut updated = message.clone();
+    updated.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    updated.edited_at = Some(Utc::now());
+    let revision = MessageRevision {
+        event_id: "$edit:hs".to_string(),
+        content: updated.content.clone(),
+        edited_at: updated.edited_at.unwrap(),
+        editor_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718:hs".to_string(),
+    };
+
+    assert!(
+        store
+            .apply_edit(&updated, &revision)
+            .await
+            .expect("apply edit")
+    );
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert!(matches!(
+        stored.content,
+        Content::Text(ref t) if t.body == "edited"
+    ));
+    assert!(stored.edited_at.is_some());
+    assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
+
+    // A stale edit (older timestamp) must be rejected.
+    let stale_ts = revision.edited_at - chrono::Duration::seconds(1);
+    let stale = MessageRevision {
+        event_id: "$stale:hs".to_string(),
+        content: updated.content.clone(),
+        edited_at: stale_ts,
+        editor_mxid: "someone".to_string(),
+    };
+    assert!(
+        !store
+            .apply_edit(&updated, &stale)
+            .await
+            .expect("stale edit rejected")
+    );
+}
+
+#[tokio::test]
+async fn redact_message_marks_status_and_keeps_row() {
+    let store = DbStore::connect(&test_db_url("message-redact"))
+        .await
+        .expect("connect db");
+    let message = guest_message("$event:hs", "hello");
+    store.save_message(&message).await.expect("save message");
+
+    let now = Utc::now();
+    assert!(
+        store
+            .redact_message("$event:hs", "!room:hs", now, "@admin:hs")
+            .await
+            .expect("redact message")
+    );
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert_eq!(stored.status, MessageStatus::Redacted);
+    assert_eq!(stored.redacted_by.as_deref(), Some("@admin:hs"));
+
+    assert!(
+        !store
+            .redact_message("$missing:hs", "!room:hs", now, "@admin:hs")
+            .await
+            .expect("missing target")
+    );
+}
+
+#[tokio::test]
+async fn reactions_aggregate_by_key_and_ignore_redacted() {
+    let store = DbStore::connect(&test_db_url("message-reactions"))
+        .await
+        .expect("connect db");
+    let message = guest_message("$event:hs", "hello");
+    store.save_message(&message).await.expect("save message");
+
+    for (event_id, sender) in [
+        ("$r1:hs", "@alice:hs"),
+        ("$r2:hs", "@bob:hs"),
+        ("$r3:hs", "@carol:hs"),
+    ] {
+        store
+            .save_reaction(&Reaction {
+                event_id: event_id.to_string(),
+                message_event_id: "$event:hs".to_string(),
+                sender_mxid: sender.to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 1,
+                redacted_at: None,
+            })
+            .await
+            .expect("save reaction");
+    }
+    store
+        .save_reaction(&Reaction {
+            event_id: "$r4:hs".to_string(),
+            message_event_id: "$event:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            key: "❤️".to_string(),
+            origin_server_ts: 2,
+            redacted_at: None,
+        })
+        .await
+        .expect("save reaction");
+
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert_eq!(stored.reactions.len(), 2);
+    assert_eq!(stored.reactions[0].key, "❤️");
+    assert_eq!(stored.reactions[0].count, 1);
+    assert_eq!(stored.reactions[1].key, "👍");
+    assert_eq!(stored.reactions[1].count, 3);
+
+    // Redacting one reaction drops its sender from the count.
+    store
+        .redact_reaction("$r1:hs", Utc::now())
+        .await
+        .expect("redact reaction");
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    let thumbs = stored
+        .reactions
+        .iter()
+        .find(|r| r.key == "👍")
+        .expect("thumbs up");
+    assert_eq!(thumbs.count, 2);
+}
+
+#[tokio::test]
+async fn poll_votes_aggregate_and_latest_vote_wins() {
+    let store = DbStore::connect(&test_db_url("message-poll"))
+        .await
+        .expect("connect db");
+    let mut message = guest_message("$poll:hs", "poll placeholder");
+    message.content = Content::Poll(PollContent {
+        question: "best? ".to_string(),
+        options: vec!["a".to_string(), "b".to_string()],
+        responses: Vec::new(),
+    });
+    store
+        .save_message(&message)
+        .await
+        .expect("save poll message");
+
+    store
+        .save_poll_vote(&PollVote {
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            option_index: 0,
+            origin_server_ts: 1,
+        })
+        .await
+        .expect("alice votes");
+    store
+        .save_poll_vote(&PollVote {
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@bob:hs".to_string(),
+            option_index: 1,
+            origin_server_ts: 2,
+        })
+        .await
+        .expect("bob votes");
+    // Alice changes her vote; the latest vote wins.
+    store
+        .save_poll_vote(&PollVote {
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            option_index: 1,
+            origin_server_ts: 3,
+        })
+        .await
+        .expect("alice changes vote");
+
+    let stored = store
+        .get_message("$poll:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    match stored.content {
+        Content::Poll(poll) => {
+            assert_eq!(poll.responses.len(), 1);
+            assert_eq!(poll.responses[0].option_index, 1);
+            assert_eq!(poll.responses[0].count, 2);
+        }
+        other => panic!("expected poll content, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn unknown_content_survives_roundtrip() {
+    let store = DbStore::connect(&test_db_url("message-unknown"))
+        .await
+        .expect("connect db");
+    let mut message = guest_message("$event:hs", "unused");
+    message.content = Content::Unknown(UnknownContent {
+        fallback: Some("custom".to_string()),
+        raw: serde_json::json!({ "custom": true }),
+    });
+    store.save_message(&message).await.expect("save message");
+
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert!(matches!(stored.content, Content::Unknown(_)));
+}
+
+#[tokio::test]
+async fn media_content_survives_roundtrip() {
+    let store = DbStore::connect(&test_db_url("message-media"))
+        .await
+        .expect("connect db");
+    let mut message = guest_message("$event:hs", "unused");
+    message.content = Content::Media(MediaContent {
+        kind: MediaKind::Image,
+        url: "mxc://hs/abc".to_string(),
+        filename: Some("cat.png".to_string()),
+        mimetype: Some("image/png".to_string()),
+        size: Some(1024),
+        width: Some(100),
+        height: Some(80),
+        thumbnail_url: Some("mxc://hs/thumb".to_string()),
+        alt_text: Some("a cat".to_string()),
+        voice: false,
+    });
+    store.save_message(&message).await.expect("save message");
+
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert_eq!(
+        stored.content,
+        Content::Media(MediaContent {
+            kind: MediaKind::Image,
+            url: "mxc://hs/abc".to_string(),
+            filename: Some("cat.png".to_string()),
+            mimetype: Some("image/png".to_string()),
+            size: Some(1024),
+            width: Some(100),
+            height: Some(80),
+            thumbnail_url: Some("mxc://hs/thumb".to_string()),
+            alt_text: Some("a cat".to_string()),
+            voice: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn virtual_user_mapping_is_stable_across_server_name_changes() {
+    let store = DbStore::connect(&test_db_url("virtual-user-stable"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+
+    let first = store
+        .get_or_create_virtual_user("key1", &site, "hs")
+        .await
+        .expect("create virtual user");
+    let second = store
+        .get_or_create_virtual_user("key1", &site, "other.hs")
+        .await
+        .expect("reuse virtual user");
+
+    assert_eq!(first, second);
+    assert!(first.starts_with("@_cumments_my-blog_"));
+    assert!(first.ends_with(":hs"));
+}

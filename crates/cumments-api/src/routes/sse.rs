@@ -134,16 +134,16 @@ pub(crate) async fn sse_handler(
         while let Ok(event) = rx.recv().await {
             // Filter events by site_id and post_slug
             let matches = match &event {
-                ProjectorEvent::CommentCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                ProjectorEvent::CommentUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                ProjectorEvent::CommentDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                ProjectorEvent::MessageCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                ProjectorEvent::MessageUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                ProjectorEvent::MessageDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
             };
 
             if matches && let Ok(json) = serde_json::to_string(&event) {
                 let event_name = match &event {
-                    ProjectorEvent::CommentCreated { .. } => "comment_created",
-                    ProjectorEvent::CommentUpdated { .. } => "comment_updated",
-                    ProjectorEvent::CommentDeleted { .. } => "comment_deleted",
+                    ProjectorEvent::MessageCreated { .. } => "message_created",
+                    ProjectorEvent::MessageUpdated { .. } => "message_updated",
+                    ProjectorEvent::MessageDeleted { .. } => "message_deleted",
                 };
                 yield Ok::<Event, Infallible>(Event::default().event(event_name).data(json));
             }

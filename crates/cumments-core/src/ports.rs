@@ -3,8 +3,8 @@ use crate::intents::{
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
 };
 use crate::models::{
-    Comment, CommentPage, PostSlug, QuarantinedRoom, RoomEventPage, RoomIdentity, RoomStatus,
-    SiteId,
+    Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom, Reaction,
+    RoomEventPage, RoomIdentity, RoomStatus, SiteId,
 };
 use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
 use anyhow::Result;
@@ -162,58 +162,65 @@ pub trait IntentStore: Send + Sync {
     ) -> Result<()>;
 }
 
-/// The port for all comment projection storage operations.
+/// The port for all message projection storage operations.
 #[async_trait]
-pub trait CommentStore: Send + Sync {
-    /// Fetches a single comment by its Matrix event ID.
-    async fn get_comment(&self, event_id: &str) -> Result<Option<Comment>>;
+pub trait MessageStore: Send + Sync {
+    /// Fetches a single message by its Matrix event ID.
+    async fn get_message(&self, event_id: &str) -> Result<Option<Message>>;
 
-    /// Fetches one page of projected comments for a given site and post.
-    async fn get_comments(
+    /// Fetches one page of projected messages for a given site and post.
+    async fn get_messages(
         &self,
         site_id: &SiteId,
         post_slug: &PostSlug,
         limit: i64,
         offset: i64,
-    ) -> Result<CommentPage>;
+    ) -> Result<MessagePage>;
 
-    /// Saves a new comment or updates an existing one (on conflict).
-    async fn save_comment(
-        &self,
-        comment: &Comment,
-        room_id: &str,
-        sender: &str,
-        site_id: &SiteId,
-        post_slug: &PostSlug,
-    ) -> Result<()>;
+    /// Saves a new message or updates an existing one (on conflict by
+    /// event_id).
+    async fn save_message(&self, message: &Message) -> Result<()>;
 
-    /// Updates only the content of a comment, bound to the room the edit
-    /// arrived from and ordered by edit recency. Returns `false` when the
-    /// target is missing, lives in another room, or the edit is older than
-    /// the content already stored.
-    async fn update_comment_content(
+    /// Applies an edit to a message and records the revision. Bound to the
+    /// room the edit arrived from and ordered by edit recency. Returns
+    /// `false` when the target is missing, lives in another room, or the edit
+    /// is older than the content already stored.
+    async fn apply_edit(&self, message: &Message, revision: &MessageRevision) -> Result<bool>;
+
+    /// Marks a message as redacted (kept in the read model as a tombstone).
+    /// Returns `false` when the message is missing or lives in another room.
+    async fn redact_message(
         &self,
         event_id: &str,
         room_id: &str,
-        content: &str,
-        edit_ts: i64,
-        edit_event_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
     ) -> Result<bool>;
 
-    /// Deletes a comment by its event ID.
-    async fn delete_comment(&self, event_id: &str) -> Result<bool>;
-
     /// Gets the author display name for a specific event.
-    /// `None` means the comment is missing; `Some(None)` means the comment
+    /// `None` means the message is missing; `Some(None)` means the message
     /// exists without a display name; `Some(Some(name))` is a stored name.
     async fn get_author_display_name(&self, event_id: &str) -> Result<Option<Option<String>>>;
 
-    /// Returns the stored author public key for a comment, if any. Used to
+    /// Returns the stored author public key for a message, if any. Used to
     /// authorize edit/delete requests by comparing the presented key.
-    async fn get_comment_author_public_key(&self, event_id: &str) -> Result<Option<String>>;
+    async fn get_author_public_key(&self, event_id: &str) -> Result<Option<String>>;
+
+    /// Saves or updates a reaction event (upsert by its own event ID).
+    async fn save_reaction(&self, reaction: &Reaction) -> Result<()>;
+
+    /// Marks a reaction event as redacted.
+    async fn redact_reaction(
+        &self,
+        event_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool>;
+
+    /// Records a poll vote (upsert per voter; the latest vote wins).
+    async fn save_poll_vote(&self, vote: &PollVote) -> Result<()>;
 
     /// Persists a tombstone for a redacted event whose original has not been
-    /// projected yet (or may be re-delivered), so the comment cannot
+    /// projected yet (or may be re-delivered), so the message cannot
     /// resurrect after a capped/resumed backfill or a push retry.
     async fn record_backfill_tombstone(
         &self,

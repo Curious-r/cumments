@@ -11,8 +11,11 @@ use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
 use cumments_core::{
     identity::{post_signature_message, signature_message},
-    models::{AuthorType, Comment, CommentAuthor, PostSlug, RoomIdentity, RoomStatus, SiteId},
-    ports::{CommentStore, IntentStore, RegistryStore, SiteStore},
+    models::{
+        AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PostSlug,
+        RoomIdentity, RoomStatus, SiteId, TextContent, TextStyle,
+    },
+    ports::{IntentStore, MessageStore, RegistryStore, SiteStore},
     projector_events::ProjectorEvent,
 };
 use std::sync::Arc;
@@ -25,7 +28,7 @@ use tracing::{debug, info, instrument, warn};
 pub struct EventProcessor {
     site_store: Arc<dyn SiteStore>,
     registry_store: Arc<dyn RegistryStore>,
-    comment_store: Arc<dyn CommentStore>,
+    message_store: Arc<dyn MessageStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     server_name: Option<String>,
@@ -35,7 +38,7 @@ impl EventProcessor {
     pub fn new(
         site_store: Arc<dyn SiteStore>,
         registry_store: Arc<dyn RegistryStore>,
-        comment_store: Arc<dyn CommentStore>,
+        message_store: Arc<dyn MessageStore>,
         intent_store: Arc<dyn IntentStore>,
         event_bus: broadcast::Sender<ProjectorEvent>,
         server_name: Option<String>,
@@ -43,7 +46,7 @@ impl EventProcessor {
         Self {
             site_store,
             registry_store,
-            comment_store,
+            message_store,
             intent_store,
             event_bus,
             server_name,
@@ -117,7 +120,7 @@ impl EventProcessor {
         // B-04: a redaction may have been seen before its target (capped or
         // resumed backfill, push retry). Never re-project a tombstoned event.
         if self
-            .comment_store
+            .message_store
             .has_backfill_tombstone(&event.event_id, &event.room_id)
             .await?
         {
@@ -129,14 +132,16 @@ impl EventProcessor {
         if let Some(ref relation) = event.relates_to {
             info!("Handling edit for event {}", relation.target_event_id);
 
+            let existing = self
+                .message_store
+                .get_message(&relation.target_event_id)
+                .await?;
+
             // Integrity: Matrix does not enforce same-sender on m.replace, so
-            // verify the replacement was sent by the original comment's author
+            // verify the replacement was sent by the original message's author
             // virtual user. Legacy rows without a recorded sender are accepted
             // until re-projected by backfill.
-            if let Some(existing) = self
-                .comment_store
-                .get_comment(&relation.target_event_id)
-                .await?
+            if let Some(ref existing) = existing
                 && !existing.sender_mxid.is_empty()
                 && existing.sender_mxid != event.sender
             {
@@ -185,18 +190,30 @@ impl EventProcessor {
                 }
             }
 
-            if self
-                .comment_store
-                .update_comment_content(
-                    &relation.target_event_id,
-                    &event.room_id,
-                    &relation.new_content,
-                    event.origin_server_ts,
-                    &event.event_id,
-                )
-                .await?
-            {
-                info!("Successfully updated comment {}", relation.target_event_id);
+            let edited_at = chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+            let Some(mut updated) = existing else {
+                debug!(
+                    "Edit ignored for {}: target missing",
+                    relation.target_event_id
+                );
+                return Ok(());
+            };
+            updated.content = Content::Text(TextContent {
+                body: relation.new_content.clone(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            });
+            updated.edited_at = Some(edited_at);
+            let revision = MessageRevision {
+                event_id: event.event_id.clone(),
+                content: updated.content.clone(),
+                edited_at,
+                editor_mxid: event.sender.clone(),
+            };
+
+            if self.message_store.apply_edit(&updated, &revision).await? {
+                info!("Successfully updated message {}", relation.target_event_id);
                 // Closed-loop only after the projection succeeded: the
                 // correlation ID lets concurrent edits close independently;
                 // legacy events fall back to target-event matching (waiting
@@ -217,15 +234,15 @@ impl EventProcessor {
                             .await?
                     }
                 };
-                if let Some(comment) = self
-                    .comment_store
-                    .get_comment(&relation.target_event_id)
+                if let Some(message) = self
+                    .message_store
+                    .get_message(&relation.target_event_id)
                     .await?
                 {
-                    let _ = self.event_bus.send(ProjectorEvent::CommentUpdated {
+                    let _ = self.event_bus.send(ProjectorEvent::MessageUpdated {
                         site_id,
                         post_slug,
-                        comment,
+                        message,
                     });
                 }
             } else {
@@ -276,19 +293,20 @@ impl EventProcessor {
             }
         }
 
-        // Handle Original Posts
+        // Handle original messages.
         let is_matrix_native = !event.is_virtual_user_sender;
-        let comment = Comment {
+        let message = Message {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),
             post_slug: post_slug.clone(),
-            author: CommentAuthor {
+            author: AuthorSnapshot {
                 kind: if is_matrix_native {
-                    AuthorType::Matrix
+                    AuthorKind::Matrix
                 } else {
-                    AuthorType::Guest
+                    AuthorKind::Guest
                 },
                 display_name: event.display_name.clone(),
+                avatar_url: None,
                 public_key: event.author_public_key.clone(),
                 mxid: if is_matrix_native {
                     Some(event.sender.clone())
@@ -296,26 +314,28 @@ impl EventProcessor {
                     None
                 },
             },
-            content: event.content.clone(),
+            content: Content::Text(TextContent {
+                body: event.content.clone(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            }),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
             edited_at: None,
             reply_to: event.reply_to.clone(),
+            thread_root: None,
             intent_id: event.intent_id,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
             room_id: event.room_id.clone(),
             sender_mxid: event.sender.clone(),
+            raw_content: serde_json::Value::Null,
         };
 
-        self.comment_store
-            .save_comment(
-                &comment,
-                &event.room_id,
-                &event.sender,
-                &site_id.clone().into(),
-                &post_slug.clone().into(),
-            )
-            .await?;
-        info!("Successfully projected comment event {}", event.event_id);
+        self.message_store.save_message(&message).await?;
+        info!("Successfully projected message event {}", event.event_id);
         // Closed-loop only after the projection succeeded. Prefer the
         // correlation ID when present – the push may arrive before the
         // reconciler's write-back, so the event_id is not yet stored on the
@@ -332,10 +352,10 @@ impl EventProcessor {
                     .await?
             }
         };
-        let _ = self.event_bus.send(ProjectorEvent::CommentCreated {
+        let _ = self.event_bus.send(ProjectorEvent::MessageCreated {
             site_id,
             post_slug,
-            comment,
+            message,
         });
         Ok(())
     }
@@ -374,15 +394,15 @@ impl EventProcessor {
             target_event_id, event.room_id
         );
 
-        // Integrity: only redact a comment that actually lives in the room the
-        // redaction arrived from. Fetch before deleting so the check uses the
-        // same snapshot the deletion will operate on.
-        let comment = self.comment_store.get_comment(&target_event_id).await?;
+        // Integrity: only redact a message that actually lives in the room the
+        // redaction arrived from. Fetch before redacting so the check uses
+        // the same snapshot the deletion will operate on.
+        let message = self.message_store.get_message(&target_event_id).await?;
 
-        if let Some(c) = &comment {
+        if let Some(c) = &message {
             if c.room_id != event.room_id {
                 warn!(
-                    "Ignoring redaction for {} in {}: comment lives in {}",
+                    "Ignoring redaction for {} in {}: message lives in {}",
                     target_event_id, event.room_id, c.room_id
                 );
                 return Ok(());
@@ -391,7 +411,7 @@ impl EventProcessor {
                 && (c.site_id != identity.site_id || c.post_slug != identity.post_slug)
             {
                 warn!(
-                    "Ignoring redaction for {} in {}: comment belongs to {}/{}",
+                    "Ignoring redaction for {} in {}: message belongs to {}/{}",
                     target_event_id, event.room_id, c.site_id, c.post_slug
                 );
                 return Ok(());
@@ -419,21 +439,31 @@ impl EventProcessor {
             }
         }
 
-        if self.comment_store.delete_comment(&target_event_id).await? {
+        let redacted_at = chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+        let redacted_by = event
+            .sender
+            .clone()
+            .unwrap_or_else(|| event.event_id.clone());
+        if self
+            .message_store
+            .redact_message(&target_event_id, &event.room_id, redacted_at, &redacted_by)
+            .await?
+        {
             // Keep a persistent tombstone so a later re-delivery of the
             // original event (push retry, resumed backfill) cannot insert it
             // again.
-            self.comment_store
+            self.message_store
                 .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
                 .await?;
-            info!("Successfully deleted redacted comment {}", target_event_id);
+            info!("Successfully redacted message {}", target_event_id);
             // Closed-loop only after the projection succeeded; a failed
             // delete leaves the intent open for the timeout safety net.
             self.intent_store
                 .mark_delete_intent_completed(&target_event_id)
                 .await?;
-            if let Some(c) = comment {
-                let _ = self.event_bus.send(ProjectorEvent::CommentDeleted {
+            if let Some(c) = message {
+                let _ = self.event_bus.send(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
                     post_slug: c.post_slug,
                     event_id: target_event_id,
@@ -444,7 +474,7 @@ impl EventProcessor {
             // The target is unknown (not yet projected, or already deleted).
             // Persist the tombstone so the target cannot resurrect when it is
             // fetched by a later backfill run.
-            self.comment_store
+            self.message_store
                 .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
                 .await?;
             debug!(

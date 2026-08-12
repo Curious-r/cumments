@@ -46,6 +46,10 @@ pub struct ParsedRelation {
 pub struct ParsedRoomRedaction {
     pub room_id: String,
     pub event_id: String,
+    /// Sender of the redaction event (e.g. the operator who deleted the
+    /// message, or the AS sender for Cumments-issued deletions).
+    pub sender: Option<String>,
+    pub origin_server_ts: i64,
     /// The event ID being redacted (may be in `redacts` top-level or `.content.redacts`).
     pub redacts: Option<String>,
     /// The Cumments delete proof embedded in `reason`, if the redaction was

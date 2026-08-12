@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
     let event_processor = Arc::new(cumments_projector::event_processor::EventProcessor::new(
         db_store.clone(), // SiteStore
         db_store.clone(), // RegistryStore
-        db_store.clone(), // CommentStore
+        db_store.clone(), // MessageStore
         db_store.clone(), // IntentStore
         event_bus.clone(),
         settings
@@ -251,7 +251,7 @@ async fn main() -> Result<()> {
     let reconciler = cumments_reconciler::Reconciler::new(
         db_store.clone(), // IntentStore
         db_store.clone(), // RegistryStore
-        db_store.clone(), // CommentStore
+        db_store.clone(), // MessageStore
         driver.clone(),
         site_service.clone(),
         reconciler_notify.clone(),

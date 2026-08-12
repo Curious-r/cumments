@@ -16,7 +16,7 @@ use axum::{
 use cumments_core::{
     identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
-    models::{AuthorType, PostSlug, SiteId},
+    models::{AuthorKind, PostSlug, SiteId},
     ports::{IdempotencyInput, IdempotencyOutcome},
     site_auth::sha256_hex,
 };
@@ -197,7 +197,7 @@ pub(crate) async fn query_comments_handler(
 
     match state
         .store
-        .get_comments(&site_id_val, &post_slug_val, limit, offset)
+        .get_messages(&site_id_val, &post_slug_val, limit, offset)
         .await
     {
         Ok(page_data) => {
@@ -296,7 +296,7 @@ pub(crate) async fn post_comment_handler(
     // does not depend on projection timing; Matrix relation semantics still
     // apply.
     if let Some(reply_to) = req.reply_to.as_deref() {
-        match state.store.get_comment(reply_to).await {
+        match state.store.get_message(reply_to).await {
             Ok(Some(parent)) => {
                 if parent.site_id != site_id || parent.post_slug != post_slug {
                     return Err(AppError::BadRequest(
@@ -436,22 +436,18 @@ async fn delete_comment_common(
     }
 
     // 2c. Authorization: the presented public key must be the comment's owner.
-    match state.store.get_comment(&path.comment_id).await {
-        Ok(Some(comment)) => {
-            if comment.site_id != path.site_id || comment.post_slug != path.post_slug {
+    match state.store.get_message(&path.comment_id).await {
+        Ok(Some(message)) => {
+            if message.site_id != path.site_id || message.post_slug != path.post_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
-            if comment.author.kind == AuthorType::Matrix {
+            if message.author.kind == AuthorKind::Matrix {
                 return Err(AppError::NotManageable(
                     "This comment was posted by a Matrix user; manage it from a Matrix client."
                         .to_string(),
                 ));
             }
-            match state
-                .store
-                .get_comment_author_public_key(&path.comment_id)
-                .await
-            {
+            match state.store.get_author_public_key(&path.comment_id).await {
                 Ok(Some(expected)) if expected == req.author_public_key => {}
                 Ok(Some(_)) => {
                     return Err(AppError::Unauthorized(
@@ -608,22 +604,18 @@ async fn update_comment_common(
 
     // 3c. Authorization: the presented public key must be the comment's owner,
     // and the comment must belong to the site/post in the path.
-    match state.store.get_comment(&path.comment_id).await {
-        Ok(Some(comment)) => {
-            if comment.site_id != path.site_id || comment.post_slug != path.post_slug {
+    match state.store.get_message(&path.comment_id).await {
+        Ok(Some(message)) => {
+            if message.site_id != path.site_id || message.post_slug != path.post_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
-            if comment.author.kind == AuthorType::Matrix {
+            if message.author.kind == AuthorKind::Matrix {
                 return Err(AppError::NotManageable(
                     "This comment was posted by a Matrix user; manage it from a Matrix client."
                         .to_string(),
                 ));
             }
-            match state
-                .store
-                .get_comment_author_public_key(&path.comment_id)
-                .await
-            {
+            match state.store.get_author_public_key(&path.comment_id).await {
                 Ok(Some(expected)) if expected == req.author_public_key => {}
                 Ok(Some(_)) => {
                     return Err(AppError::Unauthorized(

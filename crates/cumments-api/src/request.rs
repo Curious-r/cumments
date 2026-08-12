@@ -1,6 +1,6 @@
 //! Request and response DTOs for the Cumments API.
 
-use cumments_core::models::Comment;
+use cumments_core::models::Message;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -17,7 +17,7 @@ pub struct PaginationQuery {
 
 #[derive(Serialize)]
 pub struct PaginatedResponse {
-    pub data: Vec<Comment>,
+    pub data: Vec<Message>,
     pub meta: PaginationMeta,
 }
 

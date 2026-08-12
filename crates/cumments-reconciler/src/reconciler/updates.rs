@@ -92,7 +92,7 @@ impl Reconciler {
 
                 // 4. Hands: Fetch original display name to maintain it
                 let display_name = self
-                    .comment_store
+                    .message_store
                     .get_author_display_name(&intent.event_id)
                     .await?
                     .flatten()

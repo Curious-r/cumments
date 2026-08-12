@@ -267,6 +267,8 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
     Some(ParsedRoomRedaction {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
+        sender: event.sender.clone(),
+        origin_server_ts: event.origin_server_ts.unwrap_or(0),
         redacts,
         proof,
         intent_id,

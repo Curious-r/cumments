@@ -1,3 +1,6 @@
+//! Legacy comments entity, kept only so historical migrations (000001-000029)
+//! can create/alter the old table on fresh databases. The read model uses
+//! `messages` (see `migration 000031`), which drops the `comments` table.
 use sea_orm::entity::prelude::*;
 
 #[sea_orm::model]

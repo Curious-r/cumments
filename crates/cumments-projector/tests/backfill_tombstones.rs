@@ -1,5 +1,5 @@
 use cumments_core::models::{PostSlug, RoomIdentity, SiteId};
-use cumments_core::ports::{CommentStore, RegistryStore};
+use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_projector::event_processor::EventProcessor;
 use cumments_projector::parsed::{ParsedRoomMessage, ParsedRoomRedaction};
 use cumments_store::DbStore;
@@ -28,7 +28,7 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
     EventProcessor::new(
         store.clone() as Arc<dyn cumments_core::ports::SiteStore>,
         store.clone() as Arc<dyn cumments_core::ports::RegistryStore>,
-        store.clone() as Arc<dyn cumments_core::ports::CommentStore>,
+        store.clone() as Arc<dyn cumments_core::ports::MessageStore>,
         store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
         tx,
         None,
@@ -75,6 +75,8 @@ async fn redaction_seen_before_target_prevents_resurrection() {
         .process_room_redaction(ParsedRoomRedaction {
             room_id: "!room:hs".to_string(),
             event_id: "$redaction:hs".to_string(),
+            sender: Some("@admin:hs".to_string()),
+            origin_server_ts: 100,
             redacts: Some("$target:hs".to_string()),
             proof: None,
             intent_id: None,
@@ -90,10 +92,10 @@ async fn redaction_seen_before_target_prevents_resurrection() {
         .expect("process message");
 
     let stored = store
-        .get_comment("$target:hs")
+        .get_message("$target:hs")
         .await
-        .expect("query comment");
-    assert!(stored.is_none(), "tombstoned comment must not resurrect");
+        .expect("query message");
+    assert!(stored.is_none(), "tombstoned message must not resurrect");
 }
 
 #[tokio::test]
@@ -117,8 +119,8 @@ async fn message_without_tombstone_is_projected() {
         .expect("process message");
 
     let stored = store
-        .get_comment("$target:hs")
+        .get_message("$target:hs")
         .await
-        .expect("query comment");
-    assert!(stored.is_some(), "normal comment must be projected");
+        .expect("query message");
+    assert!(stored.is_some(), "normal message must be projected");
 }

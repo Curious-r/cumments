@@ -91,28 +91,44 @@ impl From<&str> for PostSlug {
     }
 }
 
-/// A comment that has been projected into our read database.
+/// A message that has been projected into our read database.
 /// This is the data structure that will be returned by the API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Comment {
+pub struct Message {
     pub event_id: String,
     pub site_id: String,
     pub post_slug: String,
-    pub author: CommentAuthor,
-    pub content: String,
+    pub author: AuthorSnapshot,
+    pub content: Content,
     pub timestamp: DateTime<Utc>,
     /// Matrix `origin_server_ts` of the last applied edit, converted to a
-    /// timestamp. `None` when the comment has never been edited.
+    /// timestamp. `None` when the message has never been edited.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edited_at: Option<DateTime<Utc>>,
-    /// Matrix event ID of the parent comment, when this comment is a reply.
+    /// Matrix event ID of the parent message, when this message is a reply.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
-    /// Queue row ID of the intent that produced this comment, when it was
+    /// Matrix event ID of the thread root, when this message belongs to a
+    /// thread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_root: Option<String>,
+    /// Queue row ID of the intent that produced this message, when it was
     /// submitted through the Cumments API. Lets clients correlate a `202`
-    /// response with the projected comment/SSE event.
+    /// response with the projected message/SSE event.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_id: Option<i64>,
-    /// Matrix room the comment lives in. Internal integrity check for edits
+    /// Lifecycle status of the message.
+    pub status: MessageStatus,
+    /// When the message was redacted; `None` while active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_at: Option<DateTime<Utc>>,
+    /// Sender of the redaction event, when redacted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_by: Option<String>,
+    /// Aggregated reaction counts for this message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionSummary>,
+    /// Matrix room the message lives in. Internal integrity check for edits
     /// and redactions; never exposed through the API/SSE.
     #[serde(skip)]
     pub room_id: String,
@@ -120,12 +136,45 @@ pub struct Comment {
     /// edits (m.replace) and never exposed through the API/SSE.
     #[serde(skip)]
     pub sender_mxid: String,
+    /// The raw Matrix event content, kept as an escape hatch for forward
+    /// compatibility; never exposed through the API/SSE.
+    #[serde(skip)]
+    pub raw_content: serde_json::Value,
 }
 
-/// Which identity model a comment belongs to.
+/// Lifecycle status of a message in the read model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum AuthorType {
+pub enum MessageStatus {
+    Active,
+    Redacted,
+}
+
+impl MessageStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MessageStatus::Active => "active",
+            MessageStatus::Redacted => "redacted",
+        }
+    }
+}
+
+impl std::str::FromStr for MessageStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(MessageStatus::Active),
+            "redacted" => Ok(MessageStatus::Redacted),
+            other => Err(format!("unknown message status `{other}`")),
+        }
+    }
+}
+
+/// Which identity model a message belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthorKind {
     /// Posted through the Cumments API by an AS virtual user; ownership is
     /// the Ed25519 public key embedded in the event.
     Guest,
@@ -134,40 +183,188 @@ pub enum AuthorType {
     Matrix,
 }
 
-impl AuthorType {
+impl AuthorKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AuthorType::Guest => "guest",
-            AuthorType::Matrix => "matrix",
-        }
-    }
-
-    /// Parse a stored `comments.author_type` value, falling back to the
-    /// legacy signal (presence of a public key) for rows written before the
-    /// column existed.
-    pub fn from_db(value: &str, has_public_key: bool) -> Self {
-        match value {
-            "guest" => AuthorType::Guest,
-            "matrix" => AuthorType::Matrix,
-            _ if has_public_key => AuthorType::Guest,
-            _ => AuthorType::Matrix,
+            AuthorKind::Guest => "guest",
+            AuthorKind::Matrix => "matrix",
         }
     }
 }
 
-/// Author identity exposed through the API.
+/// Author identity snapshot, captured when the message was projected.
 ///
-/// - Guest comments carry `public_key`; `mxid` is intentionally not exposed
+/// - Guest messages carry `public_key`; `mxid` is intentionally not exposed
 ///   because the virtual user ID is an implementation detail derived from the
 ///   key and site.
-/// - Matrix-native comments carry `mxid`; `public_key` is always `None`.
+/// - Matrix-native messages carry `mxid`; `public_key` is always `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CommentAuthor {
+pub struct AuthorSnapshot {
     #[serde(rename = "type")]
-    pub kind: AuthorType,
+    pub kind: AuthorKind,
     pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     pub public_key: Option<String>,
     pub mxid: Option<String>,
+}
+
+/// The sealed set of displayable message contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Content {
+    Text(TextContent),
+    Media(MediaContent),
+    Location(LocationContent),
+    Poll(PollContent),
+    Encrypted(EncryptedPlaceholder),
+    Unknown(UnknownContent),
+}
+
+impl Content {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Content::Text(_) => "text",
+            Content::Media(_) => "media",
+            Content::Location(_) => "location",
+            Content::Poll(_) => "poll",
+            Content::Encrypted(_) => "encrypted",
+            Content::Unknown(_) => "unknown",
+        }
+    }
+}
+
+/// A plain-text message body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextContent {
+    pub body: String,
+    /// Formatted (HTML) body; the renderer MUST sanitize it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formatted_body: Option<String>,
+    pub style: TextStyle,
+}
+
+/// How a text message should be presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextStyle {
+    Normal,
+    Emote,
+    Notice,
+}
+
+/// A media attachment (image/video/audio/file/sticker).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaContent {
+    pub kind: MediaKind,
+    /// MXC URI (`mxc://server/media_id`); downloads go through the media
+    /// proxy.
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mimetype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+    /// MSC3245 voice message marker.
+    #[serde(default)]
+    pub voice: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Image,
+    Video,
+    Audio,
+    File,
+    Sticker,
+}
+
+/// A geo location (MSC3488).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocationContent {
+    pub geo_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
+}
+
+/// A poll (MSC3381). `responses` are hydrated from the poll-responses table
+/// when reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollContent {
+    pub question: String,
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub responses: Vec<PollResponseSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollResponseSummary {
+    pub option_index: i64,
+    pub count: i64,
+}
+
+/// An encrypted message placeholder; the content is never readable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptedPlaceholder {
+    pub algorithm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_key: Option<String>,
+}
+
+/// An unknown/custom message type, degraded to a fallback body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnknownContent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+    /// Raw event content; also kept on `Message.raw_content`.
+    pub raw: serde_json::Value,
+}
+
+/// One aggregated reaction on a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactionSummary {
+    pub key: String,
+    pub count: i64,
+}
+
+/// A stored reaction event (one row per Matrix reaction event).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reaction {
+    pub event_id: String,
+    pub message_event_id: String,
+    pub sender_mxid: String,
+    pub key: String,
+    pub origin_server_ts: i64,
+    pub redacted_at: Option<DateTime<Utc>>,
+}
+
+/// One edit revision applied to a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRevision {
+    pub event_id: String,
+    pub content: Content,
+    pub edited_at: DateTime<Utc>,
+    pub editor_mxid: String,
+}
+
+/// A poll vote record (one row per voter; the latest vote wins).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollVote {
+    pub poll_message_id: String,
+    pub sender_mxid: String,
+    pub option_index: i64,
+    pub origin_server_ts: i64,
 }
 
 /// Represents a website that uses Cumments.
@@ -246,10 +443,10 @@ pub struct QuarantinedRoom {
     pub next_attempt_at: Option<DateTime<Utc>>,
 }
 
-/// One page of projected comments for a site/post.
+/// One page of projected messages for a site/post.
 #[derive(Debug, Clone, Default)]
-pub struct CommentPage {
-    pub items: Vec<Comment>,
+pub struct MessagePage {
+    pub items: Vec<Message>,
     pub total: i64,
 }
 
@@ -273,12 +470,24 @@ mod tests {
     }
 
     #[test]
-    fn author_type_parses_db_values_with_legacy_fallback() {
-        assert_eq!(AuthorType::from_db("guest", false), AuthorType::Guest);
-        assert_eq!(AuthorType::from_db("matrix", true), AuthorType::Matrix);
-        // Legacy rows written before the column existed: a stored public key
-        // means guest, anything else is a Matrix-native comment.
-        assert_eq!(AuthorType::from_db("", true), AuthorType::Guest);
-        assert_eq!(AuthorType::from_db("", false), AuthorType::Matrix);
+    fn message_status_round_trips_through_db_values() {
+        assert_eq!(MessageStatus::Active.as_str(), "active");
+        assert_eq!(MessageStatus::Redacted.as_str(), "redacted");
+        assert_eq!("active".parse::<MessageStatus>(), Ok(MessageStatus::Active));
+        assert_eq!(
+            "redacted".parse::<MessageStatus>(),
+            Ok(MessageStatus::Redacted)
+        );
+        assert!("bogus".parse::<MessageStatus>().is_err());
+    }
+
+    #[test]
+    fn content_kind_names_are_stable_and_lowercase() {
+        let content = Content::Text(TextContent {
+            body: "hi".to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        });
+        assert_eq!(content.kind(), "text");
     }
 }

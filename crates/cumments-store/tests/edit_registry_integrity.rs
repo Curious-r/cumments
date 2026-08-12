@@ -1,6 +1,9 @@
 use chrono::Utc;
-use cumments_core::models::{AuthorType, Comment, CommentAuthor, PostSlug, RoomStatus, SiteId};
-use cumments_core::ports::{CommentStore, RegistryStore};
+use cumments_core::models::{
+    AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PostSlug,
+    RoomStatus, SiteId, TextContent, TextStyle,
+};
+use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_store::DbStore;
 
 fn test_db_url(name: &str) -> String {
@@ -13,37 +16,70 @@ fn test_db_url(name: &str) -> String {
     format!("sqlite://{}", path.display())
 }
 
-async fn save_comment(store: &DbStore, event_id: &str, room_id: &str, content: &str) {
+async fn save_message(store: &DbStore, event_id: &str, room_id: &str, content: &str) {
     let site = SiteId::from("my-blog");
     let slug = PostSlug::from("hello");
-    let comment = Comment {
+    let message = Message {
         event_id: event_id.to_string(),
         site_id: site.as_str().to_string(),
         post_slug: slug.as_str().to_string(),
-        author: CommentAuthor {
-            kind: AuthorType::Guest,
+        author: AuthorSnapshot {
+            kind: AuthorKind::Guest,
             display_name: Some("Alice".to_string()),
+            avatar_url: None,
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             mxid: None,
         },
-        content: content.to_string(),
+        content: Content::Text(TextContent {
+            body: content.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
         timestamp: Utc::now(),
         edited_at: None,
         reply_to: None,
+        thread_root: None,
         intent_id: None,
+        status: MessageStatus::Active,
+        redacted_at: None,
+        redacted_by: None,
+        reactions: Vec::new(),
         room_id: room_id.to_string(),
-        sender_mxid: String::new(),
+        sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718:hs".to_string(),
+        raw_content: serde_json::Value::Null,
+    };
+    store.save_message(&message).await.expect("save message");
+}
+
+async fn apply_edit(
+    store: &DbStore,
+    event_id: &str,
+    room_id: &str,
+    body: &str,
+    ts_millis: i64,
+    edit_event_id: &str,
+) -> bool {
+    let Some(mut updated) = store.get_message(event_id).await.expect("get message") else {
+        return false;
+    };
+    updated.room_id = room_id.to_string();
+    updated.content = Content::Text(TextContent {
+        body: body.to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    let edited_at = chrono::DateTime::from_timestamp_millis(ts_millis).expect("valid ts");
+    updated.edited_at = Some(edited_at);
+    let revision = MessageRevision {
+        event_id: edit_event_id.to_string(),
+        content: updated.content.clone(),
+        edited_at,
+        editor_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718:hs".to_string(),
     };
     store
-        .save_comment(
-            &comment,
-            room_id,
-            "@_cumments_my-blog_a1b2c3d4e5f60718:hs",
-            &site,
-            &slug,
-        )
+        .apply_edit(&updated, &revision)
         .await
-        .expect("save comment");
+        .expect("apply edit")
 }
 
 #[tokio::test]
@@ -51,20 +87,17 @@ async fn edit_from_different_room_is_rejected() {
     let store = DbStore::connect(&test_db_url("room-bind"))
         .await
         .expect("connect db");
-    save_comment(&store, "$event:hs", "!room-a:hs", "original").await;
+    save_message(&store, "$event:hs", "!room-a:hs", "original").await;
 
-    let applied = store
-        .update_comment_content("$event:hs", "!room-b:hs", "edited", 200, "$edit:hs")
-        .await
-        .expect("update comment");
+    let applied = apply_edit(&store, "$event:hs", "!room-b:hs", "edited", 200, "$edit:hs").await;
     assert!(!applied, "edit from another room must be rejected");
 
     let stored = store
-        .get_comment("$event:hs")
+        .get_message("$event:hs")
         .await
-        .expect("get comment")
-        .expect("comment exists");
-    assert_eq!(stored.content, "original");
+        .expect("get message")
+        .expect("message exists");
+    assert!(matches!(stored.content, Content::Text(ref t) if t.body == "original"));
 }
 
 #[tokio::test]
@@ -72,41 +105,37 @@ async fn stale_edit_is_rejected_and_event_id_breaks_ties() {
     let store = DbStore::connect(&test_db_url("edit-order"))
         .await
         .expect("connect db");
-    save_comment(&store, "$event:hs", "!room-a:hs", "original").await;
+    save_message(&store, "$event:hs", "!room-a:hs", "original").await;
 
-    let applied = store
-        .update_comment_content("$event:hs", "!room-a:hs", "two", 200, "$e2:hs")
-        .await
-        .expect("update comment");
+    let applied = apply_edit(&store, "$event:hs", "!room-a:hs", "two", 200, "$e2:hs").await;
     assert!(applied);
 
-    let applied = store
-        .update_comment_content("$event:hs", "!room-a:hs", "one", 100, "$e1:hs")
-        .await
-        .expect("update comment");
+    let applied = apply_edit(&store, "$event:hs", "!room-a:hs", "one", 100, "$e1:hs").await;
     assert!(!applied, "older edit must be ignored");
 
-    let applied = store
-        .update_comment_content("$event:hs", "!room-a:hs", "tie-loser", 200, "$e0:hs")
-        .await
-        .expect("update comment");
+    let applied = apply_edit(
+        &store,
+        "$event:hs",
+        "!room-a:hs",
+        "tie-loser",
+        200,
+        "$e0:hs",
+    )
+    .await;
     assert!(
         !applied,
         "equal timestamp with smaller event id must be ignored"
     );
 
-    let applied = store
-        .update_comment_content("$event:hs", "!room-a:hs", "three", 300, "$e3:hs")
-        .await
-        .expect("update comment");
+    let applied = apply_edit(&store, "$event:hs", "!room-a:hs", "three", 300, "$e3:hs").await;
     assert!(applied);
 
     let stored = store
-        .get_comment("$event:hs")
+        .get_message("$event:hs")
         .await
-        .expect("get comment")
-        .expect("comment exists");
-    assert_eq!(stored.content, "three");
+        .expect("get message")
+        .expect("message exists");
+    assert!(matches!(stored.content, Content::Text(ref t) if t.body == "three"));
 }
 
 #[tokio::test]

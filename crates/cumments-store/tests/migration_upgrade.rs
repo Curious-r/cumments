@@ -42,8 +42,11 @@ async fn author_type_backfill_repairs_upgraded_rows() {
     .await
     .expect("insert legacy rows");
 
-    // Run the remaining migrations (000010..000017).
-    Migrator::up(&db, None).await.expect("migrate to latest");
+    // Run the remaining migrations through 000029 (20 of the 22 pending
+    // after the first 9), excluding 000030/000031.
+    Migrator::up(&db, Some(20))
+        .await
+        .expect("migrate to 000029");
 
     let rows = comments::Entity::find()
         .filter(comments::Column::EventId.eq("$guest"))
@@ -110,7 +113,8 @@ async fn comment_updated_at_is_renamed_to_projected_at() {
     .await
     .expect("insert pre-rename row");
 
-    Migrator::up(&db, None).await.expect("migrate to latest");
+    // One pending migration remains after 000028: apply 000029 only.
+    Migrator::up(&db, Some(1)).await.expect("migrate to 000029");
 
     let row = comments::Entity::find()
         .filter(comments::Column::EventId.eq("$guest"))
@@ -123,6 +127,37 @@ async fn comment_updated_at_is_renamed_to_projected_at() {
         now,
         "renamed column must preserve the stored value"
     );
+}
+
+#[tokio::test]
+async fn message_read_model_replaces_legacy_comments_table() {
+    let url = test_db_url("message-read-model");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let tables = db
+        .query_all_raw(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        ))
+        .await
+        .expect("list tables");
+    let names: Vec<String> = tables
+        .into_iter()
+        .filter_map(|row| row.try_get("", "name").ok())
+        .collect();
+    assert!(!names.iter().any(|n| n == "comments"), "comments dropped");
+    for expected in [
+        "messages",
+        "message_revisions",
+        "reactions",
+        "poll_responses",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "missing table {expected}: {names:?}"
+        );
+    }
 }
 
 #[tokio::test]

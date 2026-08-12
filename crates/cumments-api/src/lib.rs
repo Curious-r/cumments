@@ -20,7 +20,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use cumments_core::{
-    ports::{CommentStore, IntentStore, RegistryStore, SiteAuthStore, SiteStore},
+    ports::{IntentStore, MessageStore, RegistryStore, SiteAuthStore, SiteStore},
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
 };
@@ -42,10 +42,10 @@ pub mod site_auth;
 
 // Define a new trait that combines the store traits for API use.
 pub trait ApiStore:
-    CommentStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync
+    MessageStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync
 {
 }
-impl<T: CommentStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync>
+impl<T: MessageStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync>
     ApiStore for T
 {
 }
@@ -217,8 +217,9 @@ mod tests {
     use crate::request::PaginationQuery;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use cumments_core::models::AuthorType;
-    use cumments_core::models::{Comment, CommentAuthor};
+    use cumments_core::models::{
+        AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, TextContent, TextStyle,
+    };
     use validator::Validate;
 
     #[test]
@@ -255,29 +256,43 @@ mod tests {
     }
 
     #[test]
-    fn comment_serializes_nested_author_and_hides_internal_fields() {
-        let comment = Comment {
+    fn message_serializes_nested_author_and_hides_internal_fields() {
+        let message = Message {
             event_id: "$e:hs".to_string(),
             site_id: "my-blog".to_string(),
             post_slug: "hello".to_string(),
-            author: CommentAuthor {
-                kind: AuthorType::Guest,
+            author: AuthorSnapshot {
+                kind: AuthorKind::Guest,
                 display_name: Some("Alice".to_string()),
+                avatar_url: None,
                 public_key: Some("pk".to_string()),
                 mxid: None,
             },
-            content: "hi".to_string(),
+            content: Content::Text(TextContent {
+                body: "hi".to_string(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            }),
             timestamp: chrono::Utc::now(),
             edited_at: None,
             reply_to: None,
+            thread_root: None,
             intent_id: Some(42),
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
             room_id: "!room:hs".to_string(),
             sender_mxid: "@_cumments_my-blog_abcd:hs".to_string(),
+            raw_content: serde_json::Value::Null,
         };
 
-        let json = serde_json::to_value(&comment).expect("serialize comment");
+        let json = serde_json::to_value(&message).expect("serialize message");
         assert_eq!(json["author"]["type"], "guest");
         assert_eq!(json["author"]["public_key"], "pk");
+        assert_eq!(json["content"]["type"], "text");
+        assert_eq!(json["content"]["body"], "hi");
+        assert_eq!(json["status"], "active");
         assert_eq!(json["intent_id"], 42);
         assert!(json.get("sender_mxid").is_none());
         assert!(json.get("room_id").is_none());

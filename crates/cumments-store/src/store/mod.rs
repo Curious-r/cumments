@@ -7,9 +7,9 @@ use std::path::Path;
 use crate::entities::active_enums::IntentStatus;
 
 pub mod backfill;
-pub mod comments;
 pub mod identity;
 pub mod intents;
+pub mod messages;
 pub mod registry;
 pub mod site_auth;
 

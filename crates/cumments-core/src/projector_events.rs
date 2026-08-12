@@ -1,21 +1,21 @@
-use crate::models::Comment;
+use crate::models::Message;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectorEvent {
-    CommentCreated {
+    MessageCreated {
         site_id: String,
         post_slug: String,
-        comment: Comment,
+        message: Message,
     },
-    CommentUpdated {
+    MessageUpdated {
         site_id: String,
         post_slug: String,
-        comment: Comment,
+        message: Message,
     },
-    CommentDeleted {
+    MessageDeleted {
         site_id: String,
         post_slug: String,
         event_id: String,

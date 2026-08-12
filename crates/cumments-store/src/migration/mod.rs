@@ -33,6 +33,7 @@ pub mod m20260812_000027_comments_intent_id;
 pub mod m20260812_000028_idempotency_keys;
 pub mod m20260812_000029_comments_projected_at;
 pub mod m20260813_000030_room_quarantine_state;
+pub mod m20260813_000031_message_read_model;
 
 pub struct Migrator;
 
@@ -98,6 +99,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260812_000028_idempotency_keys::Migration),
             Box::new(m20260812_000029_comments_projected_at::Migration),
             Box::new(m20260813_000030_room_quarantine_state::Migration),
+            Box::new(m20260813_000031_message_read_model::Migration),
         ]
     }
 }
