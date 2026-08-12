@@ -283,13 +283,13 @@ fn parse_admin_list_query(body: &str) -> Result<AdminListQuery, AppError> {
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))
 }
 
-fn admin_page_bounds(query: &AdminListQuery) -> (i64, i64) {
+pub fn admin_page_bounds(query: &AdminListQuery) -> (i64, i64) {
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     (page, per_page)
 }
 
-fn admin_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
+pub fn admin_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
     let total_pages = if total > 0 {
         (total + per_page - 1) / per_page
     } else {
@@ -451,6 +451,20 @@ pub(crate) async fn config_snippet_handler(
     };
     let config_entry = state.site_auth_policy.entry(site_id.as_str());
 
+    Ok(Json(ConfigSnippetResponse {
+        site_id: site_id.as_str().to_string(),
+        toml: config_snippet_toml(site_id.as_str(), &db_info, config_entry),
+    }))
+}
+
+/// Builds the TOML block for adopting a database-tracked site into `[sites]`.
+///
+/// Shared by the admin API and the CLI so both produce identical output.
+pub fn config_snippet_toml(
+    site_id: &str,
+    db_info: &SiteAuthInfo,
+    config_entry: Option<&SitePolicyEntry>,
+) -> String {
     let mut origins = db_info
         .verified_origins
         .iter()
@@ -470,7 +484,7 @@ pub(crate) async fn config_snippet_handler(
     let auth_mode = config_entry
         .and_then(|entry| entry.auth_mode)
         .unwrap_or(db_info.auth_mode);
-    let mut toml = format!("[sites.\"{}\"]\n", site_id.as_str());
+    let mut toml = format!("[sites.\"{}\"]\n", site_id);
     toml.push_str(&format!("auth_mode = \"{}\"\n", auth_mode.as_str()));
     if !origins.is_empty() {
         toml.push_str(&format!("allowed_origins = [{}]\n", origins.join(", ")));
@@ -479,21 +493,17 @@ pub(crate) async fn config_snippet_handler(
         toml.push_str(&format!(
             "# Set the secret via environment instead of this file:\n\
              # CUMMENTS__SITES__{}__SECRET=...\n",
-            site_id.as_str()
+            site_id
         ));
     }
-
-    Ok(Json(ConfigSnippetResponse {
-        site_id: site_id.as_str().to_string(),
-        toml,
-    }))
+    toml
 }
 
 // ---------------------------------------------------------------------------
 // View helpers
 // ---------------------------------------------------------------------------
 
-fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> AdminSite {
+pub fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> AdminSite {
     let mut origins = info
         .verified_origins
         .iter()
@@ -529,7 +539,7 @@ fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> AdminSit
     }
 }
 
-fn admin_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> AdminSite {
+pub fn admin_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> AdminSite {
     AdminSite {
         site_id: site_id.to_string(),
         auth_mode: entry.auth_mode.unwrap_or(SiteAuthMode::Origin),
