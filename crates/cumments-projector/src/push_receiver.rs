@@ -22,7 +22,7 @@ use cumments_core::protocol::MESSAGE_CONTENT_KEY;
 use cumments_core::site_auth::constant_time_eq;
 use serde::Deserialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -35,13 +35,45 @@ pub struct PushState {
     /// Transaction IDs already acknowledged successfully. Prevents a
     /// homeserver retry of a fully processed transaction from re-broadcasting
     /// the same events over SSE.
-    processed_txns: Mutex<HashSet<String>>,
+    processed_txns: Mutex<ProcessedTxnSet>,
 }
 
-/// Upper bound on remembered transaction IDs; beyond it the set is cleared so
-/// memory stays bounded (a cleared ID may be reprocessed once, which is
-/// idempotent at the store layer).
+/// Upper bound on remembered transaction IDs; the oldest entry is evicted
+/// beyond it so memory stays bounded without clearing the whole set.
 const MAX_PROCESSED_TXNS: usize = 10_000;
+
+/// Bounded FIFO of recently acknowledged transaction IDs. Evicting the oldest
+/// ID instead of clearing the whole set keeps a transient homeserver retry of
+/// a slightly older transaction from re-broadcasting SSE events.
+struct ProcessedTxnSet {
+    seen: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl ProcessedTxnSet {
+    fn new() -> Self {
+        Self {
+            seen: HashSet::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn contains(&self, txn_id: &str) -> bool {
+        self.seen.contains(txn_id)
+    }
+
+    fn insert(&mut self, txn_id: String) {
+        if !self.seen.insert(txn_id.clone()) {
+            return;
+        }
+        self.order.push_back(txn_id);
+        while self.order.len() > MAX_PROCESSED_TXNS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.seen.remove(&oldest);
+            }
+        }
+    }
+}
 
 // ── Matrix AppService push event types ────────────────────────────
 
@@ -87,7 +119,7 @@ pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Ro
     let state = Arc::new(PushState {
         processor,
         hs_token,
-        processed_txns: Mutex::new(HashSet::new()),
+        processed_txns: Mutex::new(ProcessedTxnSet::new()),
     });
 
     axum::Router::new()
@@ -203,9 +235,6 @@ async fn handle_transaction(
         .processed_txns
         .lock()
         .expect("processed txns mutex poisoned");
-    if processed.len() >= MAX_PROCESSED_TXNS {
-        processed.clear();
-    }
     processed.insert(txn_id);
 
     // The AppService protocol requires an empty JSON object response.
@@ -900,5 +929,16 @@ mod tests {
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
         assert!(parsed.intent_id.is_none());
+    }
+
+    #[test]
+    fn processed_txn_set_evicts_oldest_instead_of_clearing_all() {
+        let mut set = ProcessedTxnSet::new();
+        for i in 0..=MAX_PROCESSED_TXNS {
+            set.insert(format!("txn-{i}"));
+        }
+        assert!(!set.contains("txn-0"));
+        assert!(set.contains(&format!("txn-{MAX_PROCESSED_TXNS}")));
+        assert_eq!(set.order.len(), MAX_PROCESSED_TXNS);
     }
 }
