@@ -19,7 +19,7 @@ pub const PROBLEM_TYPE_BASE: &str = "https://curious-r.github.io/cumments/proble
 /// Stable machine-readable identifiers for every problem type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCode {
-    InvalidPow,
+    InvalidPoW,
     InvalidSignature,
     Validation,
     NotFound,
@@ -40,7 +40,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     pub const ALL: [Self; 17] = [
-        Self::InvalidPow,
+        Self::InvalidPoW,
         Self::InvalidSignature,
         Self::Validation,
         Self::NotFound,
@@ -62,7 +62,7 @@ impl ErrorCode {
     /// Short identifier shared by the `type` URI and the `code` member.
     pub fn slug(self) -> &'static str {
         match self {
-            Self::InvalidPow => "invalid-pow",
+            Self::InvalidPoW => "invalid-pow",
             Self::InvalidSignature => "invalid-signature",
             Self::Validation => "validation-error",
             Self::NotFound => "not-found",
@@ -90,7 +90,7 @@ impl ErrorCode {
     /// Stable, per-type title (does not change between occurrences).
     pub fn title(self) -> &'static str {
         match self {
-            Self::InvalidPow => "Invalid Proof-of-Work response",
+            Self::InvalidPoW => "Invalid Proof-of-Work response",
             Self::InvalidSignature => "Invalid author signature",
             Self::Validation => "Input validation failed",
             Self::NotFound => "Resource not found",
@@ -152,7 +152,7 @@ impl IntoResponse for AppError {
             AppError::InvalidPoW => (
                 StatusCode::FORBIDDEN,
                 "Invalid Proof-of-Work response.".to_string(),
-                ErrorCode::InvalidPow,
+                ErrorCode::InvalidPoW,
                 None,
             ),
             AppError::InvalidSignature => (
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn every_error_code_has_a_documented_anchor() {
+    fn every_code_has_a_documented_anchor() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/problems/index.md");
         let docs = std::fs::read_to_string(path).expect("problems doc must exist");
         for code in ErrorCode::ALL {
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn error_code_slugs_are_unique() {
+    fn code_slugs_are_unique() {
         let slugs = ErrorCode::ALL
             .iter()
             .map(|c| c.slug())
