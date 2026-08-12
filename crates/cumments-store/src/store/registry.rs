@@ -3,9 +3,9 @@ use crate::entities::active_enums::{SiteAuthMode, SiteVerificationStatus};
 use crate::entities::{room_registry, sites};
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::models::{PostSlug, RoomIdentity, Site, SiteId};
+use cumments_core::models::{BlockedRoom, PostSlug, RoomIdentity, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteStore};
-use sea_orm::{EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 
 #[async_trait]
 impl RegistryStore for DbStore {
@@ -76,6 +76,7 @@ impl RegistryStore for DbStore {
             is_active: Set(true),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
+            blocked_reason: Set(None),
         };
 
         room_registry::Entity::insert(active_model)
@@ -85,6 +86,7 @@ impl RegistryStore for DbStore {
                     .update_column(room_registry::Column::SiteId)
                     .update_column(room_registry::Column::PostSlug)
                     .update_column(room_registry::Column::UpdatedAt)
+                    .update_column(room_registry::Column::BlockedReason)
                     .to_owned(),
             )
             .exec(&txn)
@@ -109,6 +111,45 @@ impl RegistryStore for DbStore {
             .exec(&self.db)
             .await?;
         Ok(())
+    }
+
+    async fn mark_room_blocked(&self, room_id: &str, reason: &str) -> Result<()> {
+        room_registry::Entity::update_many()
+            .col_expr(
+                room_registry::Column::IsActive,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                room_registry::Column::BlockedReason,
+                sea_orm::sea_query::Expr::value(Some(reason)),
+            )
+            .col_expr(
+                room_registry::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(room_registry::COLUMN.room_id.eq(room_id))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_blocked_rooms(&self) -> Result<Vec<BlockedRoom>> {
+        let models = room_registry::Entity::find()
+            .filter(room_registry::Column::BlockedReason.is_not_null())
+            .all(&self.db)
+            .await?;
+        Ok(models
+            .into_iter()
+            .filter_map(|m| {
+                m.blocked_reason.map(|reason| BlockedRoom {
+                    room_id: m.room_id,
+                    site_id: m.site_id,
+                    post_slug: m.post_slug,
+                    reason,
+                    updated_at: Some(m.updated_at),
+                })
+            })
+            .collect())
     }
 }
 

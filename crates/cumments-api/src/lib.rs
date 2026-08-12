@@ -1,6 +1,7 @@
 use crate::routes::admin::{
-    config_snippet_handler, list_admin_sites_handler, require_admin, revoke_secret_handler,
-    revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
+    config_snippet_handler, list_admin_sites_handler, list_blocked_rooms_handler, require_admin,
+    revoke_secret_handler, revoke_verified_origin_handler, rotate_claim_token_handler,
+    rotate_secret_handler,
 };
 use crate::routes::comments::{
     delete_comment_handler, post_comment_handler, query_comments_handler, update_comment_handler,
@@ -17,7 +18,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use cumments_core::{
-    ports::{CommentStore, IntentStore, SiteAuthStore, SiteStore},
+    ports::{CommentStore, IntentStore, RegistryStore, SiteAuthStore, SiteStore},
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
 };
@@ -38,8 +39,14 @@ pub mod site_auth;
 // ----------------------
 
 // Define a new trait that combines the store traits for API use.
-pub trait ApiStore: CommentStore + IntentStore + SiteStore + SiteAuthStore + Send + Sync {}
-impl<T: CommentStore + IntentStore + SiteStore + SiteAuthStore + Send + Sync> ApiStore for T {}
+pub trait ApiStore:
+    CommentStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync
+{
+}
+impl<T: CommentStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync>
+    ApiStore for T
+{
+}
 
 // The shared state for our API.
 #[derive(Clone)]
@@ -139,6 +146,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/admin/sites/{site_id}/claim-token/rotate",
             axum::routing::post(rotate_claim_token_handler),
+        )
+        .route(
+            "/api/v1/admin/rooms/blocked",
+            axum::routing::get(list_blocked_rooms_handler),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 

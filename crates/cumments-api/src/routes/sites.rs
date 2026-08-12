@@ -103,7 +103,7 @@ pub(crate) async fn register_site_handler(
     }
     let registered = register_site(&*state.store)
         .await
-        .map_err(|e| AppError::Internal(format!("failed to register site: {e}")))?;
+        .map_err(map_site_service_error)?;
     Ok((
         StatusCode::CREATED,
         Json(RegisterSiteResponse {
@@ -305,7 +305,7 @@ fn map_site_service_error(error: anyhow::Error) -> AppError {
     let message = error.to_string();
     if message.contains("claim token") {
         AppError::Unauthorized(message)
-    } else if message.contains("already has a secret") {
+    } else if message.contains("already has a secret") || message.contains("already exists") {
         AppError::Conflict(message)
     } else {
         AppError::BadRequest(message)

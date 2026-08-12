@@ -103,6 +103,24 @@ async fn site_lifecycle_register_verify_secret() {
 }
 
 #[tokio::test]
+async fn duplicate_site_registration_is_a_clean_conflict() {
+    let store = DbStore::connect(&test_db_url("site-auth-duplicate"))
+        .await
+        .expect("connect db");
+    let site_id = "a1b2c3d4e5f60718a1b2c3d4e5f60718";
+    store
+        .register_site(site_id, &token_hash("claim"))
+        .await
+        .expect("first registration");
+
+    let err = store
+        .register_site(site_id, &token_hash("other"))
+        .await
+        .expect_err("duplicate registration must fail");
+    assert!(err.to_string().contains("already exists"));
+}
+
+#[tokio::test]
 async fn admin_operations_list_revoke_and_clear_secret() {
     let store = DbStore::connect(&test_db_url("site-auth-admin"))
         .await

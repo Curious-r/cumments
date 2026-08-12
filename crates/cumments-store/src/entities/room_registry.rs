@@ -11,6 +11,9 @@ pub struct Model {
     pub is_active: bool,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    /// Why the room is blocked from adoption/use (e.g. governance check
+    /// failed). `None` means the room is not blocked.
+    pub blocked_reason: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

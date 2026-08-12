@@ -27,6 +27,7 @@ pub mod m20260812_000021_post_intent_timeout_confirmations;
 pub mod m20260812_000022_verification_token_attempts;
 pub mod m20260812_000023_intent_queue_indexes;
 pub mod m20260812_000024_post_intent_timeout_check_errors;
+pub mod m20260812_000025_room_registry_blocked_reason;
 
 pub struct Migrator;
 
@@ -86,6 +87,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260812_000022_verification_token_attempts::Migration),
             Box::new(m20260812_000023_intent_queue_indexes::Migration),
             Box::new(m20260812_000024_post_intent_timeout_check_errors::Migration),
+            Box::new(m20260812_000025_room_registry_blocked_reason::Migration),
         ]
     }
 }

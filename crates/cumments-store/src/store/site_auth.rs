@@ -33,15 +33,13 @@ impl SiteAuthStore for DbStore {
             updated_at: Set(Some(now)),
         };
 
-        if sites::Entity::find_by_id(site_id.to_owned())
-            .one(&self.db)
-            .await?
-            .is_some()
-        {
-            anyhow::bail!("site id `{site_id}` already exists");
+        match sites::Entity::insert(model).exec(&self.db).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.to_string().contains("UNIQUE constraint failed") => {
+                anyhow::bail!("site id `{site_id}` already exists")
+            }
+            Err(e) => Err(e.into()),
         }
-        sites::Entity::insert(model).exec(&self.db).await?;
-        Ok(())
     }
 
     async fn get_site_auth(&self, site_id: &str) -> Result<Option<SiteAuthInfo>> {

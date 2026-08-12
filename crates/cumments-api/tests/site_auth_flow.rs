@@ -10,7 +10,8 @@ use axum::{
     routing::{get, post},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
-use cumments_core::ports::SiteAuthStore;
+use cumments_core::models::{PostSlug, SiteId};
+use cumments_core::ports::{RegistryStore, SiteAuthStore};
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
 };
@@ -642,4 +643,47 @@ async fn admin_can_rotate_claim_token() {
         .await
         .expect("call router");
     assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_lists_blocked_rooms() {
+    let (state, store) = test_state(
+        "blocked-rooms",
+        SiteVerificationPolicy::Disabled,
+        Some("token"),
+    )
+    .await;
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+    store
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+    store
+        .mark_room_blocked("!room:hs", "Refusing to adopt room")
+        .await
+        .expect("mark blocked");
+
+    let router = cumments_api::build_router(state);
+    let resp = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/admin/rooms/blocked",
+            None,
+            &[("authorization", "Bearer token".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json: serde_json::Value =
+        serde_json::from_str(&body_text(resp).await).expect("parse response");
+    assert_eq!(json["rooms"][0]["room_id"], "!room:hs");
+    assert_eq!(json["rooms"][0]["site_id"], "my-blog");
+    assert!(
+        json["rooms"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Refusing to adopt")
+    );
 }

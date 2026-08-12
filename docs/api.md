@@ -274,6 +274,14 @@ database-tracked site into declarative config.
 Returns a new `claim_token` exactly once and invalidates the previous token.
 Use this when a claim token may have leaked.
 
+### List blocked rooms
+
+`GET /api/v1/admin/rooms/blocked`
+
+Returns rooms whose adoption failed governance/room-version checks, with the
+room id, site/post, reason, and last update. A successful re-registration
+clears the blocked state.
+
 ## Rate limiting
 
 `POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are

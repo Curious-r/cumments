@@ -149,3 +149,51 @@ async fn register_room_deactivates_previous_active_room() {
         Some(false)
     );
 }
+
+#[tokio::test]
+async fn blocked_rooms_are_listed_and_cleared_on_register() {
+    let store = DbStore::connect(&test_db_url("registry-blocked"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+
+    store
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+    store
+        .mark_room_blocked(
+            "!room:hs",
+            "Refusing to adopt room: AS sender cannot write state",
+        )
+        .await
+        .expect("mark blocked");
+
+    let blocked = store.get_blocked_rooms().await.expect("list blocked");
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].room_id, "!room:hs");
+    assert_eq!(blocked[0].site_id, "my-blog");
+    assert!(blocked[0].reason.contains("Refusing to adopt"));
+    assert_eq!(
+        store.is_room_active("!room:hs").await.expect("room a"),
+        Some(false)
+    );
+
+    // A later successful registration clears the blocked state.
+    store
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register again");
+    assert!(
+        store
+            .get_blocked_rooms()
+            .await
+            .expect("list blocked")
+            .is_empty()
+    );
+    assert_eq!(
+        store.is_room_active("!room:hs").await.expect("room a"),
+        Some(true)
+    );
+}

@@ -188,6 +188,17 @@ pub struct RoomIdentity {
     pub post_slug: String,
 }
 
+/// A room whose adoption was blocked (e.g. governance check failed), for
+/// operator visibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockedRoom {
+    pub room_id: String,
+    pub site_id: String,
+    pub post_slug: String,
+    pub reason: String,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 /// One page of projected comments for a site/post.
 #[derive(Debug, Clone, Default)]
 pub struct CommentPage {

@@ -34,6 +34,20 @@ pub struct AdminSiteList {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AdminBlockedRooms {
+    pub rooms: Vec<AdminBlockedRoom>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminBlockedRoom {
+    pub room_id: String,
+    pub site_id: String,
+    pub post_slug: String,
+    pub reason: String,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AdminSite {
     pub site_id: String,
     pub auth_mode: SiteAuthMode,
@@ -144,6 +158,28 @@ pub(crate) async fn list_admin_sites_handler(
     sites.sort_by(|a, b| a.site_id.cmp(&b.site_id));
 
     Ok(Json(AdminSiteList { sites }))
+}
+
+pub(crate) async fn list_blocked_rooms_handler(
+    State(state): State<ApiState>,
+) -> Result<Json<AdminBlockedRooms>, AppError> {
+    let rooms = state
+        .store
+        .get_blocked_rooms()
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list blocked rooms: {e}")))?;
+    Ok(Json(AdminBlockedRooms {
+        rooms: rooms
+            .into_iter()
+            .map(|room| AdminBlockedRoom {
+                room_id: room.room_id,
+                site_id: room.site_id,
+                post_slug: room.post_slug,
+                reason: room.reason,
+                updated_at: room.updated_at,
+            })
+            .collect(),
+    }))
 }
 
 pub(crate) async fn revoke_verified_origin_handler(

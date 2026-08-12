@@ -49,6 +49,18 @@ fn room_unavailable(err: &anyhow::Error) -> bool {
     text.contains("M_NOT_FOUND") || text.contains("M_FORBIDDEN")
 }
 
+/// Whether a driver error means a room was refused/blocked during adoption
+/// (governance or room-version validation), as opposed to a transient
+/// failure. These should be surfaced as operator-visible blocked rooms.
+fn adoption_blocked(err: &anyhow::Error) -> bool {
+    let text = err.to_string();
+    text.contains("Refusing to adopt")
+        || text.contains("Cannot verify governance")
+        || text.contains("redact threshold")
+        || text.contains("not created as m.space")
+        || text.contains("not in homeserver /capabilities")
+}
+
 /// The Reconciler acts as the Orchestrator of the background process.
 /// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
 pub struct Reconciler {
@@ -197,7 +209,7 @@ impl Reconciler {
                     .await?;
 
                 // 3. Hands: Ensure the post-specific room exists and is linked
-                let room_id = self
+                let room_id = match self
                     .driver
                     .ensure_comment_room(
                         &intent.site_id,
@@ -205,7 +217,21 @@ impl Reconciler {
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(room_id) => room_id,
+                    Err(e) => {
+                        if adoption_blocked(&e)
+                            && let Some(candidate) = candidate_room_id.as_deref()
+                        {
+                            let _ = self
+                                .registry_store
+                                .mark_room_blocked(candidate, &e.to_string())
+                                .await;
+                        }
+                        return Err(e);
+                    }
+                };
 
                 // 3b. Registry: Write back the room mapping immediately
                 // This is critical in AppService mode: pushes resolve room
@@ -324,7 +350,7 @@ impl Reconciler {
 
                 // 3. Hands: Recover/adopt the room when the registry is stale
                 // or missing, mirroring the post/update paths.
-                let room_id = self
+                let room_id = match self
                     .driver
                     .ensure_comment_room(
                         &intent.site_id,
@@ -332,7 +358,21 @@ impl Reconciler {
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(room_id) => room_id,
+                    Err(e) => {
+                        if adoption_blocked(&e)
+                            && let Some(candidate) = candidate_room_id.as_deref()
+                        {
+                            let _ = self
+                                .registry_store
+                                .mark_room_blocked(candidate, &e.to_string())
+                                .await;
+                        }
+                        return Err(e);
+                    }
+                };
                 self.registry_store
                     .register_room(&room_id, &intent.site_id, &intent.post_slug)
                     .await?;
@@ -429,7 +469,7 @@ impl Reconciler {
                     .await?;
 
                 // 3. Hands: Ensure room
-                let room_id = self
+                let room_id = match self
                     .driver
                     .ensure_comment_room(
                         &intent.site_id,
@@ -437,7 +477,21 @@ impl Reconciler {
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(room_id) => room_id,
+                    Err(e) => {
+                        if adoption_blocked(&e)
+                            && let Some(candidate) = candidate_room_id.as_deref()
+                        {
+                            let _ = self
+                                .registry_store
+                                .mark_room_blocked(candidate, &e.to_string())
+                                .await;
+                        }
+                        return Err(e);
+                    }
+                };
 
                 // 3b. Registry: Write back the room mapping immediately
                 self.registry_store

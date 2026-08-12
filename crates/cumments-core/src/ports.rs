@@ -2,7 +2,9 @@ use crate::intents::{
     DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
 };
-use crate::models::{Comment, CommentPage, PostSlug, RoomEventPage, RoomIdentity, SiteId};
+use crate::models::{
+    BlockedRoom, Comment, CommentPage, PostSlug, RoomEventPage, RoomIdentity, SiteId,
+};
 use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -203,6 +205,12 @@ pub trait RegistryStore: Send + Sync {
 
     /// Invalidates a room in the local registry (e.g. if metadata verification failed).
     async fn invalidate_room_registry(&self, room_id: &str) -> Result<()>;
+
+    /// Marks a room as blocked with an operator-visible reason.
+    async fn mark_room_blocked(&self, room_id: &str, reason: &str) -> Result<()>;
+
+    /// Lists all rooms currently blocked from adoption.
+    async fn get_blocked_rooms(&self) -> Result<Vec<BlockedRoom>>;
 }
 
 /// Defines the operations for managing sites in the local database.
