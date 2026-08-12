@@ -208,6 +208,7 @@
                             <textarea
                                 id="composerContent"
                                 rows="3"
+                                maxlength="5000"
                                 placeholder="写下你的评论，支持 Markdown…"
                                 data-i18n-placeholder="placeholder_content"
                                 class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-y focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
@@ -356,6 +357,7 @@
                             <input
                                 id="settingDisplayName"
                                 type="text"
+                                maxlength="50"
                                 class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                             />
                         </div>
@@ -644,6 +646,7 @@
                     status_submitting: "提交中…",
                     status_submitted: "提交成功，等待 Matrix 同步…",
                     status_synced: "已同步到 Matrix",
+                    status_still_waiting: "仍在等待 Matrix 同步，可手动刷新查看…",
                     comment_submitted: "评论已提交，等待同步",
                     comment_synced: "评论已同步到 Matrix",
                     status_failed: "发送失败",
@@ -771,6 +774,7 @@
                     status_submitting: "Submitting…",
                     status_submitted: "Submitted; waiting for Matrix sync…",
                     status_synced: "Synced to Matrix",
+                    status_still_waiting: "Still waiting for Matrix sync; try refreshing manually…",
                     comment_submitted: "Comment submitted; waiting for sync",
                     comment_synced: "Comment synced to Matrix",
                     status_failed: "Send failed",
@@ -881,8 +885,10 @@
             let mnemonicModalMode = "backup";
             let currentMnemonic = null;
             let pendingPollTimer = null;
+            let sseKey = "";
             const PENDING_POLL_INTERVAL_MS = 2000;
             const PENDING_POLL_LIMIT = 15;
+            const PENDING_POLL_LONG_INTERVAL_MS = 10000;
 
             // ==========================================
             // 初始化
@@ -943,7 +949,11 @@
                 localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
                 syncComposer(s);
                 closeSettings();
-                initApp();
+                const nextKey = `${s.api}|${s.siteId}|${s.slug}`;
+                if (nextKey !== sseKey) {
+                    sseKey = nextKey;
+                    initApp();
+                }
             }
 
             function openSettings() {
@@ -1508,13 +1518,18 @@
             function markPendingSynced(comments) {
                 const pending = state.pendingComment;
                 if (!pending) return;
-                const synced = comments.some(
-                    (c) =>
-                        c.author &&
-                        c.author.type === "guest" &&
-                        c.author.public_key === pending.publicKey &&
-                        c.content === pending.content,
-                );
+                const synced = comments.some((c) => {
+                    if (
+                        !c.author ||
+                        c.author.type !== "guest" ||
+                        c.author.public_key !== pending.publicKey ||
+                        c.content !== pending.content
+                    ) {
+                        return false;
+                    }
+                    const ts = c.timestamp ? Date.parse(c.timestamp) : NaN;
+                    return Number.isFinite(ts) && ts >= pending.submittedAt;
+                });
                 if (synced) {
                     state.pendingComment = null;
                     stopPendingSyncPoll();
@@ -1533,10 +1548,17 @@
                     if (!state.pendingComment) return;
                     attempts += 1;
                     loadList();
-                    if (attempts < PENDING_POLL_LIMIT) {
-                        pendingPollTimer = setTimeout(poll, PENDING_POLL_INTERVAL_MS);
+                    if (attempts >= PENDING_POLL_LIMIT) {
+                        const status = document.getElementById("powStatus");
+                        if (status) {
+                            status.textContent = t("status_still_waiting");
+                        }
+                        pendingPollTimer = setTimeout(
+                            poll,
+                            PENDING_POLL_LONG_INTERVAL_MS,
+                        );
                     } else {
-                        pendingPollTimer = null;
+                        pendingPollTimer = setTimeout(poll, PENDING_POLL_INTERVAL_MS);
                     }
                 };
                 pendingPollTimer = setTimeout(poll, PENDING_POLL_INTERVAL_MS);
@@ -2023,6 +2045,7 @@
                     state.pendingComment = {
                         publicKey,
                         content,
+                        submittedAt: Date.now(),
                     };
                     status.textContent = t("status_submitted");
                     toast(t("comment_submitted"));
@@ -2257,6 +2280,8 @@
             // ==========================================
 
             async function initApp() {
+                const cfg = getSettings();
+                sseKey = `${cfg.api}|${cfg.siteId}|${cfg.slug}`;
                 closeSse();
                 state.currentPage = 1;
                 state.meta = null;

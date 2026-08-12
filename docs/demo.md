@@ -28,6 +28,11 @@ Cumments accepts that only under the dev-only
 `security.site_verification = "disabled"` policy; with `optional` or
 `required`, serve the demo over HTTP(S) instead.
 
+The demo also needs a secure context for WebCrypto Ed25519: `file://` and
+`http://localhost` work, but a LAN page served over plain `http://192.168.x.x`
+or another non-localhost address will fail at identity creation. Serve the
+demo over HTTPS unless you are testing on localhost.
+
 The demo has a built-in language switcher (中文 / EN) in the top bar; the
 choice is remembered in `localStorage` (`cumments_demo_lang`).
 
