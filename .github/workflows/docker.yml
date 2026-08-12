@@ -255,12 +255,35 @@ jobs:
       - name: Sync Docker Hub overview
         if: steps.image.outputs.dockerhub != ''
         env:
+          DOCKERHUB_NAMESPACE: ${{ env.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_USERNAME: ${{ env.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ env.DOCKERHUB_TOKEN }}
         run: |
+          # Repository-description updates use the Hub API, which needs an
+          # account JWT rather than the registry PAT used by buildx. The sync
+          # is best-effort: a failure here must not turn a successful publish
+          # red.
+          login_json="$(
+            jq -n --arg u "${DOCKERHUB_USERNAME}" --arg p "${DOCKERHUB_TOKEN}" \
+              '{username: $u, password: $p}' \
+              | curl -fsS -X POST \
+                -H "Content-Type: application/json" \
+                -d @- \
+                "https://hub.docker.com/v2/users/login/"
+          )" || {
+            echo "Docker Hub login failed; skipping overview sync"
+            exit 0
+          }
+          jwt="$(printf '%s' "${login_json}" | jq -r '.token')"
+          if [ -z "${jwt}" ] || [ "${jwt}" = "null" ]; then
+            echo "Docker Hub login returned no token; skipping overview sync"
+            exit 0
+          fi
           jq -n --rawfile readme misc/docker/dockerhub-overview.md \
             '{full_description: $readme}' \
             | curl -fsS -X PATCH \
-              -H "Authorization: Bearer ${DOCKERHUB_TOKEN}" \
+              -H "Authorization: JWT ${jwt}" \
               -H "Content-Type: application/json" \
               -d @- \
-              "https://hub.docker.com/v2/repositories/${DOCKERHUB_NAMESPACE}/cumments/"
+              "https://hub.docker.com/v2/repositories/${DOCKERHUB_NAMESPACE}/cumments/" \
+            || echo "Docker Hub overview sync failed; continuing (non-fatal)"
