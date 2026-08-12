@@ -13,6 +13,10 @@ use tokio::sync::Notify;
 /// How long an intent may sit in `waiting_for_sync` (event sent, projection
 /// not observed) before the timeout reconciliation pass intervenes.
 const WAITING_FOR_SYNC_TIMEOUT_MINUTES: i64 = 10;
+/// How many consecutive timeout passes must observe the event as existing
+/// before the intent is dead-lettered. Projection can be delayed by push
+/// retries or restarts, so a single confirmation is not treated as failure.
+const TIMEOUT_CONFIRMATION_LIMIT: u32 = 3;
 /// Upper bound for processing a single intent, including all Matrix driver
 /// calls (room creation, joins, sends). Prevents one stuck homeserver request
 /// from stalling the whole write path.
@@ -443,25 +447,39 @@ impl Reconciler {
 
             match self.driver.event_exists(&room_id, &event_id).await {
                 Ok(true) => {
-                    error!(
-                        "Post intent [{}] timed out but event {} exists on the homeserver; dead-lettering",
-                        id, event_id
-                    );
-                    self.intent_store
-                        .dead_letter_post_intent(
-                            id,
-                            &format!(
-                                "waiting_for_sync timed out; event {} exists on the homeserver but was never projected",
-                                event_id
-                            ),
-                        )
+                    let confirmations = self
+                        .intent_store
+                        .increment_post_timeout_confirmation(id)
                         .await?;
+                    if confirmations >= TIMEOUT_CONFIRMATION_LIMIT {
+                        error!(
+                            "Post intent [{}] timed out and event {} exists on the homeserver; dead-lettering after {confirmations} confirmations",
+                            id, event_id
+                        );
+                        self.intent_store
+                            .dead_letter_post_intent(
+                                id,
+                                &format!(
+                                    "waiting_for_sync timed out; event {} exists on the homeserver but was never projected after {confirmations} confirmation passes",
+                                    event_id
+                                ),
+                            )
+                            .await?;
+                    } else {
+                        warn!(
+                            "Post intent [{}] event {} exists but projection is delayed; confirmation {confirmations}/{TIMEOUT_CONFIRMATION_LIMIT}",
+                            id, event_id
+                        );
+                    }
                 }
                 Ok(false) => {
                     warn!(
                         "Post intent [{}] timed out and event {} is absent; rescheduling",
                         id, event_id
                     );
+                    self.intent_store
+                        .reset_post_timeout_confirmations(id)
+                        .await?;
                     let retrying = self
                         .intent_store
                         .record_post_intent_failure(

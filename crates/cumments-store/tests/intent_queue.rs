@@ -240,6 +240,87 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
 }
 
 #[tokio::test]
+async fn timeout_confirmations_increment_and_reset() {
+    let store = DbStore::connect(&test_db_url("timeout-confirmations"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_post_intent(&post_intent())
+        .await
+        .expect("save intent");
+    let pending = store.get_pending_post_intents().await.expect("pending");
+    let id = pending[0].id;
+    store
+        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .await
+        .expect("mark waiting");
+
+    assert_eq!(
+        store
+            .increment_post_timeout_confirmation(id)
+            .await
+            .expect("increment"),
+        1
+    );
+    assert_eq!(
+        store
+            .increment_post_timeout_confirmation(id)
+            .await
+            .expect("increment again"),
+        2
+    );
+    store
+        .reset_post_timeout_confirmations(id)
+        .await
+        .expect("reset");
+    assert_eq!(
+        store
+            .increment_post_timeout_confirmation(id)
+            .await
+            .expect("increment after reset"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn failed_post_intent_can_complete_when_event_is_observed() {
+    let store = DbStore::connect(&test_db_url("failed-complete"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_post_intent(&post_intent())
+        .await
+        .expect("save intent");
+    let pending = store.get_pending_post_intents().await.expect("pending");
+    let id = pending[0].id;
+    store
+        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .await
+        .expect("mark waiting");
+    store
+        .dead_letter_post_intent(id, "event exists but never projected")
+        .await
+        .expect("dead letter");
+
+    // The projector later observes the event (push arrived after the timeout
+    // pass); a failed intent may now transition to completed.
+    store
+        .mark_post_intent_completed_by_id(id)
+        .await
+        .expect("complete failed intent");
+
+    let pending = store.get_pending_post_intents().await.expect("pending");
+    let stuck = store
+        .get_stuck_post_intents(Utc::now() + Duration::minutes(1))
+        .await
+        .expect("stuck");
+    assert!(pending.is_empty());
+    assert!(stuck.is_empty());
+}
+
+#[tokio::test]
 async fn failure_records_do_not_resurrect_failed_intents() {
     let store = DbStore::connect(&test_db_url("no-resurrect"))
         .await

@@ -11,7 +11,8 @@ use cumments_core::intents::{
 };
 use cumments_core::ports::IntentStore;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set, UpdateMany,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter,
+    QueryOrder, Set, UpdateMany,
 };
 use tracing::warn;
 
@@ -52,6 +53,7 @@ impl IntentStore for DbStore {
             payload: Set(payload),
             status: Set(IntentStatus::Pending),
             retry_count: Set(0),
+            timeout_confirmations: Set(0),
             author_public_key: Set(Some(intent.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -228,12 +230,14 @@ impl IntentStore for DbStore {
             |query: UpdateMany<intent_queue_post_comment::Entity>| {
                 query
                     .filter(intent_queue_post_comment::COLUMN.id.eq(id))
-                    // Never resurrect a failed or already-completed intent.
-                    .filter(
-                        intent_queue_post_comment::COLUMN
-                            .status
-                            .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
-                    )
+                    // Allow a failed intent to be completed when the
+                    // projector later observes its event: failure may have
+                    // been a false dead-letter from the timeout pass.
+                    .filter(intent_queue_post_comment::COLUMN.status.is_in([
+                        IntentStatus::Pending,
+                        IntentStatus::WaitingForSync,
+                        IntentStatus::Failed,
+                    ]))
             },
         )
         .await
@@ -578,7 +582,38 @@ impl IntentStore for DbStore {
                 sea_orm::sea_query::Expr::value(error),
             )
             .filter(intent_queue_post_comment::Column::Id.eq(id))
+            // Never dead-letter an intent that already completed.
+            .filter(
+                intent_queue_post_comment::Column::Status
+                    .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+            )
             .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn increment_post_timeout_confirmation(&self, id: i64) -> Result<u32> {
+        self.db
+            .execute_unprepared(&format!(
+                "UPDATE intent_queue_post_comment \
+                 SET timeout_confirmations = timeout_confirmations + 1 \
+                 WHERE id = {id}"
+            ))
+            .await?;
+
+        let model = intent_queue_post_comment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| m.timeout_confirmations as u32).unwrap_or(0))
+    }
+
+    async fn reset_post_timeout_confirmations(&self, id: i64) -> Result<()> {
+        self.db
+            .execute_unprepared(&format!(
+                "UPDATE intent_queue_post_comment \
+                 SET timeout_confirmations = 0 \
+                 WHERE id = {id}"
+            ))
             .await?;
         Ok(())
     }

@@ -19,6 +19,10 @@ pub struct Model {
     pub author_public_key: Option<String>,
     pub next_attempt_at: Option<DateTimeUtc>,
     pub last_error: Option<String>,
+    /// How many consecutive timeout passes observed the event as existing
+    /// on the homeserver. Dead-lettering requires several confirmations so a
+    /// delayed projection is not treated as a failure.
+    pub timeout_confirmations: i64,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

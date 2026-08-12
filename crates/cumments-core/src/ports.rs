@@ -75,6 +75,14 @@ pub trait IntentStore: Send + Sync {
     /// would create a duplicate comment.
     async fn dead_letter_post_intent(&self, id: i64, error: &str) -> Result<()>;
 
+    /// Records one more consecutive timeout pass in which the event was
+    /// observed on the homeserver. Returns the new confirmation count.
+    async fn increment_post_timeout_confirmation(&self, id: i64) -> Result<u32>;
+
+    /// Resets the consecutive timeout-confirmation counter (e.g. after the
+    /// event was found absent and the intent was rescheduled).
+    async fn reset_post_timeout_confirmations(&self, id: i64) -> Result<()>;
+
     /// Transitions a delete intent to 'completed' when the projector sees the redaction.
     async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()>;
 
