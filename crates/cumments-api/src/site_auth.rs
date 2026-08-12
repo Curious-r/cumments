@@ -47,14 +47,17 @@ pub async fn enforce_site_auth(
         return next.run(req).await;
     };
     if !ID_REGEX.is_match(&site_id) {
-        return AppError::BadRequest(format!("invalid site id `{site_id}`")).into_response();
+        let response = AppError::BadRequest(format!("invalid site id `{site_id}`")).into_response();
+        return maybe_disabled_wildcard(response, &state);
     }
 
     let (parts, body) = req.into_parts();
     let bytes = match to_bytes(body, BODY_LIMIT).await {
         Ok(bytes) => bytes.to_vec(),
         Err(_) => {
-            return AppError::BadRequest("request body is too large".to_string()).into_response();
+            let response =
+                AppError::BadRequest("request body is too large".to_string()).into_response();
+            return maybe_disabled_wildcard(response, &state);
         }
     };
     let req = Request::from_parts(parts, Body::from(bytes.clone()));
@@ -86,8 +89,20 @@ pub async fn enforce_site_auth(
             }
             response
         }
-        Err(error) => error.into_response(),
+        Err(error) => maybe_disabled_wildcard(error.into_response(), &state),
     }
+}
+
+/// In `disabled` mode every write response is readable cross-origin, even
+/// early validation failures, so browsers surface the JSON error instead of
+/// a generic `NetworkError`.
+fn maybe_disabled_wildcard(response: Response, state: &ApiState) -> Response {
+    if state.site_auth_policy.verification != SiteVerificationPolicy::Disabled {
+        return response;
+    }
+    let mut response = response;
+    add_wildcard_origin(&mut response);
+    response
 }
 
 /// Middleware for public routes: reads, registration and verification.

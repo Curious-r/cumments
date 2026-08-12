@@ -213,6 +213,42 @@ async fn write_enforcement_follows_policy_and_origin() {
 }
 
 #[tokio::test]
+async fn disabled_write_errors_include_wildcard_cors() {
+    let (state, _) = test_state("disabled-errors", SiteVerificationPolicy::Disabled, None).await;
+    let router = middleware_router(state);
+
+    // Early validation failures must still be readable by the browser.
+    let invalid_site = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/Bad-Site/posts/hello/comments",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(invalid_site.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response_origin(&invalid_site).as_deref(), Some("*"));
+
+    // Body-limit failures happen before the handler and must also carry CORS.
+    let oversized = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/sites/test-blog/posts/hello/comments")
+        .header(header::ORIGIN, "null")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("x".repeat(1024 * 1024 + 1)))
+        .expect("build oversized request");
+    let oversized = router
+        .clone()
+        .oneshot(oversized)
+        .await
+        .expect("call router");
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response_origin(&oversized).as_deref(), Some("*"));
+}
+
+#[tokio::test]
 async fn verified_site_enforces_exact_origins_and_rejects_null() {
     let (state, store) = test_state("verified", SiteVerificationPolicy::Required, None).await;
     store
