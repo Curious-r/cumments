@@ -103,6 +103,11 @@ pub struct Comment {
     pub timestamp: DateTime<Utc>,
     /// Matrix event ID of the parent comment, when this comment is a reply.
     pub reply_to: Option<String>,
+    /// Queue row ID of the intent that produced this comment, when it was
+    /// submitted through the Cumments API. Lets clients correlate a `202`
+    /// response with the projected comment/SSE event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_id: Option<i64>,
     /// Matrix room the comment lives in. Internal integrity check for edits
     /// and redactions; never exposed through the API/SSE.
     #[serde(skip)]

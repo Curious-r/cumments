@@ -77,6 +77,7 @@ async fn redaction_seen_before_target_prevents_resurrection() {
             event_id: "$redaction:hs".to_string(),
             redacts: Some("$target:hs".to_string()),
             proof: None,
+            intent_id: None,
             room_identity: Some(identity()),
         })
         .await

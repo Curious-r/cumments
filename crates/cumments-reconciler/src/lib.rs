@@ -386,6 +386,7 @@ impl Reconciler {
                         "public_key": intent.author_public_key.as_str(),
                         "signature": intent.author_signature.as_str(),
                         "challenge": intent.author_challenge.as_str(),
+                        "intent_id": id,
                     }
                 });
                 match self

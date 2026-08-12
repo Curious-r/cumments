@@ -63,7 +63,8 @@ Response:
         "mxid": null
       },
       "content": "...",
-      "timestamp": "2026-08-08T00:00:00Z"
+      "timestamp": "2026-08-08T00:00:00Z",
+      "intent_id": 42
     }
   ],
   "meta": {
@@ -96,6 +97,17 @@ Body:
   "challenge_response": "challenge|nonce"
 }
 ```
+
+Successful writes are asynchronous and return `202` with the queue row ID:
+
+```json
+{ "intent_id": 42 }
+```
+
+The projected comment (list/SSE `comment_created`) carries the same
+`intent_id` when it was submitted through the Cumments API, so clients can
+correlate the accepted request with the final comment. Matrix-native comments
+omit `intent_id`.
 
 Signature message:
 

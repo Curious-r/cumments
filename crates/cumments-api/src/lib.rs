@@ -220,6 +220,7 @@ mod tests {
             content: "hi".to_string(),
             timestamp: chrono::Utc::now(),
             reply_to: None,
+            intent_id: Some(42),
             room_id: "!room:hs".to_string(),
             sender_mxid: "@_cumments_my-blog_abcd:hs".to_string(),
         };
@@ -227,6 +228,7 @@ mod tests {
         let json = serde_json::to_value(&comment).expect("serialize comment");
         assert_eq!(json["author"]["type"], "guest");
         assert_eq!(json["author"]["public_key"], "pk");
+        assert_eq!(json["intent_id"], 42);
         assert!(json.get("sender_mxid").is_none());
         assert!(json.get("room_id").is_none());
     }

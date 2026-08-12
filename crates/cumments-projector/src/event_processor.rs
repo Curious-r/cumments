@@ -300,6 +300,7 @@ impl EventProcessor {
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
             reply_to: event.reply_to.clone(),
+            intent_id: event.intent_id,
             room_id: event.room_id.clone(),
             sender_mxid: event.sender.clone(),
         };
@@ -435,6 +436,7 @@ impl EventProcessor {
                     site_id: c.site_id,
                     post_slug: c.post_slug,
                     event_id: target_event_id,
+                    intent_id: event.intent_id,
                 });
             }
         } else {

@@ -18,7 +18,7 @@ use axum::{
     response::IntoResponse,
     routing::{post, put},
 };
-use cumments_core::protocol::MESSAGE_CONTENT_KEY;
+use cumments_core::protocol::{MESSAGE_CONTENT_KEY, REDACTION_PROOF_KEY};
 use cumments_core::site_auth::constant_time_eq;
 use serde::Deserialize;
 use std::{
@@ -521,12 +521,17 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
     });
 
     // Cumments deletes embed a signed JSON proof in the redaction's `reason`.
-    let proof = event
+    let proof: Option<serde_json::Value> = event
         .content
         .as_ref()
         .and_then(|c| c.get("reason"))
         .and_then(|v| v.as_str())
         .and_then(|reason| serde_json::from_str(reason).ok());
+    let intent_id = proof
+        .as_ref()
+        .and_then(|proof: &serde_json::Value| proof.get(REDACTION_PROOF_KEY))
+        .and_then(|block| block.get("intent_id"))
+        .and_then(|value| value.as_i64());
 
     // Room identity is resolved by the caller from the local registry.
     let room_identity = None;
@@ -536,6 +541,7 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
         event_id: event_id.clone(),
         redacts,
         proof,
+        intent_id,
         room_identity,
     })
 }
@@ -695,7 +701,7 @@ mod tests {
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
-                "reason": "{\"host.curious.cumments.redaction\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\"}}",
+                "reason": "{\"host.curious.cumments.redaction\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\",\"intent_id\":7}}",
                 "redacts": "$target:hs",
             })),
             redacts: None,
@@ -709,6 +715,7 @@ mod tests {
             proof["host.curious.cumments.redaction"]["site_id"].as_str(),
             Some("my-blog")
         );
+        assert_eq!(parsed.intent_id, Some(7));
     }
 
     #[test]

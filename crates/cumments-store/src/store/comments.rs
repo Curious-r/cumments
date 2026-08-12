@@ -78,6 +78,7 @@ impl CommentStore for DbStore {
             content: Set(comment.content.clone()),
             timestamp: Set(comment.timestamp),
             reply_to: Set(comment.reply_to.clone()),
+            intent_id: Set(comment.intent_id),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
@@ -97,6 +98,7 @@ impl CommentStore for DbStore {
                         comments::Column::Content,
                         comments::Column::Timestamp,
                         comments::Column::ReplyTo,
+                        comments::Column::IntentId,
                         comments::Column::UpdatedAt,
                     ])
                     .to_owned(),
@@ -236,6 +238,7 @@ impl From<comments::Model> for Comment {
             content: model.content,
             timestamp: model.timestamp,
             reply_to: model.reply_to,
+            intent_id: model.intent_id,
             room_id: model.room_id,
             sender_mxid: model.sender_mxid,
         }

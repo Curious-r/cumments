@@ -12,9 +12,12 @@ use async_trait::async_trait;
 /// The port for all intent storage operations.
 #[async_trait]
 pub trait IntentStore: Send + Sync {
-    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()>;
-    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
-    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()>;
+    /// Persists a new post intent and returns its queue row ID.
+    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<i64>;
+    /// Persists a new delete intent and returns its queue row ID.
+    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<i64>;
+    /// Persists a new update intent and returns its queue row ID.
+    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<i64>;
 
     /// Returns at most `limit` due pending post intents, oldest first.
     async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>>;

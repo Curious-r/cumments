@@ -11,8 +11,8 @@ use cumments_core::intents::{
 };
 use cumments_core::ports::IntentStore;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, UpdateMany,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    Set, UpdateMany,
 };
 use tracing::warn;
 
@@ -51,7 +51,7 @@ where
 
 #[async_trait]
 impl IntentStore for DbStore {
-    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<()> {
+    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<i64> {
         let payload = serde_json::to_string(intent)?;
 
         let active_model = intent_queue_post_comment::ActiveModel {
@@ -67,12 +67,13 @@ impl IntentStore for DbStore {
             ..Default::default()
         };
 
-        active_model.insert(&self.db).await?;
-
-        Ok(())
+        let result = intent_queue_post_comment::Entity::insert(active_model)
+            .exec(&self.db)
+            .await?;
+        Ok(result.last_insert_id)
     }
 
-    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()> {
+    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<i64> {
         let payload = serde_json::to_string(intent)?;
 
         let active_model = intent_queue_delete_comment::ActiveModel {
@@ -85,12 +86,13 @@ impl IntentStore for DbStore {
             ..Default::default()
         };
 
-        active_model.insert(&self.db).await?;
-
-        Ok(())
+        let result = intent_queue_delete_comment::Entity::insert(active_model)
+            .exec(&self.db)
+            .await?;
+        Ok(result.last_insert_id)
     }
 
-    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()> {
+    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<i64> {
         let active_model = intent_queue_update_comment::ActiveModel {
             site_id: Set(intent.site_id.as_str().to_owned()),
             post_slug: Set(intent.post_slug.as_str().to_owned()),
@@ -106,9 +108,10 @@ impl IntentStore for DbStore {
             ..Default::default()
         };
 
-        active_model.insert(&self.db).await?;
-
-        Ok(())
+        let result = intent_queue_update_comment::Entity::insert(active_model)
+            .exec(&self.db)
+            .await?;
+        Ok(result.last_insert_id)
     }
 
     async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>> {

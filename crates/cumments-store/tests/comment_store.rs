@@ -35,6 +35,7 @@ async fn save_comment_records_original_sender() {
         content: "hello".to_string(),
         timestamp: Utc::now(),
         reply_to: Some("$parent:hs".to_string()),
+        intent_id: Some(42),
         room_id: "!room:hs".to_string(),
         sender_mxid: String::new(),
     };
@@ -63,6 +64,7 @@ async fn save_comment_records_original_sender() {
         Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc")
     );
     assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
+    assert_eq!(stored.intent_id, Some(42));
 }
 
 #[tokio::test]
@@ -86,6 +88,7 @@ async fn update_comment_preserves_reply_to() {
         content: "original".to_string(),
         timestamp: Utc::now(),
         reply_to: Some("$parent:hs".to_string()),
+        intent_id: None,
         room_id: "!room:hs".to_string(),
         sender_mxid: String::new(),
     };
@@ -140,6 +143,7 @@ async fn comments_with_equal_timestamps_sort_by_event_id() {
             content: content.to_string(),
             timestamp: ts,
             reply_to: None,
+            intent_id: None,
             room_id: "!room:hs".to_string(),
             sender_mxid: String::new(),
         };
@@ -187,6 +191,7 @@ async fn matrix_native_comment_roundtrip() {
         content: "from matrix".to_string(),
         timestamp: Utc::now(),
         reply_to: None,
+        intent_id: None,
         room_id: "!room:hs".to_string(),
         sender_mxid: "@alice:hs".to_string(),
     };

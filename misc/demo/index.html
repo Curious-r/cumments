@@ -1520,6 +1520,12 @@
                 if (!pending) return;
                 const synced = comments.some((c) => {
                     if (
+                        pending.intentId != null &&
+                        c.intent_id === pending.intentId
+                    ) {
+                        return true;
+                    }
+                    if (
                         !c.author ||
                         c.author.type !== "guest" ||
                         c.author.public_key !== pending.publicKey ||
@@ -2038,11 +2044,22 @@
                         },
                     );
                     if (!res.ok) throw new Error(await apiError(res));
+                    let intentId = null;
+                    try {
+                        const accepted = await res.json();
+                        intentId = accepted && accepted.intent_id
+                            ? accepted.intent_id
+                            : null;
+                    } catch {
+                        // Older servers may return a plain 202 body; fall back
+                        // to public-key/content/time matching.
+                    }
 
                     document.getElementById("composerContent").value = "";
                     state.replyingTo = null;
                     updateReplyBanner();
                     state.pendingComment = {
+                        intentId,
                         publicKey,
                         content,
                         submittedAt: Date.now(),

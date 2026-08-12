@@ -29,6 +29,7 @@ async fn save_comment(store: &DbStore, event_id: &str, room_id: &str, content: &
         content: content.to_string(),
         timestamp: Utc::now(),
         reply_to: None,
+        intent_id: None,
         room_id: room_id.to_string(),
         sender_mxid: String::new(),
     };

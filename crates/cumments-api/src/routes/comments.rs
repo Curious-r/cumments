@@ -231,12 +231,12 @@ pub(crate) async fn post_comment_handler(
 
     // 4. Save the intent for the reconciler
     match state.store.save_post_intent(&intent).await {
-        Ok(_) => {
+        Ok(intent_id) => {
             tracing::info!("Successfully saved a new comment intent.");
             state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
-                "Comment received and queued for processing.",
+                Json(serde_json::json!({ "intent_id": intent_id })),
             ))
         }
 
@@ -340,12 +340,12 @@ pub(crate) async fn delete_comment_handler(
 
     // 4. Save the intent for the reconciler
     match state.store.save_delete_intent(&intent).await {
-        Ok(_) => {
+        Ok(intent_id) => {
             tracing::info!("Successfully saved a delete comment intent.");
             state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
-                "Delete request received and queued for processing.",
+                Json(serde_json::json!({ "intent_id": intent_id })),
             ))
         }
         Err(e) => {
@@ -459,12 +459,12 @@ pub(crate) async fn update_comment_handler(
 
     // 5. Save the intent for the reconciler
     match state.store.save_update_intent(&intent).await {
-        Ok(_) => {
+        Ok(intent_id) => {
             tracing::info!("Successfully saved an update comment intent.");
             state.reconciler_notify.notify_one();
             Ok((
                 StatusCode::ACCEPTED,
-                "Update request received and queued for processing.",
+                Json(serde_json::json!({ "intent_id": intent_id })),
             ))
         }
         Err(e) => {

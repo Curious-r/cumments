@@ -51,6 +51,8 @@ pub struct ParsedRoomRedaction {
     /// The Cumments delete proof embedded in `reason`, if the redaction was
     /// issued through the Cumments API.
     pub proof: Option<serde_json::Value>,
+    /// Correlation hint: the delete intent queue row ID embedded in the proof.
+    pub intent_id: Option<i64>,
     /// The room's Cumments identity, if available.
     pub room_identity: Option<RoomIdentity>,
 }

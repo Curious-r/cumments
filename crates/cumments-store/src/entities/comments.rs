@@ -17,6 +17,9 @@ pub struct Model {
     pub content: String,
     pub timestamp: DateTimeUtc,
     pub reply_to: Option<String>,
+    /// Queue row ID of the intent that produced this comment, when submitted
+    /// through the Cumments API; `None` for Matrix-native comments.
+    pub intent_id: Option<i64>,
     pub created_at: DateTimeUtc,
     pub author_public_key: Option<String>,
     pub updated_at: DateTimeUtc,
