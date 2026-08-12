@@ -11,7 +11,9 @@ use cumments_core::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteAuthMode, SiteVerificationStatus,
     VerificationToken,
 };
-use sea_orm::{ColumnTrait, EntityTrait, NotSet, QueryFilter, Set, TransactionTrait};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, EntityTrait, NotSet, QueryFilter, Set, TransactionTrait,
+};
 use std::collections::HashMap;
 
 #[async_trait]
@@ -90,6 +92,7 @@ impl SiteAuthStore for DbStore {
                 expires_at: Set(token.expires_at),
                 consumed_at: Set(None),
                 created_at: Set(now),
+                attempts: Set(0),
             })
             .collect::<Vec<_>>();
         verification_tokens::Entity::insert_many(models)
@@ -114,6 +117,20 @@ impl SiteAuthStore for DbStore {
             .one(&self.db)
             .await?;
         row.map(core_verification_token).transpose()
+    }
+
+    async fn increment_verification_attempt(&self, id: i64) -> Result<u32> {
+        self.db
+            .execute_unprepared(&format!(
+                "UPDATE verification_tokens \
+                 SET attempts = attempts + 1 \
+                 WHERE id = {id}"
+            ))
+            .await?;
+        let row = verification_tokens::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?;
+        Ok(row.map(|r| r.attempts as u32).unwrap_or(0))
     }
 
     async fn consume_verification_token(&self, id: i64) -> Result<bool> {
@@ -367,5 +384,6 @@ fn core_verification_token(row: verification_tokens::Model) -> Result<Verificati
         expires_at: row.expires_at,
         consumed_at: row.consumed_at,
         created_at: row.created_at,
+        attempts: row.attempts as u32,
     })
 }

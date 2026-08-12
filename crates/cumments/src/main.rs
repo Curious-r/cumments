@@ -380,7 +380,12 @@ async fn main() -> Result<()> {
             60,
             std::time::Duration::from_secs(60),
         )),
+        confirm_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            30,
+            std::time::Duration::from_secs(3600),
+        )),
         trusted_proxies: Arc::new(trusted_proxies),
+        allow_private_verification_origins: settings.security.allow_private_verification_origins,
     };
     let api_router = cumments_api::build_router(api_state);
 

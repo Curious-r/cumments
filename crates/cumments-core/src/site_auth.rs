@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::net::IpAddr;
 use subtle::ConstantTimeEq;
 use url::Url;
 
@@ -185,6 +186,35 @@ impl Origin {
         Url::parse(&self.0)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
+    }
+
+    /// Whether the origin is an IP literal that targets loopback, private,
+    /// link-local (including cloud metadata), or unspecified address space.
+    /// Domain names are not resolved here; callers doing outbound fetches
+    /// should also validate the resolved address.
+    pub fn is_private_ip(&self) -> bool {
+        let Some(host) = self.host() else {
+            return false;
+        };
+        let Ok(ip) = host.parse::<IpAddr>() else {
+            return false;
+        };
+        match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_multicast()
+            }
+            IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local()
+                    || v6.is_multicast()
+            }
+        }
     }
 }
 
@@ -445,6 +475,8 @@ pub struct VerificationToken {
     pub expires_at: DateTime<Utc>,
     pub consumed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Number of confirm attempts already made against this token.
+    pub attempts: u32,
 }
 
 /// Insert payload for a verification token row.

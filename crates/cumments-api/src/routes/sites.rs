@@ -29,6 +29,8 @@ const PROOF_ATTEMPTS: usize = 2;
 const PROOF_RETRY_DELAY: Duration = Duration::from_secs(2);
 /// Upper bound for a downloaded well-known document (proofs are tiny).
 const MAX_WELL_KNOWN_BYTES: usize = 1024 * 1024;
+/// Maximum confirm attempts per verification token before re-issuance.
+const MAX_VERIFICATION_ATTEMPTS: u32 = 5;
 
 // ---------------------------------------------------------------------------
 // Request / response DTOs
@@ -134,6 +136,13 @@ pub(crate) async fn start_verification_handler(
                 .map_err(|e| AppError::BadRequest(format!("invalid origin `{raw}`: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if !state.allow_private_verification_origins && origins.iter().any(Origin::is_private_ip) {
+        return Err(AppError::BadRequest(
+            "verification origins must be public; loopback/private/link-local \
+             IP literals are not allowed"
+                .to_string(),
+        ));
+    }
     let claim_token = claim_token_from_headers(&headers)?;
 
     let challenge = start_site_verification(
@@ -163,11 +172,27 @@ pub(crate) async fn start_verification_handler(
 pub(crate) async fn confirm_verification_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<ConfirmVerificationRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.confirm_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "verification confirmation is rate limited; try again later".to_string(),
+        ));
+    }
+
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let origin = Origin::parse(&req.origin)
         .map_err(|e| AppError::BadRequest(format!("invalid origin `{}`: {e}", req.origin)))?;
+    if !state.allow_private_verification_origins && origin.is_private_ip() {
+        return Err(AppError::BadRequest(
+            "verification origins must be public; loopback/private/link-local \
+             IP literals are not allowed"
+                .to_string(),
+        ));
+    }
     let token_hash = token_hash(&req.token);
 
     let token = state
@@ -182,6 +207,22 @@ pub(crate) async fn confirm_verification_handler(
                     .to_string(),
             )
         })?;
+
+    if token.attempts >= MAX_VERIFICATION_ATTEMPTS {
+        return Err(AppError::BadRequest(
+            "verification attempt limit reached; start a new verification".to_string(),
+        ));
+    }
+    let attempts = state
+        .store
+        .increment_verification_attempt(token.id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to record verification attempt: {e}")))?;
+    if attempts > MAX_VERIFICATION_ATTEMPTS {
+        return Err(AppError::BadRequest(
+            "verification attempt limit reached; start a new verification".to_string(),
+        ));
+    }
 
     let proof_verified = verify_origin_proof(&site_id, &origin, &req.token, &token).await?;
     if !proof_verified {
@@ -402,10 +443,15 @@ async fn query_dns_proof(origin: &Origin, site_id: &str, token: &str) -> Result<
     let resolver = hickory_resolver::TokioResolver::builder_tokio()
         .and_then(|builder| builder.build())
         .map_err(|e| AppError::Internal(format!("failed to initialize DNS resolver: {e}")))?;
-    let lookup = resolver
-        .txt_lookup(name)
-        .await
-        .map_err(|e| AppError::Internal(format!("DNS TXT lookup failed: {e}")))?;
+    let lookup = match resolver.txt_lookup(name.clone()).await {
+        Ok(lookup) => lookup,
+        Err(e) => {
+            // A DNS failure means "no proof", not an internal error; leaking
+            // it as a 500 would turn confirm into an internal-name oracle.
+            tracing::warn!(host = %name, "DNS TXT lookup failed; treating as no proof: {e}");
+            return Ok(false);
+        }
+    };
     let records = lookup
         .answers()
         .iter()

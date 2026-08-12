@@ -59,6 +59,10 @@ pub struct Security {
     /// Operator token for the admin API. When unset, admin routes return 403.
     #[serde(default)]
     pub admin_token: Option<String>,
+    /// Allow verification of IP-literal origins in loopback/private/link-local
+    /// address space. Off by default because confirm performs outbound probes.
+    #[serde(default)]
+    pub allow_private_verification_origins: bool,
 }
 
 /// Operator-declared trust for one site.

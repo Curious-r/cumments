@@ -58,8 +58,12 @@ pub struct ApiState {
     pub verification_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-brute-force limiter for the admin API.
     pub admin_limiter: Arc<rate_limit::RateLimiter>,
+    /// Anti-abuse limiter for verification confirm (outbound probes).
+    pub confirm_limiter: Arc<rate_limit::RateLimiter>,
     /// Reverse proxies trusted to set `X-Forwarded-For` for rate limiting.
     pub trusted_proxies: Arc<HashSet<IpAddr>>,
+    /// Allow verification of loopback/private/link-local IP-literal origins.
+    pub allow_private_verification_origins: bool,
 }
 
 /// Builds the Axum router for the API.

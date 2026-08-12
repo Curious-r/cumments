@@ -51,7 +51,10 @@ async fn test_state(
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         admin_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
+        confirm_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         trusted_proxies: Arc::new(Default::default()),
+        // The existing integration test verifies against 127.0.0.1.
+        allow_private_verification_origins: true,
     };
     (state, store)
 }
@@ -510,4 +513,45 @@ async fn admin_lifecycle_and_well_known_verification() {
         "{}",
         body_text(revoked_origin).await
     );
+}
+
+#[tokio::test]
+async fn private_verification_origins_rejected_by_default() {
+    let (mut state, _) = test_state("private-origin", SiteVerificationPolicy::Disabled, None).await;
+    state.allow_private_verification_origins = false;
+    let router = cumments_api::build_router(state);
+
+    let registered = router
+        .clone()
+        .oneshot(request(Method::POST, "/api/v1/sites", None, &[]))
+        .await
+        .expect("call router");
+    assert_eq!(registered.status(), StatusCode::CREATED);
+    let registered_json: serde_json::Value =
+        serde_json::from_str(&body_text(registered).await).expect("parse response");
+    let site_id = registered_json["site_id"].as_str().unwrap().to_string();
+    let claim_token = registered_json["claim_token"].as_str().unwrap().to_string();
+
+    let started = router
+        .clone()
+        .oneshot(
+            request(
+                Method::POST,
+                &format!("/api/v1/sites/{site_id}/verifications"),
+                None,
+                &[("x-cumments-claim-token", claim_token)],
+            )
+            .map(|_| {
+                Body::from(
+                    serde_json::json!({
+                        "origins": ["http://127.0.0.1:8080"],
+                        "methods": ["well-known"]
+                    })
+                    .to_string(),
+                )
+            }),
+        )
+        .await
+        .expect("call router");
+    assert_eq!(started.status(), StatusCode::BAD_REQUEST);
 }

@@ -260,6 +260,59 @@ async fn one_challenge_with_multiple_origins_inserts_distinct_tokens() {
 }
 
 #[tokio::test]
+async fn verification_attempts_increment_and_are_persisted() {
+    let store = DbStore::connect(&test_db_url("site-auth-attempts"))
+        .await
+        .expect("connect db");
+    let site_id = "a1b2c3d4e5f60718a1b2c3d4e5f60718";
+    store
+        .register_site(site_id, &token_hash("claim"))
+        .await
+        .expect("register site");
+
+    let origin = Origin::parse("https://example.com").expect("valid origin");
+    store
+        .insert_verification_tokens(&[NewVerificationToken {
+            site_id: site_id.to_string(),
+            origin: origin.clone(),
+            token_hash: token_hash("proof"),
+            methods: vec![VerificationMethod::WellKnown],
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        }])
+        .await
+        .expect("insert token");
+
+    let token = store
+        .find_verification_token(site_id, &origin, &token_hash("proof"))
+        .await
+        .expect("query token")
+        .expect("token exists");
+    assert_eq!(token.attempts, 0);
+
+    assert_eq!(
+        store
+            .increment_verification_attempt(token.id)
+            .await
+            .expect("increment"),
+        1
+    );
+    assert_eq!(
+        store
+            .increment_verification_attempt(token.id)
+            .await
+            .expect("increment again"),
+        2
+    );
+
+    let token = store
+        .find_verification_token(site_id, &origin, &token_hash("proof"))
+        .await
+        .expect("query token")
+        .expect("token still exists");
+    assert_eq!(token.attempts, 2);
+}
+
+#[tokio::test]
 async fn complete_verification_is_atomic_and_idempotent() {
     let store = DbStore::connect(&test_db_url("site-auth-complete"))
         .await

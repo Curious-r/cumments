@@ -222,6 +222,10 @@ pub trait SiteAuthStore: Send + Sync {
         token_hash: &str,
     ) -> Result<Option<VerificationToken>>;
 
+    /// Increments the attempt counter for a verification token and returns
+    /// the new count. Used to cap outbound proof probes per token.
+    async fn increment_verification_attempt(&self, id: i64) -> Result<u32>;
+
     /// Marks a verification token row consumed. Returns `false` if it was
     /// already consumed (e.g. by a concurrent confirmation).
     async fn consume_verification_token(&self, id: i64) -> Result<bool>;

@@ -14,6 +14,8 @@ pub struct Model {
     pub expires_at: DateTimeUtc,
     pub consumed_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
+    /// Number of confirm attempts made against this token.
+    pub attempts: i64,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

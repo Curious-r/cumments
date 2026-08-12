@@ -48,6 +48,11 @@ site_verification = "optional"
 # Prefer the CUMMENTS__SECURITY__ADMIN_TOKEN environment variable.
 # admin_token = "change-me"
 
+# Allow verification against loopback/private/link-local IP-literal origins.
+# Keep false in production: verification confirm makes outbound HTTP/DNS
+# probes. Enable only for tests or intentionally internal deployments.
+# allow_private_verification_origins = false
+
 # ── Operator-declared sites ─────────────────────────────────────
 # Sites listed here are trusted without online verification. This is the
 # declarative alternative to the self-service verification API.
