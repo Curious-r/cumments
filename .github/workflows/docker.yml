@@ -1,9 +1,19 @@
-# Builds and publishes the Cumments Docker image.
+# Builds and publishes the Cumments Docker image for linux/amd64 and
+# linux/arm64.
 #
-# Validation builds run only when Docker-relevant files change (the
-# Dockerfile/config, dependency manifests, or this workflow); code-only
-# changes are covered by ci.yml. Version tags always build and publish;
-# manual runs can opt into publishing with the `publish` input.
+# Each architecture is built natively on its own runner (no QEMU emulation):
+# amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`. The per-arch images
+# are pushed with `<tag>-amd64` / `<tag>-arm64` suffixes, then a merge job
+# combines them into the multi-arch `latest` / version tags on GHCR and (when
+# configured) Docker Hub.
+#
+# Validation builds run on main pushes and PRs when Docker-relevant files
+# change; version tags always build and publish. Manual runs can opt into
+# publishing with the `publish` input.
+#
+# Docker Hub publishing is opt-in: set the `DOCKERHUB_NAMESPACE` repository
+# variable (the Docker Hub account that owns the `cumments` repository) and
+# the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets.
 name: Docker
 
 on:
@@ -34,7 +44,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Push the built image to GHCR
+        description: Push the built image to the registries
         type: boolean
         required: false
         default: false
@@ -46,17 +56,33 @@ concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
+  DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
 jobs:
   build:
-    name: Build image
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
       artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
 
     steps:
       - uses: actions/checkout@v7
@@ -72,27 +98,60 @@ jobs:
         id: rust-version
         run: echo "version=$(sed -n 's/^channel = \"\(.*\)\"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve image names
+        id: image
+        run: |
+          ghcr="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          dockerhub=""
+          if [ -n "${DOCKERHUB_NAMESPACE}" ] && [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+            dockerhub="docker.io/${DOCKERHUB_NAMESPACE}/cumments"
+          fi
+          echo "ghcr=${ghcr}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub=${dockerhub}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build per-arch tag list
+        id: tags
+        run: |
+          {
+            echo "${GHCR}:${TAG}-${SUFFIX}"
+            echo "${GHCR}:latest-${SUFFIX}"
+            if [ -n "${DOCKERHUB}" ]; then
+              echo "${DOCKERHUB}:${TAG}-${SUFFIX}"
+              echo "${DOCKERHUB}:latest-${SUFFIX}"
+            fi
+          } > /tmp/arch-tags.txt
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/arch-tags.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+        env:
+          GHCR: ${{ steps.image.outputs.ghcr }}
+          DOCKERHUB: ${{ steps.image.outputs.dockerhub }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SUFFIX: ${{ matrix.suffix }}
+
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Normalize image name
-        id: image
-        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v6
+      - name: Log in to Docker Hub
+        if: env.PUBLISH == 'true' && steps.image.outputs.dockerhub != ''
+        uses: docker/login-action@v4
         with:
-          images: ghcr.io/${{ steps.image.outputs.name }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Build and push image
         id: build
@@ -101,16 +160,92 @@ jobs:
           context: .
           file: misc/docker/Dockerfile
           build-args: RUST_VERSION=${{ steps.rust-version.outputs.version }}
-          push: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true') }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Cumments
+            org.opencontainers.image.description=Matrix-native comment system backend
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=cumments-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=cumments-${{ matrix.suffix }}
 
       - name: Generate build provenance attestation
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+        if: env.PUBLISH == 'true'
         uses: actions/attest@v4
         with:
-          subject-name: ghcr.io/${{ steps.image.outputs.name }}
+          subject-name: ${{ steps.image.outputs.ghcr }}:${{ steps.version.outputs.tag }}-${{ matrix.suffix }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  merge:
+    name: Merge multi-arch manifests
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Resolve image names
+        id: image
+        run: |
+          ghcr="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          dockerhub=""
+          if [ -n "${DOCKERHUB_NAMESPACE}" ] && [ -n "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+            dockerhub="docker.io/${DOCKERHUB_NAMESPACE}/cumments"
+          fi
+          echo "ghcr=${ghcr}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub=${dockerhub}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GHCR multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${GHCR}:${TAG}" \
+            -t "${GHCR}:latest" \
+            "${GHCR}:${TAG}-amd64" \
+            "${GHCR}:${TAG}-arm64"
+        env:
+          GHCR: ${{ steps.image.outputs.ghcr }}
+          TAG: ${{ steps.version.outputs.tag }}
+
+      - name: Log in to Docker Hub
+        if: steps.image.outputs.dockerhub != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Create Docker Hub multi-arch manifest
+        if: steps.image.outputs.dockerhub != ''
+        run: |
+          docker buildx imagetools create \
+            -t "${DOCKERHUB}:${TAG}" \
+            -t "${DOCKERHUB}:latest" \
+            "${DOCKERHUB}:${TAG}-amd64" \
+            "${DOCKERHUB}:${TAG}-arm64"
+        env:
+          DOCKERHUB: ${{ steps.image.outputs.dockerhub }}
+          TAG: ${{ steps.version.outputs.tag }}
