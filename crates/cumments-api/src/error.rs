@@ -18,7 +18,7 @@ pub const PROBLEM_TYPE_BASE: &str = "https://curious-r.github.io/cumments/proble
 
 /// Stable machine-readable identifiers for every problem type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ErrorCode {
+pub enum ProblemType {
     InvalidPoW,
     InvalidSignature,
     Validation,
@@ -38,7 +38,7 @@ pub enum ErrorCode {
     Internal,
 }
 
-impl ErrorCode {
+impl ProblemType {
     pub const ALL: [Self; 17] = [
         Self::InvalidPoW,
         Self::InvalidSignature,
@@ -152,78 +152,78 @@ impl IntoResponse for AppError {
             AppError::InvalidPoW => (
                 StatusCode::FORBIDDEN,
                 "Invalid Proof-of-Work response.".to_string(),
-                ErrorCode::InvalidPoW,
+                ProblemType::InvalidPoW,
                 None,
             ),
             AppError::InvalidSignature => (
                 StatusCode::FORBIDDEN,
                 "Invalid author signature.".to_string(),
-                ErrorCode::InvalidSignature,
+                ProblemType::InvalidSignature,
                 None,
             ),
             AppError::Validation(errs) => (
                 StatusCode::BAD_REQUEST,
                 "Input validation failed.".to_string(),
-                ErrorCode::Validation,
+                ProblemType::Validation,
                 serde_json::to_value(errs).ok(),
             ),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, ErrorCode::NotFound, None),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, ProblemType::NotFound, None),
             AppError::Unauthorized(msg) => {
-                (StatusCode::FORBIDDEN, msg, ErrorCode::Unauthorized, None)
+                (StatusCode::FORBIDDEN, msg, ProblemType::Unauthorized, None)
             }
             AppError::NotManageable(msg) => {
-                (StatusCode::FORBIDDEN, msg, ErrorCode::NotManageable, None)
+                (StatusCode::FORBIDDEN, msg, ProblemType::NotManageable, None)
             }
             AppError::MethodNotAllowed => (
                 StatusCode::METHOD_NOT_ALLOWED,
                 "Method not allowed. Use QUERY for queries, POST for submissions.".to_string(),
-                ErrorCode::MethodNotAllowed,
+                ProblemType::MethodNotAllowed,
                 None,
             ),
             AppError::BadRequest(msg) => {
-                (StatusCode::BAD_REQUEST, msg, ErrorCode::BadRequest, None)
+                (StatusCode::BAD_REQUEST, msg, ProblemType::BadRequest, None)
             }
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg, ErrorCode::Conflict, None),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg, ProblemType::Conflict, None),
             AppError::TooManyRequests(msg) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 msg,
-                ErrorCode::RateLimited,
+                ProblemType::RateLimited,
                 None,
             ),
             AppError::IdempotencyKeyRequired(msg) => (
                 StatusCode::BAD_REQUEST,
                 msg,
-                ErrorCode::IdempotencyKeyRequired,
+                ProblemType::IdempotencyKeyRequired,
                 None,
             ),
             AppError::InvalidIdempotencyKey(msg) => (
                 StatusCode::BAD_REQUEST,
                 msg,
-                ErrorCode::InvalidIdempotencyKey,
+                ProblemType::InvalidIdempotencyKey,
                 None,
             ),
             AppError::IdempotencyReused => (
                 StatusCode::CONFLICT,
                 "This Idempotency-Key was already used with a different request.".to_string(),
-                ErrorCode::IdempotencyReused,
+                ProblemType::IdempotencyReused,
                 None,
             ),
             AppError::SiteVerificationRequired(msg) => (
                 StatusCode::FORBIDDEN,
                 msg,
-                ErrorCode::SiteVerificationRequired,
+                ProblemType::SiteVerificationRequired,
                 None,
             ),
             AppError::SiteOriginDenied(msg) => (
                 StatusCode::FORBIDDEN,
                 msg,
-                ErrorCode::SiteOriginDenied,
+                ProblemType::SiteOriginDenied,
                 None,
             ),
             AppError::SiteSignatureInvalid(msg) => (
                 StatusCode::FORBIDDEN,
                 msg,
-                ErrorCode::SiteSignatureInvalid,
+                ProblemType::SiteSignatureInvalid,
                 None,
             ),
             AppError::Internal(msg) => {
@@ -232,7 +232,7 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error.".to_string(),
-                    ErrorCode::Internal,
+                    ProblemType::Internal,
                     None,
                 )
             }
@@ -291,7 +291,7 @@ mod tests {
     fn every_code_has_a_documented_anchor() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/problems/index.md");
         let docs = std::fs::read_to_string(path).expect("problems doc must exist");
-        for code in ErrorCode::ALL {
+        for code in ProblemType::ALL {
             assert!(
                 docs.contains(&format!("{{#{}}}", code.slug())),
                 "docs/problems/index.md is missing anchor for `{}`",
@@ -302,10 +302,10 @@ mod tests {
 
     #[test]
     fn code_slugs_are_unique() {
-        let slugs = ErrorCode::ALL
+        let slugs = ProblemType::ALL
             .iter()
             .map(|c| c.slug())
             .collect::<HashSet<_>>();
-        assert_eq!(slugs.len(), ErrorCode::ALL.len());
+        assert_eq!(slugs.len(), ProblemType::ALL.len());
     }
 }
