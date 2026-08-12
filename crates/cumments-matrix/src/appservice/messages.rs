@@ -88,6 +88,10 @@ impl AppServiceMatrixDriver {
             let error_body = resp.text().await.unwrap_or_default();
             if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
+                return Err(room_gone(
+                    room_id,
+                    format!("Failed to post message ({status}): {error_body}"),
+                ));
             }
             return Err(anyhow!(
                 "Failed to post message ({}): {}",
@@ -162,6 +166,10 @@ impl AppServiceMatrixDriver {
             let error_body = resp.text().await.unwrap_or_default();
             if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
+                return Err(room_gone(
+                    room_id,
+                    format!("Failed to update message ({status}): {error_body}"),
+                ));
             }
             return Err(anyhow!(
                 "Failed to update message ({}): {}",
@@ -205,6 +213,12 @@ impl AppServiceMatrixDriver {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
             warn!("Failed to redact message ({}): {}", status, error_body);
+            if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
+                return Err(room_gone(
+                    room_id,
+                    format!("Failed to redact message ({status}): {error_body}"),
+                ));
+            }
             return Err(anyhow!(
                 "Failed to redact message ({}): {}",
                 status,

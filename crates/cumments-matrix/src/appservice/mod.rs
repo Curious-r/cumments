@@ -15,6 +15,24 @@ use cumments_core::ports::VirtualUserStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+/// Build a typed adoption-refusal error so the reconciler can quarantine the
+/// room without matching error strings.
+pub(crate) fn adoption_refused(room_id: &str, reason: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(cumments_core::matrix_error::MatrixError::AdoptionRefused {
+        room_id: room_id.to_string(),
+        reason: reason.into(),
+    })
+}
+
+/// Build a typed room-gone error so the reconciler can retire the registry
+/// entry without matching error strings.
+pub(crate) fn room_gone(room_id: &str, reason: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(cumments_core::matrix_error::MatrixError::RoomGone {
+        room_id: room_id.to_string(),
+        reason: reason.into(),
+    })
+}
+
 /// The AppService-based Matrix driver.
 ///
 /// This driver authenticates with the AppService `as_token` and can

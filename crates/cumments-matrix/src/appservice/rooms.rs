@@ -324,10 +324,12 @@ impl AppServiceMatrixDriver {
         match self.sender_can_write_state(room_id, implicit_creator).await {
             Ok(true) => {}
             Ok(false) => {
-                return Err(anyhow!(
-                    "Refusing to adopt room {}: AS sender cannot write state \
-                 (not a member or insufficient power)",
-                    room_id
+                return Err(adoption_refused(
+                    room_id,
+                    format!(
+                        "Refusing to adopt room {room_id}: AS sender cannot write state \
+                         (not a member or insufficient power)"
+                    ),
                 ));
             }
             Err(e) => {
@@ -339,10 +341,12 @@ impl AppServiceMatrixDriver {
             }
         }
         if !self.sender_can_redact(room_id, implicit_creator).await? {
-            return Err(anyhow!(
-                "Refusing to adopt room {}: AS sender cannot meet the room's \
-                 redact threshold (delete intents would fail)",
-                room_id
+            return Err(adoption_refused(
+                room_id,
+                format!(
+                    "Refusing to adopt room {room_id}: AS sender cannot meet the room's \
+                     redact threshold (delete intents would fail)"
+                ),
             ));
         }
         Ok(())
@@ -359,10 +363,10 @@ impl AppServiceMatrixDriver {
         require_space: bool,
     ) -> Result<()> {
         if require_space && !self.is_space_room(room_id).await? {
-            anyhow::bail!(
-                "Refusing to adopt room {} as a site space: not created as m.space",
-                room_id
-            );
+            return Err(adoption_refused(
+                room_id,
+                format!("Refusing to adopt room {room_id} as a site space: not created as m.space"),
+            ));
         }
         self.ensure_room_adoptable(room_id).await?;
         if !self

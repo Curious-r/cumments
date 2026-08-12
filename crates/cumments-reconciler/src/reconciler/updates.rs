@@ -32,6 +32,33 @@ impl Reconciler {
                     .get_registered_room(&intent.site_id, &intent.post_slug)
                     .await?;
 
+                // Quarantine gate: fail fast while a quarantined room's retry
+                // is not due instead of hammering alias recovery per comment.
+                if candidate_room_id.is_none()
+                    && let Some(room) = self
+                        .quarantined_room_for(&intent.site_id, &intent.post_slug)
+                        .await?
+                {
+                    match room.next_attempt_at {
+                        Some(next) if next > chrono::Utc::now() => {
+                            return Err(anyhow::anyhow!(
+                                "Room {} is quarantined until {}: {}",
+                                room.room_id,
+                                next.to_rfc3339(),
+                                room.quarantine_reason
+                            ));
+                        }
+                        None => {
+                            return Err(anyhow::anyhow!(
+                                "Room {} requires manual reinstatement: {}",
+                                room.room_id,
+                                room.quarantine_reason
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+
                 // 3. Hands: Ensure room
                 let room_id = match self
                     .driver
@@ -45,13 +72,14 @@ impl Reconciler {
                 {
                     Ok(room_id) => room_id,
                     Err(e) => {
-                        if adoption_blocked(&e)
-                            && let Some(candidate) = candidate_room_id.as_deref()
-                        {
-                            let _ = self
-                                .registry_store
-                                .quarantine_room(candidate, &e.to_string(), None)
-                                .await;
+                        if should_quarantine(&e) {
+                            let room_id = quarantine_target(&e)
+                                .or_else(|| candidate_room_id.clone());
+                            if let Some(room_id) = room_id {
+                                let _ = self
+                                    .record_adoption_failure(&room_id, &e.to_string())
+                                    .await;
+                            }
                         }
                         return Err(e);
                     }
@@ -88,15 +116,12 @@ impl Reconciler {
                 {
                     Ok(_) => {}
                     Err(e) => {
-                        if room_unavailable(&e) {
+                        if is_room_gone(&e) {
                             warn!(
-                                "Update intent [{}] failed on room {}; invalidating registry entry: {:#}",
+                                "Update intent [{}] failed on room {}; retiring registry entry: {:#}",
                                 id, room_id, e
                             );
-                            let _ = self
-                                .registry_store
-                                .retire_room(&room_id)
-                                .await;
+                            let _ = self.registry_store.retire_room(&room_id).await;
                         }
                         return Err(e);
                     }

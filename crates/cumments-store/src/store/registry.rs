@@ -136,6 +136,7 @@ impl RegistryStore for DbStore {
         &self,
         room_id: &str,
         reason: &str,
+        adoption_failures: u32,
         next_attempt_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<()> {
         let now = chrono::Utc::now();
@@ -145,13 +146,7 @@ impl RegistryStore for DbStore {
         else {
             return Ok(());
         };
-        let already_quarantined = model.status == RoomStatus::Quarantined.as_str();
-        let adoption_failures = if already_quarantined {
-            model.adoption_failures + 1
-        } else {
-            1
-        };
-        let quarantined_at = if already_quarantined {
+        let quarantined_at = if model.status == RoomStatus::Quarantined.as_str() {
             model.quarantined_at
         } else {
             Some(now)

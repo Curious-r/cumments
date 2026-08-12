@@ -5,6 +5,8 @@ mod updates;
 
 use anyhow::Result;
 use cumments_core::{
+    matrix_error::MatrixError,
+    models::{PostSlug, QuarantinedRoom, SiteId},
     ports::{CommentStore, IntentStore, MatrixDriver, RegistryStore},
     site_service::SiteService,
 };
@@ -31,6 +33,16 @@ const INTENT_BATCH_SIZE: u64 = 100;
 /// calls (room creation, joins, sends). Prevents one stuck homeserver request
 /// from stalling the whole write path.
 const INTENT_TIMEOUT: Duration = Duration::from_secs(90);
+/// Adoption-retry backoff schedule for quarantined rooms.
+const QUARANTINE_BACKOFFS: [Duration; 3] = [
+    Duration::from_secs(60 * 60),
+    Duration::from_secs(6 * 60 * 60),
+    Duration::from_secs(24 * 60 * 60),
+];
+/// Consecutive adoption failures before automatic retries stop and the room
+/// requires manual `reinstate`. Failures 1-3 schedule the 1h/6h/24h retries;
+/// the fourth failure escalates.
+const QUARANTINE_ESCALATION: u32 = 4;
 
 /// Run one intent's processing future with a hard time budget.
 async fn run_intent<F>(future: F) -> Result<()>
@@ -46,22 +58,46 @@ where
     }
 }
 
-/// Whether a driver error indicates the target room itself is gone or no
-/// longer writable (as opposed to a transient homeserver failure).
-fn room_unavailable(err: &anyhow::Error) -> bool {
-    let text = err.to_string();
-    text.contains("M_NOT_FOUND") || text.contains("M_FORBIDDEN")
+/// Next scheduled automatic adoption attempt after `failures` consecutive
+/// adoption failures; `None` once the escalation threshold is reached.
+fn next_quarantine_attempt(failures: u32) -> Option<chrono::DateTime<chrono::Utc>> {
+    if failures == 0 || failures >= QUARANTINE_ESCALATION {
+        return None;
+    }
+    QUARANTINE_BACKOFFS
+        .get((failures - 1) as usize)
+        .map(|backoff| chrono::Utc::now() + *backoff)
 }
 
-/// Whether a driver error means a room was refused/blocked during adoption
-/// (governance or room-version validation), as opposed to a transient
-/// failure. These should be surfaced as operator-visible blocked rooms.
-fn adoption_blocked(err: &anyhow::Error) -> bool {
-    let text = err.to_string();
-    text.contains("Refusing to adopt")
-        || text.contains("Cannot verify governance")
-        || text.contains("redact threshold")
-        || text.contains("not created as m.space")
+/// Whether a driver error means adoption was refused for governance reasons;
+/// the room should be quarantined.
+fn should_quarantine(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<MatrixError>(),
+            Some(MatrixError::AdoptionRefused { .. })
+        )
+    })
+}
+
+/// Whether a driver error means the target room itself is gone or no longer
+/// writable; the registry entry should be retired.
+fn is_room_gone(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<MatrixError>(),
+            Some(MatrixError::RoomGone { .. })
+        )
+    })
+}
+
+/// The room ID of an adoption refusal, if the typed error carries one.
+fn quarantine_target(err: &anyhow::Error) -> Option<String> {
+    err.chain()
+        .find_map(|cause| match cause.downcast_ref::<MatrixError>() {
+            Some(MatrixError::AdoptionRefused { room_id, .. }) => Some(room_id.clone()),
+            _ => None,
+        })
 }
 
 /// The Reconciler acts as the Orchestrator of the background process.
@@ -92,6 +128,35 @@ impl Reconciler {
             site_service,
             notify,
         }
+    }
+
+    /// The quarantined room for a site/post, if any.
+    async fn quarantined_room_for(
+        &self,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<Option<QuarantinedRoom>> {
+        let rooms = self.registry_store.get_quarantined_rooms().await?;
+        Ok(rooms
+            .into_iter()
+            .find(|r| r.site_id == site_id.as_str() && r.post_slug == post_slug.as_str()))
+    }
+
+    /// Records one more adoption failure for a room, applying the backoff
+    /// schedule and escalating to manual attention after repeated failures.
+    async fn record_adoption_failure(&self, room_id: &str, reason: &str) -> Result<()> {
+        let failures = self
+            .registry_store
+            .get_quarantined_rooms()
+            .await?
+            .into_iter()
+            .find(|r| r.room_id == room_id)
+            .map(|r| r.adoption_failures + 1)
+            .unwrap_or(1);
+        self.registry_store
+            .quarantine_room(room_id, reason, failures, next_quarantine_attempt(failures))
+            .await?;
+        Ok(())
     }
 
     /// Runs the main reconciliation loop.
@@ -181,5 +246,46 @@ impl Reconciler {
             }
         };
         Ok(post_count + delete_count + update_count + timeout_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quarantine_backoff_escalates_after_three_scheduled_retries() {
+        let now = chrono::Utc::now();
+        let one_hour = next_quarantine_attempt(1).expect("1h retry") - now;
+        assert!((one_hour - chrono::Duration::hours(1)).num_seconds().abs() <= 5);
+        let six_hours = next_quarantine_attempt(2).expect("6h retry") - now;
+        assert!((six_hours - chrono::Duration::hours(6)).num_seconds().abs() <= 5);
+        let day = next_quarantine_attempt(3).expect("24h retry") - now;
+        assert!((day - chrono::Duration::hours(24)).num_seconds().abs() <= 5);
+        assert!(next_quarantine_attempt(4).is_none());
+        assert!(next_quarantine_attempt(0).is_none());
+    }
+
+    #[test]
+    fn typed_classifiers_drive_quarantine_and_retire_policy() {
+        let refused = anyhow::Error::new(MatrixError::AdoptionRefused {
+            room_id: "!room:hs".to_string(),
+            reason: "Refusing to adopt room".to_string(),
+        });
+        assert!(should_quarantine(&refused));
+        assert!(!is_room_gone(&refused));
+        assert_eq!(quarantine_target(&refused).as_deref(), Some("!room:hs"));
+
+        let gone = anyhow::Error::new(MatrixError::RoomGone {
+            room_id: "!room:hs".to_string(),
+            reason: "M_NOT_FOUND".to_string(),
+        });
+        assert!(!should_quarantine(&gone));
+        assert!(is_room_gone(&gone));
+        assert!(quarantine_target(&gone).is_none());
+
+        let transient = anyhow::anyhow!("request timed out");
+        assert!(!should_quarantine(&transient));
+        assert!(!is_room_gone(&transient));
     }
 }

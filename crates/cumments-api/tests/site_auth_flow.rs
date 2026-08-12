@@ -808,7 +808,7 @@ async fn admin_lists_quarantined_rooms() {
         .await
         .expect("register room");
     store
-        .quarantine_room("!room:hs", "Refusing to adopt room", None)
+        .quarantine_room("!room:hs", "Refusing to adopt room", 1, None)
         .await
         .expect("quarantine room");
 

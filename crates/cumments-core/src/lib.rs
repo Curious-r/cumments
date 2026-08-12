@@ -2,6 +2,7 @@
 
 pub mod identity;
 pub mod intents;
+pub mod matrix_error;
 pub mod models;
 pub mod ports;
 pub mod projector_events;

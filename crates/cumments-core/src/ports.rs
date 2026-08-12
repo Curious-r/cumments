@@ -258,14 +258,17 @@ pub trait RegistryStore: Send + Sync {
     /// was replaced), keeping the row for projection history.
     async fn retire_room(&self, room_id: &str) -> Result<()>;
 
-    /// Quarantines a room after an adoption failure. Repeated failures
-    /// increment the counter while preserving the original quarantine time.
-    /// `next_attempt_at` schedules the next automatic adoption attempt;
-    /// `None` means the room needs manual attention (`reinstate_room`).
+    /// Quarantines a room after an adoption failure. `adoption_failures` is
+    /// the failure count after this attempt (the caller derives it from the
+    /// backoff policy); the original quarantine time is preserved when the
+    /// room is already quarantined. `next_attempt_at` schedules the next
+    /// automatic adoption attempt; `None` means the room needs manual
+    /// attention (`reinstate_room`).
     async fn quarantine_room(
         &self,
         room_id: &str,
         reason: &str,
+        adoption_failures: u32,
         next_attempt_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<()>;
 

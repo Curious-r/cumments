@@ -948,6 +948,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
+ "thiserror",
  "tokio",
  "tracing",
  "url",

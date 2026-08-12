@@ -168,6 +168,7 @@ async fn quarantined_rooms_are_listed_and_cleared_on_register() {
         .quarantine_room(
             "!room:hs",
             "Refusing to adopt room: AS sender cannot write state",
+            1,
             None,
         )
         .await
@@ -223,12 +224,12 @@ async fn quarantine_tracks_failures_and_preserves_first_time() {
     let first_quarantine = Utc::now();
     let first_attempt = first_quarantine + chrono::Duration::hours(1);
     store
-        .quarantine_room("!room:hs", "first refusal", Some(first_attempt))
+        .quarantine_room("!room:hs", "first refusal", 1, Some(first_attempt))
         .await
         .expect("first quarantine");
     let second_attempt = Utc::now() + chrono::Duration::hours(6);
     store
-        .quarantine_room("!room:hs", "second refusal", Some(second_attempt))
+        .quarantine_room("!room:hs", "second refusal", 2, Some(second_attempt))
         .await
         .expect("second quarantine");
 
@@ -266,7 +267,7 @@ async fn reinstate_supersedes_other_active_room() {
         .await
         .expect("register second room");
     store
-        .quarantine_room("!room-b:hs", "refused", None)
+        .quarantine_room("!room-b:hs", "refused", 1, None)
         .await
         .expect("quarantine current room");
 
@@ -312,6 +313,7 @@ async fn retire_room_marks_superseded_and_clears_schedule() {
         .quarantine_room(
             "!room:hs",
             "refused",
+            1,
             Some(Utc::now() + chrono::Duration::hours(1)),
         )
         .await
