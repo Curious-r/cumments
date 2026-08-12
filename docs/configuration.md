@@ -102,6 +102,11 @@ For local development, set `mode = "logging"`; no `matrix.homeserver`,
 - SQLite files are created automatically, but the parent directory must exist
   (the repo has a `data/` directory).
 - All timestamps are stored in UTC with millisecond precision.
+- `server.trusted_proxies` lists reverse proxies allowed to set
+  `X-Forwarded-For`; rate limiting ignores the header from any other peer.
+- `security.allow_private_verification_origins` (default `false`) permits
+  verification of loopback/private/link-local IP-literal origins; keep it
+  disabled in production because `confirm` makes outbound HTTP/DNS probes.
 
 ## Site verification and write-path authentication
 

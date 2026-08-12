@@ -271,10 +271,18 @@ database-tracked site into declarative config.
 
 `POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are
 rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
-`429 RATE_LIMITED`. Behind a reverse proxy, set `X-Forwarded-For` correctly;
-the first value is used as the client key.
+`429 RATE_LIMITED`. Verification `confirm` is limited to 30/hour, comment
+writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE connections to
+20/hour with a global cap of 500 concurrent streams.
 
-## Validation
+Client keys are the peer IP by default. `X-Forwarded-For` is honored only
+when the peer is listed in `server.trusted_proxies`; the first value is then
+used as the client key.
+
+Verification origins must be public by default: loopback/private/link-local
+IP-literal origins are rejected unless
+`security.allow_private_verification_origins = true`. Each verification
+token allows at most 5 confirm attempts before a new challenge is required.
 
 ## Validation
 
