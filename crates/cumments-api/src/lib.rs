@@ -102,7 +102,9 @@ pub fn build_router(state: ApiState) -> Router {
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
-            delete(delete_comment_handler).patch(update_comment_handler),
+            delete(delete_comment_handler)
+                .patch(update_comment_handler)
+                .fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -114,50 +116,63 @@ pub fn build_router(state: ApiState) -> Router {
     let public_router = Router::new()
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/sse",
-            get(sse_handler),
+            get(sse_handler).fallback(method_not_allowed_handler),
         )
-        .route("/api/v1/challenge", get(get_challenge_handler))
-        .route("/api/v1/sites", post(register_site_handler))
+        .route(
+            "/api/v1/challenge",
+            get(get_challenge_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites",
+            post(register_site_handler).fallback(method_not_allowed_handler),
+        )
         .route(
             "/api/v1/sites/{site_id}/verifications",
-            post(start_verification_handler),
+            post(start_verification_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/verifications/confirm",
-            post(confirm_verification_handler),
+            post(confirm_verification_handler).fallback(method_not_allowed_handler),
         )
-        .route("/api/v1/sites/{site_id}/secret", post(issue_secret_handler))
-        .route("/health", get(health_handler))
+        .route(
+            "/api/v1/sites/{site_id}/secret",
+            post(issue_secret_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/health",
+            get(health_handler).fallback(method_not_allowed_handler),
+        )
         .layer(middleware::from_fn(public_cors));
 
     let admin_router = Router::new()
         .route(
             "/api/v1/admin/sites",
-            axum::routing::get(list_admin_sites_handler),
+            axum::routing::get(list_admin_sites_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/admin/sites/{site_id}/origins/revoke",
-            axum::routing::post(revoke_verified_origin_handler),
+            axum::routing::post(revoke_verified_origin_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/admin/sites/{site_id}/secret/rotate",
-            axum::routing::post(rotate_secret_handler),
+            axum::routing::post(rotate_secret_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/admin/sites/{site_id}/secret",
-            axum::routing::delete(revoke_secret_handler),
+            axum::routing::delete(revoke_secret_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/admin/sites/{site_id}/config-snippet",
-            axum::routing::get(config_snippet_handler),
+            axum::routing::get(config_snippet_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/admin/sites/{site_id}/claim-token/rotate",
-            axum::routing::post(rotate_claim_token_handler),
+            axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/admin/rooms/blocked",
-            axum::routing::get(list_blocked_rooms_handler),
+            axum::routing::get(list_blocked_rooms_handler).fallback(method_not_allowed_handler),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -165,8 +180,20 @@ pub fn build_router(state: ApiState) -> Router {
         .merge(comment_router)
         .merge(public_router)
         .merge(admin_router)
+        .fallback(not_found_handler)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Unmatched methods on a registered route return the same problem envelope
+/// as business errors.
+async fn method_not_allowed_handler() -> error::AppError {
+    error::AppError::MethodNotAllowed
+}
+
+/// Unmatched paths return the same problem envelope as business errors.
+async fn not_found_handler() -> error::AppError {
+    error::AppError::NotFound("Route not found.".to_string())
 }
 
 #[cfg(test)]

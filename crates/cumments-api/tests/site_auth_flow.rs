@@ -191,7 +191,7 @@ async fn write_enforcement_follows_policy_and_origin() {
     assert!(
         body_text(null_optional)
             .await
-            .contains("SITE_ORIGIN_DENIED")
+            .contains("site-origin-denied")
     );
 
     // required: unknown sites are rejected with verification guidance
@@ -211,7 +211,7 @@ async fn write_enforcement_follows_policy_and_origin() {
     assert!(
         body_text(response)
             .await
-            .contains("SITE_VERIFICATION_REQUIRED")
+            .contains("site-verification-required")
     );
 }
 
@@ -351,7 +351,7 @@ async fn verified_site_enforces_exact_origins_and_rejects_null() {
         .await
         .expect("call router");
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
-    assert!(body_text(denied).await.contains("SITE_ORIGIN_DENIED"));
+    assert!(body_text(denied).await.contains("site-origin-denied"));
 
     let null_origin = router
         .clone()
@@ -364,7 +364,7 @@ async fn verified_site_enforces_exact_origins_and_rejects_null() {
         .await
         .expect("call router");
     assert_eq!(null_origin.status(), StatusCode::FORBIDDEN);
-    assert!(body_text(null_origin).await.contains("SITE_ORIGIN_DENIED"));
+    assert!(body_text(null_origin).await.contains("site-origin-denied"));
 
     let missing = router
         .clone()
@@ -423,7 +423,7 @@ async fn secret_mode_requires_a_valid_hmac_signature() {
         .await
         .expect("call router");
     assert_eq!(bad.status(), StatusCode::FORBIDDEN);
-    assert!(body_text(bad).await.contains("SITE_SIGNATURE_INVALID"));
+    assert!(body_text(bad).await.contains("site-signature-invalid"));
 }
 
 #[tokio::test]

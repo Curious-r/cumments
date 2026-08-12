@@ -1600,8 +1600,9 @@
                 let message = res.statusText || `HTTP ${res.status}`;
                 try {
                     const body = await res.json();
-                    if (body.error) message = body.error;
-                    if (body.code) message += ` (${body.code})`;
+                    if (body.detail) message = body.detail;
+                    else if (body.title) message = body.title;
+                    if (body.error_code) message += ` (${body.error_code})`;
                 } catch {
                     // keep status text
                 }

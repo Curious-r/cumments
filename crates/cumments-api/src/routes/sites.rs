@@ -190,8 +190,10 @@ pub(crate) async fn start_verification_handler(
     Path(site_id): Path<String>,
     headers: HeaderMap,
     connect: ConnectInfo<SocketAddr>,
-    Json(req): Json<StartVerificationRequest>,
+    body: String,
 ) -> Result<impl IntoResponse, AppError> {
+    let req: StartVerificationRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.verification_limiter.allow(&key) {
         return Err(AppError::TooManyRequests(
@@ -242,8 +244,10 @@ pub(crate) async fn confirm_verification_handler(
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(req): Json<ConfirmVerificationRequest>,
+    body: String,
 ) -> Result<impl IntoResponse, AppError> {
+    let req: ConfirmVerificationRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.confirm_limiter.allow(&key) {
         return Err(AppError::TooManyRequests(
@@ -338,8 +342,10 @@ pub(crate) async fn issue_secret_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     headers: HeaderMap,
-    Json(req): Json<IssueSecretRequest>,
+    body: String,
 ) -> Result<impl IntoResponse, AppError> {
+    let req: IssueSecretRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let claim_token = claim_token_from_headers(&headers)?;
     let issued = issue_site_secret(&*state.store, &site_id, &claim_token, req.rotate)

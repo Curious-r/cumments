@@ -248,8 +248,10 @@ fn admin_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
 pub(crate) async fn revoke_verified_origin_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
-    Json(req): Json<RevokeOriginRequest>,
+    body: String,
 ) -> Result<Json<AdminSite>, AppError> {
+    let req: RevokeOriginRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let origin = cumments_core::site_auth::Origin::parse(&req.origin)
         .map_err(|e| AppError::BadRequest(format!("invalid origin `{}`: {e}", req.origin)))?;

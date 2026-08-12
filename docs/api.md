@@ -35,7 +35,7 @@ Authors come in two forms:
   `author.public_key` is set and `PATCH`/`DELETE` work via the API.
 - `"type": "matrix"` — posted directly in Matrix by a regular account;
   `author.mxid` is set. These comments are managed from a Matrix client, and
-  the Cumments API returns `403 NOT_MANAGEABLE` for `PATCH`/`DELETE`.
+  the Cumments API returns `403 error_code=not-manageable` for `PATCH`/`DELETE`.
 
 ### List comments
 
@@ -192,11 +192,11 @@ server detects the duplicate and returns the original `intent_id` again with
 Rules:
 
 - The key is mandatory (missing or invalid values return
-  `400 IDEMPOTENCY_KEY_REQUIRED` / `400 INVALID_IDEMPOTENCY_KEY`).
+  `400 error_code=idempotency-key-required` / `400 error_code=invalid-idempotency-key`).
 - Keys are scoped to `author_public_key + Idempotency-Key`; the same key from
   a different author is independent.
 - The request fingerprint is `METHOD\npath\nsha256(body)`. Reusing a key with
-  a different request returns `409 IDEMPOTENCY_KEY_REUSED`; the conflicting
+  a different request returns `409 error_code=idempotency-key-reused`; the conflicting
   request is not recorded and not queued.
 - Invalid requests (bad PoW, bad signature, not found, unauthorized, invalid
   JSON) do not consume the key.
@@ -363,11 +363,30 @@ room id, site/post, reason, and last update. A successful re-registration
 clears the blocked state. The same pagination/filter parameters and
 `{ "data", "meta" }` shape apply.
 
+## Error responses
+
+All error responses use the RFC 9457 problem details format with
+`Content-Type: application/problem+json`:
+
+```json
+{
+  "type": "https://curious-r.github.io/cumments/problems/#idempotency-key-reused",
+  "title": "Idempotency-Key reused",
+  "status": 409,
+  "detail": "This Idempotency-Key was already used with a different request.",
+  "error_code": "idempotency-key-reused"
+}
+```
+
+`error_code` is a stable machine-readable slug; `type` is its canonical URI
+and resolves to the problem documentation on the docs site. The complete
+registry is documented in [Problem types](problems/index.md).
+
 ## Rate limiting
 
 `POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are
 rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
-`429 RATE_LIMITED`. Verification `confirm` is limited to 30/hour, comment
+`429 error_code=rate-limited`. Verification `confirm` is limited to 30/hour, comment
 writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE connections to
 20/hour with a global cap of 500 concurrent streams.
 SSE reconnects within 30 seconds of a disconnect do not consume the hourly
@@ -387,4 +406,4 @@ token allows at most 5 confirm attempts before a new challenge is required.
 ## Validation
 
 `site_id` and `post_slug` accept lowercase `[a-z0-9-]`, 1–64 characters.
-Invalid values return `400 VALIDATION_ERROR`.
+Invalid values return `400 error_code=validation-error`.

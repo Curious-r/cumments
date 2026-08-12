@@ -197,5 +197,5 @@ tighten the instance:
 2. Check the admin API for stragglers:
    `GET /api/v1/admin/sites` (with the admin token).
 3. Flip the policy to `"required"` and restart. Unverified sites now receive
-   `403 SITE_VERIFICATION_REQUIRED` on writes, and legacy auto-creation is
+   `403 error_code=site-verification-required` on writes, and legacy auto-creation is
    disabled entirely.
