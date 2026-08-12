@@ -1627,6 +1627,22 @@
                 return res.json();
             }
 
+            // One key per logical write; a retry of the same request should
+            // reuse the same key so the server replays the original intent.
+            function newIdempotencyKey() {
+                if (crypto.randomUUID) return crypto.randomUUID();
+                const bytes = crypto.getRandomValues(new Uint8Array(16));
+                bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                const hex = Array.from(bytes, (b) =>
+                    b.toString(16).padStart(2, "0"),
+                ).join("");
+                return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+                    12,
+                    16,
+                )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+            }
+
             // ==========================================
             // 评论列表
             // ==========================================
@@ -2030,7 +2046,10 @@
                         `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
                         {
                             method: "POST",
-                            headers: { "Content-Type": "application/json" },
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Idempotency-Key": newIdempotencyKey(),
+                            },
                             body: JSON.stringify({
                                 content,
                                 display_name: displayName,
@@ -2092,7 +2111,10 @@
                     `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}`,
                     {
                         method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Idempotency-Key": newIdempotencyKey(),
+                        },
                         body: JSON.stringify({
                             content: newContent,
                             author_public_key: publicKey,
@@ -2121,7 +2143,10 @@
                         `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(commentId)}`,
                         {
                             method: "DELETE",
-                            headers: { "Content-Type": "application/json" },
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Idempotency-Key": newIdempotencyKey(),
+                            },
                             body: JSON.stringify({
                                 author_public_key: publicKey,
                                 author_signature: signature,

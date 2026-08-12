@@ -30,6 +30,7 @@ pub mod m20260812_000024_post_intent_timeout_check_errors;
 pub mod m20260812_000025_room_registry_blocked_reason;
 pub mod m20260812_000026_post_intent_last_timeout_confirmation_at;
 pub mod m20260812_000027_comments_intent_id;
+pub mod m20260812_000028_idempotency_keys;
 
 pub struct Migrator;
 
@@ -92,6 +93,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260812_000025_room_registry_blocked_reason::Migration),
             Box::new(m20260812_000026_post_intent_last_timeout_confirmation_at::Migration),
             Box::new(m20260812_000027_comments_intent_id::Migration),
+            Box::new(m20260812_000028_idempotency_keys::Migration),
         ]
     }
 }

@@ -86,6 +86,10 @@ request must carry `X-Cumments-Timestamp` and `X-Cumments-Signature`
 (HMAC-SHA256 over `timestamp\nMETHOD\npath\nsha256(body)`, ±5 minutes).
 See [configuration](configuration.md) for the policy.
 
+Every write request must also carry an `Idempotency-Key` header (8-255
+printable ASCII characters). See [Idempotent writes](#idempotent-writes)
+below.
+
 Body:
 
 ```json
@@ -147,6 +151,8 @@ The same operation is available without embedding `comment_id` in the URL:
 
 The path-based form remains supported for backwards compatibility.
 
+Both edit forms require the `Idempotency-Key` header.
+
 ### Delete a comment
 
 `DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`
@@ -171,6 +177,35 @@ The body-based form is:
 ```
 
 The path-based form remains supported for backwards compatibility.
+
+Both delete forms require the `Idempotency-Key` header.
+
+### Idempotent writes
+
+`POST`, `PATCH` and `DELETE` are asynchronous: they accept an intent and
+return `202 { "intent_id": ... }` before the comment actually lands in Matrix.
+If the client loses the response (network failure, timeout, browser crash) it
+can retry the exact same request with the same `Idempotency-Key` header; the
+server detects the duplicate and returns the original `intent_id` again with
+`Idempotent-Replayed: true`, without queueing a second intent.
+
+Rules:
+
+- The key is mandatory (missing or invalid values return
+  `400 IDEMPOTENCY_KEY_REQUIRED` / `400 INVALID_IDEMPOTENCY_KEY`).
+- Keys are scoped to `author_public_key + Idempotency-Key`; the same key from
+  a different author is independent.
+- The request fingerprint is `METHOD\npath\nsha256(body)`. Reusing a key with
+  a different request returns `409 IDEMPOTENCY_KEY_REUSED`; the conflicting
+  request is not recorded and not queued.
+- Invalid requests (bad PoW, bad signature, not found, unauthorized, invalid
+  JSON) do not consume the key.
+- Records are kept for 24 hours, aligned with Stripe's idempotency retention;
+  after that the key can be reused.
+
+Clients should generate a fresh key per logical write (e.g. `crypto.randomUUID()`)
+and reuse that exact key when retrying the same request. Use the same endpoint
+form (path-based or body-based) for all retries of a key.
 
 ## Real-time updates (SSE)
 

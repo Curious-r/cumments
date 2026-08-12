@@ -59,6 +59,8 @@ paths:
       tags: [Comments]
       summary: Submit a comment
       operationId: postComment
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -67,7 +69,13 @@ paths:
               $ref: "#/components/schemas/PostCommentRequest"
       responses:
         "202":
-          description: Intent accepted
+          description: "Intent accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
@@ -76,12 +84,16 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
     patch:
       tags: [Comments]
       summary: Edit a comment (body carries comment_id)
       operationId: updateCommentBody
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -90,7 +102,13 @@ paths:
               $ref: "#/components/schemas/UpdateCommentRequest"
       responses:
         "202":
-          description: Edit intent accepted
+          description: "Edit intent accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
@@ -99,12 +117,16 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
     delete:
       tags: [Comments]
       summary: Delete a comment (body carries comment_id)
       operationId: deleteCommentBody
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -113,7 +135,13 @@ paths:
               $ref: "#/components/schemas/DeleteCommentRequest"
       responses:
         "202":
-          description: Delete intent accepted
+          description: "Delete intent accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
@@ -121,6 +149,8 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
@@ -176,6 +206,8 @@ paths:
       tags: [Comments]
       summary: Edit a comment (legacy path form)
       operationId: updateCommentPath
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -184,7 +216,13 @@ paths:
               $ref: "#/components/schemas/UpdateCommentRequest"
       responses:
         "202":
-          description: Edit intent accepted
+          description: "Edit intent accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
@@ -193,12 +231,16 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
     delete:
       tags: [Comments]
       summary: Delete a comment (legacy path form)
       operationId: deleteCommentPath
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -207,7 +249,13 @@ paths:
               $ref: "#/components/schemas/DeleteCommentRequest"
       responses:
         "202":
-          description: Delete intent accepted
+          description: "Delete intent accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
@@ -215,6 +263,8 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
@@ -492,6 +542,21 @@ components:
       schema:
         type: string
         description: Matrix event ID, percent-encoded
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Mandatory for all write intents. 8-255 printable ASCII characters,
+        scoped to the author's public key. Retrying an accepted request with
+        the same key and body returns the original `intent_id` with
+        `Idempotent-Replayed: true`; a different body with the same key
+        returns `409 IDEMPOTENCY_KEY_REUSED`. Keys are retained for 24 hours.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+        pattern: "^[!-~]{8,255}$"
     ClaimToken:
       name: X-Cumments-Claim-Token
       in: header

@@ -366,7 +366,7 @@ fn preflight_response(allowed_origin: Option<Origin>) -> Response {
     );
     headers.insert(
         ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("content-type"),
+        HeaderValue::from_static("content-type, idempotency-key"),
     );
     response
 }

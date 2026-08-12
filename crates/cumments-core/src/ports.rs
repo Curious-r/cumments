@@ -9,6 +9,28 @@ use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationT
 use anyhow::Result;
 use async_trait::async_trait;
 
+/// Idempotency metadata attached to one write request.
+///
+/// The key scopes retries to a single author, and the request fingerprint
+/// detects reuse of the same key with a different request body.
+#[derive(Clone, Debug)]
+pub struct IdempotencyInput {
+    pub author_public_key: String,
+    pub key: String,
+    pub request_fingerprint: String,
+}
+
+/// Result of an idempotency-aware intent save.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdempotencyOutcome {
+    /// A new intent was queued.
+    Accepted { intent_id: i64 },
+    /// The exact same request was already accepted; return the original id.
+    Replayed { intent_id: i64 },
+    /// The key is already bound to a different request fingerprint.
+    Reused,
+}
+
 /// The port for all intent storage operations.
 #[async_trait]
 pub trait IntentStore: Send + Sync {
@@ -18,6 +40,31 @@ pub trait IntentStore: Send + Sync {
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<i64>;
     /// Persists a new update intent and returns its queue row ID.
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<i64>;
+
+    /// Saves a post intent and its idempotency record atomically.
+    ///
+    /// The lookup, fingerprint comparison and inserts happen in one
+    /// transaction so concurrent retries of the same key cannot queue
+    /// duplicate intents.
+    async fn save_post_intent_idempotent(
+        &self,
+        intent: &PostCommentIntent,
+        idempotency: &IdempotencyInput,
+    ) -> Result<IdempotencyOutcome>;
+
+    /// Saves a delete intent and its idempotency record atomically.
+    async fn save_delete_intent_idempotent(
+        &self,
+        intent: &DeleteCommentIntent,
+        idempotency: &IdempotencyInput,
+    ) -> Result<IdempotencyOutcome>;
+
+    /// Saves an update intent and its idempotency record atomically.
+    async fn save_update_intent_idempotent(
+        &self,
+        intent: &UpdateCommentIntent,
+        idempotency: &IdempotencyInput,
+    ) -> Result<IdempotencyOutcome>;
 
     /// Returns at most `limit` due pending post intents, oldest first.
     async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>>;

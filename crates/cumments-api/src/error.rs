@@ -28,6 +28,9 @@ pub enum AppError {
     BadRequest(String),
     Conflict(String),
     TooManyRequests(String),
+    IdempotencyKeyRequired(String),
+    InvalidIdempotencyKey(String),
+    IdempotencyReused,
     SiteVerificationRequired(String),
     SiteOriginDenied(String),
     SiteSignatureInvalid(String),
@@ -69,6 +72,24 @@ impl IntoResponse for AppError {
             AppError::TooManyRequests(msg) => {
                 (StatusCode::TOO_MANY_REQUESTS, msg, "RATE_LIMITED", None)
             }
+            AppError::IdempotencyKeyRequired(msg) => (
+                StatusCode::BAD_REQUEST,
+                msg,
+                "IDEMPOTENCY_KEY_REQUIRED",
+                None,
+            ),
+            AppError::InvalidIdempotencyKey(msg) => (
+                StatusCode::BAD_REQUEST,
+                msg,
+                "INVALID_IDEMPOTENCY_KEY",
+                None,
+            ),
+            AppError::IdempotencyReused => (
+                StatusCode::CONFLICT,
+                "This Idempotency-Key was already used with a different request.".to_string(),
+                "IDEMPOTENCY_KEY_REUSED",
+                None,
+            ),
             AppError::SiteVerificationRequired(msg) => (
                 StatusCode::FORBIDDEN,
                 msg,

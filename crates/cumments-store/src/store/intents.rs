@@ -1,7 +1,7 @@
 use super::DbStore;
 use crate::entities::{
-    active_enums::IntentStatus, intent_queue_delete_comment, intent_queue_post_comment,
-    intent_queue_update_comment,
+    active_enums::IntentStatus, idempotency_keys, intent_queue_delete_comment,
+    intent_queue_post_comment, intent_queue_update_comment,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -9,10 +9,10 @@ use cumments_core::intents::{
     DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
 };
-use cumments_core::ports::IntentStore;
+use cumments_core::ports::{IdempotencyInput, IdempotencyOutcome, IntentStore};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-    Set, UpdateMany,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait, UpdateMany, Value,
 };
 use tracing::warn;
 
@@ -27,6 +27,9 @@ const MAX_BACKOFF_SECS: i64 = 1800;
 /// confirmations required before dead-lettering are genuinely spread across
 /// reconcile cycles.
 const TIMEOUT_CONFIRMATION_COOLDOWN_MS: i64 = 60_000;
+/// How long an `Idempotency-Key` stays valid (aligned with Stripe's 24h
+/// retention). Expired rows are purged lazily on the next idempotent write.
+const IDEMPOTENCY_RETENTION: chrono::Duration = chrono::Duration::hours(24);
 
 /// Exponential backoff delay for the *next* attempt, based on the number of
 /// failures already recorded.
@@ -112,6 +115,151 @@ impl IntentStore for DbStore {
             .exec(&self.db)
             .await?;
         Ok(result.last_insert_id)
+    }
+
+    async fn save_post_intent_idempotent(
+        &self,
+        intent: &PostCommentIntent,
+        idempotency: &IdempotencyInput,
+    ) -> Result<IdempotencyOutcome> {
+        let txn = self.db.begin().await?;
+        self.purge_expired_idempotency(&txn).await?;
+        if let Some(outcome) = self.existing_idempotency_outcome(&txn, idempotency).await? {
+            return Ok(outcome);
+        }
+
+        let payload = serde_json::to_string(intent)?;
+        let active_model = intent_queue_post_comment::ActiveModel {
+            payload: Set(payload),
+            status: Set(IntentStatus::Pending),
+            retry_count: Set(0),
+            timeout_confirmations: Set(0),
+            timeout_check_errors: Set(0),
+            last_timeout_confirmation_at: Set(None),
+            author_public_key: Set(Some(intent.author_public_key.clone())),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        let result = intent_queue_post_comment::Entity::insert(active_model)
+            .exec(&txn)
+            .await?;
+        let intent_id = result.last_insert_id;
+
+        let outcome = self
+            .save_idempotency_record(&txn, idempotency, intent_id)
+            .await?;
+        if let IdempotencyOutcome::Replayed {
+            intent_id: existing_id,
+        } = &outcome
+            && *existing_id != intent_id
+        {
+            // Another writer won the key race: drop the intent this request
+            // just queued so only the winner's work is ever processed.
+            intent_queue_post_comment::Entity::delete_by_id(intent_id)
+                .exec(&txn)
+                .await?;
+        }
+        if matches!(outcome, IdempotencyOutcome::Reused) {
+            // Roll back the duplicate intent; invalid reuse is not recorded.
+            return Ok(outcome);
+        }
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn save_delete_intent_idempotent(
+        &self,
+        intent: &DeleteCommentIntent,
+        idempotency: &IdempotencyInput,
+    ) -> Result<IdempotencyOutcome> {
+        let txn = self.db.begin().await?;
+        self.purge_expired_idempotency(&txn).await?;
+        if let Some(outcome) = self.existing_idempotency_outcome(&txn, idempotency).await? {
+            return Ok(outcome);
+        }
+
+        let payload = serde_json::to_string(intent)?;
+        let active_model = intent_queue_delete_comment::ActiveModel {
+            payload: Set(payload),
+            status: Set(IntentStatus::Pending),
+            target_event_id: Set(Some(intent.event_id.clone())),
+            retry_count: Set(0),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        let result = intent_queue_delete_comment::Entity::insert(active_model)
+            .exec(&txn)
+            .await?;
+        let intent_id = result.last_insert_id;
+
+        let outcome = self
+            .save_idempotency_record(&txn, idempotency, intent_id)
+            .await?;
+        if let IdempotencyOutcome::Replayed {
+            intent_id: existing_id,
+        } = &outcome
+            && *existing_id != intent_id
+        {
+            intent_queue_delete_comment::Entity::delete_by_id(intent_id)
+                .exec(&txn)
+                .await?;
+        }
+        if matches!(outcome, IdempotencyOutcome::Reused) {
+            return Ok(outcome);
+        }
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn save_update_intent_idempotent(
+        &self,
+        intent: &UpdateCommentIntent,
+        idempotency: &IdempotencyInput,
+    ) -> Result<IdempotencyOutcome> {
+        let txn = self.db.begin().await?;
+        self.purge_expired_idempotency(&txn).await?;
+        if let Some(outcome) = self.existing_idempotency_outcome(&txn, idempotency).await? {
+            return Ok(outcome);
+        }
+
+        let active_model = intent_queue_update_comment::ActiveModel {
+            site_id: Set(intent.site_id.as_str().to_owned()),
+            post_slug: Set(intent.post_slug.as_str().to_owned()),
+            event_id: Set(intent.event_id.clone()),
+            content: Set(intent.content.clone()),
+            author_public_key: Set(Some(intent.author_public_key.clone())),
+            author_signature: Set(Some(intent.author_signature.clone())),
+            author_challenge: Set(Some(intent.author_challenge.clone())),
+            status: Set(IntentStatus::Pending),
+            retry_count: Set(0),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        let result = intent_queue_update_comment::Entity::insert(active_model)
+            .exec(&txn)
+            .await?;
+        let intent_id = result.last_insert_id;
+
+        let outcome = self
+            .save_idempotency_record(&txn, idempotency, intent_id)
+            .await?;
+        if let IdempotencyOutcome::Replayed {
+            intent_id: existing_id,
+        } = &outcome
+            && *existing_id != intent_id
+        {
+            intent_queue_update_comment::Entity::delete_by_id(intent_id)
+                .exec(&txn)
+                .await?;
+        }
+        if matches!(outcome, IdempotencyOutcome::Reused) {
+            return Ok(outcome);
+        }
+        txn.commit().await?;
+        Ok(outcome)
     }
 
     async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>> {
@@ -763,6 +911,101 @@ impl IntentStore for DbStore {
             },
         )
         .await
+    }
+}
+
+impl DbStore {
+    /// Deletes idempotency rows older than the 24-hour retention window.
+    ///
+    /// Runs inside the same transaction as the write so a stale key can be
+    /// reused immediately without a separate cleanup pass.
+    async fn purge_expired_idempotency(&self, txn: &DatabaseTransaction) -> Result<()> {
+        idempotency_keys::Entity::delete_many()
+            .filter(
+                idempotency_keys::Column::CreatedAt.lt(chrono::Utc::now() - IDEMPOTENCY_RETENTION),
+            )
+            .exec(txn)
+            .await?;
+        Ok(())
+    }
+
+    /// Returns the stored outcome when this key was already used.
+    async fn existing_idempotency_outcome(
+        &self,
+        txn: &DatabaseTransaction,
+        idempotency: &IdempotencyInput,
+    ) -> Result<Option<IdempotencyOutcome>> {
+        let row = idempotency_keys::Entity::find()
+            .filter(idempotency_keys::Column::AuthorPublicKey.eq(&idempotency.author_public_key))
+            .filter(idempotency_keys::Column::IdempotencyKey.eq(&idempotency.key))
+            .one(txn)
+            .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        if row.request_fingerprint == idempotency.request_fingerprint {
+            Ok(Some(IdempotencyOutcome::Replayed {
+                intent_id: row.intent_id,
+            }))
+        } else {
+            Ok(Some(IdempotencyOutcome::Reused))
+        }
+    }
+
+    /// Inserts the idempotency record for a freshly queued intent.
+    ///
+    /// The insert ignores unique-constraint conflicts; when two writers race
+    /// for the same key, the loser reads the winner's row and reports replay
+    /// or reuse instead of queueing a duplicate intent.
+    async fn save_idempotency_record(
+        &self,
+        txn: &DatabaseTransaction,
+        idempotency: &IdempotencyInput,
+        intent_id: i64,
+    ) -> Result<IdempotencyOutcome> {
+        let backend = txn.get_database_backend();
+        let sql = if backend == DatabaseBackend::Sqlite {
+            "INSERT OR IGNORE INTO idempotency_keys \
+             (author_public_key, idempotency_key, request_fingerprint, intent_id, created_at) \
+             VALUES (?, ?, ?, ?, ?)"
+        } else {
+            "INSERT INTO idempotency_keys \
+             (author_public_key, idempotency_key, request_fingerprint, intent_id, created_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT (author_public_key, idempotency_key) DO NOTHING"
+        };
+        let inserted = txn
+            .execute_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                vec![
+                    Value::from(idempotency.author_public_key.clone()),
+                    Value::from(idempotency.key.clone()),
+                    Value::from(idempotency.request_fingerprint.clone()),
+                    Value::from(intent_id),
+                    Value::from(chrono::Utc::now()),
+                ],
+            ))
+            .await?;
+        if inserted.rows_affected() > 0 {
+            return Ok(IdempotencyOutcome::Accepted { intent_id });
+        }
+
+        let existing = idempotency_keys::Entity::find()
+            .filter(idempotency_keys::Column::AuthorPublicKey.eq(&idempotency.author_public_key))
+            .filter(idempotency_keys::Column::IdempotencyKey.eq(&idempotency.key))
+            .one(txn)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("idempotency insert conflicted but no row exists"))?;
+
+        if existing.request_fingerprint == idempotency.request_fingerprint {
+            Ok(IdempotencyOutcome::Replayed {
+                intent_id: existing.intent_id,
+            })
+        } else {
+            Ok(IdempotencyOutcome::Reused)
+        }
     }
 }
 
