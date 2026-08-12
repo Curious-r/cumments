@@ -4,7 +4,8 @@ use crate::routes::admin::{
     rotate_secret_handler,
 };
 use crate::routes::comments::{
-    delete_comment_handler, post_comment_handler, query_comments_handler, update_comment_handler,
+    delete_comment_body_handler, delete_comment_handler, post_comment_handler,
+    query_comments_handler, update_comment_body_handler, update_comment_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::sites::{
@@ -94,7 +95,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments",
             // POST for writing intents, fallback handles QUERY for reading.
-            post(post_comment_handler).fallback(query_comments_handler),
+            post(post_comment_handler)
+                .patch(update_comment_body_handler)
+                .delete(delete_comment_body_handler)
+                .fallback(query_comments_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",

@@ -252,6 +252,63 @@ async fn disabled_write_errors_include_wildcard_cors() {
 }
 
 #[tokio::test]
+async fn comment_body_endpoints_require_comment_id() {
+    let (state, _) = test_state("comment-body", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state);
+
+    let delete = router
+        .clone()
+        .oneshot(
+            request(
+                Method::DELETE,
+                "/api/v1/sites/test-blog/posts/hello/comments",
+                Some("null"),
+                &[],
+            )
+            .map(|_| {
+                Body::from(
+                    serde_json::json!({
+                        "author_public_key": "pk",
+                        "author_signature": "sig",
+                        "challenge_response": "chal|nonce",
+                    })
+                    .to_string(),
+                )
+            }),
+        )
+        .await
+        .expect("call router");
+    assert_eq!(delete.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(delete).await.contains("comment_id is required"));
+
+    let patch = router
+        .clone()
+        .oneshot(
+            request(
+                Method::PATCH,
+                "/api/v1/sites/test-blog/posts/hello/comments",
+                Some("null"),
+                &[],
+            )
+            .map(|_| {
+                Body::from(
+                    serde_json::json!({
+                        "content": "edited",
+                        "author_public_key": "pk",
+                        "author_signature": "sig",
+                        "challenge_response": "chal|nonce",
+                    })
+                    .to_string(),
+                )
+            }),
+        )
+        .await
+        .expect("call router");
+    assert_eq!(patch.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(patch).await.contains("comment_id is required"));
+}
+
+#[tokio::test]
 async fn verified_site_enforces_exact_origins_and_rejects_null() {
     let (state, store) = test_state("verified", SiteVerificationPolicy::Required, None).await;
     store

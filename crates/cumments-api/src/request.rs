@@ -57,6 +57,10 @@ pub struct PostCommentRequest {
 /// Request DTO for deleting a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct DeleteCommentRequest {
+    /// Matrix event ID of the comment to delete. Required when calling the
+    /// collection endpoint; ignored/optional on the legacy path endpoint.
+    #[serde(default)]
+    pub comment_id: Option<String>,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]
@@ -68,6 +72,10 @@ pub struct DeleteCommentRequest {
 /// Request DTO for updating a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateCommentRequest {
+    /// Matrix event ID of the comment to edit. Required when calling the
+    /// collection endpoint; ignored/optional on the legacy path endpoint.
+    #[serde(default)]
+    pub comment_id: Option<String>,
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
     #[validate(length(min = 1, max = 128))]

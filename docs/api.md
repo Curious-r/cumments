@@ -131,6 +131,22 @@ Signature message:
 PATCH\n{site_id}\n{post_slug}\n{comment_id}\n{content}\n{challenge_prefix}
 ```
 
+The same operation is available without embedding `comment_id` in the URL:
+
+`PATCH /api/v1/sites/{site_id}/posts/{post_slug}/comments`
+
+```json
+{
+  "comment_id": "$event:server",
+  "content": "edited",
+  "author_public_key": "...",
+  "author_signature": "...",
+  "challenge_response": "challenge|nonce"
+}
+```
+
+The path-based form remains supported for backwards compatibility.
+
 ### Delete a comment
 
 `DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`
@@ -140,6 +156,21 @@ Signature message:
 ```text
 DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}
 ```
+
+The body-based form is:
+
+`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments`
+
+```json
+{
+  "comment_id": "$event:server",
+  "author_public_key": "...",
+  "author_signature": "...",
+  "challenge_response": "challenge|nonce"
+}
+```
+
+The path-based form remains supported for backwards compatibility.
 
 ## Real-time updates (SSE)
 

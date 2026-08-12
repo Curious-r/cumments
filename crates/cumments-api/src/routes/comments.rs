@@ -255,6 +255,34 @@ pub(crate) async fn delete_comment_handler(
     headers: HeaderMap,
     Json(req): Json<DeleteCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    delete_comment_common(state, connect, headers, site_id, post_slug, comment_id, req).await
+}
+
+/// Delete via the collection endpoint, with `comment_id` in the JSON body so
+/// opaque Matrix event IDs never need percent-encoding in the URL.
+pub(crate) async fn delete_comment_body_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<DeleteCommentRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let comment_id = req
+        .comment_id
+        .clone()
+        .ok_or_else(|| AppError::BadRequest("comment_id is required".to_string()))?;
+    delete_comment_common(state, connect, headers, site_id, post_slug, comment_id, req).await
+}
+
+async fn delete_comment_common(
+    state: ApiState,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    site_id: String,
+    post_slug: String,
+    comment_id: String,
+    req: DeleteCommentRequest,
+) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
         return Err(AppError::TooManyRequests(
@@ -364,6 +392,34 @@ pub(crate) async fn update_comment_handler(
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<UpdateCommentRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    update_comment_common(state, connect, headers, site_id, post_slug, comment_id, req).await
+}
+
+/// Edit via the collection endpoint, with `comment_id` in the JSON body so
+/// opaque Matrix event IDs never need percent-encoding in the URL.
+pub(crate) async fn update_comment_body_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateCommentRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let comment_id = req
+        .comment_id
+        .clone()
+        .ok_or_else(|| AppError::BadRequest("comment_id is required".to_string()))?;
+    update_comment_common(state, connect, headers, site_id, post_slug, comment_id, req).await
+}
+
+async fn update_comment_common(
+    state: ApiState,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    site_id: String,
+    post_slug: String,
+    comment_id: String,
+    req: UpdateCommentRequest,
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
