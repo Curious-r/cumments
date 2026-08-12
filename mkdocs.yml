@@ -1,0 +1,30 @@
+site_name: Cumments
+site_url: https://curious-r.github.io/cumments/
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  palette:
+    scheme: slate
+    primary: indigo
+  features:
+    - navigation.top
+
+markdown_extensions:
+  - attr_list
+  - admonition
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - API: api.md
+  - Architecture: architecture.md
+  - Configuration: configuration.md
+  - Demo: demo.md
+  - Development: development.md
+  - Installation: installation.md
+  - Site authentication: site-authentication.md
+  - Site verification: site-verification.md
+  - Problem types: problems/index.md

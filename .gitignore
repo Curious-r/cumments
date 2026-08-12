@@ -12,6 +12,7 @@ devenv.local.nix
 
 # Cumments
 /target
+/site
 /data/*
 !/data/.keep
 **/cumments.toml

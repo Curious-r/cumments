@@ -3,7 +3,7 @@
 This guide runs a complete local stack with the official images: a
 [tuwunel](https://github.com/matrix-construct/tuwunel) homeserver and Cumments
 as its Matrix Application Service. The ready-made compose file lives at
-[`misc/docker/compose.yaml`](../misc/docker/compose.yaml) and is a minimal,
+[`misc/docker/compose.yaml`](https://github.com/Curious-r/cumments/blob/main/misc/docker/compose.yaml) and is a minimal,
 self-contained example: both services are configured entirely through
 environment variables; the only manual step outside the compose file is
 generating the AppService registration and copying its tokens in.
