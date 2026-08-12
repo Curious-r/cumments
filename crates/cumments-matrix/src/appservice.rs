@@ -84,6 +84,11 @@ pub struct AppServiceMatrixDriver {
     room_version_override: Option<String>,
     /// Cached `m.room_versions.default` from `/capabilities`.
     default_room_version: Mutex<Option<String>>,
+    /// Set once when `/capabilities` is unreachable or unusable for this
+    /// homeserver (e.g. appservice credentials are rejected). Room-version
+    /// preflight checks then skip further queries and warn only once per
+    /// process, letting `createRoom` decide.
+    capabilities_unavailable: Mutex<bool>,
 }
 
 impl AppServiceMatrixDriver {
@@ -112,6 +117,7 @@ impl AppServiceMatrixDriver {
             display_name_cache: Mutex::new(HashMap::new()),
             room_version_override: room_version,
             default_room_version: Mutex::new(None),
+            capabilities_unavailable: Mutex::new(false),
         })
     }
 
@@ -480,6 +486,9 @@ impl AppServiceMatrixDriver {
         {
             return Some(version);
         }
+        if self.capabilities_unavailable() {
+            return None;
+        }
 
         let resp = match self
             .request(reqwest::Method::GET, "_matrix/client/v3/capabilities", None)
@@ -488,35 +497,36 @@ impl AppServiceMatrixDriver {
         {
             Ok(resp) => resp,
             Err(e) => {
-                warn!("Failed to query homeserver capabilities: {:#}", e);
+                self.note_capabilities_unavailable(&format!("query failed: {e:#}"));
                 return None;
             }
         };
         if !resp.status().is_success() {
-            warn!(
-                "Failed to query homeserver capabilities ({}): {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            );
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            self.note_capabilities_unavailable(&format!("{status}: {error_body}"));
             return None;
         }
 
-        let version = match resp.json::<CapabilitiesResponse>().await {
-            Ok(caps) => caps
-                .room_versions
-                .and_then(|r| (!r.default.is_empty()).then_some(r.default)),
+        let caps = match resp.json::<CapabilitiesResponse>().await {
+            Ok(caps) => caps,
             Err(e) => {
-                warn!("Failed to parse homeserver capabilities: {:#}", e);
+                self.note_capabilities_unavailable(&format!("parse failed: {e:#}"));
                 return None;
             }
         };
-        if let Some(version) = &version {
-            *self
-                .default_room_version
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(version.clone());
-        }
-        version
+        let Some(version) = caps
+            .room_versions
+            .and_then(|r| (!r.default.is_empty()).then_some(r.default))
+        else {
+            self.note_capabilities_unavailable("no default room version advertised");
+            return None;
+        };
+        *self
+            .default_room_version
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(version.clone());
+        Some(version)
     }
 
     /// Best-effort pre-check that the configured `room_version` is supported
@@ -532,6 +542,9 @@ impl AppServiceMatrixDriver {
         let Some(version) = &self.room_version_override else {
             return Ok(());
         };
+        if self.capabilities_unavailable() {
+            return Ok(());
+        }
         let resp = self
             .request(reqwest::Method::GET, "_matrix/client/v3/capabilities", None)
             .send()
@@ -539,50 +552,54 @@ impl AppServiceMatrixDriver {
         let resp = match resp {
             Ok(resp) => resp,
             Err(e) => {
-                warn!(
-                    "Cannot verify room_version `{version}` support (capabilities query failed): {e}; \
-                     proceeding and letting createRoom decide"
-                );
+                self.note_capabilities_unavailable(&format!("query failed: {e}"));
                 return Ok(());
             }
         };
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            warn!(
-                "Cannot verify room_version `{version}` support (capabilities returned {} {}); \
-                 proceeding and letting createRoom decide",
-                status, error_body
-            );
+            self.note_capabilities_unavailable(&format!("{status}: {error_body}"));
             return Ok(());
         }
         let caps: CapabilitiesResponse = match resp.json().await {
             Ok(caps) => caps,
             Err(e) => {
-                warn!(
-                    "Cannot verify room_version `{version}` support (failed to parse capabilities): {e}; \
-                     proceeding and letting createRoom decide"
-                );
+                self.note_capabilities_unavailable(&format!("parse failed: {e}"));
                 return Ok(());
             }
         };
         let available = caps.room_versions.map(|r| r.available).unwrap_or_default();
         if available.is_empty() {
-            warn!(
-                "Homeserver did not advertise room versions; cannot verify room_version `{version}` \
-                 support, proceeding and letting createRoom decide"
-            );
+            self.note_capabilities_unavailable("no room versions advertised");
             return Ok(());
         }
-        if available.contains_key(version) {
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "configured room_version `{version}` is not supported by homeserver /capabilities \
-                 (available: {})",
-                available.keys().cloned().collect::<Vec<_>>().join(", ")
-            ))
+        room_version_decision(version, &available).map_err(anyhow::Error::msg)
+    }
+
+    /// Whether `/capabilities` has already been marked unusable for this
+    /// process.
+    fn capabilities_unavailable(&self) -> bool {
+        *self
+            .capabilities_unavailable
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Marks `/capabilities` unusable for this process and warns exactly once.
+    fn note_capabilities_unavailable(&self, reason: &str) {
+        let mut guard = self
+            .capabilities_unavailable
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if *guard {
+            return;
         }
+        *guard = true;
+        warn!(
+            "Homeserver capabilities are unavailable for this process ({reason}); \
+             skipping room-version checks and letting createRoom decide until restart"
+        );
     }
 
     /// Read a room's current `m.room.power_levels` content, if any.
@@ -896,6 +913,27 @@ impl AppServiceMatrixDriver {
     }
 }
 
+/// Pure decision for a `/capabilities` room-version list.
+///
+/// An empty list means the homeserver did not advertise room versions: the
+/// version can neither be confirmed nor ruled out, so the caller proceeds and
+/// lets `createRoom` decide. A non-empty list is definitive — the version
+/// either is supported or the configuration is invalid.
+fn room_version_decision(version: &str, available: &HashMap<String, String>) -> Result<(), String> {
+    if available.is_empty() {
+        return Ok(());
+    }
+    if available.contains_key(version) {
+        Ok(())
+    } else {
+        Err(format!(
+            "configured room_version `{version}` is not supported by homeserver /capabilities \
+             (available: {})",
+            available.keys().cloned().collect::<Vec<_>>().join(", ")
+        ))
+    }
+}
+
 #[async_trait]
 impl MatrixDriver for AppServiceMatrixDriver {
     #[instrument(skip(self), fields(site_id = %site_id.as_str()))]
@@ -906,79 +944,88 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
         info!("Creating new space for site {} via AppService", site_id_str);
 
-        let include_sender =
-            room_requires_explicit_creator(self.effective_room_version().await.as_deref());
-        let power_levels =
-            initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
-
-        let mut body = serde_json::json!({
-            "name": format!("Comments: {}", site_id_str),
-            "room_alias_name": alias_localpart,
-            "creation_content": {
-                "type": "m.space"
-            },
-            "initial_state": [
-                {
-                    "type": ROOM_METADATA_EVENT_TYPE,
-                    "state_key": "",
-                    "content": {
-                        "site_id": site_id_str,
-                        "post_slug": null
-                    }
-                },
-                {
-                    "type": "m.room.power_levels",
-                    "state_key": "",
-                    "content": power_levels
-                }
-            ],
-            "invite": [self.admin_id.clone()],
-            "preset": "public_chat",
-        });
-
-        if let Some(version) = &self.room_version_override {
-            body["room_version"] = serde_json::json!(version);
+        // When the homeserver's default room version cannot be determined,
+        // the explicit-creator policy is a guess: try the conservative
+        // pre-v12 policy first, then retry once with the opposite policy.
+        // A failed createRoom leaves no residue, so the retry is safe.
+        let version = self.effective_room_version().await;
+        let mut creator_policies = vec![room_requires_explicit_creator(version.as_deref())];
+        if version.is_none() {
+            creator_policies.push(!creator_policies[0]);
         }
+        let mut last_error: Option<anyhow::Error> = None;
 
-        let resp = self
-            .request(reqwest::Method::POST, "_matrix/client/v3/createRoom", None)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| anyhow!("createRoom request failed: {}", e))?;
+        for include_sender in creator_policies {
+            let power_levels =
+                initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
+            let mut body = serde_json::json!({
+                "name": format!("Comments: {}", site_id_str),
+                "room_alias_name": alias_localpart,
+                "creation_content": {
+                    "type": "m.space"
+                },
+                "initial_state": [
+                    {
+                        "type": ROOM_METADATA_EVENT_TYPE,
+                        "state_key": "",
+                        "content": {
+                            "site_id": site_id_str,
+                            "post_slug": null
+                        }
+                    },
+                    {
+                        "type": "m.room.power_levels",
+                        "state_key": "",
+                        "content": power_levels
+                    }
+                ],
+                "invite": [self.admin_id.clone()],
+                "preset": "public_chat",
+            });
+            if let Some(version) = &self.room_version_override {
+                body["room_version"] = serde_json::json!(version);
+            }
 
-        if resp.status().is_success() {
-            let data: CreateRoomResponse = resp
-                .json()
+            let resp = match self
+                .request(reqwest::Method::POST, "_matrix/client/v3/createRoom", None)
+                .json(&body)
+                .send()
                 .await
-                .map_err(|e| anyhow!("Failed to parse createRoom response: {}", e))?;
-            Ok(data.room_id)
-        } else {
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_error = Some(anyhow!("createRoom request failed: {e}"));
+                    continue;
+                }
+            };
+            if resp.status().is_success() {
+                let data: CreateRoomResponse = resp
+                    .json()
+                    .await
+                    .map_err(|e| anyhow!("Failed to parse createRoom response: {e}"))?;
+                return Ok(data.room_id);
+            }
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            warn!(
-                "createRoom failed ({}): {}. Trying alias recovery.",
-                status, error_body
-            );
+            last_error = Some(anyhow!("createRoom failed ({status}): {error_body}"));
+            warn!("createRoom failed ({status}): {error_body}. Trying alias recovery.");
+        }
 
-            // Recovery: after a local DB reset (or a partial previous run) the
-            // space may already exist under our exclusive alias. Adopt it.
-            let alias = site_space_alias(&self.server_name, site_id_str);
-            match self.resolve_room_by_alias(&alias).await? {
-                Some(room_id) => {
-                    self.adopt_room(&room_id, site_id, None, true).await?;
-                    info!(
-                        "Recovered existing site space {} via alias {}",
-                        room_id, alias
-                    );
-                    Ok(room_id)
-                }
-                None => Err(anyhow!(
-                    "Failed to create site space ({}): {}",
-                    status,
-                    error_body
-                )),
+        // Recovery: after a local DB reset (or a partial previous run) the
+        // space may already exist under our exclusive alias. Adopt it.
+        let alias = site_space_alias(&self.server_name, site_id_str);
+        match self.resolve_room_by_alias(&alias).await? {
+            Some(room_id) => {
+                self.adopt_room(&room_id, site_id, None, true).await?;
+                info!(
+                    "Recovered existing site space {} via alias {}",
+                    room_id, alias
+                );
+                Ok(room_id)
             }
+            None => Err(last_error.unwrap_or_else(|| {
+                anyhow!("Failed to create site space; no createRoom attempt was made")
+            })),
         }
     }
 
@@ -1025,80 +1072,99 @@ impl MatrixDriver for AppServiceMatrixDriver {
             let alias_localpart =
                 comment_room_alias_localpart(site_id.as_str(), post_slug.as_str());
 
-            let include_sender =
-                room_requires_explicit_creator(self.effective_room_version().await.as_deref());
-            let power_levels =
-                initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
-
-            let mut body = serde_json::json!({
-                "name": format!("Comments: {}/{}", site_id.as_str(), post_slug.as_str()),
-                "room_alias_name": alias_localpart,
-                "initial_state": [
-                    {
-                        "type": ROOM_METADATA_EVENT_TYPE,
-                        "state_key": "",
-                        "content": {
-                            "site_id": site_id.as_str(),
-                            "post_slug": post_slug.as_str()
-                        }
-                    },
-                    {
-                        "type": "m.room.power_levels",
-                        "state_key": "",
-                        "content": power_levels
-                    }
-                ],
-                "invite": [self.admin_id.clone()],
-                "preset": "public_chat",
-            });
-
-            if let Some(version) = &self.room_version_override {
-                body["room_version"] = serde_json::json!(version);
+            // Same conservative-then-opposite retry as create_site_space:
+            // when the homeserver default is unknown, a failed createRoom is
+            // retried once with the other explicit-creator policy.
+            let version = self.effective_room_version().await;
+            let mut creator_policies = vec![room_requires_explicit_creator(version.as_deref())];
+            if version.is_none() {
+                creator_policies.push(!creator_policies[0]);
             }
+            let mut last_error: Option<anyhow::Error> = None;
+            let mut created_room_id: Option<String> = None;
 
-            let resp = self
-                .request(reqwest::Method::POST, "_matrix/client/v3/createRoom", None)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| anyhow!("createRoom request failed: {}", e))?;
+            for include_sender in creator_policies {
+                let power_levels =
+                    initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
+                let mut body = serde_json::json!({
+                    "name": format!("Comments: {}/{}", site_id.as_str(), post_slug.as_str()),
+                    "room_alias_name": alias_localpart,
+                    "initial_state": [
+                        {
+                            "type": ROOM_METADATA_EVENT_TYPE,
+                            "state_key": "",
+                            "content": {
+                                "site_id": site_id.as_str(),
+                                "post_slug": post_slug.as_str()
+                            }
+                        },
+                        {
+                            "type": "m.room.power_levels",
+                            "state_key": "",
+                            "content": power_levels
+                        }
+                    ],
+                    "invite": [self.admin_id.clone()],
+                    "preset": "public_chat",
+                });
+                if let Some(version) = &self.room_version_override {
+                    body["room_version"] = serde_json::json!(version);
+                }
 
-            if !resp.status().is_success() {
+                let resp = match self
+                    .request(reqwest::Method::POST, "_matrix/client/v3/createRoom", None)
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        last_error = Some(anyhow!("createRoom request failed: {e}"));
+                        continue;
+                    }
+                };
+                if resp.status().is_success() {
+                    let data: CreateRoomResponse = resp
+                        .json()
+                        .await
+                        .map_err(|e| anyhow!("Failed to parse createRoom response: {e}"))?;
+                    created_room_id = Some(data.room_id);
+                    break;
+                }
                 let status = resp.status();
                 let error_body = resp.text().await.unwrap_or_default();
-                warn!(
-                    "createRoom failed ({}): {}. Trying alias recovery.",
-                    status, error_body
-                );
-
-                // Recovery: another attempt may have won the race, or the room
-                // already exists after a DB reset.
-                let alias =
-                    comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
-                return match self.resolve_room_by_alias(&alias).await? {
-                    Some(room_id) => {
-                        self.adopt_room(&room_id, site_id, Some(post_slug), false)
-                            .await?;
-                        info!(
-                            "Recovered comment room {} after createRoom failure via alias {}",
-                            room_id, alias
-                        );
-                        self.link_room_to_space(space_id, &room_id).await?;
-                        Ok(room_id)
-                    }
-                    None => Err(anyhow!(
-                        "Failed to create comment room ({}): {}",
-                        status,
-                        error_body
-                    )),
-                };
+                last_error = Some(anyhow!("createRoom failed ({status}): {error_body}"));
+                warn!("createRoom failed ({status}): {error_body}. Trying alias recovery.");
             }
 
-            let data: CreateRoomResponse = resp
-                .json()
-                .await
-                .map_err(|e| anyhow!("Failed to parse createRoom response: {}", e))?;
-            data.room_id
+            match created_room_id {
+                Some(room_id) => room_id,
+                None => {
+                    // Recovery: another attempt may have won the race, or the
+                    // room already exists after a DB reset.
+                    let alias =
+                        comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
+                    match self.resolve_room_by_alias(&alias).await? {
+                        Some(room_id) => {
+                            self.adopt_room(&room_id, site_id, Some(post_slug), false)
+                                .await?;
+                            info!(
+                                "Recovered comment room {} after createRoom failure via alias {}",
+                                room_id, alias
+                            );
+                            self.link_room_to_space(space_id, &room_id).await?;
+                            room_id
+                        }
+                        None => {
+                            return Err(last_error.unwrap_or_else(|| {
+                                anyhow!(
+                                    "Failed to create comment room; no createRoom attempt was made"
+                                )
+                            }));
+                        }
+                    }
+                }
+            }
         };
 
         // Keep the room linked to its Space (idempotent, best-effort).
@@ -1460,5 +1526,35 @@ mod tests {
         let no_versions: CapabilitiesResponse =
             serde_json::from_value(json!({})).expect("empty capabilities parse");
         assert!(no_versions.room_versions.is_none());
+    }
+
+    #[test]
+    fn room_version_decision_accepts_supported_and_empty_lists() {
+        let mut available = HashMap::new();
+        available.insert("12".to_string(), "stable".to_string());
+        assert!(room_version_decision("12", &available).is_ok());
+        assert!(
+            room_version_decision("11", &available).is_err(),
+            "a definitive list without the version must fail"
+        );
+
+        let empty = HashMap::new();
+        assert!(
+            room_version_decision("12", &empty).is_ok(),
+            "no advertised versions must be treated as unknown, not unsupported"
+        );
+    }
+
+    #[test]
+    fn room_version_decision_error_lists_available_versions() {
+        let mut available = HashMap::new();
+        available.insert("10".to_string(), "stable".to_string());
+        available.insert("11".to_string(), "stable".to_string());
+        let error = room_version_decision("12", &available).expect_err("must reject");
+        assert!(error.contains("`12` is not supported"));
+        assert!(
+            error.contains("10, 11"),
+            "error must list available versions: {error}"
+        );
     }
 }
