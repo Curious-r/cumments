@@ -363,25 +363,33 @@ database-tracked site into declarative config.
 Returns a new `claim_token` exactly once and invalidates the previous token.
 Use this when a claim token may have leaked.
 
-### List blocked rooms
+### List quarantined rooms
 
-`QUERY /api/v1/admin/rooms/blocked`
+`QUERY /api/v1/admin/rooms/quarantined`
 
 Optional JSON body with the same `page` / `per_page` / `site_id` fields as
 [List sites](#list-sites).
 
-Returns rooms whose adoption failed governance/room-version checks, with the
-room id, site/post, reason, and last update. A successful re-registration
-clears the blocked state. The same pagination/filter fields and
-`{ "data", "meta" }` shape apply.
+Returns rooms whose adoption failed governance checks and are currently
+quarantined, with the room id, site/post, quarantine reason, when the room
+was first quarantined, how many consecutive adoption attempts failed, and
+when the next automatic retry is scheduled (`null` means manual attention is
+required). Quarantined rooms are retried on a 1h/6h/24h schedule; after the
+fourth consecutive failure they require `reinstate`. A successful
+re-registration clears the quarantine automatically. The same
+pagination/filter fields and `{ "data", "meta" }` shape apply.
 
-### Unblock a room
+### Reinstate a room
 
-`DELETE /api/v1/admin/rooms/blocked/{room_id}`
+`DELETE /api/v1/admin/rooms/quarantined/{room_id}`
 
-Clears a room's blocked state so the reconciler can adopt it again. The
-operation is idempotent: unblocking an already-unblocked room also returns
-`204`; an unknown room returns `404`.
+Clears a room's quarantine and makes it the canonical room again (any other
+active room for the same post is superseded). The operation is idempotent:
+reinstating an already-active room also returns `204`; an unknown room
+returns `404`.
+
+The old `/api/v1/admin/rooms/blocked` paths are kept as deprecated aliases
+for one release.
 
 ## Error responses
 

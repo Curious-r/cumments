@@ -38,14 +38,14 @@ cumments
 │   ├── export-config SITE_ID
 │   └── rotate-claim-token SITE_ID
 ├── rooms
-│   ├── list-blocked [--site-id ID] [--page N] [--per-page N] [--table]
-│   └── unblock ROOM_ID
+│   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
+│   └── reinstate ROOM_ID
 └── completions SHELL
 ```
 
 ## Output conventions
 
-- Machine-readable data (site lists, blocked rooms, secrets, tokens) goes to
+- Machine-readable data (site lists, quarantined rooms, secrets, tokens) goes to
   **stdout as JSON**, matching the admin API response shape. `--table` on
   list commands switches to a human-readable table.
 - Human notes and warnings go to **stderr**, so stdout stays script-friendly.
@@ -62,12 +62,15 @@ cumments sites list
 cumments sites list --site-id my-blog --table
 ```
 
-List and clear blocked rooms:
+List quarantined rooms and reinstate one:
 
 ```bash
-cumments rooms list-blocked
-cumments rooms unblock '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
+cumments rooms list-quarantined
+cumments rooms reinstate '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
 ```
+
+The old `list-blocked` and `unblock` names are kept as deprecated aliases
+for one release.
 
 Rotate a site's HMAC secret (printed once) or revoke it (destructive, needs
 `--yes`):

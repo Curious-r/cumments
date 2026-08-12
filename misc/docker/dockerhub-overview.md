@@ -17,7 +17,7 @@ history with `cumments backfill`.
   virtual users, receives events over HTTP push.
 - **Flexible site trust** — operator-declared `[sites]` or self-service
   verification via `/.well-known` / DNS TXT; origin mode or HMAC secret mode.
-- **Admin API + local CLI** — sites, secrets, blocked rooms, backups and
+- **Admin API + local CLI** — sites, secrets, quarantined rooms, backups and
   shell completions.
 
 ## Supported platforms

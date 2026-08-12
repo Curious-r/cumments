@@ -502,14 +502,14 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/rooms/blocked:
+  /api/v1/admin/rooms/quarantined:
     x-cumments-query:
       tags: [Admin]
-      summary: List blocked rooms (QUERY)
-      operationId: listBlockedRooms
+      summary: List quarantined rooms (QUERY)
+      operationId: listQuarantinedRooms
       description: |
-        Sent as `QUERY /api/v1/admin/rooms/blocked` with an optional JSON body
-        carrying pagination and the `site_id` filter.
+        Sent as `QUERY /api/v1/admin/rooms/quarantined` with an optional JSON
+        body carrying pagination and the `site_id` filter.
       security:
         - adminToken: []
       requestBody:
@@ -520,11 +520,55 @@ paths:
               $ref: "#/components/schemas/AdminListQuery"
       responses:
         "200":
-          description: Paginated blocked rooms
+          description: Paginated quarantined rooms
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminBlockedRoomPage"
+                $ref: "#/components/schemas/AdminQuarantinedRoomPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/rooms/quarantined/{room_id}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    delete:
+      tags: [Admin]
+      summary: Reinstate a room
+      operationId: reinstateQuarantinedRoom
+      security:
+        - adminToken: []
+      responses:
+        "204":
+          description: Room reinstated (idempotent)
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/rooms/blocked:
+    x-cumments-query:
+      tags: [Admin]
+      summary: List quarantined rooms (QUERY, deprecated alias)
+      operationId: listBlockedRooms
+      deprecated: true
+      description: |
+        Deprecated alias for `/api/v1/admin/rooms/quarantined`, kept for one
+        release.
+      security:
+        - adminToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminListQuery"
+      responses:
+        "200":
+          description: Paginated quarantined rooms
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminQuarantinedRoomPage"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -534,13 +578,14 @@ paths:
       - $ref: "#/components/parameters/RoomId"
     delete:
       tags: [Admin]
-      summary: Unblock a room
+      summary: Reinstate a room (deprecated alias)
       operationId: unblockBlockedRoom
+      deprecated: true
       security:
         - adminToken: []
       responses:
         "204":
-          description: Room unblocked (idempotent)
+          description: Room reinstated (idempotent)
         "403":
           $ref: "#/components/responses/Error"
         "404":
@@ -905,9 +950,15 @@ components:
           default: 20
         site_id:
           type: string
-    AdminBlockedRoom:
+    AdminQuarantinedRoom:
       type: object
-      required: [room_id, site_id, post_slug, reason]
+      required:
+        - room_id
+        - site_id
+        - post_slug
+        - quarantine_reason
+        - quarantined_at
+        - adoption_failures
       properties:
         room_id:
           type: string
@@ -915,20 +966,26 @@ components:
           type: string
         post_slug:
           type: string
-        reason:
+        quarantine_reason:
           type: string
-        updated_at:
+        quarantined_at:
+          type: string
+          format: date-time
+        adoption_failures:
+          type: integer
+          minimum: 1
+        next_attempt_at:
           type: string
           format: date-time
           nullable: true
-    AdminBlockedRoomPage:
+    AdminQuarantinedRoomPage:
       type: object
       required: [data, meta]
       properties:
         data:
           type: array
           items:
-            $ref: "#/components/schemas/AdminBlockedRoom"
+            $ref: "#/components/schemas/AdminQuarantinedRoom"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
     RevokeOriginRequest:
