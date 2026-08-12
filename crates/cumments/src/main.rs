@@ -417,6 +417,20 @@ async fn main() -> Result<()> {
         )),
         max_sse_connections: 500,
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        media_proxy: appservice.as_ref().map(|runtime| {
+            Arc::new(
+                cumments_api::routes::media::MediaProxy::new(
+                    runtime.homeserver_url.clone(),
+                    runtime.server_name.clone(),
+                    runtime.as_token.clone(),
+                )
+                .expect("build media proxy"),
+            )
+        }),
+        media_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            120,
+            std::time::Duration::from_secs(3600),
+        )),
     };
     let api_router = cumments_api::build_router(api_state);
 

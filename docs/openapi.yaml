@@ -590,6 +590,55 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/media/{server}/{media_id}:
+    parameters:
+      - name: server
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: media_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Public]
+      summary: Proxy a Matrix media file (signed URL)
+      description: |
+        Public read-only proxy for MXC media. URLs are HMAC-signed with a
+        short TTL; requests are rate limited, restricted to the configured
+        homeserver and filtered by size/content type.
+      parameters:
+        - name: expires
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: sig
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: thumbnail
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Media bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:

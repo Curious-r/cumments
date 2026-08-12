@@ -7,6 +7,7 @@ use crate::routes::comments::{
     delete_comment_body_handler, delete_comment_handler, post_comment_handler,
     query_comments_handler, update_comment_body_handler, update_comment_handler,
 };
+use crate::routes::media::{MediaProxy, media_handler};
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::sites::{
     confirm_verification_handler, issue_secret_handler, register_site_handler,
@@ -85,6 +86,10 @@ pub struct ApiState {
     pub max_sse_connections: usize,
     /// Live SSE connection count.
     pub active_sse_connections: Arc<AtomicUsize>,
+    /// Optional public media proxy for Matrix MXC media.
+    pub media_proxy: Option<Arc<MediaProxy>>,
+    /// Per-client-key limiter for media proxy requests.
+    pub media_limiter: Arc<rate_limit::RateLimiter>,
 }
 
 /// Builds the Axum router for the API.
@@ -121,6 +126,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/challenge",
             get(get_challenge_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/media/{server}/{media_id}",
+            get(media_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites",

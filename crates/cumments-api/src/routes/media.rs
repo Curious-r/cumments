@@ -1,0 +1,379 @@
+//! Public read-only media proxy for Matrix MXC media.
+//!
+//! The read model stores `mxc://` references; browsers cannot download them
+//! without Matrix credentials. This endpoint fetches the media with the
+//! AppService token and streams it back to public readers, using short-lived
+//! HMAC-signed URLs to prevent hotlinking.
+
+use crate::ApiState;
+use crate::error::AppError;
+use crate::rate_limit::client_key;
+use axum::{
+    body::Body,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
+};
+use cumments_core::models::{Content, Message};
+use cumments_core::site_auth::constant_time_eq;
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Upper bound on a single proxied media response.
+const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
+/// How long a signed media URL stays valid.
+const MEDIA_URL_TTL_SECONDS: i64 = 15 * 60;
+/// Content types allowed through the proxy (prefix match).
+const ALLOWED_MEDIA_TYPES: [&str; 5] = [
+    "image/",
+    "video/",
+    "audio/",
+    "application/pdf",
+    "application/octet-stream",
+];
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// Server-side media proxy configuration.
+pub struct MediaProxy {
+    homeserver_url: String,
+    server_name: String,
+    as_token: String,
+    http_client: reqwest::Client,
+}
+
+impl MediaProxy {
+    pub fn new(
+        homeserver_url: String,
+        server_name: String,
+        as_token: String,
+    ) -> anyhow::Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        Ok(Self {
+            homeserver_url,
+            server_name,
+            as_token,
+            http_client,
+        })
+    }
+
+    /// Converts an `mxc://server/media_id` reference into a short-lived signed
+    /// proxy URL, or `None` when the media is not served by our homeserver.
+    pub fn proxify(&self, url: &str) -> Option<String> {
+        let rest = url.strip_prefix("mxc://")?;
+        let (server, media_id) = rest.split_once('/')?;
+        if server != self.server_name {
+            return None;
+        }
+        let expires = now_epoch_seconds() + MEDIA_URL_TTL_SECONDS;
+        let signature = self.sign(server, media_id, expires);
+        Some(format!(
+            "/api/v1/media/{server}/{media_id}?expires={expires}&sig={signature}"
+        ))
+    }
+
+    /// Rewrites media URLs inside a message for API/SSE delivery.
+    pub fn proxify_message(&self, message: &mut Message) {
+        match &mut message.content {
+            Content::Media(media) => {
+                if let Some(url) = self.proxify(&media.url) {
+                    media.url = url;
+                }
+                if let Some(thumbnail) =
+                    media.thumbnail_url.as_deref().and_then(|u| self.proxify(u))
+                {
+                    media.thumbnail_url = Some(thumbnail);
+                }
+            }
+            Content::Location(location) => {
+                if let Some(thumbnail) = location
+                    .thumbnail_url
+                    .as_deref()
+                    .and_then(|u| self.proxify(u))
+                {
+                    location.thumbnail_url = Some(thumbnail);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Verifies an HMAC-signed media URL without revealing the token.
+    pub fn verify(&self, server: &str, media_id: &str, expires: i64, signature: &str) -> bool {
+        if server != self.server_name {
+            return false;
+        }
+        let now = now_epoch_seconds();
+        if expires < now - 60 || expires > now + MEDIA_URL_TTL_SECONDS {
+            return false;
+        }
+        let expected = self.sign(server, media_id, expires);
+        constant_time_eq(expected.as_bytes(), signature.as_bytes())
+    }
+
+    /// Fetches media from the homeserver as the AppService.
+    pub async fn fetch(
+        &self,
+        server: &str,
+        media_id: &str,
+        thumbnail: bool,
+    ) -> anyhow::Result<reqwest::Response> {
+        let path = if thumbnail {
+            format!("_matrix/media/v3/thumbnail/{server}/{media_id}?width=320&height=320")
+        } else {
+            format!("_matrix/media/v3/download/{server}/{media_id}")
+        };
+        let url = format!("{}/{}", self.homeserver_url.trim_end_matches('/'), path);
+        Ok(self
+            .http_client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", self.as_token))
+            .send()
+            .await?)
+    }
+
+    fn sign(&self, server: &str, media_id: &str, expires: i64) -> String {
+        let mut mac = HmacSha256::new_from_slice(self.as_token.as_bytes())
+            .expect("hmac accepts any key length");
+        mac.update(server.as_bytes());
+        mac.update(b"/");
+        mac.update(media_id.as_bytes());
+        mac.update(b"/");
+        mac.update(expires.to_string().as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+}
+
+/// Serves one media file to a public reader.
+pub(crate) async fn media_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path((server, media_id)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    let Some(proxy) = &state.media_proxy else {
+        return Err(AppError::NotFound(
+            "Media proxy is not enabled for this deployment.".to_string(),
+        ));
+    };
+
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.media_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "media requests are rate limited; try again later".to_string(),
+        ));
+    }
+
+    let expires = query
+        .get("expires")
+        .and_then(|v| v.parse::<i64>().ok())
+        .ok_or_else(|| AppError::BadRequest("missing or invalid expires".to_string()))?;
+    let signature = query
+        .get("sig")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing signature".to_string()))?;
+    if !proxy.verify(&server, &media_id, expires, &signature) {
+        return Err(AppError::BadRequest(
+            "invalid or expired media URL".to_string(),
+        ));
+    }
+
+    let thumbnail = query.get("thumbnail").map(|v| v == "1").unwrap_or(false);
+    let upstream = proxy
+        .fetch(&server, &media_id, thumbnail)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to fetch media: {e}")))?;
+    if !upstream.status().is_success() {
+        return Err(AppError::NotFound("Media not found.".to_string()));
+    }
+
+    let content_type = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if !ALLOWED_MEDIA_TYPES
+        .iter()
+        .any(|allowed| content_type.starts_with(allowed))
+    {
+        return Err(AppError::BadRequest(format!(
+            "unsupported media type {content_type}"
+        )));
+    }
+
+    let bytes = upstream
+        .bytes()
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to read media: {e}")))?;
+    if bytes.len() > MEDIA_MAX_BYTES {
+        return Err(AppError::BadRequest(
+            "media exceeds the size limit".to_string(),
+        ));
+    }
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from(bytes))
+        .expect("static response builds"))
+}
+
+fn now_epoch_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cumments_core::models::{
+        AuthorKind, AuthorSnapshot, MediaContent, MediaKind, Message, MessageStatus, TextContent,
+        TextStyle,
+    };
+
+    fn proxy() -> MediaProxy {
+        MediaProxy::new(
+            "http://hs".to_string(),
+            "hs".to_string(),
+            "token".to_string(),
+        )
+        .expect("build proxy")
+    }
+
+    fn query_params(url: &str) -> HashMap<String, String> {
+        let (_, query) = url.split_once('?').expect("query string");
+        query
+            .split('&')
+            .filter_map(|pair| {
+                let (key, value) = pair.split_once('=')?;
+                Some((key.to_string(), value.to_string()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn proxify_rewrites_mxc_urls_and_verify_round_trips() {
+        let p = proxy();
+        let url = p.proxify("mxc://hs/abc").expect("proxify");
+        assert!(url.starts_with("/api/v1/media/hs/abc?expires="));
+        let params = query_params(&url);
+        let expires: i64 = params["expires"].parse().expect("expires");
+        assert!(p.verify("hs", "abc", expires, &params["sig"]));
+    }
+
+    #[test]
+    fn proxify_rejects_foreign_servers() {
+        let p = proxy();
+        assert!(p.proxify("mxc://other/abc").is_none());
+    }
+
+    #[test]
+    fn verify_rejects_tampered_and_expired_urls() {
+        let p = proxy();
+        let params = query_params(&p.proxify("mxc://hs/abc").expect("proxify"));
+        let expires: i64 = params["expires"].parse().expect("expires");
+        assert!(!p.verify("hs", "abc", expires, "deadbeef"));
+        assert!(!p.verify("hs", "abc", expires - 1000, &params["sig"]));
+        assert!(!p.verify("other", "abc", expires, &params["sig"]));
+    }
+
+    #[test]
+    fn proxify_message_rewrites_media_and_thumbnail_urls() {
+        let p = proxy();
+        let mut message = Message {
+            event_id: "$e:hs".to_string(),
+            site_id: "my-blog".to_string(),
+            post_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Matrix,
+                display_name: None,
+                avatar_url: None,
+                public_key: None,
+                mxid: Some("@alice:hs".to_string()),
+            },
+            content: Content::Media(MediaContent {
+                kind: MediaKind::Image,
+                url: "mxc://hs/abc".to_string(),
+                filename: Some("cat.png".to_string()),
+                mimetype: Some("image/png".to_string()),
+                size: None,
+                width: None,
+                height: None,
+                thumbnail_url: Some("mxc://hs/thumb".to_string()),
+                alt_text: None,
+                voice: false,
+            }),
+            timestamp: chrono::Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            intent_id: None,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            raw_content: serde_json::Value::Null,
+        };
+        p.proxify_message(&mut message);
+        match message.content {
+            Content::Media(media) => {
+                assert!(media.url.starts_with("/api/v1/media/hs/abc?"));
+                assert!(
+                    media
+                        .thumbnail_url
+                        .unwrap()
+                        .starts_with("/api/v1/media/hs/thumb?")
+                );
+            }
+            other => panic!("expected media, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_content_is_not_rewritten() {
+        let p = proxy();
+        let mut message = Message {
+            event_id: "$e:hs".to_string(),
+            site_id: "my-blog".to_string(),
+            post_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Matrix,
+                display_name: None,
+                avatar_url: None,
+                public_key: None,
+                mxid: Some("@alice:hs".to_string()),
+            },
+            content: Content::Text(TextContent {
+                body: "hi".to_string(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            }),
+            timestamp: chrono::Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            intent_id: None,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            raw_content: serde_json::Value::Null,
+        };
+        p.proxify_message(&mut message);
+        assert!(matches!(message.content, Content::Text(_)));
+    }
+}

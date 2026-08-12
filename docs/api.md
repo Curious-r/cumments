@@ -391,6 +391,18 @@ returns `404`.
 The old `/api/v1/admin/rooms/blocked` paths are kept as deprecated aliases
 for one release.
 
+### Media proxy
+
+`GET /api/v1/media/{server}/{media_id}?expires=...&sig=...`
+
+Public read-only proxy for Matrix media referenced by messages. Message
+payloads carry signed proxy URLs (instead of raw `mxc://` URIs) in
+`content.media.url` / `thumbnail_url`; the signature is an HMAC over
+`server/media_id/expires` and expires after 15 minutes. Requests are rate
+limited, restricted to the configured homeserver, size-capped, and filtered
+by content type. The optional `thumbnail=1` query serves a 320×320
+thumbnail.
+
 ## Error responses
 
 All error responses use the RFC 9457 problem details format with

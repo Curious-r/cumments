@@ -63,6 +63,8 @@ async fn test_state(
         )),
         max_sse_connections: 100,
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        media_proxy: None,
+        media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
     };
     (state, store)
 }

@@ -200,7 +200,12 @@ pub(crate) async fn query_comments_handler(
         .get_messages(&site_id_val, &post_slug_val, limit, offset)
         .await
     {
-        Ok(page_data) => {
+        Ok(mut page_data) => {
+            if let Some(proxy) = &state.media_proxy {
+                for message in &mut page_data.items {
+                    proxy.proxify_message(message);
+                }
+            }
             let total = page_data.total;
             let total_pages = if total > 0 {
                 (total + per_page - 1) / per_page

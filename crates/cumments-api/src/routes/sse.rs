@@ -126,6 +126,7 @@ pub(crate) async fn sse_handler(
         reconnect: state.sse_reconnect.clone(),
         key,
     };
+    let media_proxy = state.media_proxy.clone();
 
     let mut rx = state.event_bus.subscribe();
 
@@ -139,7 +140,20 @@ pub(crate) async fn sse_handler(
                 ProjectorEvent::MessageDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
             };
 
-            if matches && let Ok(json) = serde_json::to_string(&event) {
+            if matches {
+                let mut payload = event.clone();
+                if let Some(proxy) = &media_proxy {
+                    match &mut payload {
+                        ProjectorEvent::MessageCreated { message, .. }
+                        | ProjectorEvent::MessageUpdated { message, .. } => {
+                            proxy.proxify_message(message);
+                        }
+                        ProjectorEvent::MessageDeleted { .. } => {}
+                    }
+                }
+                let Ok(json) = serde_json::to_string(&payload) else {
+                    continue;
+                };
                 let event_name = match &event {
                     ProjectorEvent::MessageCreated { .. } => "message_created",
                     ProjectorEvent::MessageUpdated { .. } => "message_updated",
