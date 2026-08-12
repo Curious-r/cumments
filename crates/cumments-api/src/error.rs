@@ -2,7 +2,7 @@
 //!
 //! Error responses follow RFC 9457 (Problem Details for HTTP APIs). Every
 //! problem type has a stable `type` URI under
-//! `https://curious-r.github.io/cumments/problems/{slug}`; the `error_code`
+//! `https://curious-r.github.io/cumments/problems/{slug}`; the `code`
 //! member is the short machine-readable slug of that URI, and `title` is the
 //! stable human-readable name of the problem type.
 
@@ -59,7 +59,7 @@ impl ErrorCode {
         Self::Internal,
     ];
 
-    /// Short identifier shared by the `type` URI and the `error_code` member.
+    /// Short identifier shared by the `type` URI and the `code` member.
     pub fn slug(self) -> &'static str {
         match self {
             Self::InvalidPow => "invalid-pow",
@@ -119,8 +119,7 @@ pub struct ErrorResponse {
     pub title: String,
     pub status: u16,
     pub detail: String,
-    #[serde(rename = "error_code")]
-    pub error_code: String,
+    pub code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
 }
@@ -149,7 +148,7 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, detail, error_code, details) = match self {
+        let (status, detail, code, details) = match self {
             AppError::InvalidPoW => (
                 StatusCode::FORBIDDEN,
                 "Invalid Proof-of-Work response.".to_string(),
@@ -240,11 +239,11 @@ impl IntoResponse for AppError {
         };
 
         let body = ErrorResponse {
-            type_: error_code.type_uri(),
-            title: error_code.title().to_string(),
+            type_: code.type_uri(),
+            title: code.title().to_string(),
             status: status.as_u16(),
             detail,
-            error_code: error_code.slug().to_string(),
+            code: code.slug().to_string(),
             details,
         };
 
@@ -285,7 +284,7 @@ mod tests {
             body["detail"],
             "This Idempotency-Key was already used with a different request."
         );
-        assert_eq!(body["error_code"], "idempotency-key-reused");
+        assert_eq!(body["code"], "idempotency-key-reused");
     }
 
     #[test]

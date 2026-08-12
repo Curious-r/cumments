@@ -551,7 +551,7 @@ components:
         scoped to the author's public key. Retrying an accepted request with
         the same key and body returns the original `intent_id` with
         `Idempotent-Replayed: true`; a different body with the same key
-        returns `409 error_code=idempotency-key-reused`. Keys are retained
+        returns `409 code=idempotency-key-reused`. Keys are retained
         for 24 hours.
       schema:
         type: string
@@ -594,7 +594,7 @@ components:
   schemas:
     Error:
       type: object
-      required: [type, title, status, detail, error_code]
+      required: [type, title, status, detail, code]
       properties:
         type:
           type: string
@@ -610,7 +610,7 @@ components:
         detail:
           type: string
           description: Occurrence-specific explanation for the client
-        error_code:
+        code:
           type: string
           description: Stable machine-readable slug; final segment of `type`
         details:
