@@ -24,6 +24,7 @@ use cumments_core::{
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::{Notify, broadcast};
 use tower_http::trace::TraceLayer;
 
@@ -64,6 +65,14 @@ pub struct ApiState {
     pub trusted_proxies: Arc<HashSet<IpAddr>>,
     /// Allow verification of loopback/private/link-local IP-literal origins.
     pub allow_private_verification_origins: bool,
+    /// Per-client-key limiter for comment write intents (POST/PATCH/DELETE).
+    pub write_limiter: Arc<rate_limit::RateLimiter>,
+    /// Per-client-key limiter for new SSE connections.
+    pub sse_limiter: Arc<rate_limit::RateLimiter>,
+    /// Global cap on concurrent SSE connections.
+    pub max_sse_connections: usize,
+    /// Live SSE connection count.
+    pub active_sse_connections: Arc<AtomicUsize>,
 }
 
 /// Builds the Axum router for the API.

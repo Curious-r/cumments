@@ -17,6 +17,9 @@ const WAITING_FOR_SYNC_TIMEOUT_MINUTES: i64 = 10;
 /// before the intent is dead-lettered. Projection can be delayed by push
 /// retries or restarts, so a single confirmation is not treated as failure.
 const TIMEOUT_CONFIRMATION_LIMIT: u32 = 3;
+/// Maximum number of pending intents loaded per queue per pass. Keeps memory
+/// bounded under write floods; `reconcile()` loops until a batch is empty.
+const INTENT_BATCH_SIZE: u64 = 100;
 /// Upper bound for processing a single intent, including all Matrix driver
 /// calls (room creation, joins, sends). Prevents one stuck homeserver request
 /// from stalling the whole write path.
@@ -104,15 +107,42 @@ impl Reconciler {
 
     /// Reconciles all types of pending intents from the database.
     async fn reconcile(&self) -> Result<u64> {
-        let post_count = self.reconcile_posts().await?;
-        let delete_count = self.reconcile_deletions().await?;
-        let update_count = self.reconcile_updates().await?;
+        let mut post_count = 0;
+        loop {
+            let batch = self.reconcile_posts().await?;
+            post_count += batch;
+            if batch < INTENT_BATCH_SIZE {
+                break;
+            }
+        }
+
+        let mut delete_count = 0;
+        loop {
+            let batch = self.reconcile_deletions().await?;
+            delete_count += batch;
+            if batch < INTENT_BATCH_SIZE {
+                break;
+            }
+        }
+
+        let mut update_count = 0;
+        loop {
+            let batch = self.reconcile_updates().await?;
+            update_count += batch;
+            if batch < INTENT_BATCH_SIZE {
+                break;
+            }
+        }
+
         let timeout_count = self.reconcile_timeouts().await?;
         Ok(post_count + delete_count + update_count + timeout_count)
     }
 
     async fn reconcile_posts(&self) -> Result<u64> {
-        let intents = self.intent_store.get_pending_post_intents().await?;
+        let intents = self
+            .intent_store
+            .get_pending_post_intents(INTENT_BATCH_SIZE)
+            .await?;
 
         if intents.is_empty() {
             return Ok(0);
@@ -236,7 +266,10 @@ impl Reconciler {
     }
 
     async fn reconcile_deletions(&self) -> Result<u64> {
-        let intents = self.intent_store.get_pending_delete_intents().await?;
+        let intents = self
+            .intent_store
+            .get_pending_delete_intents(INTENT_BATCH_SIZE)
+            .await?;
 
         if intents.is_empty() {
             return Ok(0);
@@ -307,7 +340,10 @@ impl Reconciler {
     }
 
     async fn reconcile_updates(&self) -> Result<u64> {
-        let intents = self.intent_store.get_pending_update_intents().await?;
+        let intents = self
+            .intent_store
+            .get_pending_update_intents(INTENT_BATCH_SIZE)
+            .await?;
 
         if intents.is_empty() {
             return Ok(0);

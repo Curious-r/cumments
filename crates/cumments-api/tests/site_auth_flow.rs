@@ -55,6 +55,10 @@ async fn test_state(
         trusted_proxies: Arc::new(Default::default()),
         // The existing integration test verifies against 127.0.0.1.
         allow_private_verification_origins: true,
+        write_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        sse_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        max_sse_connections: 100,
+        active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     (state, store)
 }

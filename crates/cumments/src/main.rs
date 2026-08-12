@@ -386,6 +386,16 @@ async fn main() -> Result<()> {
         )),
         trusted_proxies: Arc::new(trusted_proxies),
         allow_private_verification_origins: settings.security.allow_private_verification_origins,
+        write_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            120,
+            std::time::Duration::from_secs(3600),
+        )),
+        sse_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            20,
+            std::time::Duration::from_secs(3600),
+        )),
+        max_sse_connections: 500,
+        active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let api_router = cumments_api::build_router(api_state);
 

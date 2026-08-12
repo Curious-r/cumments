@@ -12,7 +12,7 @@ use cumments_core::intents::{
 use cumments_core::ports::IntentStore;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter,
-    QueryOrder, Set, UpdateMany,
+    QueryOrder, QuerySelect, Set, UpdateMany,
 };
 use tracing::warn;
 
@@ -104,7 +104,7 @@ impl IntentStore for DbStore {
         Ok(())
     }
 
-    async fn get_pending_post_intents(&self) -> Result<Vec<PendingPostIntent>> {
+    async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>> {
         let models = intent_queue_post_comment::Entity::find()
             .filter(
                 intent_queue_post_comment::COLUMN
@@ -115,6 +115,7 @@ impl IntentStore for DbStore {
                 intent_queue_post_comment::Column::NextAttemptAt,
             ))
             .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
+            .limit(limit)
             .all(&self.db)
             .await?;
 
@@ -131,7 +132,7 @@ impl IntentStore for DbStore {
         Ok(intents)
     }
 
-    async fn get_pending_delete_intents(&self) -> Result<Vec<PendingDeleteIntent>> {
+    async fn get_pending_delete_intents(&self, limit: u64) -> Result<Vec<PendingDeleteIntent>> {
         let models = intent_queue_delete_comment::Entity::find()
             .filter(
                 intent_queue_delete_comment::COLUMN
@@ -142,6 +143,7 @@ impl IntentStore for DbStore {
                 intent_queue_delete_comment::Column::NextAttemptAt,
             ))
             .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
+            .limit(limit)
             .all(&self.db)
             .await?;
 
@@ -158,7 +160,7 @@ impl IntentStore for DbStore {
         Ok(intents)
     }
 
-    async fn get_pending_update_intents(&self) -> Result<Vec<PendingUpdateIntent>> {
+    async fn get_pending_update_intents(&self, limit: u64) -> Result<Vec<PendingUpdateIntent>> {
         let models = intent_queue_update_comment::Entity::find()
             .filter(
                 intent_queue_update_comment::COLUMN
@@ -169,6 +171,7 @@ impl IntentStore for DbStore {
                 intent_queue_update_comment::Column::NextAttemptAt,
             ))
             .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
+            .limit(limit)
             .all(&self.db)
             .await?;
 

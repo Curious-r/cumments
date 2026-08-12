@@ -54,7 +54,7 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
         .save_post_intent(&post_intent())
         .await
         .expect("save intent");
-    let pending = store.get_pending_post_intents().await.expect("pending");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
     assert_eq!(pending.len(), 1);
     let id = pending[0].id;
 
@@ -92,11 +92,37 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
     assert!(stuck.is_empty());
     assert!(
         store
-            .get_pending_post_intents()
+            .get_pending_post_intents(100)
             .await
             .expect("pending after dead letter")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn pending_intent_batch_is_limited() {
+    let store = DbStore::connect(&test_db_url("batch-limit"))
+        .await
+        .expect("connect db");
+
+    for _ in 0..3 {
+        store
+            .save_post_intent(&post_intent())
+            .await
+            .expect("save intent");
+    }
+
+    let batch = store
+        .get_pending_post_intents(2)
+        .await
+        .expect("limited batch");
+    assert_eq!(batch.len(), 2);
+
+    let all = store
+        .get_pending_post_intents(100)
+        .await
+        .expect("full batch");
+    assert_eq!(all.len(), 3);
 }
 
 #[tokio::test]
@@ -109,7 +135,7 @@ async fn failure_records_schedule_retry_then_dead_letters() {
         .save_post_intent(&post_intent())
         .await
         .expect("save intent");
-    let pending = store.get_pending_post_intents().await.expect("pending");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
     let id = pending[0].id;
 
     // First failure: retried (back to pending, but not due immediately).
@@ -120,7 +146,7 @@ async fn failure_records_schedule_retry_then_dead_letters() {
     assert!(retrying);
 
     let due_now = store
-        .get_pending_post_intents()
+        .get_pending_post_intents(100)
         .await
         .expect("pending query");
     assert!(
@@ -155,7 +181,10 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
         .save_update_intent(&update_intent())
         .await
         .expect("save update intent");
-    let pending = store.get_pending_update_intents().await.expect("pending");
+    let pending = store
+        .get_pending_update_intents(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
 
     // Simulate the projector seeing the replacement before the reconciler's
@@ -186,7 +215,7 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
     assert!(!retrying, "completed intent must not be rescheduled");
     assert!(
         store
-            .get_pending_update_intents()
+            .get_pending_update_intents(100)
             .await
             .expect("pending query")
             .is_empty(),
@@ -209,7 +238,10 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
         .await
         .expect("save second update");
 
-    let pending = store.get_pending_update_intents().await.expect("pending");
+    let pending = store
+        .get_pending_update_intents(100)
+        .await
+        .expect("pending");
     assert_eq!(pending.len(), 2);
     let first_id = pending[0].id;
     let second_id = pending[1].id;
@@ -224,7 +256,10 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
         .await
         .expect("complete observed edit");
 
-    let pending = store.get_pending_update_intents().await.expect("pending");
+    let pending = store
+        .get_pending_update_intents(100)
+        .await
+        .expect("pending");
     assert_eq!(
         pending.len(),
         1,
@@ -249,7 +284,7 @@ async fn timeout_confirmations_increment_and_reset() {
         .save_post_intent(&post_intent())
         .await
         .expect("save intent");
-    let pending = store.get_pending_post_intents().await.expect("pending");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
     let id = pending[0].id;
     store
         .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
@@ -293,7 +328,7 @@ async fn failed_post_intent_can_complete_when_event_is_observed() {
         .save_post_intent(&post_intent())
         .await
         .expect("save intent");
-    let pending = store.get_pending_post_intents().await.expect("pending");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
     let id = pending[0].id;
     store
         .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
@@ -311,7 +346,7 @@ async fn failed_post_intent_can_complete_when_event_is_observed() {
         .await
         .expect("complete failed intent");
 
-    let pending = store.get_pending_post_intents().await.expect("pending");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
     let stuck = store
         .get_stuck_post_intents(Utc::now() + Duration::minutes(1))
         .await
@@ -330,7 +365,7 @@ async fn failure_records_do_not_resurrect_failed_intents() {
         .save_post_intent(&post_intent())
         .await
         .expect("save intent");
-    let pending = store.get_pending_post_intents().await.expect("pending");
+    let pending = store.get_pending_post_intents(100).await.expect("pending");
     let id = pending[0].id;
 
     // Dead-letter directly (retry_count stays below the budget).
@@ -349,7 +384,7 @@ async fn failure_records_do_not_resurrect_failed_intents() {
     );
     assert!(
         store
-            .get_pending_post_intents()
+            .get_pending_post_intents(100)
             .await
             .expect("pending query")
             .is_empty()

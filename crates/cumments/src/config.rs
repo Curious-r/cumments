@@ -953,6 +953,7 @@ mode = "logging"
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             admin_token: None,
+            allow_private_verification_origins: false,
         };
 
         let mut sites = HashMap::new();
@@ -995,6 +996,7 @@ mode = "logging"
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             admin_token: None,
+            allow_private_verification_origins: false,
         };
 
         let mut sites = HashMap::new();
@@ -1049,6 +1051,7 @@ mode = "logging"
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             admin_token: None,
+            allow_private_verification_origins: false,
         };
         assert!(
             admin_token_hash(&security)

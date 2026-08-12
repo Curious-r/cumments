@@ -14,9 +14,12 @@ pub trait IntentStore: Send + Sync {
     async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<()>;
     async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<()>;
 
-    async fn get_pending_post_intents(&self) -> Result<Vec<PendingPostIntent>>;
-    async fn get_pending_delete_intents(&self) -> Result<Vec<PendingDeleteIntent>>;
-    async fn get_pending_update_intents(&self) -> Result<Vec<PendingUpdateIntent>>;
+    /// Returns at most `limit` due pending post intents, oldest first.
+    async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>>;
+    /// Returns at most `limit` due pending delete intents, oldest first.
+    async fn get_pending_delete_intents(&self, limit: u64) -> Result<Vec<PendingDeleteIntent>>;
+    /// Returns at most `limit` due pending update intents, oldest first.
+    async fn get_pending_update_intents(&self, limit: u64) -> Result<Vec<PendingUpdateIntent>>;
 
     /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
     async fn mark_post_intent_waiting_for_sync(

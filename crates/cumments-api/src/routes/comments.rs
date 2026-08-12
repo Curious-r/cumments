@@ -2,14 +2,15 @@
 
 use crate::ApiState;
 use crate::error::AppError;
+use crate::rate_limit::client_key;
 use crate::request::{
     DeleteCommentRequest, PaginatedResponse, PaginationMeta, PaginationQuery, PostCommentRequest,
     UpdateCommentRequest,
 };
 use axum::{
     Json,
-    extract::{Path, State},
-    http::{HeaderName, Method, StatusCode},
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, HeaderName, Method, StatusCode},
     response::IntoResponse,
 };
 use cumments_core::{
@@ -132,8 +133,17 @@ pub(crate) async fn query_comments_handler(
 pub(crate) async fn post_comment_handler(
     State(state): State<ApiState>,
     Path((site_id, post_slug)): Path<(String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<PostCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "comment writes are rate limited; try again later".to_string(),
+        ));
+    }
+
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
     if req
@@ -230,8 +240,17 @@ pub(crate) async fn post_comment_handler(
 pub(crate) async fn delete_comment_handler(
     State(state): State<ApiState>,
     Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<DeleteCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "comment writes are rate limited; try again later".to_string(),
+        ));
+    }
+
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
 
@@ -328,8 +347,17 @@ pub(crate) async fn delete_comment_handler(
 pub(crate) async fn update_comment_handler(
     State(state): State<ApiState>,
     Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<UpdateCommentRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "comment writes are rate limited; try again later".to_string(),
+        ));
+    }
+
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
 
