@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::Parser;
 use cumments_core::ports::MatrixDriver;
 use cumments_core::site_service::SiteService;
+use std::collections::HashSet;
 use std::io::IsTerminal;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -350,6 +352,15 @@ async fn main() -> Result<()> {
         settings.security.pow_secret,
         settings.security.pow_difficulty,
     );
+    let trusted_proxies = settings
+        .server
+        .trusted_proxies
+        .iter()
+        .map(|s| {
+            s.parse::<IpAddr>()
+                .map_err(|e| anyhow::anyhow!("invalid server.trusted_proxies entry `{s}`: {e}"))
+        })
+        .collect::<Result<HashSet<_>>>()?;
     let api_state = cumments_api::ApiState {
         store: db_store,
         pow: Arc::new(pow),
@@ -369,6 +380,7 @@ async fn main() -> Result<()> {
             60,
             std::time::Duration::from_secs(60),
         )),
+        trusted_proxies: Arc::new(trusted_proxies),
     };
     let api_router = cumments_api::build_router(api_state);
 

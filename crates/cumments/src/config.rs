@@ -25,6 +25,11 @@ pub struct Settings {
 pub struct Server {
     pub host: String,
     pub port: u16,
+    /// Reverse proxies that are allowed to set `X-Forwarded-For`. Rate
+    /// limiting only trusts the header when the peer is in this list;
+    /// otherwise the peer IP is used as the client key.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for Server {
@@ -32,6 +37,7 @@ impl Default for Server {
         Self {
             host: "localhost".to_string(),
             port: 7931,
+            trusted_proxies: Vec::new(),
         }
     }
 }

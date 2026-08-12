@@ -10,7 +10,7 @@ use crate::rate_limit::client_key;
 use axum::extract::Request;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::header::AUTHORIZATION,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -79,8 +79,13 @@ pub struct ConfigSnippetResponse {
 // Middleware
 // ---------------------------------------------------------------------------
 
-pub async fn require_admin(State(state): State<ApiState>, req: Request, next: Next) -> Response {
-    let key = client_key(req.headers(), None);
+pub async fn require_admin(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let key = client_key(req.headers(), Some(addr), &state.trusted_proxies);
     if !state.admin_limiter.allow(&key) {
         return AppError::TooManyRequests("admin API is rate limited; try again later".to_string())
             .into_response();

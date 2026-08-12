@@ -51,6 +51,7 @@ async fn test_state(
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         admin_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
+        trusted_proxies: Arc::new(Default::default()),
     };
     (state, store)
 }

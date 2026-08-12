@@ -21,6 +21,8 @@ use cumments_core::{
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
 };
+use std::collections::HashSet;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::{Notify, broadcast};
 use tower_http::trace::TraceLayer;
@@ -56,6 +58,8 @@ pub struct ApiState {
     pub verification_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-brute-force limiter for the admin API.
     pub admin_limiter: Arc<rate_limit::RateLimiter>,
+    /// Reverse proxies trusted to set `X-Forwarded-For` for rate limiting.
+    pub trusted_proxies: Arc<HashSet<IpAddr>>,
 }
 
 /// Builds the Axum router for the API.

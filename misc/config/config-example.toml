@@ -16,6 +16,10 @@ host = "0.0.0.0"
 # Port number for the HTTP server
 port = 7931
 
+# Reverse proxies trusted to set X-Forwarded-For. Rate limiting uses the peer
+# IP unless it appears here (e.g. ["127.0.0.1", "::1"] behind a local proxy).
+# trusted_proxies = ["127.0.0.1"]
+
 [database]
 # Database connection URL
 # For the Docker image this is /srv/cumments/cumments.db (the mounted volume).

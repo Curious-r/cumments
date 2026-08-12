@@ -93,7 +93,7 @@ pub(crate) async fn register_site_handler(
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    let key = client_key(&headers, Some(connect.0));
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.registration_limiter.allow(&key) {
         return Err(AppError::TooManyRequests(
             "site registration is rate limited; try again later".to_string(),
@@ -118,7 +118,7 @@ pub(crate) async fn start_verification_handler(
     connect: ConnectInfo<SocketAddr>,
     Json(req): Json<StartVerificationRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let key = client_key(&headers, Some(connect.0));
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.verification_limiter.allow(&key) {
         return Err(AppError::TooManyRequests(
             "verification issuance is rate limited; try again later".to_string(),

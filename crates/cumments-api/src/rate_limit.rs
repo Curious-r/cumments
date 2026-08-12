@@ -6,6 +6,8 @@
 //! correctly.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -13,15 +15,21 @@ use std::time::{Duration, Instant};
 /// growing memory without limit (keys are client-controlled via XFF).
 const MAX_KEYS: usize = 10_000;
 
-/// Best-effort client key: the first `X-Forwarded-For` value when present
-/// (set by a trusted reverse proxy), otherwise the peer address.
-pub fn client_key(headers: &axum::http::HeaderMap, addr: Option<std::net::SocketAddr>) -> String {
-    if let Some(forwarded) = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|ip| !ip.is_empty())
+/// Best-effort client key: the first `X-Forwarded-For` value is honored only
+/// when the peer is one of the configured trusted proxies; otherwise the
+/// peer address is used so direct clients cannot spoof their rate-limit key.
+pub fn client_key(
+    headers: &axum::http::HeaderMap,
+    addr: Option<SocketAddr>,
+    trusted_proxies: &HashSet<IpAddr>,
+) -> String {
+    if addr.is_some_and(|peer| trusted_proxies.contains(&peer.ip()))
+        && let Some(forwarded) = headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|ip| !ip.is_empty())
     {
         return forwarded.to_string();
     }
@@ -68,6 +76,12 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
+    use std::net::Ipv4Addr;
+
+    fn no_proxies() -> HashSet<IpAddr> {
+        HashSet::new()
+    }
 
     #[test]
     fn sliding_window_limits_and_releases_requests() {
@@ -89,5 +103,37 @@ mod tests {
         }
         assert!(!limiter.allow("new-key"));
         assert!(limiter.allow("key-0"), "existing keys keep working");
+    }
+
+    #[test]
+    fn direct_client_cannot_spoof_xff() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
+        let peer = SocketAddr::from((Ipv4Addr::new(198, 51, 100, 7), 1234));
+
+        let key = client_key(&headers, Some(peer), &no_proxies());
+        assert_eq!(key, "198.51.100.7", "peer IP must win over spoofed XFF");
+    }
+
+    #[test]
+    fn trusted_proxy_xff_is_used() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
+        let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
+        let trusted: HashSet<IpAddr> = [IpAddr::V4(Ipv4Addr::LOCALHOST)].into();
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "203.0.113.9");
+    }
+
+    #[test]
+    fn untrusted_proxy_gets_peer_key() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
+        let peer = SocketAddr::from((Ipv4Addr::new(10, 0, 0, 5), 1234));
+        let trusted: HashSet<IpAddr> = [IpAddr::V4(Ipv4Addr::LOCALHOST)].into();
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "10.0.0.5");
     }
 }
