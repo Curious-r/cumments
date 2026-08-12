@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
 
     // Handle CLI subcommands that only need the database.
     if let Some(cli::Commands::Sites(sites_args)) = &args.command {
-        cli::handle_sites_command(&db_store, sites_args).await?;
+        cli::handle_sites_command(&db_store, &site_auth_policy, sites_args).await?;
         return Ok(());
     }
     if let Some(cli::Commands::Rooms(rooms_args)) = &args.command {
