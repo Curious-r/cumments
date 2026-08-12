@@ -1,6 +1,6 @@
 use crate::routes::admin::{
     config_snippet_handler, list_admin_sites_handler, require_admin, revoke_secret_handler,
-    revoke_verified_origin_handler, rotate_secret_handler,
+    revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
 };
 use crate::routes::comments::{
     delete_comment_handler, post_comment_handler, query_comments_handler, update_comment_handler,
@@ -135,6 +135,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/admin/sites/{site_id}/config-snippet",
             axum::routing::get(config_snippet_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}/claim-token/rotate",
+            axum::routing::post(rotate_claim_token_handler),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 

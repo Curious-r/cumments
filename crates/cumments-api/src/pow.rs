@@ -1,4 +1,5 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use cumments_core::site_auth::constant_time_eq;
 use hmac::{Hmac, KeyInit, Mac};
 use rand::Rng;
 use sha2::{Digest, Sha256};
@@ -10,6 +11,9 @@ use tracing::debug;
 type HmacSha256 = Hmac<Sha256>;
 
 const CHALLENGE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
+/// Upper bound on remembered used challenges. Beyond this the PoW endpoint
+/// fails closed (new solves are rejected) instead of growing without bound.
+const MAX_USED_CHALLENGES: usize = 100_000;
 
 #[derive(Clone)]
 pub struct Pow {
@@ -100,7 +104,7 @@ impl Pow {
         // Verify signature
         let payload = format!("{}.{}", ts_hex, rnd_hex);
         let sig_expected = self.sign(&payload);
-        if sig_provided != sig_expected {
+        if !constant_time_eq(sig_provided.as_bytes(), sig_expected.as_bytes()) {
             debug!("Invalid challenge signature");
             return false;
         }
@@ -128,8 +132,12 @@ impl Pow {
             .used_challenges
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if used.len() > 1024 {
-            used.retain(|_, expiry| *expiry > now);
+        // Prune expired entries on every insert so the map cannot grow
+        // beyond the active 5-minute window plus the hard cap.
+        used.retain(|_, expiry| *expiry > now);
+        if used.len() >= MAX_USED_CHALLENGES {
+            debug!("PoW used-challenge cache is full; rejecting new solves");
+            return false;
         }
         if let Some(expiry) = used.get(challenge)
             && *expiry > now

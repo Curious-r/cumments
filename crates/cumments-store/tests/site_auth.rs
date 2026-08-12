@@ -313,6 +313,39 @@ async fn verification_attempts_increment_and_are_persisted() {
 }
 
 #[tokio::test]
+async fn claim_token_can_be_rotated() {
+    let store = DbStore::connect(&test_db_url("site-auth-rotate-claim"))
+        .await
+        .expect("connect db");
+    let site_id = "f60718a1b2c3d4e5f60718a1b2c3d4e5";
+    store
+        .register_site(site_id, &token_hash("old-claim"))
+        .await
+        .expect("register site");
+
+    assert!(
+        store
+            .rotate_claim_token(site_id, &token_hash("new-claim"))
+            .await
+            .expect("rotate claim token")
+    );
+
+    let stored = store
+        .get_claim_token_hash(site_id)
+        .await
+        .expect("query hash")
+        .expect("hash exists");
+    assert_eq!(stored, token_hash("new-claim"));
+
+    assert!(
+        !store
+            .rotate_claim_token("missing-site", &token_hash("x"))
+            .await
+            .expect("missing site is a no-op")
+    );
+}
+
+#[tokio::test]
 async fn complete_verification_is_atomic_and_idempotent() {
     let store = DbStore::connect(&test_db_url("site-auth-complete"))
         .await

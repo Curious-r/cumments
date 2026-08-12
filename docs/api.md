@@ -267,6 +267,13 @@ Both refuse to touch sites whose secret is declared in the config file.
 Returns a TOML block to paste into `[sites]` when the operator wants to move a
 database-tracked site into declarative config.
 
+### Rotate the claim token
+
+`POST /api/v1/admin/sites/{site_id}/claim-token/rotate`
+
+Returns a new `claim_token` exactly once and invalidates the previous token.
+Use this when a claim token may have leaked.
+
 ## Rate limiting
 
 `POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are

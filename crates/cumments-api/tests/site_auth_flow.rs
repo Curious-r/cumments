@@ -559,3 +559,87 @@ async fn private_verification_origins_rejected_by_default() {
         .expect("call router");
     assert_eq!(started.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn admin_can_rotate_claim_token() {
+    let (state, _) = test_state(
+        "rotate-claim",
+        SiteVerificationPolicy::Disabled,
+        Some("token"),
+    )
+    .await;
+    let router = cumments_api::build_router(state);
+
+    let registered = router
+        .clone()
+        .oneshot(request(Method::POST, "/api/v1/sites", None, &[]))
+        .await
+        .expect("call router");
+    let registered_json: serde_json::Value =
+        serde_json::from_str(&body_text(registered).await).expect("parse response");
+    let site_id = registered_json["site_id"].as_str().unwrap().to_string();
+    let old_claim = registered_json["claim_token"].as_str().unwrap().to_string();
+
+    let rotated = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/api/v1/admin/sites/{site_id}/claim-token/rotate"),
+            None,
+            &[("authorization", "Bearer token".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated_json: serde_json::Value =
+        serde_json::from_str(&body_text(rotated).await).expect("parse response");
+    let new_claim = rotated_json["claim_token"].as_str().unwrap().to_string();
+    assert_ne!(new_claim, old_claim);
+
+    // The new token works; the old one is rejected.
+    let started = router
+        .clone()
+        .oneshot(
+            request(
+                Method::POST,
+                &format!("/api/v1/sites/{site_id}/verifications"),
+                None,
+                &[("x-cumments-claim-token", new_claim)],
+            )
+            .map(|_| {
+                Body::from(
+                    serde_json::json!({
+                        "origins": ["https://example.com"],
+                        "methods": ["dns"]
+                    })
+                    .to_string(),
+                )
+            }),
+        )
+        .await
+        .expect("call router");
+    assert_eq!(started.status(), StatusCode::OK);
+
+    let rejected = router
+        .clone()
+        .oneshot(
+            request(
+                Method::POST,
+                &format!("/api/v1/sites/{site_id}/verifications"),
+                None,
+                &[("x-cumments-claim-token", old_claim)],
+            )
+            .map(|_| {
+                Body::from(
+                    serde_json::json!({
+                        "origins": ["https://example.com"],
+                        "methods": ["dns"]
+                    })
+                    .to_string(),
+                )
+            }),
+        )
+        .await
+        .expect("call router");
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+}

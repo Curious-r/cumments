@@ -79,16 +79,40 @@ impl SiteAuthStore for DbStore {
             .and_then(|site| site.claim_token_hash))
     }
 
+    async fn rotate_claim_token(&self, site_id: &str, new_hash: &str) -> Result<bool> {
+        let result = sites::Entity::update_many()
+            .col_expr(
+                sites::Column::ClaimTokenHash,
+                sea_orm::sea_query::Expr::value(Some(new_hash)),
+            )
+            .col_expr(
+                sites::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(Some(Utc::now())),
+            )
+            .filter(sites::Column::Id.eq(site_id))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected == 1)
+    }
+
     async fn insert_verification_tokens(&self, tokens: &[NewVerificationToken]) -> Result<()> {
         let now = Utc::now();
+        let methods_json = tokens
+            .iter()
+            .map(|token| {
+                serde_json::to_string(&token.methods)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize verification methods: {e}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let models = tokens
             .iter()
-            .map(|token| verification_tokens::ActiveModel {
+            .zip(methods_json)
+            .map(|(token, methods)| verification_tokens::ActiveModel {
                 id: NotSet,
                 site_id: Set(token.site_id.clone()),
                 origin: Set(token.origin.as_str().to_owned()),
                 token_hash: Set(token.token_hash.clone()),
-                methods: Set(serde_json::to_string(&token.methods).expect("methods serialize")),
+                methods: Set(methods),
                 expires_at: Set(token.expires_at),
                 consumed_at: Set(None),
                 created_at: Set(now),
@@ -107,6 +131,16 @@ impl SiteAuthStore for DbStore {
         origin: &Origin,
         token_hash: &str,
     ) -> Result<Option<VerificationToken>> {
+        // Opportunistic GC: drop expired tokens and consumed tokens older
+        // than a day so the table cannot grow without bound.
+        self.db
+            .execute_unprepared(
+                "DELETE FROM verification_tokens \
+                 WHERE expires_at < datetime('now') \
+                    OR (consumed_at IS NOT NULL AND consumed_at < datetime('now', '-1 day'))",
+            )
+            .await?;
+
         let now = Utc::now();
         let row = verification_tokens::Entity::find()
             .filter(verification_tokens::Column::SiteId.eq(site_id))
@@ -168,6 +202,10 @@ impl SiteAuthStore for DbStore {
         .exec(&transaction)
         .await?;
 
+        let existing_verified_at = sites::Entity::find_by_id(site_id.to_owned())
+            .one(&transaction)
+            .await?
+            .and_then(|site| site.verified_at);
         sites::Entity::update_many()
             .col_expr(
                 sites::Column::VerificationStatus,
@@ -175,7 +213,7 @@ impl SiteAuthStore for DbStore {
             )
             .col_expr(
                 sites::Column::VerifiedAt,
-                sea_orm::sea_query::Expr::value(Utc::now()),
+                sea_orm::sea_query::Expr::value(existing_verified_at.unwrap_or_else(Utc::now)),
             )
             .col_expr(
                 sites::Column::UpdatedAt,
@@ -203,6 +241,7 @@ impl SiteAuthStore for DbStore {
                 sea_orm::sea_query::Expr::value(Utc::now()),
             )
             .filter(verification_tokens::Column::Id.eq(token_id))
+            .filter(verification_tokens::Column::SiteId.eq(site_id))
             .filter(verification_tokens::Column::ConsumedAt.is_null())
             .exec(&transaction)
             .await?;
@@ -224,6 +263,10 @@ impl SiteAuthStore for DbStore {
         .exec(&transaction)
         .await?;
 
+        let existing_verified_at = sites::Entity::find_by_id(site_id.to_owned())
+            .one(&transaction)
+            .await?
+            .and_then(|site| site.verified_at);
         sites::Entity::update_many()
             .col_expr(
                 sites::Column::VerificationStatus,
@@ -231,7 +274,7 @@ impl SiteAuthStore for DbStore {
             )
             .col_expr(
                 sites::Column::VerifiedAt,
-                sea_orm::sea_query::Expr::value(Utc::now()),
+                sea_orm::sea_query::Expr::value(existing_verified_at.unwrap_or_else(Utc::now)),
             )
             .col_expr(
                 sites::Column::UpdatedAt,

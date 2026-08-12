@@ -44,18 +44,24 @@ pub struct PostCommentRequest {
     #[validate(length(min = 1, max = 50))]
     pub display_name: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
+    #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     /// Ed25519 signature over the canonical POST message.
+    #[validate(length(min = 1, max = 256))]
     pub author_signature: String,
     pub reply_to: Option<String>,
+    #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }
 
 /// Request DTO for deleting a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct DeleteCommentRequest {
+    #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
     pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }
 
@@ -64,7 +70,10 @@ pub struct DeleteCommentRequest {
 pub struct UpdateCommentRequest {
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
+    #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
     pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }

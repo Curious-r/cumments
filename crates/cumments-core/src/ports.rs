@@ -213,6 +213,10 @@ pub trait SiteAuthStore: Send + Sync {
     /// Stored SHA-256 hash of the site's claim token, if any.
     async fn get_claim_token_hash(&self, site_id: &str) -> Result<Option<String>>;
 
+    /// Replaces the stored claim-token hash. Returns `false` when the site
+    /// does not exist.
+    async fn rotate_claim_token(&self, site_id: &str, new_hash: &str) -> Result<bool>;
+
     /// Inserts the rows of one verification challenge (same raw token, one
     /// row per origin).
     async fn insert_verification_tokens(&self, tokens: &[NewVerificationToken]) -> Result<()>;

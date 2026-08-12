@@ -81,12 +81,16 @@ impl IntoResponse for AppError {
             AppError::SiteSignatureInvalid(msg) => {
                 (StatusCode::FORBIDDEN, msg, "SITE_SIGNATURE_INVALID", None)
             }
-            AppError::Internal(msg) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                msg,
-                "INTERNAL_ERROR",
-                None,
-            ),
+            AppError::Internal(msg) => {
+                // Log the detail server-side; never echo it to clients.
+                tracing::error!("Internal error: {msg}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error.".to_string(),
+                    "INTERNAL_ERROR",
+                    None,
+                )
+            }
         };
 
         let body = Json(ErrorResponse {

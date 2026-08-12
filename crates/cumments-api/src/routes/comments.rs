@@ -36,6 +36,8 @@ fn challenge_prefix(challenge_response: &str) -> &str {
 /// Error returned when `reply_to` cannot be a Matrix event ID.
 const REPLY_TO_FORMAT_ERROR: &str =
     "reply_to must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
+const COMMENT_ID_FORMAT_ERROR: &str =
+    "comment_id must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
 
 /// Basic shape check for a Matrix event ID used as a reply target.
 ///
@@ -49,6 +51,15 @@ fn validate_reply_to_format(reply_to: &str) -> Result<(), &'static str> {
     let event_id = EventId::parse(reply_to).map_err(|_| REPLY_TO_FORMAT_ERROR)?;
     if event_id.localpart().is_empty() || reply_to.len() > 255 {
         return Err(REPLY_TO_FORMAT_ERROR);
+    }
+    Ok(())
+}
+
+/// Same shape check for comment IDs used in PATCH/DELETE paths.
+fn validate_comment_id_format(comment_id: &str) -> Result<(), &'static str> {
+    let event_id = EventId::parse(comment_id).map_err(|_| COMMENT_ID_FORMAT_ERROR)?;
+    if event_id.localpart().is_empty() || comment_id.len() > 255 {
+        return Err(COMMENT_ID_FORMAT_ERROR);
     }
     Ok(())
 }
@@ -253,6 +264,9 @@ pub(crate) async fn delete_comment_handler(
 
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
+    if let Err(msg) = validate_comment_id_format(&comment_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
 
     // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
@@ -360,6 +374,9 @@ pub(crate) async fn update_comment_handler(
 
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
+    if let Err(msg) = validate_comment_id_format(&comment_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
 
     // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {

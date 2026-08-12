@@ -70,6 +70,12 @@ pub struct RevokeSecretResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RotateClaimTokenResponse {
+    pub site_id: String,
+    pub claim_token: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ConfigSnippetResponse {
     pub site_id: String,
     pub toml: String,
@@ -248,6 +254,26 @@ pub(crate) async fn revoke_secret_handler(
     Ok(Json(RevokeSecretResponse {
         site_id: site_id.as_str().to_string(),
         auth_mode: SiteAuthMode::Origin,
+    }))
+}
+
+pub(crate) async fn rotate_claim_token_handler(
+    State(state): State<ApiState>,
+    Path(site_id): Path<String>,
+) -> Result<Json<RotateClaimTokenResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let claim_token = generate_token();
+    let rotated = state
+        .store
+        .rotate_claim_token(site_id.as_str(), &token_hash(&claim_token))
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to rotate claim token: {e}")))?;
+    if !rotated {
+        return Err(AppError::NotFound("site not found".to_string()));
+    }
+    Ok(Json(RotateClaimTokenResponse {
+        site_id: site_id.as_str().to_string(),
+        claim_token,
     }))
 }
 
