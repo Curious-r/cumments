@@ -69,9 +69,6 @@ cumments rooms list-quarantined
 cumments rooms reinstate '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
 ```
 
-The old `list-blocked` and `unblock` names are kept as deprecated aliases
-for one release.
-
 Rotate a site's HMAC secret (printed once) or revoke it (destructive, needs
 `--yes`):
 

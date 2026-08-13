@@ -138,10 +138,10 @@ pub struct RoomsArgs {
 #[derive(Subcommand, Debug)]
 pub enum RoomsCommand {
     /// List rooms currently quarantined from adoption
-    #[command(name = "list-quarantined", alias = "list-blocked")]
+    #[command(name = "list-quarantined")]
     ListQuarantined(QuarantinedListArgs),
     /// Clear a room's quarantine and make it canonical again
-    #[command(name = "reinstate", alias = "unblock")]
+    #[command(name = "reinstate")]
     Reinstate(ReinstateRoomArgs),
 }
 
