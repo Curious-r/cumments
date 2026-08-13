@@ -442,6 +442,14 @@ The signature covers `["VOTE", site_id, post_slug, poll_id, option_id, challenge
 the vote is sent as `m.poll.response` (MSC3381) with the signed proof block
 and aggregated into the poll's response counts.
 
+### Post a location
+
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/location`
+
+Body: `{ "geo_uri", "description?", "author_public_key", "author_signature", "challenge_response" }`.
+The signature covers `["LOCATE", site_id, post_slug, geo_uri, challenge]`;
+the message is sent as `m.location` (MSC3488) with the signed proof block.
+
 ### Room info
 
 `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`

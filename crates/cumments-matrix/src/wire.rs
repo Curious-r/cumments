@@ -364,6 +364,33 @@ pub(crate) fn build_poll_vote_body(
         }
     })
 }
+
+/// Build the `m.room.message` content for a guest location (MSC3488).
+pub(crate) fn build_location_body(
+    geo_uri: &str,
+    description: Option<&str>,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    guest_id: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "msgtype": "org.matrix.msc3488.location",
+        "geo_uri": geo_uri,
+        MESSAGE_CONTENT_KEY: {
+            "guest_id": guest_id,
+            "public_key": author_public_key,
+            "signature": author_signature,
+            "challenge": author_challenge,
+            "content": geo_uri,
+            "displayname": "",
+        }
+    });
+    if let Some(description) = description {
+        body["body"] = serde_json::json!(description);
+    }
+    body
+}
 /// Build the `m.room.message` content for an edit (`m.replace`).
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_edit_body(
@@ -695,6 +722,15 @@ mod tests {
         assert_eq!(body["org.matrix.msc3381.poll.response"]["answers"][0], "2");
         assert_eq!(body["m.relates_to"]["event_id"], "$poll:hs");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "2");
+    }
+
+    #[test]
+    fn location_body_carries_geo_uri_and_proof() {
+        let body = build_location_body("geo:31.2,121.5", Some("here"), "pk", "sig", "chal", "abcd");
+        assert_eq!(body["msgtype"], "org.matrix.msc3488.location");
+        assert_eq!(body["geo_uri"], "geo:31.2,121.5");
+        assert_eq!(body["body"], "here");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "geo:31.2,121.5");
     }
 
     #[test]

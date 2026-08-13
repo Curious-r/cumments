@@ -931,13 +931,14 @@ mod tests {
             }),
         );
         let parsed = parse_push_message(&event).expect("parse location");
-        match parsed.content {
+        match &parsed.content {
             Content::Location(location) => {
                 assert_eq!(location.geo_uri, "geo:31.2,121.5");
                 assert_eq!(location.description.as_deref(), Some("here"));
             }
             other => panic!("expected location content, got {other:?}"),
         }
+        assert_eq!(parsed.signable_content(), Some("geo:31.2,121.5"));
     }
 
     #[test]

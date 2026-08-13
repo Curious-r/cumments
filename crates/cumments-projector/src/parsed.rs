@@ -46,6 +46,7 @@ impl ParsedRoomMessage {
         match &self.content {
             Content::Text(text) => Some(&text.body),
             Content::Media(media) => Some(&media.url),
+            Content::Location(location) => Some(&location.geo_uri),
             _ => None,
         }
     }

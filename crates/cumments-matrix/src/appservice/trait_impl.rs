@@ -106,6 +106,28 @@ impl MatrixDriver for AppServiceMatrixDriver {
         .await
     }
 
+    async fn post_location(
+        &self,
+        room_id: &str,
+        geo_uri: &str,
+        description: Option<&str>,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()> {
+        self.post_location_impl(
+            room_id,
+            geo_uri,
+            description,
+            site_id,
+            author_public_key,
+            author_signature,
+            author_challenge,
+        )
+        .await
+    }
+
     async fn update_message(
         &self,
         room_id: &str,

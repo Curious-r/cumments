@@ -99,6 +99,23 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
+    async fn post_location(
+        &self,
+        room_id: &str,
+        geo_uri: &str,
+        description: Option<&str>,
+        _site_id: &SiteId,
+        _author_public_key: &str,
+        _author_signature: &str,
+        _author_challenge: &str,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Post location {geo_uri} in {room_id} ({})",
+            description.unwrap_or("")
+        );
+        Ok(())
+    }
+
     async fn update_message(
         &self,
         room_id: &str,

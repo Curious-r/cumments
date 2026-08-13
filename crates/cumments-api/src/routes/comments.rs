@@ -4,8 +4,8 @@ use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
-    DeleteCommentRequest, PaginatedResponse, PaginationMeta, PaginationQuery, PostCommentRequest,
-    ReactRequest, UpdateCommentRequest, VoteRequest,
+    DeleteCommentRequest, LocationRequest, PaginatedResponse, PaginationMeta, PaginationQuery,
+    PostCommentRequest, ReactRequest, UpdateCommentRequest, VoteRequest,
 };
 use axum::{
     Json,
@@ -880,6 +880,65 @@ pub(crate) async fn vote_handler(
         )
         .await
         .map_err(|e| AppError::Internal(format!("failed to send vote: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/sites/{site}/posts/{post}/location`
+pub(crate) async fn location_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "comment writes are rate limited; try again later".to_string(),
+        ));
+    }
+    let req: LocationRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+    req.validate().map_err(AppError::Validation)?;
+    if !req.geo_uri.starts_with("geo:") {
+        return Err(AppError::BadRequest(
+            "geo_uri must be a geo: URI".to_string(),
+        ));
+    }
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&["LOCATE", &site_id, &post_slug, &req.geo_uri, challenge]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let Some(room_id) = state
+        .store
+        .get_registered_room(&site_id_val, &post_slug_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
+    else {
+        return Err(AppError::NotFound(
+            "No room registered for this post.".to_string(),
+        ));
+    };
+    state
+        .driver
+        .post_location(
+            &room_id,
+            &req.geo_uri,
+            req.description.as_deref(),
+            &site_id_val,
+            &req.author_public_key,
+            &req.author_signature,
+            challenge,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to send location: {e}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

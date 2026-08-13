@@ -854,6 +854,43 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/location:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    post:
+      tags: [Comments]
+      summary: Post a location message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [geo_uri, author_public_key, author_signature, challenge_response]
+              properties:
+                geo_uri:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+                author_public_key:
+                  type: string
+                author_signature:
+                  type: string
+                challenge_response:
+                  type: string
+      responses:
+        "204":
+          description: Location sent
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:

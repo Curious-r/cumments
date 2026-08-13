@@ -4,7 +4,7 @@ use crate::routes::admin::{
     rotate_claim_token_handler, rotate_secret_handler,
 };
 use crate::routes::comments::{
-    delete_comment_body_handler, delete_comment_handler, post_comment_handler,
+    delete_comment_body_handler, delete_comment_handler, location_handler, post_comment_handler,
     query_comments_handler, react_handler, update_comment_body_handler, update_comment_handler,
     vote_handler,
 };
@@ -154,6 +154,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/media",
             post(upload_media_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/location",
+            post(location_handler).fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

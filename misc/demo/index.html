@@ -217,6 +217,7 @@
                                 <button id="imageBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">🖼 <span data-i18n="add_image">图片</span></button>
                                 <button id="voiceBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">🎤 <span data-i18n="record_voice">语音</span></button>
                                 <button id="stickerBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">✨ <span data-i18n="stickers">贴纸</span></button>
+                                <button id="locationBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">📍 <span data-i18n="location">位置</span></button>
                                 <span id="mediaPreview" class="text-xs text-slate-500"></span>
                                 <input type="file" id="imageInput" accept="image/*" class="hidden">
                             </div>
@@ -686,6 +687,8 @@
                     no_stickers: "暂无预置贴纸",
                     reaction_submitted: "已发送回应",
                     vote_submitted: "投票已提交",
+                    location: "位置",
+                    location_submitted: "位置已发送",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -836,6 +839,8 @@
                     no_stickers: "No preset stickers",
                     reaction_submitted: "Reaction sent",
                     vote_submitted: "Vote submitted",
+                    location: "Location",
+                    location_submitted: "Location sent",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -2421,6 +2426,51 @@
                 }
             }
 
+            async function sendLocation() {
+                if (!navigator.geolocation) {
+                    toast(t("publish_failed") + "geolocation unsupported", "error");
+                    return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                    async (position) => {
+                        const geoUri = `geo:${position.coords.latitude},${position.coords.longitude}`;
+                        const cfg = getSettings();
+                        try {
+                            const chal = await getChallenge(cfg);
+                            const nonce = await solvePow(chal.prefix, chal.difficulty);
+                            const { publicKey, signature } = await authorSignature([
+                                "LOCATE",
+                                cfg.siteId,
+                                cfg.slug,
+                                geoUri,
+                                chal.prefix,
+                            ]);
+                            const res = await fetch(
+                                `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/location`,
+                                {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                        geo_uri: geoUri,
+                                        description: t("location"),
+                                        author_public_key: publicKey,
+                                        author_signature: signature,
+                                        challenge_response: `${chal.prefix}|${nonce}`,
+                                    }),
+                                },
+                            );
+                            if (!res.ok) throw new Error(await apiError(res));
+                            toast(t("location_submitted"), "success");
+                            loadList();
+                        } catch (e) {
+                            toast(t("publish_failed") + e.message, "error");
+                        }
+                    },
+                    (error) =>
+                        toast(t("publish_failed") + error.message, "error"),
+                );
+            }
+
             async function submitComment() {
                 const cfg = getSettings();
                 const displayName =
@@ -2888,6 +2938,7 @@
             document.getElementById("imageBtn").addEventListener("click", pickImage);
             document.getElementById("voiceBtn").addEventListener("click", toggleVoiceRecord);
             document.getElementById("stickerBtn").addEventListener("click", pickSticker);
+            document.getElementById("locationBtn").addEventListener("click", sendLocation);
             document.getElementById("imageInput").addEventListener("change", (event) => {
                 const file = event.target.files && event.target.files[0];
                 if (file) {

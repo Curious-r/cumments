@@ -115,3 +115,19 @@ pub struct VoteRequest {
     #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }
+
+/// Request DTO for posting a location.
+#[derive(Debug, Deserialize, Validate)]
+pub struct LocationRequest {
+    #[validate(length(min = 4, max = 512))]
+    pub geo_uri: String,
+    #[validate(length(min = 0, max = 255))]
+    #[serde(default)]
+    pub description: Option<String>,
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}

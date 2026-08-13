@@ -463,6 +463,19 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
     ) -> Result<()>;
 
+    /// Sends a location message (`m.location`, MSC3488) as the guest's
+    /// virtual user.
+    async fn post_location(
+        &self,
+        room_id: &str,
+        geo_uri: &str,
+        description: Option<&str>,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()>;
+
     /// Updates an existing message in a specific room using m.replace.
     async fn update_message(
         &self,
