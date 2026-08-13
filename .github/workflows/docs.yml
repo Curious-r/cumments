@@ -1,5 +1,8 @@
 name: Docs
 
+# Build-only documentation check for main and pull requests. The public site
+# is published from `v*` release tags by docs-deploy.yml, so the online docs
+# always match the latest released binary instead of unreleased main.
 on:
   push:
     branches: [main]
@@ -14,8 +17,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: docs-${{ github.ref }}
@@ -39,20 +40,3 @@ jobs:
         run: |
           pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
           mkdocs build --strict --config-file docs/mkdocs.yml
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-  deploy:
-    needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4

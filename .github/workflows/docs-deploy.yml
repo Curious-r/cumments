@@ -1,0 +1,51 @@
+name: Docs deploy
+
+# Publishes the documentation site on `v*` release tags only. Pushes to main
+# run the build-only check in docs.yml, so unreleased main never appears on
+# the public site. `workflow_dispatch` is the manual escape hatch for a
+# one-off publish.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build docs site
+        run: |
+          pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
+          mkdocs build --strict --config-file docs/mkdocs.yml
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Intentionally no `environment:` here. The `github-pages` environment's
+    # branch policy only allows `main`, and GitHub deployment branch policies
+    # cannot list tag refs. A `v*` tag is itself the publish gate, so the
+    # environment protection is redundant for this workflow.
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
