@@ -10,7 +10,7 @@ use crate::error::AppError;
 use crate::rate_limit::client_key;
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, Request, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -26,6 +26,7 @@ use cumments_core::{
 };
 use ruma_common::UserId;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 /// How long an unverified role claim stays valid.
@@ -119,6 +120,16 @@ fn parse_user_id(raw: &str) -> Result<String, AppError> {
         ));
     }
     Ok(user_id)
+}
+
+/// Reads the mandatory `user_id` from a DELETE query string with a
+/// problem-details error instead of axum's default rejection body.
+fn user_id_from_query(query: &HashMap<String, String>) -> Result<String, AppError> {
+    query
+        .get("user_id")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("user_id query parameter is required".to_string()))
 }
 
 fn rate_limited(
@@ -279,11 +290,11 @@ pub(crate) async fn remove_owner_handler(
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(req): Json<UserIdRequest>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
-    let user_id = parse_user_id(&req.user_id)?;
+    let user_id = parse_user_id(&user_id_from_query(&query)?)?;
     let revoked = state
         .store
         .revoke_role_claim(site_id.as_str(), "", &user_id, OWNER_LEVEL)
@@ -319,11 +330,11 @@ pub(crate) async fn remove_co_manager_handler(
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(req): Json<UserIdRequest>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
-    let user_id = parse_user_id(&req.user_id)?;
+    let user_id = parse_user_id(&user_id_from_query(&query)?)?;
     let revoked = state
         .store
         .revoke_role_claim(site_id.as_str(), "", &user_id, CO_MANAGER_LEVEL)
@@ -361,12 +372,12 @@ pub(crate) async fn remove_room_moderator_handler(
     Path((site_id, post_slug)): Path<(String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(req): Json<UserIdRequest>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
-    let user_id = parse_user_id(&req.user_id)?;
+    let user_id = parse_user_id(&user_id_from_query(&query)?)?;
     let room_id = room_id_for(&state, &site_id, &post_slug).await?;
     let revoked = state
         .store

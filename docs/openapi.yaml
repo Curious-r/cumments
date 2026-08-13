@@ -123,10 +123,11 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Comments]
-      summary: Delete a comment (body carries comment_id)
-      operationId: deleteCommentBody
+      summary: Delete a comment (comment_id is a query parameter)
+      operationId: deleteComment
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CommentIdQuery"
       requestBody:
         required: true
         content:
@@ -204,7 +205,7 @@ paths:
       - $ref: "#/components/parameters/CommentId"
     patch:
       tags: [Comments]
-      summary: Edit a comment (legacy path form)
+      summary: Edit a comment (path form)
       operationId: updateCommentPath
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -217,39 +218,6 @@ paths:
       responses:
         "202":
           description: "Edit intent accepted (replays carry Idempotent-Replayed: true)"
-          headers:
-            Idempotent-Replayed:
-              description: "true when this is a replay of an accepted request"
-              schema:
-                type: boolean
-                enum: [true]
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IntentAccepted"
-        "400":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-    delete:
-      tags: [Comments]
-      summary: Delete a comment (legacy path form)
-      operationId: deleteCommentPath
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DeleteCommentRequest"
-      responses:
-        "202":
-          description: "Delete intent accepted (replays carry Idempotent-Replayed: true)"
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -912,12 +880,8 @@ paths:
       operationId: removeSiteOwner
       security:
         - claimToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UserIdRequest"
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -969,12 +933,8 @@ paths:
       operationId: removeSiteCoManager
       security:
         - claimToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UserIdRequest"
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1040,12 +1000,8 @@ paths:
       operationId: removeRoomModerator
       security:
         - claimToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UserIdRequest"
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1111,12 +1067,8 @@ paths:
       operationId: adminRemoveSiteOwner
       security:
         - adminToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UserIdRequest"
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1168,12 +1120,8 @@ paths:
       operationId: adminRemoveSiteCoManager
       security:
         - adminToken: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UserIdRequest"
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1220,6 +1168,20 @@ components:
       schema:
         type: string
         description: Matrix event ID, percent-encoded
+    CommentIdQuery:
+      name: comment_id
+      in: query
+      required: true
+      schema:
+        type: string
+        description: Matrix event ID, percent-encoded
+    UserIdQuery:
+      name: user_id
+      in: query
+      required: true
+      schema:
+        type: string
+        description: Fully qualified Matrix user ID, percent-encoded
     RoomId:
       name: room_id
       in: path
@@ -1601,9 +1563,6 @@ components:
       type: object
       required: [author_public_key, author_signature, challenge_response]
       properties:
-        comment_id:
-          type: string
-          description: Required for the collection endpoint; optional on the path endpoint
         author_public_key:
           type: string
         author_signature:

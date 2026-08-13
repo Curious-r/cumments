@@ -161,7 +161,8 @@ POST\n{site_id}\n{post_slug}\n{content}\n{display_name}\n{reply_to}\n{challenge_
 the API, or an empty line when the comment is not a reply. Event IDs are
 opaque strings by spec; legacy v1/v2 IDs look like `$localpart:server` while
 room v3+ IDs are bare hashes (v3 may even contain `/`). When an event ID is
-used in a request path (edit/delete), clients must percent-encode it.
+used in a request path (the path-based edit form) or query string (delete),
+clients must percent-encode it.
 
 ### Edit a comment
 
@@ -187,13 +188,28 @@ The same operation is available without embedding `comment_id` in the URL:
 }
 ```
 
-The path-based form remains supported for backwards compatibility.
+Both edit forms are supported: the body-based form avoids percent-encoding
+opaque event IDs, while the path-based form keeps the target in the URL.
 
 Both edit forms require the `Idempotency-Key` header.
 
 ### Delete a comment
 
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`
+`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments?comment_id=$event%3Aserver`
+
+The target event id travels as a percent-encoded `comment_id` query
+parameter. RFC 9110 leaves DELETE request bodies undefined, so Cumments
+never puts the target in a DELETE body — that keeps requests acceptable to
+proxies that reject body-bearing DELETEs. The body carries only the author
+proof:
+
+```json
+{
+  "author_public_key": "...",
+  "author_signature": "...",
+  "challenge_response": "challenge|nonce"
+}
+```
 
 Signature message:
 
@@ -201,22 +217,7 @@ Signature message:
 DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}
 ```
 
-The body-based form is:
-
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments`
-
-```json
-{
-  "comment_id": "$event:server",
-  "author_public_key": "...",
-  "author_signature": "...",
-  "challenge_response": "challenge|nonce"
-}
-```
-
-The path-based form remains supported for backwards compatibility.
-
-Both delete forms require the `Idempotency-Key` header.
+The request requires the `Idempotency-Key` header.
 
 ### Idempotent writes
 
@@ -243,7 +244,7 @@ Rules:
 
 Clients should generate a fresh key per logical write (e.g. `crypto.randomUUID()`)
 and reuse that exact key when retrying the same request. Use the same endpoint
-form (path-based or body-based) for all retries of a key.
+form (the path-based or body-based PATCH variant) for all retries of a key.
 
 ## Real-time updates (SSE)
 
@@ -449,10 +450,13 @@ Matrix power levels.
 
 ### Site owners
 
-`POST /api/v1/sites/{site_id}/owners` / `DELETE /api/v1/sites/{site_id}/owners`
+`POST /api/v1/sites/{site_id}/owners` /
+`DELETE /api/v1/sites/{site_id}/owners?user_id=%40alice%3Aexample.com`
 
-Body: `{ "user_id": "@alice:example.com" }`. Adds or removes an owner
-(level 100 in the Space and every comment room). POST returns
+POST body: `{ "user_id": "@alice:example.com" }`. DELETE carries the target
+in the `user_id` query parameter (DELETE bodies are avoided per RFC 9110).
+Adds or removes an owner (level 100 in the Space and every comment room).
+POST returns
 `{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
 DELETE returns `{ "revoked": true, "user_id", "level" }` and cancels a
 pending claim or removes an applied role. Registering the owner is the
@@ -461,20 +465,22 @@ one-time bootstrap step.
 ### Site co-managers
 
 `POST /api/v1/sites/{site_id}/co-managers` /
-`DELETE /api/v1/sites/{site_id}/co-managers`
+`DELETE /api/v1/sites/{site_id}/co-managers?user_id=...`
 
-Body: `{ "user_id": "..." }`. Co-managers hold 75 in the Space and are
-replicated into every comment room by the moderation sync pass. POST returns
-the pending claim shape; DELETE returns the revoked shape.
+POST body: `{ "user_id": "..." }`; DELETE takes `user_id` as a query
+parameter. Co-managers hold 75 in the Space and are replicated into every
+comment room by the moderation sync pass. POST returns the pending claim
+shape; DELETE returns the revoked shape.
 
 ### Room moderators
 
 `POST /api/v1/sites/{site_id}/posts/{post_slug}/moderators` /
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/moderators`
+`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/moderators?user_id=...`
 
-Body: `{ "user_id": "..." }`. Appoints or removes a moderator (level 50) in
-the room registered for that post only. POST returns the pending claim shape;
-DELETE returns the revoked shape.
+POST body: `{ "user_id": "..." }`; DELETE takes `user_id` as a query
+parameter. Appoints or removes a moderator (level 50) in the room registered
+for that post only. POST returns the pending claim shape; DELETE returns the
+revoked shape.
 
 ### Read the projected rosters
 

@@ -93,7 +93,7 @@ fn middleware_router(state: ApiState) -> Router {
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
-            post(ok_handler).delete(ok_handler).patch(ok_handler),
+            post(ok_handler).patch(ok_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/media",
@@ -330,7 +330,11 @@ async fn comment_body_endpoints_require_comment_id() {
         .await
         .expect("call router");
     assert_eq!(delete.status(), StatusCode::BAD_REQUEST);
-    assert!(body_text(delete).await.contains("comment_id is required"));
+    assert!(
+        body_text(delete)
+            .await
+            .contains("comment_id query parameter is required")
+    );
 
     let patch = router
         .clone()
@@ -1363,10 +1367,10 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         .clone()
         .oneshot(request_with_body(
             Method::DELETE,
-            &owner_uri,
+            &format!("{owner_uri}?user_id=%40owner%3Ahs"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
-            &owner_body,
+            "",
         ))
         .await
         .expect("call router");

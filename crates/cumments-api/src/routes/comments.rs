@@ -9,7 +9,7 @@ use crate::request::{
 };
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -195,12 +195,16 @@ struct CommentWritePath {
 }
 
 impl CommentWritePath {
-    fn new(site_id: String, post_slug: String, comment_id: String, path_form: bool) -> Self {
-        let fingerprint_path = if path_form {
-            format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}")
-        } else {
-            format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments")
-        };
+    /// `fingerprint_path` is the canonical idempotency identity of the
+    /// endpoint form used. DELETE targets the collection endpoint (the
+    /// comment id rides in the query string); PATCH can use either the path
+    /// or the body form.
+    fn new(
+        site_id: String,
+        post_slug: String,
+        comment_id: String,
+        fingerprint_path: String,
+    ) -> Self {
         Self {
             site_id,
             post_slug,
@@ -476,36 +480,30 @@ pub(crate) async fn post_comment_handler(
     }
 }
 
-/// The handler for receiving a new delete comment request.
+/// Delete via the collection endpoint, with `comment_id` in the query string
+/// so opaque Matrix event IDs never need percent-encoding in the path.
 pub(crate) async fn delete_comment_handler(
-    State(state): State<ApiState>,
-    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
-    connect: ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, AppError> {
-    let req: DeleteCommentRequest = serde_json::from_str(&body)
-        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, true);
-    delete_comment_common(state, connect, headers, path, req, body).await
-}
-
-/// Delete via the collection endpoint, with `comment_id` in the JSON body so
-/// opaque Matrix event IDs never need percent-encoding in the URL.
-pub(crate) async fn delete_comment_body_handler(
     State(state): State<ApiState>,
     Path((site_id, post_slug)): Path<(String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
     body: String,
 ) -> Result<impl IntoResponse, AppError> {
     let req: DeleteCommentRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
-    let comment_id = req
-        .comment_id
-        .clone()
-        .ok_or_else(|| AppError::BadRequest("comment_id is required".to_string()))?;
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, false);
+    let comment_id = query
+        .get("comment_id")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::BadRequest("comment_id query parameter is required".to_string())
+        })?;
+    // The collection path is constant for every DELETE: the body signature
+    // already covers `comment_id`, so the idempotency fingerprint stays
+    // insensitive to query percent-encoding choices.
+    let fingerprint_path = format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments");
+    let path = CommentWritePath::new(site_id, post_slug, comment_id, fingerprint_path);
     delete_comment_common(state, connect, headers, path, req, body).await
 }
 
@@ -664,7 +662,9 @@ pub(crate) async fn update_comment_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let req: UpdateCommentRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, true);
+    let fingerprint_path =
+        format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}");
+    let path = CommentWritePath::new(site_id, post_slug, comment_id, fingerprint_path);
     update_comment_common(state, connect, headers, path, req, body).await
 }
 
@@ -683,7 +683,8 @@ pub(crate) async fn update_comment_body_handler(
         .comment_id
         .clone()
         .ok_or_else(|| AppError::BadRequest("comment_id is required".to_string()))?;
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, false);
+    let fingerprint_path = format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments");
+    let path = CommentWritePath::new(site_id, post_slug, comment_id, fingerprint_path);
     update_comment_common(state, connect, headers, path, req, body).await
 }
 

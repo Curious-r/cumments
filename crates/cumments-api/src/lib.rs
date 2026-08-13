@@ -4,9 +4,8 @@ use crate::routes::admin::{
     rotate_claim_token_handler, rotate_secret_handler,
 };
 use crate::routes::comments::{
-    delete_comment_body_handler, delete_comment_handler, location_handler, post_comment_handler,
-    query_comments_handler, react_handler, update_comment_body_handler, update_comment_handler,
-    vote_handler,
+    delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
+    react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::media::{
     MEDIA_MAX_BYTES, MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
@@ -29,7 +28,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{delete, get, post},
+    routing::{get, patch, post},
 };
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
@@ -149,14 +148,12 @@ pub fn build_router(state: ApiState) -> Router {
             // POST for writing intents, fallback handles QUERY for reading.
             post(post_comment_handler)
                 .patch(update_comment_body_handler)
-                .delete(delete_comment_body_handler)
+                .delete(delete_comment_handler)
                 .fallback(query_comments_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
-            delete(delete_comment_handler)
-                .patch(update_comment_handler)
-                .fallback(method_not_allowed_handler),
+            patch(update_comment_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions",
