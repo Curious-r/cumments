@@ -77,10 +77,22 @@ pub enum SitesCommand {
     RevokeSecret(RevokeSecretArgs),
     /// Export a TOML block to adopt a database-tracked site into `[sites]`
     #[command(name = "export-config")]
-    ExportConfig(SiteIdArg),
+    ExportConfig(ExportConfigArgs),
     /// Rotate the claim token; the new token is printed exactly once
     #[command(name = "rotate-claim-token")]
     RotateClaimToken(SiteIdArg),
+    /// Start a pending owner claim and print its one-time verify token
+    #[command(name = "add-owner")]
+    AddOwner(SiteUserIdArg),
+    /// Revoke a pending owner claim (applied roles are managed in Matrix)
+    #[command(name = "remove-owner")]
+    RemoveOwner(SiteUserIdArg),
+    /// Start a pending co-manager claim and print its one-time verify token
+    #[command(name = "add-co-manager")]
+    AddCoManager(SiteUserIdArg),
+    /// Revoke a pending co-manager claim (applied roles are managed in Matrix)
+    #[command(name = "remove-co-manager")]
+    RemoveCoManager(SiteUserIdArg),
 }
 
 #[derive(clap::Args, Debug)]
@@ -110,6 +122,22 @@ pub struct SiteListArgs {
 #[derive(clap::Args, Debug)]
 pub struct SiteIdArg {
     pub site_id: String,
+}
+
+/// A site id plus a target Matrix user id.
+#[derive(clap::Args, Debug)]
+pub struct SiteUserIdArg {
+    pub site_id: String,
+    pub user_id: String,
+}
+
+/// Arguments for exporting a config snippet.
+#[derive(clap::Args, Debug)]
+pub struct ExportConfigArgs {
+    pub site_id: String,
+    /// Print raw TOML instead of the JSON wrapper
+    #[arg(long, default_value_t = false)]
+    pub raw: bool,
 }
 
 /// Arguments for revoking the HMAC secret.

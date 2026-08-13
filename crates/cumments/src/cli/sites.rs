@@ -1,17 +1,24 @@
 //! `cumments sites ...` command handling.
 
-use super::args::{SitesArgs, SitesCommand};
+use super::args::{ExportConfigArgs, SiteUserIdArg, SitesArgs, SitesCommand};
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
+use chrono::{Duration, Utc};
 use cumments_api::routes::admin::{
     AdminListQuery, AdminPage, AdminSite, admin_meta, admin_page_bounds, admin_site,
     admin_site_from_config, config_snippet_toml,
 };
+use cumments_core::governance::{
+    CO_MANAGER_LEVEL, NewRoleClaim, OWNER_LEVEL, RoleEntry, validate_governance_user_id,
+};
 use cumments_core::models::SiteId;
-use cumments_core::ports::SiteAuthStore;
+use cumments_core::ports::{GovernanceStore, RoleClaimStore, SiteAuthStore};
 use cumments_core::site_auth::{Origin, SiteAuthMode, SiteAuthPolicy, register_site, token_hash};
 use std::collections::HashSet;
+
+/// How long an unverified role claim stays valid, matching the governance API.
+const ROLE_CLAIM_TTL_HOURS: i64 = 24;
 
 pub async fn handle_sites_command(
     store: &cumments_store::DbStore,
@@ -134,19 +141,7 @@ pub async fn handle_sites_command(
             }))?;
             Ok(())
         }
-        SitesCommand::ExportConfig(args) => {
-            let site_id = SiteId::new(args.site_id.clone())
-                .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
-            let info = store
-                .get_site_auth(site_id.as_str())
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("site not found"))?;
-            print!(
-                "{}",
-                config_snippet_toml(site_id.as_str(), &info, policy.entry(site_id.as_str()))
-            );
-            Ok(())
-        }
+        SitesCommand::ExportConfig(args) => export_config(store, policy, args).await,
         SitesCommand::RotateClaimToken(args) => {
             let site_id = SiteId::new(args.site_id.clone())
                 .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
@@ -164,7 +159,123 @@ pub async fn handle_sites_command(
             eprintln!("Keep the new claim token private; it proves ownership of this site.");
             Ok(())
         }
+        SitesCommand::AddOwner(args) => add_role_claim(store, args, OWNER_LEVEL).await,
+        SitesCommand::AddCoManager(args) => add_role_claim(store, args, CO_MANAGER_LEVEL).await,
+        SitesCommand::RemoveOwner(args) => remove_role_claim(store, args, OWNER_LEVEL).await,
+        SitesCommand::RemoveCoManager(args) => {
+            remove_role_claim(store, args, CO_MANAGER_LEVEL).await
+        }
     }
+}
+
+/// Prints the JSON-wrapped config snippet (or raw TOML with `--raw`).
+async fn export_config(
+    store: &cumments_store::DbStore,
+    policy: &SiteAuthPolicy,
+    args: &ExportConfigArgs,
+) -> Result<()> {
+    let site_id =
+        SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+    let info = store
+        .get_site_auth(site_id.as_str())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("site not found"))?;
+    let toml = config_snippet_toml(site_id.as_str(), &info, policy.entry(site_id.as_str()));
+    if args.raw {
+        print!("{toml}");
+    } else {
+        print_json(&serde_json::json!({
+            "site_id": site_id.as_str(),
+            "toml": toml,
+        }))?;
+    }
+    Ok(())
+}
+
+/// Mirrors the governance API's POST: stores a pending claim and prints the
+/// one-time verify token without touching Matrix power levels.
+async fn add_role_claim(
+    store: &cumments_store::DbStore,
+    args: &SiteUserIdArg,
+    level: i64,
+) -> Result<()> {
+    let site_id =
+        SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+    require_api_registered_site(store, site_id.as_str()).await?;
+    let user_id = validate_governance_user_id(&args.user_id)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    let verify_token = generate_token();
+    let claim = store
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: site_id.as_str().to_string(),
+            room_id: String::new(),
+            user_id,
+            level,
+            token_hash: token_hash(&verify_token),
+            expires_at: Utc::now() + Duration::hours(ROLE_CLAIM_TTL_HOURS),
+        })
+        .await?;
+    print_json(&serde_json::json!({
+        "pending": true,
+        "user_id": claim.user_id,
+        "level": claim.level,
+        "verify_token": verify_token,
+        "expires_at": claim.expires_at,
+    }))?;
+    eprintln!(
+        "The target MXID must DM `cumments-claim:{verify_token}` to the AS bot to activate the role."
+    );
+    Ok(())
+}
+
+/// Mirrors the governance API's DELETE for the pending-claim part. Applied
+/// roles are Matrix power-level state, which the CLI deliberately does not
+/// write: operators remove those from a Matrix client or the admin API.
+async fn remove_role_claim(
+    store: &cumments_store::DbStore,
+    args: &SiteUserIdArg,
+    level: i64,
+) -> Result<()> {
+    let site_id =
+        SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+    require_api_registered_site(store, site_id.as_str()).await?;
+    let user_id = validate_governance_user_id(&args.user_id)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    let revoked = store
+        .revoke_role_claim(site_id.as_str(), "", &user_id, level)
+        .await?;
+    if !revoked {
+        let applied = store
+            .list_site_roles(site_id.as_str())
+            .await?
+            .iter()
+            .any(|role: &RoleEntry| role.user_id == user_id && role.level == level);
+        if applied {
+            bail!(
+                "role is already applied in Matrix; remove it from the Space power \
+                 levels in a Matrix client or through the admin API"
+            );
+        }
+        bail!("no pending claim or applied role for this user and level");
+    }
+    print_json(&serde_json::json!({
+        "revoked": true,
+        "user_id": user_id,
+        "level": level,
+    }))?;
+    Ok(())
+}
+
+async fn require_api_registered_site(store: &cumments_store::DbStore, site_id: &str) -> Result<()> {
+    if store.get_site_auth(site_id).await?.is_none() {
+        bail!(
+            "site is not API-registered; operator-configured sites are managed \
+             through configuration"
+        );
+    }
+    Ok(())
 }
 
 /// Lists managed sites, merging database rows with the `[sites]` overlay —
@@ -208,7 +319,10 @@ async fn list_admin_sites(
 
 #[cfg(test)]
 mod tests {
-    use super::super::args::{RevokeOriginArgs, RevokeSecretArgs, SiteIdArg, SiteListArgs};
+    use super::super::args::{
+        ExportConfigArgs, RevokeOriginArgs, RevokeSecretArgs, SiteIdArg, SiteListArgs,
+        SiteUserIdArg,
+    };
     use super::super::test_support::*;
     use super::*;
     use cumments_core::site_auth::OriginPattern;
@@ -323,13 +437,74 @@ mod tests {
         assert!(auth.verified_origins.is_empty());
 
         let export = SitesArgs {
-            command: SitesCommand::ExportConfig(SiteIdArg {
+            command: SitesCommand::ExportConfig(ExportConfigArgs {
                 site_id: "my-blog".to_string(),
+                raw: false,
             }),
         };
         handle_sites_command(&store, &policy, &export)
             .await
             .expect("export config snippet");
+    }
+
+    #[tokio::test]
+    async fn governance_claims_are_pending_and_revocable() {
+        let store = DbStore::connect(&test_db_url("gov-cli"))
+            .await
+            .expect("connect db");
+        let policy = test_policy();
+        store
+            .register_site("my-blog", &token_hash("token"))
+            .await
+            .expect("register site");
+
+        let add = SitesArgs {
+            command: SitesCommand::AddOwner(SiteUserIdArg {
+                site_id: "my-blog".to_string(),
+                user_id: "@owner:hs".to_string(),
+            }),
+        };
+        handle_sites_command(&store, &policy, &add)
+            .await
+            .expect("add owner claim");
+        assert_eq!(
+            store
+                .pending_claims_for_user("@owner:hs")
+                .await
+                .expect("pending claims")
+                .len(),
+            1
+        );
+
+        let remove = SitesArgs {
+            command: SitesCommand::RemoveOwner(SiteUserIdArg {
+                site_id: "my-blog".to_string(),
+                user_id: "@owner:hs".to_string(),
+            }),
+        };
+        handle_sites_command(&store, &policy, &remove)
+            .await
+            .expect("remove owner claim");
+        assert!(
+            store
+                .pending_claims_for_user("@owner:hs")
+                .await
+                .expect("pending claims")
+                .is_empty()
+        );
+
+        // Applied roles are Matrix state, which the CLI does not write.
+        let missing = SitesArgs {
+            command: SitesCommand::RemoveOwner(SiteUserIdArg {
+                site_id: "my-blog".to_string(),
+                user_id: "@owner:hs".to_string(),
+            }),
+        };
+        assert!(
+            handle_sites_command(&store, &policy, &missing)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

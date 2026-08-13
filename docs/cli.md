@@ -35,8 +35,12 @@ cumments
 │   ├── revoke-origin SITE_ID ORIGIN
 │   ├── rotate-secret SITE_ID
 │   ├── revoke-secret SITE_ID --yes
-│   ├── export-config SITE_ID
-│   └── rotate-claim-token SITE_ID
+│   ├── export-config [--raw] SITE_ID
+│   ├── rotate-claim-token SITE_ID
+│   ├── add-owner SITE_ID USER_ID
+│   ├── remove-owner SITE_ID USER_ID
+│   ├── add-co-manager SITE_ID USER_ID
+│   └── remove-co-manager SITE_ID USER_ID
 ├── rooms
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
 │   └── reinstate ROOM_ID
@@ -51,6 +55,11 @@ cumments
 - Human notes and warnings go to **stderr**, so stdout stays script-friendly.
 - Secrets and claim tokens are printed **exactly once**; the CLI refuses to
   show them again.
+- `export-config` prints the `{"site_id","toml"}` wrapper returned by the
+  admin API; `--raw` prints only the TOML block for shell redirection.
+- `rooms reinstate` prints `{"room_id","status":"active"}`. This is a CLI-side
+  enhancement of the admin API, which returns an empty `204`: the CLI has no
+  body-free "no content" convention, so it reports the affected resource.
 - Exit codes: `0` success, `1` runtime error, `2` usage error (clap).
 
 ## Examples
@@ -81,8 +90,24 @@ Export a TOML block to move a database-tracked site into declarative
 configuration:
 
 ```bash
-cumments sites export-config my-blog >> cumments.toml
+cumments sites export-config my-blog
+cumments sites export-config --raw my-blog >> cumments.toml
 ```
+
+Register or revoke a site-level role. Both `add-*` commands store a pending
+claim and print the one-time `verify_token`; the target Matrix account must
+DM `cumments-claim:<token>` to the AS bot before the role is applied. The
+CLI never writes Matrix power levels directly:
+
+```bash
+cumments sites add-owner my-blog '@alice:example.com'
+cumments sites remove-owner my-blog '@alice:example.com'
+cumments sites add-co-manager my-blog '@bob:example.com'
+```
+
+`remove-*` cancels a pending claim. A role that has already been applied is
+Matrix state, so remove it from the Space power levels in a Matrix client (or
+through the admin API) instead.
 
 ## Shell completions
 
