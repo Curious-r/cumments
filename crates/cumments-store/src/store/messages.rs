@@ -109,10 +109,9 @@ impl MessageStore for DbStore {
             .all(&self.db)
             .await?;
 
-        let mut items = Vec::with_capacity(models.len());
-        for model in models {
-            items.push(self.hydrate(message_from_model(model)).await?);
-        }
+        let event_ids: Vec<String> = models.iter().map(|model| model.event_id.clone()).collect();
+        let mut items: Vec<Message> = models.into_iter().map(message_from_model).collect();
+        self.hydrate_batch(&mut items, &event_ids).await?;
         Ok(MessagePage {
             items,
             total: total as i64,
@@ -599,60 +598,110 @@ impl MessageStore for DbStore {
 impl DbStore {
     /// Hydrate a message with its aggregated reactions and poll responses.
     async fn hydrate(&self, mut message: Message) -> Result<Message> {
-        message.reactions = self.reaction_summaries(&message.event_id).await?;
+        let mut reactions = self
+            .reaction_summary_map(std::slice::from_ref(&message.event_id))
+            .await?;
+        message.reactions = reactions.remove(&message.event_id).unwrap_or_default();
         if let Content::Poll(poll) = &mut message.content {
-            poll.responses = self.poll_response_summaries(&message.event_id).await?;
+            let mut responses = self
+                .poll_response_summary_map(std::slice::from_ref(&message.event_id))
+                .await?;
+            poll.responses = responses.remove(&message.event_id).unwrap_or_default();
         }
         Ok(message)
     }
 
-    async fn reaction_summaries(&self, message_event_id: &str) -> Result<Vec<ReactionSummary>> {
+    /// Batch variant of [`Self::hydrate`]: one query per annotation table for
+    /// a whole page instead of two queries per message.
+    async fn hydrate_batch(&self, messages: &mut [Message], event_ids: &[String]) -> Result<()> {
+        let mut reactions = self.reaction_summary_map(event_ids).await?;
+        let mut responses = self.poll_response_summary_map(event_ids).await?;
+        for message in messages {
+            message.reactions = reactions.remove(&message.event_id).unwrap_or_default();
+            if let Content::Poll(poll) = &mut message.content {
+                poll.responses = responses.remove(&message.event_id).unwrap_or_default();
+            }
+        }
+        Ok(())
+    }
+
+    /// Aggregated reaction summaries keyed by message event ID. Redacted
+    /// reactions are excluded and multiple reactions from one sender collapse
+    /// into a single count.
+    async fn reaction_summary_map(
+        &self,
+        message_event_ids: &[String],
+    ) -> Result<HashMap<String, Vec<ReactionSummary>>> {
+        if message_event_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
         let rows = reactions::Entity::find()
-            .filter(reactions::Column::MessageEventId.eq(message_event_id))
+            .filter(reactions::Column::MessageEventId.is_in(message_event_ids.iter().cloned()))
             .filter(reactions::Column::RedactedAt.is_null())
             .all(&self.db)
             .await?;
 
-        let mut senders_by_key: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut senders_by_key: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
         for row in rows {
             senders_by_key
+                .entry(row.message_event_id)
+                .or_default()
                 .entry(row.key)
                 .or_default()
                 .insert(row.sender_mxid);
         }
-        let mut summaries: Vec<_> = senders_by_key
+        Ok(senders_by_key
             .into_iter()
-            .map(|(key, senders)| ReactionSummary {
-                key,
-                count: senders.len() as i64,
+            .map(|(event_id, keys)| {
+                let mut summaries: Vec<ReactionSummary> = keys
+                    .into_iter()
+                    .map(|(key, senders)| ReactionSummary {
+                        key,
+                        count: senders.len() as i64,
+                    })
+                    .collect();
+                summaries.sort_by(|a, b| a.key.cmp(&b.key));
+                (event_id, summaries)
             })
-            .collect();
-        summaries.sort_by(|a, b| a.key.cmp(&b.key));
-        Ok(summaries)
+            .collect())
     }
 
-    async fn poll_response_summaries(
+    /// Aggregated poll response summaries keyed by poll message ID. Redacted
+    /// votes are excluded.
+    async fn poll_response_summary_map(
         &self,
-        poll_message_id: &str,
-    ) -> Result<Vec<PollResponseSummary>> {
+        poll_message_ids: &[String],
+    ) -> Result<HashMap<String, Vec<PollResponseSummary>>> {
+        if poll_message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
         let rows = poll_responses::Entity::find()
-            .filter(poll_responses::Column::PollMessageId.eq(poll_message_id))
+            .filter(poll_responses::Column::PollMessageId.is_in(poll_message_ids.iter().cloned()))
             .filter(poll_responses::Column::RedactedAt.is_null())
             .all(&self.db)
             .await?;
 
-        let mut counts: HashMap<i64, i64> = HashMap::new();
+        let mut counts_by_poll: HashMap<String, HashMap<i64, i64>> = HashMap::new();
         for row in rows {
-            *counts.entry(row.option_index).or_default() += 1;
+            *counts_by_poll
+                .entry(row.poll_message_id)
+                .or_default()
+                .entry(row.option_index)
+                .or_default() += 1;
         }
-        let mut summaries: Vec<_> = counts
+        Ok(counts_by_poll
             .into_iter()
-            .map(|(option_index, count)| PollResponseSummary {
-                option_index,
-                count,
+            .map(|(poll_id, counts)| {
+                let mut summaries: Vec<PollResponseSummary> = counts
+                    .into_iter()
+                    .map(|(option_index, count)| PollResponseSummary {
+                        option_index,
+                        count,
+                    })
+                    .collect();
+                summaries.sort_by_key(|s| s.option_index);
+                (poll_id, summaries)
             })
-            .collect();
-        summaries.sort_by_key(|s| s.option_index);
-        Ok(summaries)
+            .collect())
     }
 }
