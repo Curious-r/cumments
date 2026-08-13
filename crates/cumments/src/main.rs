@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
-use cumments_core::ports::MatrixDriver;
+use cumments_core::ports::{MatrixDriver, MessageStore};
 use cumments_core::site_service::SiteService;
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -397,6 +397,75 @@ async fn main() -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("invalid server.trusted_proxies entry `{s}`: {e}"))
         })
         .collect::<Result<HashSet<_>>>()?;
+    let media_proxy = appservice.as_ref().map(|runtime| {
+        let media_sign_key = settings.security.media_sign_key.clone().unwrap_or_else(|| {
+            tracing::warn!(
+                "security.media_sign_key is not set; media proxy URLs are signed \
+                 with the AppService token and will all expire when it rotates"
+            );
+            runtime.as_token.clone()
+        });
+        Arc::new(
+            cumments_api::routes::media::MediaProxy::new(
+                runtime.homeserver_url.clone(),
+                runtime.server_name.clone(),
+                runtime.as_token.clone(),
+                media_sign_key,
+            )
+            .expect("build media proxy"),
+        )
+    });
+    // Orphan media cleanup: periodically forget uploads that were never
+    // referenced by a comment, deleting the homeserver copy best-effort.
+    if let Some(proxy) = media_proxy.clone() {
+        let cleanup_store = db_store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+            loop {
+                interval.tick().await;
+                let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+                match cleanup_store.list_unused_media_before(cutoff).await {
+                    Ok(orphans) => {
+                        for url in orphans {
+                            let Some(rest) = url.strip_prefix("mxc://") else {
+                                continue;
+                            };
+                            let Some((server, media_id)) = rest.split_once('/') else {
+                                continue;
+                            };
+                            match proxy.delete_media(server, media_id).await {
+                                Ok(true) => {
+                                    if let Err(e) = cleanup_store.delete_media_upload(&url).await {
+                                        tracing::warn!(
+                                            "Orphan cleanup: failed to forget {}: {e:#}",
+                                            url
+                                        );
+                                    } else {
+                                        tracing::info!("Orphan cleanup: deleted {}", url);
+                                    }
+                                }
+                                Ok(false) => {
+                                    tracing::warn!(
+                                        "Orphan cleanup: homeserver refused deletion of {}; keeping record",
+                                        url
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Orphan cleanup: deletion of {} failed: {e:#}",
+                                        url
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Orphan cleanup scan failed: {e:#}");
+                    }
+                }
+            }
+        });
+    }
     let api_state = cumments_api::ApiState {
         store: db_store,
         driver: driver.clone(),
@@ -436,24 +505,7 @@ async fn main() -> Result<()> {
         )),
         max_sse_connections: 500,
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        media_proxy: appservice.as_ref().map(|runtime| {
-            let media_sign_key = settings.security.media_sign_key.clone().unwrap_or_else(|| {
-                tracing::warn!(
-                    "security.media_sign_key is not set; media proxy URLs are signed \
-                     with the AppService token and will all expire when it rotates"
-                );
-                runtime.as_token.clone()
-            });
-            Arc::new(
-                cumments_api::routes::media::MediaProxy::new(
-                    runtime.homeserver_url.clone(),
-                    runtime.server_name.clone(),
-                    runtime.as_token.clone(),
-                    media_sign_key,
-                )
-                .expect("build media proxy"),
-            )
-        }),
+        media_proxy,
         media_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             120,
             std::time::Duration::from_secs(3600),

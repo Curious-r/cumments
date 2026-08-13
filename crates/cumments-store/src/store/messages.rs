@@ -559,6 +559,14 @@ impl MessageStore for DbStore {
             .await?;
         Ok(rows.into_iter().map(|row| row.mxc_url).collect())
     }
+
+    async fn delete_media_upload(&self, mxc_url: &str) -> Result<()> {
+        media_uploads::Entity::delete_many()
+            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
 }
 
 impl DbStore {

@@ -472,6 +472,19 @@ async fn media_uploads_track_ownership_and_usage() {
         .await
         .expect("list unused after use");
     assert!(unused.is_empty(), "used media must not be listed as orphan");
+
+    // Cleanup removes the local record entirely.
+    store
+        .delete_media_upload("mxc://hs/cat")
+        .await
+        .expect("delete upload record");
+    assert!(
+        !store
+            .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership after delete"),
+        "deleted upload must no longer prove ownership"
+    );
 }
 
 #[tokio::test]

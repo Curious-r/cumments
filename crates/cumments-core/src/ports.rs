@@ -271,6 +271,10 @@ pub trait MessageStore: Send + Sync {
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<String>>;
 
+    /// Removes the local upload record (after the homeserver copy was
+    /// deleted or is unreachable).
+    async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
+
     /// Persists a tombstone for a redacted event whose original has not been
     /// projected yet (or may be re-delivered), so the message cannot
     /// resurrect after a capped/resumed backfill or a push retry.

@@ -209,6 +209,32 @@ impl MediaProxy {
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow!("media upload response missing content_uri"))
     }
+
+    /// Best-effort deletion of an uploaded media file via the homeserver's
+    /// media admin endpoint. Most homeservers require a server admin token
+    /// rather than the AppService token, so `Ok(false)` is expected and must
+    /// not fail the cleanup pass.
+    pub async fn delete_media(&self, server: &str, media_id: &str) -> anyhow::Result<bool> {
+        if server != self.server_name {
+            return Ok(false);
+        }
+        let url = format!(
+            "{}/_matrix/media/v3/delete/{}/{}",
+            self.homeserver_url.trim_end_matches('/'),
+            server,
+            media_id
+        );
+        let resp = self
+            .http_client
+            .delete(url)
+            .header("Authorization", format!("Bearer {}", self.as_token))
+            .send()
+            .await?;
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(true);
+        }
+        Ok(false)
+    }
 }
 
 /// Guest media upload: verifies PoW + author signature, uploads to the
