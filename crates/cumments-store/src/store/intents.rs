@@ -54,6 +54,17 @@ where
 
 #[async_trait]
 impl IntentStore for DbStore {
+    async fn lookup_idempotency(
+        &self,
+        idempotency: &IdempotencyInput,
+    ) -> Result<Option<IdempotencyOutcome>> {
+        let txn = self.db.begin().await?;
+        self.purge_expired_idempotency(&txn).await?;
+        let outcome = self.existing_idempotency_outcome(&txn, idempotency).await?;
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
     async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<i64> {
         let payload = serde_json::to_string(intent)?;
 

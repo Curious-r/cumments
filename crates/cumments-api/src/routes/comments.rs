@@ -150,6 +150,32 @@ fn accepted_response(intent_id: i64, replayed: bool) -> Response {
     response
 }
 
+/// Short-circuits an already-accepted idempotency key before PoW/signature
+/// verification: a replay returns the original intent ID (and the replay
+/// marker) without consuming a fresh PoW challenge, while reusing the key
+/// with a different request is rejected.
+async fn idempotency_short_circuit(
+    state: &ApiState,
+    idempotency: &IdempotencyInput,
+) -> Result<Option<Response>, AppError> {
+    match state.store.lookup_idempotency(idempotency).await {
+        Ok(Some(IdempotencyOutcome::Replayed { intent_id })) => {
+            tracing::info!("Replayed idempotent request for intent_id {}", intent_id);
+            Ok(Some(accepted_response(intent_id, true)))
+        }
+        Ok(Some(IdempotencyOutcome::Reused)) => Err(AppError::IdempotencyReused),
+        // `Accepted` is never produced by a lookup; treat it as free so the
+        // caller proceeds to the normal queue path.
+        Ok(Some(IdempotencyOutcome::Accepted { .. })) | Ok(None) => Ok(None),
+        Err(e) => {
+            tracing::error!("Failed to look up idempotency: {:?}", e);
+            Err(AppError::Internal(
+                "Failed to verify idempotency.".to_string(),
+            ))
+        }
+    }
+}
+
 /// Route parameters shared by the PATCH/DELETE handlers, plus the canonical
 /// fingerprint path for the endpoint form actually used.
 struct CommentWritePath {
@@ -316,6 +342,21 @@ pub(crate) async fn post_comment_handler(
         }
     }
 
+    // 1b. Idempotency replay short-circuit: an identical request must return
+    // the original intent without consuming a new PoW challenge.
+    if let Some(response) = idempotency_short_circuit(
+        &state,
+        &IdempotencyInput {
+            author_public_key: req.author_public_key.clone(),
+            key: idempotency_key.clone(),
+            request_fingerprint: fingerprint.clone(),
+        },
+    )
+    .await?
+    {
+        return Ok(response);
+    }
+
     // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
         return Err(AppError::InvalidPoW);
@@ -466,6 +507,20 @@ async fn delete_comment_common(
     req.validate().map_err(AppError::Validation)?;
     if let Err(msg) = validate_comment_id_format(&path.comment_id) {
         return Err(AppError::BadRequest(msg.to_string()));
+    }
+
+    // 1b. Idempotency replay short-circuit.
+    if let Some(response) = idempotency_short_circuit(
+        &state,
+        &IdempotencyInput {
+            author_public_key: req.author_public_key.clone(),
+            key: idempotency_key.clone(),
+            request_fingerprint: fingerprint.clone(),
+        },
+    )
+    .await?
+    {
+        return Ok(response);
     }
 
     // 2. Verify the PoW challenge
@@ -632,6 +687,20 @@ async fn update_comment_common(
     req.validate().map_err(AppError::Validation)?;
     if let Err(msg) = validate_comment_id_format(&path.comment_id) {
         return Err(AppError::BadRequest(msg.to_string()));
+    }
+
+    // 1b. Idempotency replay short-circuit.
+    if let Some(response) = idempotency_short_circuit(
+        &state,
+        &IdempotencyInput {
+            author_public_key: req.author_public_key.clone(),
+            key: idempotency_key.clone(),
+            request_fingerprint: fingerprint.clone(),
+        },
+    )
+    .await?
+    {
+        return Ok(response);
     }
 
     // 2. Verify the PoW challenge
@@ -931,6 +1000,19 @@ pub(crate) async fn location_handler(
         return Err(AppError::BadRequest(
             "geo_uri must be a geo: URI with decimal lat,lon coordinates".to_string(),
         ));
+    }
+    // 1b. Idempotency replay short-circuit.
+    if let Some(response) = idempotency_short_circuit(
+        &state,
+        &IdempotencyInput {
+            author_public_key: req.author_public_key.clone(),
+            key: idempotency_key.clone(),
+            request_fingerprint: fingerprint.clone(),
+        },
+    )
+    .await?
+    {
+        return Ok(response);
     }
     if !state.pow.verify(&req.challenge_response) {
         return Err(AppError::InvalidPoW);

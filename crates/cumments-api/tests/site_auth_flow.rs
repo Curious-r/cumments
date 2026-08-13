@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
-use cumments_core::identity::signature_message;
+use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{IntentStore, RegistryStore, SiteAuthStore};
 use cumments_core::site_auth::{
@@ -1019,8 +1019,98 @@ async fn location_posts_are_queued_and_idempotent() {
         "intent must carry the location payload"
     );
 
-    // Note: HTTP-level replays with the exact same body are rejected earlier
-    // by the single-use PoW check (InvalidPoW/403), matching the behaviour of
-    // text/delete/update intents; store-level idempotent replay is covered by
-    // the cumments-store idempotency tests.
+    // Replays with the same key and body return the original intent without
+    // consuming a new PoW challenge.
+    let replayed = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/location",
+            Some("null"),
+            &[("idempotency-key", "locate-key-123456".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(replayed.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        replayed
+            .headers()
+            .get("idempotent-replayed")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    let replayed_json: serde_json::Value =
+        serde_json::from_str(&body_text(replayed).await).expect("json");
+    assert_eq!(replayed_json["intent_id"].as_i64(), Some(intent_id));
+}
+
+#[tokio::test]
+async fn comment_replay_returns_original_intent_without_consuming_pow() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let (state, store) = test_state("comment-replay", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let display_name = "Alice";
+    let message = post_signature_message(
+        "test-blog",
+        "hello",
+        "hello world",
+        display_name,
+        None,
+        &challenge.prefix,
+    );
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "content": "hello world",
+        "display_name": display_name,
+        "author_public_key": public_key,
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+
+    let post = || {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[("idempotency-key", "comment-key-123456".to_string())],
+            &body,
+        ))
+    };
+
+    let first = post().await.expect("call router");
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let first_json: serde_json::Value =
+        serde_json::from_str(&body_text(first).await).expect("json");
+    let intent_id = first_json["intent_id"].as_i64().expect("intent_id");
+
+    let second = post().await.expect("call router");
+    assert_eq!(second.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        second
+            .headers()
+            .get("idempotent-replayed")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    let second_json: serde_json::Value =
+        serde_json::from_str(&body_text(second).await).expect("json");
+    assert_eq!(second_json["intent_id"].as_i64(), Some(intent_id));
+    assert_eq!(
+        store
+            .get_pending_post_intents(10)
+            .await
+            .expect("pending intents")
+            .len(),
+        1,
+        "replay must not queue a second intent"
+    );
 }

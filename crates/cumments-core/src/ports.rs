@@ -36,6 +36,16 @@ pub enum IdempotencyOutcome {
 /// The port for all intent storage operations.
 #[async_trait]
 pub trait IntentStore: Send + Sync {
+    /// Looks up an already-accepted idempotency record without queueing
+    /// anything or consuming the request's PoW challenge. Returns `Replayed`
+    /// with the original intent ID when the key/fingerprint pair matches,
+    /// `Reused` when the key is bound to a different request, and `None`
+    /// when the key is free.
+    async fn lookup_idempotency(
+        &self,
+        idempotency: &IdempotencyInput,
+    ) -> Result<Option<IdempotencyOutcome>>;
+
     /// Persists a new post intent and returns its queue row ID.
     async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<i64>;
     /// Persists a new delete intent and returns its queue row ID.
