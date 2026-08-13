@@ -4,7 +4,7 @@ Cumments is a **backend-only** project: it exposes an HTTP API and SSE stream,
 and speaks Matrix through its AppService. The repository does **not** ship a
 production frontend. Website and SSG-template developers are expected to write
 their own comment section for their own pages, using the
-[HTTP API](api.md) (challenge, PoW, signing, comments, SSE).
+[HTTP API](api/index.md) (challenge, PoW, signing, comments, SSE).
 
 `misc/demo/` is a standalone demo (no build step: `index.html` +
 `demo.css` + `demo.js`) that exercises the full API: it connects to a real
@@ -76,4 +76,5 @@ reminds you that mnemonic recovery is unavailable.
    leading zero hex digits.
 3. Submit `challenge_response = prefix + "|" + nonce`.
 
-The canonical signing messages are documented in the [API reference](api.md).
+The canonical signing messages are documented in the
+[API reference](api/index.md).

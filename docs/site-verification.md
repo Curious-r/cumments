@@ -2,7 +2,7 @@
 
 This guide walks an SSG site owner through binding their site to Cumments and,
 optionally, switching it to strict (HMAC) mode. The threat model behind these
-two modes is explained in [site-authentication.md](site-authentication.md).
+two modes is explained in [site-trust.md](site-trust.md).
 
 ## The two modes
 

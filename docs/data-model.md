@@ -176,7 +176,7 @@ before trusting the projection.
 Reactions and votes are sent synchronously and are naturally idempotent
 (reaction dedupe by sender + key, latest-vote-wins); text, media, location
 and other comment-shaped writes go through the async intent queue with an
-`Idempotency-Key` (see [API](api.md#idempotent-writes)).
+`Idempotency-Key` (see [API](api/index.md#idempotent-writes)).
 
 ## Media proxy
 
@@ -185,4 +185,4 @@ public, read-only proxy with short-lived signed URLs. The proxy is limited to
 the configured homeserver, rate limited, size-capped, filtered by content
 type, and answers media and thumbnail requests. It is deliberately
 read-only: site administrators browse media directly in their Matrix client,
-which is one benefit of building on Matrix (see [API](api.md#media-proxy)).
+which is one benefit of building on Matrix (see [API](api/media.md#media-proxy)).

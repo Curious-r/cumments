@@ -103,7 +103,7 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
 - `server.cors_origins` has been **removed**: CORS headers are now derived
   from the site registry (see below). A config file that still contains the
   key fails startup because unknown keys are rejected.
-- `security.admin_token` enables the admin API (see [api.md](api.md)).
+- `security.admin_token` enables the admin API (see [API](api/index.md)).
   Placeholder values and tokens shorter than 32 characters are rejected at
   startup.
 - SQLite files are created automatically, but the parent directory must exist
@@ -135,7 +135,7 @@ Per-site trust comes from two sources whose union is the effective rule set:
 - **Self-service registration** through `POST /api/v1/sites`: returns a
   random `site_id` and a one-time claim token. The owner proves domain
   control via `/.well-known/cumments.json` or a DNS TXT record, then switches
-  to secret auth via the secret endpoint. See [API](api.md).
+  to secret auth via the secret endpoint. See [API](api/index.md).
 
 Origin-mode requests are accepted only when the browser `Origin` matches the
 effective allowlist; `Origin: null` and missing `Origin` are rejected. The

@@ -1,4 +1,4 @@
-# Site authentication
+# Site trust
 
 Cumments' write API is public and `site_id` is a self-declared path
 parameter. Site authentication binds a `site_id` to a real website and
@@ -220,7 +220,7 @@ requests per minute per client.
 - [Site verification and strict mode](site-verification.md) — walkthroughs
   for SSG sites, DNS/well-known proofs and edge-function examples.
 - [Configuration](configuration.md) — the full configuration reference.
-- [API](api.md) — endpoint reference, including registration, verification
+- [API](api/index.md) — endpoint reference, including registration, verification
   and secret issuance.
 - [Problem types](problems/index.md) — the RFC 9457 error registry used by
   the write path.

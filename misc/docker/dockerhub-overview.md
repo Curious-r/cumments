@@ -108,7 +108,7 @@ curl -sS -X POST "http://localhost:7931/api/v1/sites/$(jq -r .site_id site.json)
 Everything else — appointing co-managers, moderating rooms — happens from a
 Matrix client. See the [site governance
 guide](https://curious-r.github.io/cumments/site-governance/) and the
-[installation guide](https://curious-r.github.io/cumments/installation/).
+[installation guide](https://curious-r.github.io/cumments/quick-start/).
 
 ## Configuration
 

@@ -39,7 +39,7 @@ docker compose up -d
 ```
 
 注册文件的生成、站点所有者的登记、验证与排障的完整流程见
-[安装指南](docs/installation.md)。
+[安装指南](docs/quick-start.md)。
 
 ## 文档
 
@@ -47,7 +47,7 @@ docker compose up -d
 
 **快速开始**
 
-- [安装](docs/installation.md) —— 使用官方镜像与 homeserver 的快速开始。
+- [安装](docs/quick-start.md) —— 使用官方镜像与 homeserver 的快速开始。
 - [配置](docs/configuration.md) —— 配置发现顺序、环境变量、完整 AppService
   示例。
 
@@ -55,7 +55,7 @@ docker compose up -d
 
 - [架构](docs/architecture.md) —— 系统设计、运行模式、恢复、crate 结构。
 - [数据模型](docs/data-model.md) —— Matrix 事件到评论模型的映射与存储布局。
-- [站点认证](docs/site-authentication.md) —— origin 与 HMAC 两种写入信任模型。
+- [站点认证](docs/site-trust.md) —— origin 与 HMAC 两种写入信任模型。
 - [站点验证](docs/site-verification.md) —— 绑定 SSG 站点、well-known/DNS
   证明、严格 HMAC 模式。
 - [站点治理](docs/site-governance.md) —— 站主、协管员与逐房间版主的 Matrix
@@ -63,7 +63,7 @@ docker compose up -d
 
 **参考**
 
-- [API](docs/api.md) —— 挑战、评论、签名、SSE 与设计取舍。
+- [API](docs/api/index.md) —— 挑战、评论、签名、SSE 与设计取舍，按资源域分页。
 - [CLI](docs/cli.md) —— 本地管理：站点、房间、角色、备份。
 - [错误码](docs/problems/index.md) —— RFC 9457 问题类型注册表。
 

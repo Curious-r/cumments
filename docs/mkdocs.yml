@@ -24,16 +24,22 @@ markdown_extensions:
 nav:
   - Getting started:
       - Home: index.md
-      - Quick start: installation.md
+      - Quick start: quick-start.md
   - Concepts:
       - Architecture: architecture.md
       - Data model: data-model.md
       - Site trust:
-          - Overview: site-authentication.md
+          - Overview: site-trust.md
           - Verification walkthrough: site-verification.md
       - Site governance: site-governance.md
   - Reference:
-      - API: api.md
+      - API:
+          - Overview: api/index.md
+          - Comments: api/comments.md
+          - Sites: api/sites.md
+          - Governance: api/governance.md
+          - Admin: api/admin.md
+          - Media: api/media.md
       - Configuration: configuration.md
       - CLI: cli.md
       - Problem types: problems/index.md

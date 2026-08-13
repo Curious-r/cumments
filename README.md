@@ -43,7 +43,7 @@ docker compose up -d
 ```
 
 The full walkthrough — registration, the site owner, verification and
-troubleshooting — is in the [installation guide](docs/installation.md).
+troubleshooting — is in the [installation guide](docs/quick-start.md).
 
 ## Documentation
 
@@ -51,7 +51,7 @@ The full documentation is rendered at <https://curious-r.github.io/cumments/>.
 
 **Getting started**
 
-- [Installation](docs/installation.md) — quick start with the official image
+- [Installation](docs/quick-start.md) — quick start with the official image
   and a homeserver.
 - [Configuration](docs/configuration.md) — config discovery, environment
   variables, full AppService example.
@@ -62,7 +62,7 @@ The full documentation is rendered at <https://curious-r.github.io/cumments/>.
   recovery, crates.
 - [Data model](docs/data-model.md) — the Matrix-to-comment mapping and
   storage layout.
-- [Site authentication](docs/site-authentication.md) — origin and HMAC
+- [Site authentication](docs/site-trust.md) — origin and HMAC
   write-path trust models.
 - [Site verification](docs/site-verification.md) — bind an SSG site,
   well-known/DNS proofs, strict HMAC mode.
@@ -71,8 +71,8 @@ The full documentation is rendered at <https://curious-r.github.io/cumments/>.
 
 **Reference**
 
-- [API](docs/api.md) — challenge, comments, signatures, SSE, design
-  trade-offs.
+- [API](docs/api/index.md) — challenge, comments, signatures, SSE, design
+  trade-offs, split by resource area.
 - [CLI](docs/cli.md) — local administration: sites, rooms, roles, backups.
 - [Problem types](docs/problems/index.md) — the RFC 9457 error registry.
 

@@ -10,7 +10,7 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 
 ## Getting started
 
-- [Quick start](installation.md) — run the bundled tuwunel + Cumments stack
+- [Quick start](quick-start.md) — run the bundled tuwunel + Cumments stack
   and register the first site owner.
 - [Configuration](configuration.md) — file discovery, environment variables
   and the full AppService example.
@@ -21,7 +21,7 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
   AppService fit together, plus recovery.
 - [Data model](data-model.md) — how Matrix events map to the typed comment
   model and its storage layout.
-- [Site trust](site-authentication.md) — origin and HMAC write-path trust
+- [Site trust](site-trust.md) — origin and HMAC write-path trust
   models, with a [verification walkthrough](site-verification.md) for SSG
   sites.
 - [Site governance](site-governance.md) — owners, co-managers and per-room
@@ -29,8 +29,10 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 
 ## Reference
 
-- [API](api.md) — endpoints, signatures, idempotent writes, real-time updates
-  and design trade-offs.
+- [API](api/index.md) — shared primitives, then per-area references for
+  [comments](api/comments.md), [sites](api/sites.md),
+  [governance](api/governance.md), [admin](api/admin.md) and
+  [media](api/media.md).
 - [Problem types](problems/index.md) — the RFC 9457 error registry.
 - [CLI](cli.md) — local administration of sites, rooms, roles and backups.
 
