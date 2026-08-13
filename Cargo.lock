@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "cumments"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-api"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-core"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-matrix"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-projector"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-reconciler"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "cumments-store"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
