@@ -442,15 +442,21 @@ registration (`X-Cumments-Claim-Token`). Operator fallbacks with the same
 handlers live under `/api/v1/admin/sites/{site_id}/owners` and
 `/api/v1/admin/sites/{site_id}/co-managers` (admin token).
 
+Every role registration starts as a **pending claim**: the POST response
+returns a one-time `verify_token`, and the target Matrix account must DM
+`cumments-claim:<token>` to the AppService bot before the role is written to
+Matrix power levels.
+
 ### Site owners
 
 `POST /api/v1/sites/{site_id}/owners` / `DELETE /api/v1/sites/{site_id}/owners`
 
 Body: `{ "user_id": "@alice:example.com" }`. Adds or removes an owner
-(level 100 in the Space and every comment room). Returns
-`{ "owners": [...], "co_managers": [...] }`. Registering the owner is the
-one-time bootstrap step; after it the owner manages everything from a Matrix
-client.
+(level 100 in the Space and every comment room). POST returns
+`{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
+DELETE returns `{ "revoked": true, "user_id", "level" }` and cancels a
+pending claim or removes an applied role. Registering the owner is the
+one-time bootstrap step.
 
 ### Site co-managers
 
@@ -458,8 +464,8 @@ client.
 `DELETE /api/v1/sites/{site_id}/co-managers`
 
 Body: `{ "user_id": "..." }`. Co-managers hold 75 in the Space and are
-replicated into every comment room by the moderation sync pass. Returns the
-updated `{ "owners", "co_managers" }` roster.
+replicated into every comment room by the moderation sync pass. POST returns
+the pending claim shape; DELETE returns the revoked shape.
 
 ### Room moderators
 
@@ -467,7 +473,8 @@ updated `{ "owners", "co_managers" }` roster.
 `DELETE /api/v1/sites/{site_id}/posts/{post_slug}/moderators`
 
 Body: `{ "user_id": "..." }`. Appoints or removes a moderator (level 50) in
-the room registered for that post only. Returns `{ "room_id", "moderators" }`.
+the room registered for that post only. POST returns the pending claim shape;
+DELETE returns the revoked shape.
 
 ### Read the projected rosters
 

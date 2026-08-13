@@ -109,12 +109,21 @@ CLAIM=$(jq -r .claim_token site.json)
 curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/owners" \
   -H "Content-Type: application/json" \
   -H "X-Cumments-Claim-Token: $CLAIM" \
-  -d '{"user_id":"@alice:localhost:8008"}'
+  -d '{"user_id":"@alice:localhost:8008"}' | tee owner.json
 ```
 
-After this one-time step the owner manages everything from a Matrix client:
-they hold power 100 in the site Space and every comment room, and can appoint
-co-managers and per-room moderators (see
+The response contains a one-time `verify_token`. The account proves ownership
+by sending exactly `cumments-claim:<token>` as a direct message to the
+AppService bot (`@_cumments_bot:localhost:8008`):
+
+```bash
+VERIFY_TOKEN=$(jq -r .verify_token owner.json)
+# From the alice account in any Matrix client, DM this text to the bot:
+# cumments-claim:$VERIFY_TOKEN
+```
+
+After verification the owner holds power 100 in the site Space and every
+comment room, and can appoint co-managers and per-room moderators (see
 [site governance](site-governance.md)).
 
 ## 6. Verify

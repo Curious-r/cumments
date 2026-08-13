@@ -893,11 +893,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Pending role claim with one-time verification token
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/PendingRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -920,11 +920,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Role revoked
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/RevokedRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -950,11 +950,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Pending role claim with one-time verification token
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/PendingRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -977,11 +977,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Role revoked
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/RevokedRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1021,11 +1021,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated room moderators
+          description: Pending role claim with one-time verification token
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RoomModeratorsResponse"
+                $ref: "#/components/schemas/PendingRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1048,11 +1048,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated room moderators
+          description: Role revoked
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RoomModeratorsResponse"
+                $ref: "#/components/schemas/RevokedRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1092,11 +1092,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Pending role claim with one-time verification token
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/PendingRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1119,11 +1119,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Role revoked
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/RevokedRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1149,11 +1149,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Pending role claim with one-time verification token
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/PendingRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1176,11 +1176,11 @@ paths:
               $ref: "#/components/schemas/UserIdRequest"
       responses:
         "200":
-          description: Updated site roles
+          description: Role revoked
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SiteRolesResponse"
+                $ref: "#/components/schemas/RevokedRoleResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1819,6 +1819,36 @@ components:
         user_id:
           type: string
           description: Fully qualified Matrix user ID.
+    PendingRoleResponse:
+      type: object
+      required: [pending, user_id, level, verify_token, expires_at]
+      properties:
+        pending:
+          type: boolean
+          enum: [true]
+        user_id:
+          type: string
+        level:
+          type: integer
+          enum: [100, 75, 50]
+        verify_token:
+          type: string
+          description: One-time token; DM `cumments-claim:<token>` to the AppService bot.
+        expires_at:
+          type: string
+          format: date-time
+    RevokedRoleResponse:
+      type: object
+      required: [revoked, user_id, level]
+      properties:
+        revoked:
+          type: boolean
+          enum: [true]
+        user_id:
+          type: string
+        level:
+          type: integer
+          enum: [100, 75, 50]
     SiteRolesResponse:
       type: object
       required: [owners, co_managers]

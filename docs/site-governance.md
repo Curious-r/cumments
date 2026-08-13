@@ -30,22 +30,37 @@ not represented as a role.
 
 ## Day-to-day workflow
 
-1. The site owner registers their own Matrix account once through the API
-   (or asks the platform operator to do it). This is the only required API
-   step; it exists because a Matrix ID cannot be provisioned ahead of time.
-2. Everything else happens in a Matrix client: edit the Space's power levels
-   to add/remove co-managers, and edit a comment room's power levels to
-   appoint its moderators.
-3. The homeserver pushes those state events to Cumments, which projects them
+1. The site owner registers their own Matrix account through the API (or
+   asks the platform operator to do it). The API returns a one-time
+   verification token because a Matrix ID cannot be provisioned ahead of
+   time and the ID must be proven to belong to the registrant.
+2. The target Matrix account sends `cumments-claim:<token>` as a direct
+   message to the AppService bot. Once the homeserver pushes that DM,
+   Cumments activates the claim and writes the role into Matrix power levels.
+3. Everything after that happens in a Matrix client: edit the Space's power
+   levels to add/remove co-managers, and edit a comment room's power levels
+   to appoint its moderators.
+4. The homeserver pushes those state events to Cumments, which projects them
    into the read model. A background sync pass replicates the Space's ≥ 75
    roster into existing rooms (adding new co-managers, removing revoked
    ones), leaving per-room moderators untouched.
-4. New comment rooms are seeded from the Space's roster at creation time:
+5. New comment rooms are seeded from the Space's roster at creation time:
    owner + co-managers, with per-room moderators starting empty.
 
-The API offers the same operations for scripted/automated setups; it always
-writes Matrix first (as the AppService sender) and lets the normal projection
-bring the change back, so both paths converge on the same Matrix state.
+The API offers the same operations for scripted/automated setups; registration
+stores a pending claim, verification happens through the DM token, and the
+normal projection brings the applied role back into the read model.
+
+## Token-DM verification
+
+Every role registration — including the first owner — starts as a **pending
+claim** with a 24-hour expiry. The claim does not affect Matrix until the
+target MXID proves ownership by DMing the exact text
+`cumments-claim:<token>` to the AppService bot as a plain `m.text` message.
+The projector matches the message against the pending claims for that sender
+in constant time, marks the claim activated, and the reconciler then writes
+the role to power levels. Re-registering the same role rotates the token;
+deleting a pending role revokes the claim without touching Matrix.
 
 ## API
 
@@ -55,14 +70,17 @@ registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 
 | Endpoint | Method | Body | Effect |
 |---|---|---|---|
-| `/api/v1/sites/{site_id}/owners` | POST / DELETE | `{ "user_id": "@..." }` | Add or remove a site owner |
-| `/api/v1/sites/{site_id}/co-managers` | POST / DELETE | `{ "user_id": "@..." }` | Add or remove a co-manager |
-| `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | POST / DELETE | `{ "user_id": "@..." }` | Add or remove a room moderator |
+| `/api/v1/sites/{site_id}/owners` | POST / DELETE | `{ "user_id": "@..." }` | Register/revoke a site owner (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/co-managers` | POST / DELETE | `{ "user_id": "@..." }` | Register/revoke a co-manager (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | POST / DELETE | `{ "user_id": "@..." }` | Register/revoke a room moderator (POST returns a pending claim + token) |
 | `/api/v1/sites/{site_id}/roles` | GET | — | Projected owners and co-managers |
 | `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | GET | — | Projected room moderators |
 
-Write responses return the updated roster. Reads come from the projection and
-are therefore eventually consistent with Matrix.
+POST responses are
+`{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
+DELETE responses are `{ "revoked": true, "user_id", "level" }` and are
+idempotent. Reads come from the projection and are therefore eventually
+consistent with Matrix.
 
 ## Platform ownership and recovery
 
