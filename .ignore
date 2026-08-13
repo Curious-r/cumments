@@ -18,3 +18,4 @@ devenv.local.nix
 !/data/.keep
 **/cumments.toml
 **/registration.yaml
+misc/design/
