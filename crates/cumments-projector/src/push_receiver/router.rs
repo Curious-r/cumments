@@ -1,6 +1,6 @@
 //! Axum router and HTTP handlers for the AppService push endpoint.
 
-use super::auth::{hs_token_matches, received_hs_token};
+use super::auth::hs_token_matches;
 use super::parsers::process_single_event;
 use super::state::{ProcessedTxnSet, PushState};
 use super::types::Transaction;
@@ -100,6 +100,19 @@ async fn handle_transaction(
             Json(serde_json::json!({"errcode": "M_INVALID_PARAM", "error": "txnId required"})),
         );
     }
+
+    // ── hs_token verification (constant time) ──
+    // Authentication happens before the txn-id replay short-circuit so
+    // unauthenticated callers cannot probe which transaction IDs have been
+    // acknowledged.
+    if !hs_token_matches(&headers, &query, &state.hs_token) {
+        tracing::warn!("Push transaction rejected: invalid hs_token");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"errcode": "M_FORBIDDEN", "error": "Invalid hs_token"})),
+        );
+    }
+
     if state
         .processed_txns
         .lock()
@@ -107,19 +120,6 @@ async fn handle_transaction(
         .contains(&txn_id)
     {
         return (StatusCode::OK, Json(serde_json::json!({})));
-    }
-
-    // ── hs_token verification ──
-    let received = received_hs_token(&headers, &query);
-    if received != Some(state.hs_token.as_str()) {
-        tracing::warn!(
-            "Push transaction rejected: invalid hs_token (received: {:?})",
-            received.map(|s| &s[..8.min(s.len())])
-        );
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"errcode": "M_FORBIDDEN", "error": "Invalid hs_token"})),
-        );
     }
 
     let mut failed = false;
