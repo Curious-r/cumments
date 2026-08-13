@@ -41,6 +41,7 @@ async fn test_state(
     let (event_bus, _) = tokio::sync::broadcast::channel(100);
     let state = ApiState {
         store: Arc::new(store.clone()),
+        driver: Arc::new(cumments_matrix::LoggingMatrixDriver),
         pow: Arc::new(Pow::new("test-secret".to_string(), 1)),
         event_bus,
         reconciler_notify: Arc::new(tokio::sync::Notify::new()),

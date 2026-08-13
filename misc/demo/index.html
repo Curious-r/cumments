@@ -684,6 +684,8 @@
                     upload_media_failed: "媒体上传失败：",
                     stickers: "贴纸",
                     no_stickers: "暂无预置贴纸",
+                    reaction_submitted: "已发送回应",
+                    vote_submitted: "投票已提交",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -832,6 +834,8 @@
                     upload_media_failed: "Media upload failed: ",
                     stickers: "Stickers",
                     no_stickers: "No preset stickers",
+                    reaction_submitted: "Reaction sent",
+                    vote_submitted: "Vote submitted",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -1995,6 +1999,9 @@
                     ${comment.reactions && comment.reactions.length
                         ? `<div class="flex gap-1.5 flex-wrap mt-2 pl-12">${renderReactions(comment.reactions)}</div>`
                         : ""}
+                    <div class="mt-1 pl-12">
+                        <button type="button" class="react-btn text-xs text-slate-400 hover:text-indigo-600 px-1 py-0.5">＋</button>
+                    </div>
                     <div class="edit-box hidden mt-3 pl-12">
                         <textarea class="edit-textarea w-full text-sm border border-slate-200 rounded-lg p-2.5 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none resize-y"
                                   rows="3"></textarea>
@@ -2006,6 +2013,10 @@
                 `;
 
                 el.querySelector(".reply-btn").onclick = () => startReply(comment);
+                el.querySelector(".react-btn").onclick = () => pickReaction(comment);
+                el.querySelectorAll(".poll-option").forEach((btn) => {
+                    btn.onclick = () => submitVote(comment.event_id, btn.dataset.option);
+                });
                 if (own) {
                     bindEdit(el, comment);
                     el.querySelector(".delete-btn").onclick = () =>
@@ -2312,6 +2323,102 @@
                     };
                 });
                 document.body.appendChild(overlay);
+            }
+
+            const REACTION_EMOJIS = ["👍", "❤️", "😂", "🎉", "🔥"];
+
+            function pickReaction(comment) {
+                const overlay = document.createElement("div");
+                overlay.className =
+                    "fixed inset-0 bg-black/40 flex items-center justify-center z-50";
+                overlay.innerHTML = `
+                    <div class="bg-white rounded-2xl p-4 shadow-xl">
+                        <div class="flex gap-2">
+                            ${REACTION_EMOJIS.map(
+                                (emoji) =>
+                                    `<button type="button" class="reaction-option text-2xl hover:bg-slate-100 rounded-lg p-2">${emoji}</button>`,
+                            ).join("")}
+                        </div>
+                    </div>
+                `;
+                overlay.addEventListener("click", (event) => {
+                    if (event.target === overlay) overlay.remove();
+                });
+                overlay.querySelectorAll(".reaction-option").forEach((btn, index) => {
+                    btn.onclick = async () => {
+                        overlay.remove();
+                        await submitReaction(comment, REACTION_EMOJIS[index]);
+                    };
+                });
+                document.body.appendChild(overlay);
+            }
+
+            async function submitReaction(comment, key) {
+                const cfg = getSettings();
+                try {
+                    const chal = await getChallenge(cfg);
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "REACT",
+                        cfg.siteId,
+                        cfg.slug,
+                        comment.event_id,
+                        key,
+                        chal.prefix,
+                    ]);
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}/reactions`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                key,
+                                author_public_key: publicKey,
+                                author_signature: signature,
+                                challenge_response: `${chal.prefix}|${nonce}`,
+                            }),
+                        },
+                    );
+                    if (!res.ok) throw new Error(await apiError(res));
+                    toast(t("reaction_submitted"), "success");
+                    loadList();
+                } catch (e) {
+                    toast(t("publish_failed") + e.message, "error");
+                }
+            }
+
+            async function submitVote(pollId, optionId) {
+                const cfg = getSettings();
+                try {
+                    const chal = await getChallenge(cfg);
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "VOTE",
+                        cfg.siteId,
+                        cfg.slug,
+                        pollId,
+                        optionId,
+                        chal.prefix,
+                    ]);
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/polls/${encodeURIComponent(pollId)}/votes`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                option_id: optionId,
+                                author_public_key: publicKey,
+                                author_signature: signature,
+                                challenge_response: `${chal.prefix}|${nonce}`,
+                            }),
+                        },
+                    );
+                    if (!res.ok) throw new Error(await apiError(res));
+                    toast(t("vote_submitted"), "success");
+                    loadList();
+                } catch (e) {
+                    toast(t("publish_failed") + e.message, "error");
+                }
             }
 
             async function submitComment() {
@@ -2680,7 +2787,7 @@
                         );
                         const count = summary ? summary.count : 0;
                         const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-                        return `<div class="space-y-1">
+                        return `<button type="button" class="poll-option w-full text-left space-y-1 hover:bg-indigo-50 rounded-lg p-1.5 transition" data-option="${escapeHtml(option.id)}">
                             <div class="flex justify-between text-xs text-slate-600">
                                 <span>${escapeHtml(option.text)}</span>
                                 <span>${count} ${t("votes")}</span>
@@ -2688,7 +2795,7 @@
                             <div class="h-2 bg-slate-100 rounded-full">
                                 <div class="h-2 bg-indigo-500 rounded-full" style="width:${pct}%"></div>
                             </div>
-                        </div>`;
+                        </button>`;
                     })
                     .join("");
                 return `<div class="border border-slate-200 rounded-xl p-3 space-y-2 bg-slate-50">

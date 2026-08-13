@@ -439,6 +439,30 @@ pub trait MatrixDriver: Send + Sync {
         intent_id: Option<i64>,
     ) -> Result<String>;
 
+    /// Sends a reaction (`m.reaction`) as the guest's virtual user.
+    async fn react_message(
+        &self,
+        room_id: &str,
+        target_event_id: &str,
+        key: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()>;
+
+    /// Sends a poll vote (`m.poll.response`) as the guest's virtual user.
+    async fn vote_poll(
+        &self,
+        room_id: &str,
+        poll_event_id: &str,
+        answer_id: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()>;
+
     /// Updates an existing message in a specific room using m.replace.
     async fn update_message(
         &self,

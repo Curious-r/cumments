@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::wire::{
-    build_edit_body, build_media_body, build_message_body, build_redaction_body, percent_encode,
+    build_edit_body, build_media_body, build_message_body, build_poll_vote_body,
+    build_reaction_body, build_redaction_body, percent_encode,
 };
 use anyhow::{Result, anyhow};
 use cumments_core::{
@@ -119,6 +120,98 @@ impl AppServiceMatrixDriver {
             .await
             .map_err(|e| anyhow!("Failed to parse send response: {}", e))?;
         Ok(data.event_id)
+    }
+
+    #[instrument(skip(self))]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn react_message_impl(
+        &self,
+        room_id: &str,
+        target_event_id: &str,
+        key: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        self.ensure_joined(room_id, &virtual_user).await?;
+        let guest_id = derive_guest_id_from_public_key(author_public_key)
+            .ok_or_else(|| anyhow!("invalid author public key"))?;
+        let body = build_reaction_body(
+            key,
+            target_event_id,
+            author_public_key,
+            author_signature,
+            author_challenge,
+            &guest_id,
+        );
+        let txn_id = self.txn_id("react", None);
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/send/m.reaction/{}",
+            percent_encode(room_id),
+            txn_id
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| anyhow!("reactMessage request failed: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to react ({}): {}", status, error_body));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn vote_poll_impl(
+        &self,
+        room_id: &str,
+        poll_event_id: &str,
+        answer_id: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        self.ensure_joined(room_id, &virtual_user).await?;
+        let guest_id = derive_guest_id_from_public_key(author_public_key)
+            .ok_or_else(|| anyhow!("invalid author public key"))?;
+        let body = build_poll_vote_body(
+            poll_event_id,
+            answer_id,
+            author_public_key,
+            author_signature,
+            author_challenge,
+            &guest_id,
+        );
+        let txn_id = self.txn_id("vote", None);
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+            percent_encode(room_id),
+            txn_id
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| anyhow!("votePoll request failed: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to vote ({}): {}", status, error_body));
+        }
+        Ok(())
     }
 
     #[instrument(skip(self))]

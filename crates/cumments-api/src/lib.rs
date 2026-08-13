@@ -5,7 +5,8 @@ use crate::routes::admin::{
 };
 use crate::routes::comments::{
     delete_comment_body_handler, delete_comment_handler, post_comment_handler,
-    query_comments_handler, update_comment_body_handler, update_comment_handler,
+    query_comments_handler, react_handler, update_comment_body_handler, update_comment_handler,
+    vote_handler,
 };
 use crate::routes::media::{
     MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
@@ -26,8 +27,8 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        IntentStore, MessageStore, RegistryStore, RoomStore, SiteAuthStore, SiteStore,
-        VirtualUserStore,
+        IntentStore, MatrixDriver, MessageStore, RegistryStore, RoomStore, SiteAuthStore,
+        SiteStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -79,6 +80,7 @@ impl<
 #[derive(Clone)]
 pub struct ApiState {
     pub store: Arc<dyn ApiStore>,
+    pub driver: Arc<dyn MatrixDriver>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub reconciler_notify: Arc<Notify>,
@@ -140,6 +142,14 @@ pub fn build_router(state: ApiState) -> Router {
             delete(delete_comment_handler)
                 .patch(update_comment_handler)
                 .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions",
+            post(react_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes",
+            post(vote_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/media",

@@ -78,6 +78,11 @@ pub struct ParsedReaction {
     pub message_event_id: String,
     pub key: String,
     pub origin_server_ts: i64,
+    /// Whether the sender is one of our exclusive AS virtual users.
+    pub is_virtual_user_sender: bool,
+    pub author_public_key: Option<String>,
+    pub author_signature: Option<String>,
+    pub author_challenge: Option<String>,
     pub room_identity: Option<RoomIdentity>,
 }
 
@@ -91,6 +96,10 @@ pub struct ParsedPollVote {
     /// Answer IDs selected by the voter (typically one).
     pub answer_ids: Vec<String>,
     pub origin_server_ts: i64,
+    pub is_virtual_user_sender: bool,
+    pub author_public_key: Option<String>,
+    pub author_signature: Option<String>,
+    pub author_challenge: Option<String>,
     pub room_identity: Option<RoomIdentity>,
 }
 

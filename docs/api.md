@@ -424,6 +424,24 @@ posting, `proxy_url` is the signed preview URL). Guests send a sticker by
 posting a comment with `media.kind = "sticker"` referencing one of these
 `url` values; the API rejects stickers outside the preset list.
 
+### React to a comment
+
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions`
+
+Body: `{ "key", "author_public_key", "author_signature", "challenge_response" }`.
+The signature covers `["REACT", site_id, post_slug, comment_id, key, challenge]`;
+the reaction is sent as the guest's virtual user (`m.reaction` with the
+signed proof block) and projected into the message's reaction counts.
+
+### Vote on a poll
+
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes`
+
+Body: `{ "option_id", "author_public_key", "author_signature", "challenge_response" }`.
+The signature covers `["VOTE", site_id, post_slug, poll_id, option_id, challenge]`;
+the vote is sent as `m.poll.response` (MSC3381) with the signed proof block
+and aggregated into the poll's response counts.
+
 ### Room info
 
 `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`

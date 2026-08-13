@@ -399,6 +399,7 @@ async fn main() -> Result<()> {
         .collect::<Result<HashSet<_>>>()?;
     let api_state = cumments_api::ApiState {
         store: db_store,
+        driver: driver.clone(),
         pow: Arc::new(pow),
         event_bus,
         reconciler_notify,

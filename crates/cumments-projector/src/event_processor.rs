@@ -376,6 +376,46 @@ impl EventProcessor {
                 return Ok(());
             }
         }
+        // Guest reactions carry a signed proof block that must verify.
+        if event.is_virtual_user_sender {
+            let (Some(pk), Some(sig), Some(chal)) = (
+                event.author_public_key.as_deref(),
+                event.author_signature.as_deref(),
+                event.author_challenge.as_deref(),
+            ) else {
+                warn!(
+                    "Rejecting guest reaction {} from {}: missing proof block",
+                    event.event_id, event.sender
+                );
+                return Ok(());
+            };
+            let Some(identity) = &event.room_identity else {
+                debug!("Ignoring reaction {} without room identity", event.event_id);
+                return Ok(());
+            };
+            let message = signature_message(&[
+                "REACT",
+                &identity.site_id,
+                &identity.post_slug,
+                &event.message_event_id,
+                &event.key,
+                chal,
+            ]);
+            if !verify_guest_event(
+                self.server_name.as_deref(),
+                &event.sender,
+                &identity.site_id,
+                pk,
+                sig,
+                &message,
+            ) {
+                warn!(
+                    "Rejecting guest reaction {} from {}: invalid proof",
+                    event.event_id, event.sender
+                );
+                return Ok(());
+            }
+        }
         self.message_store
             .save_reaction(&Reaction {
                 event_id: event.event_id,
@@ -408,6 +448,54 @@ impl EventProcessor {
             }
         }
 
+        let Some(answer_id) = event.answer_ids.first() else {
+            debug!("Poll vote without answers; ignoring");
+            return Ok(());
+        };
+
+        if event.is_virtual_user_sender {
+            let (Some(pk), Some(sig), Some(chal)) = (
+                event.author_public_key.as_deref(),
+                event.author_signature.as_deref(),
+                event.author_challenge.as_deref(),
+            ) else {
+                warn!(
+                    "Rejecting guest vote {} from {}: missing proof block",
+                    event.event_id, event.sender
+                );
+                return Ok(());
+            };
+            let Some(identity) = &event.room_identity else {
+                debug!(
+                    "Ignoring poll vote {} without room identity",
+                    event.event_id
+                );
+                return Ok(());
+            };
+            let message = signature_message(&[
+                "VOTE",
+                &identity.site_id,
+                &identity.post_slug,
+                &event.poll_message_id,
+                answer_id,
+                chal,
+            ]);
+            if !verify_guest_event(
+                self.server_name.as_deref(),
+                &event.sender,
+                &identity.site_id,
+                pk,
+                sig,
+                &message,
+            ) {
+                warn!(
+                    "Rejecting guest vote {} from {}: invalid proof",
+                    event.event_id, event.sender
+                );
+                return Ok(());
+            }
+        }
+
         let Some(message) = self
             .message_store
             .get_message(&event.poll_message_id)
@@ -424,10 +512,6 @@ impl EventProcessor {
                 "Poll vote target {} is not a poll; ignoring",
                 event.poll_message_id
             );
-            return Ok(());
-        };
-        let Some(answer_id) = event.answer_ids.first() else {
-            debug!("Poll vote without answers; ignoring");
             return Ok(());
         };
         let Some(option_index) = poll.options.iter().position(|o| &o.id == answer_id) else {

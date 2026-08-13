@@ -71,6 +71,34 @@ impl MatrixDriver for LoggingMatrixDriver {
         ))
     }
 
+    async fn react_message(
+        &self,
+        room_id: &str,
+        target_event_id: &str,
+        key: &str,
+        _site_id: &SiteId,
+        _author_public_key: &str,
+        _author_signature: &str,
+        _author_challenge: &str,
+    ) -> Result<()> {
+        info!("LOGGING: React to {target_event_id} in {room_id} with {key}");
+        Ok(())
+    }
+
+    async fn vote_poll(
+        &self,
+        room_id: &str,
+        poll_event_id: &str,
+        answer_id: &str,
+        _site_id: &SiteId,
+        _author_public_key: &str,
+        _author_signature: &str,
+        _author_challenge: &str,
+    ) -> Result<()> {
+        info!("LOGGING: Vote on poll {poll_event_id} in {room_id} with {answer_id}");
+        Ok(())
+    }
+
     async fn update_message(
         &self,
         room_id: &str,

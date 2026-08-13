@@ -440,6 +440,7 @@ fn parse_push_reaction(event: &PushEvent) -> Option<ParsedReaction> {
     }
     let message_event_id = relates_to.get("event_id").and_then(|v| v.as_str())?;
     let key = relates_to.get("key").and_then(|v| v.as_str())?;
+    let is_virtual_user_sender = is_virtual_user_sender(sender);
     Some(ParsedReaction {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
@@ -447,6 +448,10 @@ fn parse_push_reaction(event: &PushEvent) -> Option<ParsedReaction> {
         message_event_id: message_event_id.to_string(),
         key: key.to_string(),
         origin_server_ts: event.origin_server_ts.unwrap_or(0),
+        is_virtual_user_sender,
+        author_public_key: namespaced_string(content, "public_key").map(|s| s.to_string()),
+        author_signature: namespaced_string(content, "signature").map(|s| s.to_string()),
+        author_challenge: namespaced_string(content, "challenge").map(|s| s.to_string()),
         room_identity: None,
     })
 }
@@ -474,6 +479,7 @@ fn parse_push_poll_vote(event: &PushEvent) -> Option<ParsedPollVote> {
         .and_then(|rel| rel.get("event_id"))
         .and_then(|v| v.as_str())?
         .to_string();
+    let is_virtual_user_sender = is_virtual_user_sender(sender);
     Some(ParsedPollVote {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
@@ -481,6 +487,10 @@ fn parse_push_poll_vote(event: &PushEvent) -> Option<ParsedPollVote> {
         poll_message_id,
         answer_ids,
         origin_server_ts: event.origin_server_ts.unwrap_or(0),
+        is_virtual_user_sender,
+        author_public_key: namespaced_string(content, "public_key").map(|s| s.to_string()),
+        author_signature: namespaced_string(content, "signature").map(|s| s.to_string()),
+        author_challenge: namespaced_string(content, "challenge").map(|s| s.to_string()),
         room_identity: None,
     })
 }
@@ -989,6 +999,36 @@ mod tests {
         let reaction = parse_push_reaction(&event).expect("parse reaction");
         assert_eq!(reaction.message_event_id, "$target:hs");
         assert_eq!(reaction.key, "👍");
+        assert!(!reaction.is_virtual_user_sender);
+        assert!(reaction.author_public_key.is_none());
+    }
+
+    #[test]
+    fn guest_reaction_parses_proof_block() {
+        let mut event = event_with_content(
+            "m.reaction",
+            serde_json::json!({
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$target:hs",
+                    "key": "👍",
+                },
+                "host.curious.cumments.message": {
+                    "guest_id": "abcd",
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "challenge": "chal",
+                    "content": "👍",
+                    "displayname": "",
+                }
+            }),
+        );
+        event.sender = Some("@_cumments_my-blog_3282f2a21b4a1e6b:hs".to_string());
+        let reaction = parse_push_reaction(&event).expect("parse guest reaction");
+        assert!(reaction.is_virtual_user_sender);
+        assert_eq!(reaction.author_public_key.as_deref(), Some("pubkey"));
+        assert_eq!(reaction.author_signature.as_deref(), Some("sig"));
+        assert_eq!(reaction.author_challenge.as_deref(), Some("chal"));
     }
 
     #[test]

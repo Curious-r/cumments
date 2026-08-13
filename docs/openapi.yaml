@@ -778,8 +778,82 @@ paths:
                       type: string
                     proxy_url:
                       type: string
-                    alt:
+                  alt:
                       type: string
+  /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/CommentId"
+    post:
+      tags: [Comments]
+      summary: React to a comment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, author_public_key, author_signature, challenge_response]
+              properties:
+                key:
+                  type: string
+                author_public_key:
+                  type: string
+                author_signature:
+                  type: string
+                challenge_response:
+                  type: string
+      responses:
+        "204":
+          description: Reaction sent
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+      - name: poll_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Comments]
+      summary: Vote on a poll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [option_id, author_public_key, author_signature, challenge_response]
+              properties:
+                option_id:
+                  type: string
+                author_public_key:
+                  type: string
+                author_signature:
+                  type: string
+                challenge_response:
+                  type: string
+      responses:
+        "204":
+          description: Vote sent
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:

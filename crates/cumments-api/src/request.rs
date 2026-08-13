@@ -89,3 +89,29 @@ pub struct UpdateCommentRequest {
     #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }
+
+/// Request DTO for reacting to a comment.
+#[derive(Debug, Deserialize, Validate)]
+pub struct ReactRequest {
+    #[validate(length(min = 1, max = 32))]
+    pub key: String,
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
+/// Request DTO for voting on a poll.
+#[derive(Debug, Deserialize, Validate)]
+pub struct VoteRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub option_id: String,
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}

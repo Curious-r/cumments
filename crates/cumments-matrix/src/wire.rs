@@ -310,6 +310,60 @@ pub(crate) fn build_media_body(
     });
     message_body
 }
+/// Build the `m.reaction` content for a guest reaction.
+pub(crate) fn build_reaction_body(
+    key: &str,
+    target_event_id: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    guest_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "m.relates_to": {
+            "rel_type": "m.annotation",
+            "event_id": target_event_id,
+            "key": key,
+        },
+        MESSAGE_CONTENT_KEY: {
+            "guest_id": guest_id,
+            "public_key": author_public_key,
+            "signature": author_signature,
+            "challenge": author_challenge,
+            "content": key,
+            "displayname": "",
+        }
+    })
+}
+
+/// Build the `m.room.message` content for a guest poll vote (MSC3381).
+pub(crate) fn build_poll_vote_body(
+    poll_event_id: &str,
+    answer_id: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    guest_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "msgtype": "org.matrix.msc3381.poll.response",
+        "org.matrix.msc3381.poll.response": {
+            "answers": [answer_id],
+        },
+        "m.relates_to": {
+            "rel_type": "m.reference",
+            "event_id": poll_event_id,
+        },
+        MESSAGE_CONTENT_KEY: {
+            "guest_id": guest_id,
+            "public_key": author_public_key,
+            "signature": author_signature,
+            "challenge": author_challenge,
+            "content": answer_id,
+            "displayname": "",
+        }
+    })
+}
 /// Build the `m.room.message` content for an edit (`m.replace`).
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_edit_body(
@@ -622,6 +676,25 @@ mod tests {
         );
         assert_eq!(body["msgtype"], "m.audio");
         assert!(body.get("org.matrix.msc3245.voice").is_some());
+    }
+
+    #[test]
+    fn reaction_body_carries_annotation_and_proof() {
+        let body = build_reaction_body("👍", "$target:hs", "pk", "sig", "chal", "abcd");
+        assert_eq!(body["m.relates_to"]["rel_type"], "m.annotation");
+        assert_eq!(body["m.relates_to"]["event_id"], "$target:hs");
+        assert_eq!(body["m.relates_to"]["key"], "👍");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "👍");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["guest_id"], "abcd");
+    }
+
+    #[test]
+    fn poll_vote_body_carries_answer_and_reference() {
+        let body = build_poll_vote_body("$poll:hs", "2", "pk", "sig", "chal", "abcd");
+        assert_eq!(body["msgtype"], "org.matrix.msc3381.poll.response");
+        assert_eq!(body["org.matrix.msc3381.poll.response"]["answers"][0], "2");
+        assert_eq!(body["m.relates_to"]["event_id"], "$poll:hs");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "2");
     }
 
     #[test]

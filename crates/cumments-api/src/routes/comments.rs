@@ -5,7 +5,7 @@ use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
     DeleteCommentRequest, PaginatedResponse, PaginationMeta, PaginationQuery, PostCommentRequest,
-    UpdateCommentRequest,
+    ReactRequest, UpdateCommentRequest, VoteRequest,
 };
 use axum::{
     Json,
@@ -16,7 +16,7 @@ use axum::{
 use cumments_core::{
     identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
-    models::{AuthorKind, MediaKind, PostSlug, SiteId},
+    models::{AuthorKind, Content, MediaKind, PostSlug, SiteId},
     ports::{IdempotencyInput, IdempotencyOutcome},
     site_auth::sha256_hex,
 };
@@ -723,6 +723,164 @@ async fn update_comment_common(
             ))
         }
     }
+}
+
+/// `POST /api/v1/sites/{site}/posts/{post}/comments/{comment_id}/reactions`
+pub(crate) async fn react_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "comment writes are rate limited; try again later".to_string(),
+        ));
+    }
+    let req: ReactRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+    req.validate().map_err(AppError::Validation)?;
+    if let Err(msg) = validate_comment_id_format(&comment_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&[
+        "REACT",
+        &site_id,
+        &post_slug,
+        &comment_id,
+        &req.key,
+        challenge,
+    ]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    match state
+        .store
+        .get_message(&comment_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to verify target: {e}")))?
+    {
+        Some(message)
+            if message.site_id == site_id_val.as_str()
+                && message.post_slug == post_slug_val.as_str() => {}
+        _ => return Err(AppError::NotFound("Comment not found.".to_string())),
+    }
+    let Some(room_id) = state
+        .store
+        .get_registered_room(&site_id_val, &post_slug_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
+    else {
+        return Err(AppError::NotFound(
+            "No room registered for this post.".to_string(),
+        ));
+    };
+    state
+        .driver
+        .react_message(
+            &room_id,
+            &comment_id,
+            &req.key,
+            &site_id_val,
+            &req.author_public_key,
+            &req.author_signature,
+            challenge,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to send reaction: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/sites/{site}/posts/{post}/polls/{poll_id}/votes`
+pub(crate) async fn vote_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug, poll_id)): Path<(String, String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "comment writes are rate limited; try again later".to_string(),
+        ));
+    }
+    let req: VoteRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+    req.validate().map_err(AppError::Validation)?;
+    if let Err(msg) = validate_comment_id_format(&poll_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&[
+        "VOTE",
+        &site_id,
+        &post_slug,
+        &poll_id,
+        &req.option_id,
+        challenge,
+    ]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let Some(poll_message) = state
+        .store
+        .get_message(&poll_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to verify poll: {e}")))?
+    else {
+        return Err(AppError::NotFound("Poll not found.".to_string()));
+    };
+    if poll_message.site_id != site_id_val.as_str()
+        || poll_message.post_slug != post_slug_val.as_str()
+    {
+        return Err(AppError::NotFound("Poll not found.".to_string()));
+    }
+    let Content::Poll(poll) = &poll_message.content else {
+        return Err(AppError::BadRequest("target is not a poll".to_string()));
+    };
+    if !poll.options.iter().any(|option| option.id == req.option_id) {
+        return Err(AppError::BadRequest("poll option not found".to_string()));
+    }
+    let Some(room_id) = state
+        .store
+        .get_registered_room(&site_id_val, &post_slug_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
+    else {
+        return Err(AppError::NotFound(
+            "No room registered for this post.".to_string(),
+        ));
+    };
+    state
+        .driver
+        .vote_poll(
+            &room_id,
+            &poll_id,
+            &req.option_id,
+            &site_id_val,
+            &req.author_public_key,
+            &req.author_signature,
+            challenge,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to send vote: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

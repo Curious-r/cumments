@@ -62,6 +62,50 @@ impl MatrixDriver for AppServiceMatrixDriver {
         .await
     }
 
+    async fn react_message(
+        &self,
+        room_id: &str,
+        target_event_id: &str,
+        key: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()> {
+        self.react_message_impl(
+            room_id,
+            target_event_id,
+            key,
+            site_id,
+            author_public_key,
+            author_signature,
+            author_challenge,
+        )
+        .await
+    }
+
+    async fn vote_poll(
+        &self,
+        room_id: &str,
+        poll_event_id: &str,
+        answer_id: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+    ) -> Result<()> {
+        self.vote_poll_impl(
+            room_id,
+            poll_event_id,
+            answer_id,
+            site_id,
+            author_public_key,
+            author_signature,
+            author_challenge,
+        )
+        .await
+    }
+
     async fn update_message(
         &self,
         room_id: &str,
