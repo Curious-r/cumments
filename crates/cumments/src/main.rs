@@ -153,6 +153,7 @@ async fn main() -> Result<()> {
             message_store: db_store.clone(),
             room_store: db_store.clone(),
             governance_store: db_store.clone(),
+            role_claim_store: db_store.clone(),
             intent_store: db_store.clone(),
             event_bus: event_bus.clone(),
             moderation_notify: reconciler_notify.clone(),

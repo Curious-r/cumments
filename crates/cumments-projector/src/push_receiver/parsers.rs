@@ -28,6 +28,9 @@ pub(crate) async fn process_single_event(
                 return Ok(());
             }
             if let Some(mut parsed) = parse_push_message(event) {
+                if processor.process_claim_dm(&parsed).await? {
+                    return Ok(());
+                }
                 parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await?;
                 processor.process_room_message(parsed).await?;
             }

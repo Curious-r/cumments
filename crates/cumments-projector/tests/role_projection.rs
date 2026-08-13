@@ -1,8 +1,9 @@
-use cumments_core::governance::RoleEntry;
-use cumments_core::models::{PostSlug, SiteId};
-use cumments_core::ports::{GovernanceStore, RegistryStore, SiteStore};
+use cumments_core::governance::{NewRoleClaim, RoleEntry};
+use cumments_core::models::{Content, PostSlug, SiteId, TextContent, TextStyle};
+use cumments_core::ports::{GovernanceStore, RegistryStore, RoleClaimStore, SiteStore};
+use cumments_core::site_auth::token_hash;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
-use cumments_projector::parsed::ParsedRoomState;
+use cumments_projector::parsed::{ParsedRoomMessage, ParsedRoomState};
 use cumments_store::DbStore;
 use std::sync::Arc;
 use tokio::sync::{Notify, broadcast};
@@ -26,6 +27,31 @@ fn state_event(room_id: &str, power_levels: serde_json::Value) -> ParsedRoomStat
         state_key: String::new(),
         origin_server_ts: 1,
         content: power_levels,
+    }
+}
+
+fn claim_message(sender: &str, body: &str) -> ParsedRoomMessage {
+    ParsedRoomMessage {
+        room_id: "!dm:hs".to_string(),
+        event_id: "$dm:hs".to_string(),
+        sender: sender.to_string(),
+        content: Content::Text(TextContent {
+            body: body.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
+        display_name: None,
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
+        is_virtual_user_sender: false,
+        intent_id: None,
+        reply_to: None,
+        thread_root: None,
+        origin_server_ts: 1,
+        relates_to: None,
+        room_identity: None,
+        raw_content: serde_json::Value::Null,
     }
 }
 
@@ -57,6 +83,7 @@ async fn power_levels_project_site_and_room_roles() {
         message_store: store.clone(),
         room_store: store.clone(),
         governance_store: store.clone(),
+        role_claim_store: store.clone(),
         intent_store: store.clone(),
         event_bus: tx,
         moderation_notify: moderation_notify.clone(),
@@ -128,5 +155,90 @@ async fn power_levels_project_site_and_room_roles() {
                 level: 100
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn claim_dm_activates_only_the_matching_token() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("claim-dm"))
+            .await
+            .expect("connect db"),
+    );
+    let (tx, _rx) = broadcast::channel(16);
+    let moderation_notify = Arc::new(Notify::new());
+    let processor = EventProcessor::new(EventProcessorDeps {
+        site_store: store.clone(),
+        registry_store: store.clone(),
+        message_store: store.clone(),
+        room_store: store.clone(),
+        governance_store: store.clone(),
+        role_claim_store: store.clone(),
+        intent_store: store.clone(),
+        event_bus: tx,
+        moderation_notify: moderation_notify.clone(),
+        server_name: Some("hs".to_string()),
+    });
+
+    store
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: "my-blog".to_string(),
+            room_id: String::new(),
+            user_id: "@alice:hs".to_string(),
+            level: 100,
+            token_hash: token_hash("secret-token"),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+        })
+        .await
+        .expect("create claim");
+
+    let wrong = claim_message("@alice:hs", "cumments-claim:wrong-token");
+    assert!(
+        !processor
+            .process_claim_dm(&wrong)
+            .await
+            .expect("wrong token"),
+        "a wrong token must not activate the claim"
+    );
+    assert_eq!(
+        store
+            .pending_claims_for_user("@alice:hs")
+            .await
+            .expect("pending claims")
+            .len(),
+        1
+    );
+
+    let right = claim_message("@alice:hs", "cumments-claim:secret-token");
+    assert!(
+        processor
+            .process_claim_dm(&right)
+            .await
+            .expect("right token"),
+        "the matching token must activate the claim"
+    );
+    assert!(
+        store
+            .pending_claims_for_user("@alice:hs")
+            .await
+            .expect("pending claims")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .activated_unapplied_claims()
+            .await
+            .expect("activated claims")
+            .len(),
+        1
+    );
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            moderation_notify.notified(),
+        )
+        .await
+        .is_ok(),
+        "claim activation must wake the reconciler"
     );
 }

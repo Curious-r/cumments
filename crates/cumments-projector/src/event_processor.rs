@@ -20,9 +20,15 @@ use cumments_core::{
     models::{
         AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PollVote,
         PostSlug, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId,
+        TextStyle,
     },
-    ports::{GovernanceStore, IntentStore, MessageStore, RegistryStore, RoomStore, SiteStore},
+    ports::{
+        GovernanceStore, IntentStore, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
+        SiteStore,
+    },
     projector_events::ProjectorEvent,
+    protocol::CLAIM_MESSAGE_PREFIX,
+    site_auth::{constant_time_eq, sha256_hex},
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, broadcast};
@@ -37,6 +43,7 @@ pub struct EventProcessor {
     message_store: Arc<dyn MessageStore>,
     room_store: Arc<dyn RoomStore>,
     governance_store: Arc<dyn GovernanceStore>,
+    role_claim_store: Arc<dyn RoleClaimStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
@@ -54,6 +61,7 @@ pub struct EventProcessorDeps {
     pub message_store: Arc<dyn MessageStore>,
     pub room_store: Arc<dyn RoomStore>,
     pub governance_store: Arc<dyn GovernanceStore>,
+    pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub intent_store: Arc<dyn IntentStore>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub moderation_notify: Arc<Notify>,
@@ -68,6 +76,7 @@ impl EventProcessor {
             message_store: deps.message_store,
             room_store: deps.room_store,
             governance_store: deps.governance_store,
+            role_claim_store: deps.role_claim_store,
             intent_store: deps.intent_store,
             event_bus: deps.event_bus,
             moderation_notify: deps.moderation_notify,
@@ -82,6 +91,48 @@ impl EventProcessor {
             .get_site_by_space_id(space_id)
             .await
             .map(|site| site.map(|s| s.id))
+    }
+
+    /// Attempts to match a plain-text message against a pending token-DM role
+    /// claim. Returns `true` when the message activated a claim and therefore
+    /// must not be projected as a comment.
+    pub async fn process_claim_dm(&self, event: &ParsedRoomMessage) -> Result<bool> {
+        if event.is_virtual_user_sender {
+            return Ok(false);
+        }
+        let Content::Text(text) = &event.content else {
+            return Ok(false);
+        };
+        if text.style != TextStyle::Normal
+            || event.relates_to.is_some()
+            || event.reply_to.is_some()
+            || event.thread_root.is_some()
+        {
+            return Ok(false);
+        }
+        let Some(token) = text.body.trim().strip_prefix(CLAIM_MESSAGE_PREFIX) else {
+            return Ok(false);
+        };
+        let token = token.trim();
+        if token.is_empty() {
+            return Ok(false);
+        }
+
+        let presented_hash = sha256_hex(token.as_bytes());
+        for claim in self
+            .role_claim_store
+            .pending_claims_for_user(&event.sender)
+            .await?
+        {
+            if constant_time_eq(claim.token_hash.as_bytes(), presented_hash.as_bytes())
+                && self.role_claim_store.mark_claim_activated(claim.id).await?
+            {
+                info!("Activated role claim {} for {}", claim.id, claim.user_id);
+                self.moderation_notify.notify_one();
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Resolve the Cumments identity of a room from the local registry.
