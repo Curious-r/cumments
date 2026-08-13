@@ -1,3 +1,4 @@
+use crate::governance::RoleEntry;
 use crate::intents::{
     DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
@@ -329,6 +330,9 @@ pub trait RegistryStore: Send + Sync {
     /// Lists all rooms currently registered as active (canonical).
     async fn list_active_rooms(&self) -> Result<Vec<String>>;
 
+    /// Lists the active room IDs registered for one site.
+    async fn list_active_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
+
     /// Looks up the Cumments identity registered for a room.
     ///
     /// Unlike [`Self::get_registered_room`] this is a reverse lookup by room ID,
@@ -379,10 +383,33 @@ pub trait SiteStore: Send + Sync {
     /// Looks up a site by its Matrix Space room ID.
     async fn get_site_by_space_id(&self, space_id: &str) -> Result<Option<crate::models::Site>>;
 
+    /// Lists every site known to the local store.
+    async fn list_sites(&self) -> Result<Vec<crate::models::Site>>;
+
     async fn save_site(&self, site: &crate::models::Site) -> Result<()>;
 
     /// Ensures a site exists in the database, creating it with default values if not.
     async fn ensure_site_exists(&self, site_id: &str, matrix_space_id: &str) -> Result<()>;
+}
+
+/// Port for the projected governance read model.
+///
+/// The authoritative state lives in Matrix power levels; these rows are a
+/// disposable projection used for API visibility and offline inspection, and
+/// are rebuilt by pushes and `cumments backfill`.
+#[async_trait]
+pub trait GovernanceStore: Send + Sync {
+    /// Atomically replaces the projected roles of one site (from its Space).
+    async fn replace_site_roles(&self, site_id: &str, roles: &[RoleEntry]) -> Result<()>;
+
+    /// The projected roles of one site, ordered by user ID.
+    async fn list_site_roles(&self, site_id: &str) -> Result<Vec<RoleEntry>>;
+
+    /// Atomically replaces the projected roles of one comment room.
+    async fn replace_room_roles(&self, room_id: &str, roles: &[RoleEntry]) -> Result<()>;
+
+    /// The projected roles of one comment room, ordered by user ID.
+    async fn list_room_roles(&self, room_id: &str) -> Result<Vec<RoleEntry>>;
 }
 
 /// Port for site identity and write-path authentication state.

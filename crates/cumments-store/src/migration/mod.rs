@@ -39,6 +39,7 @@ pub mod m20260813_000033_drop_room_registry_blocked_reason;
 pub mod m20260813_000034_poll_response_redaction;
 pub mod m20260813_000035_media_uploads;
 pub mod m20260813_000036_poll_votes_unique_sender;
+pub mod m20260813_000037_site_governance_roles;
 
 pub struct Migrator;
 
@@ -110,6 +111,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260813_000034_poll_response_redaction::Migration),
             Box::new(m20260813_000035_media_uploads::Migration),
             Box::new(m20260813_000036_poll_votes_unique_sender::Migration),
+            Box::new(m20260813_000037_site_governance_roles::Migration),
         ]
     }
 }

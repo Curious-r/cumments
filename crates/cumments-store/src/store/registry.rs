@@ -51,6 +51,17 @@ impl RegistryStore for DbStore {
         Ok(rows.into_iter().map(|row| row.room_id).collect())
     }
 
+    async fn list_active_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>> {
+        let rows = room_registry::Entity::find()
+            .filter(room_registry::COLUMN.site_id.eq(site_id.as_str()))
+            .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
+            .select_only()
+            .column(room_registry::Column::RoomId)
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.room_id).collect())
+    }
+
     async fn get_registered_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>> {
         let room = room_registry::Entity::find_by_id(room_id.to_owned())
             .one(&self.db)
@@ -295,6 +306,11 @@ impl SiteStore for DbStore {
             .await?;
 
         Ok(model.map(Site::from))
+    }
+
+    async fn list_sites(&self) -> Result<Vec<Site>> {
+        let models = sites::Entity::find().all(&self.db).await?;
+        Ok(models.into_iter().map(Site::from).collect())
     }
 
     async fn save_site(&self, site: &Site) -> Result<()> {
