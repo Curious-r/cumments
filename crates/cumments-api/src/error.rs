@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn problem_type_base_matches_mkdocs_site_url() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mkdocs.yml");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/mkdocs.yml");
         let mkdocs = std::fs::read_to_string(path).expect("mkdocs.yml must exist");
         let site_root = PROBLEM_TYPE_BASE
             .strip_suffix("/problems")
