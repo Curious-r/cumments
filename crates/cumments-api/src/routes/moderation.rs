@@ -128,9 +128,10 @@ fn rate_limited(
 ) -> Result<(), AppError> {
     let key = client_key(headers, addr, &state.trusted_proxies);
     if !state.moderation_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "site governance writes are rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "site governance writes are rate limited; try again later".to_string(),
+            retry_after_seconds: state.moderation_limiter.window().as_secs(),
+        });
     }
     Ok(())
 }

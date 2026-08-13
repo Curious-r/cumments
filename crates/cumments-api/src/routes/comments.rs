@@ -43,6 +43,15 @@ pub(crate) fn challenge_prefix(challenge_response: &str) -> &str {
     challenge_response.split('|').next().unwrap_or("")
 }
 
+/// 429 error for comment-write rate limiting, using the write limiter's
+/// fixed window as the conservative `Retry-After` value.
+fn comment_write_rate_limited(state: &ApiState) -> AppError {
+    AppError::TooManyRequests {
+        detail: "comment writes are rate limited; try again later".to_string(),
+        retry_after_seconds: state.write_limiter.window().as_secs(),
+    }
+}
+
 /// Error returned when `reply_to` cannot be a Matrix event ID.
 const REPLY_TO_FORMAT_ERROR: &str =
     "reply_to must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
@@ -292,9 +301,7 @@ pub(crate) async fn post_comment_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "comment writes are rate limited; try again later".to_string(),
-        ));
+        return Err(comment_write_rate_limited(&state));
     }
 
     let idempotency_key = extract_idempotency_key(&headers)?;
@@ -512,9 +519,7 @@ async fn delete_comment_common(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "comment writes are rate limited; try again later".to_string(),
-        ));
+        return Err(comment_write_rate_limited(&state));
     }
 
     let idempotency_key = extract_idempotency_key(&headers)?;
@@ -692,9 +697,7 @@ async fn update_comment_common(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "comment writes are rate limited; try again later".to_string(),
-        ));
+        return Err(comment_write_rate_limited(&state));
     }
 
     let idempotency_key = extract_idempotency_key(&headers)?;
@@ -842,9 +845,7 @@ pub(crate) async fn react_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "comment writes are rate limited; try again later".to_string(),
-        ));
+        return Err(comment_write_rate_limited(&state));
     }
     let req: ReactRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
@@ -917,9 +918,7 @@ pub(crate) async fn vote_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "comment writes are rate limited; try again later".to_string(),
-        ));
+        return Err(comment_write_rate_limited(&state));
     }
     let req: VoteRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
@@ -1000,9 +999,7 @@ pub(crate) async fn location_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "comment writes are rate limited; try again later".to_string(),
-        ));
+        return Err(comment_write_rate_limited(&state));
     }
     let idempotency_key = extract_idempotency_key(&headers)?;
     let req: LocationRequest = serde_json::from_str(&body)

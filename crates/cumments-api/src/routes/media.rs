@@ -266,9 +266,10 @@ pub(crate) async fn upload_media_handler(
 
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "media uploads are rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "media uploads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.write_limiter.window().as_secs(),
+        });
     }
     if body.len() > MEDIA_MAX_BYTES {
         return Err(AppError::BadRequest(
@@ -397,9 +398,10 @@ pub(crate) async fn media_handler(
 
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.media_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "media requests are rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "media requests are rate limited; try again later".to_string(),
+            retry_after_seconds: state.media_limiter.window().as_secs(),
+        });
     }
 
     let expires = query

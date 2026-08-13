@@ -8,7 +8,10 @@
 
 use axum::{
     Json,
-    http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
+    http::{
+        HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, RETRY_AFTER},
+    },
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
@@ -136,7 +139,13 @@ pub enum AppError {
     NotManageable(String),
     BadRequest(String),
     Conflict(String),
-    TooManyRequests(String),
+    TooManyRequests {
+        detail: String,
+        /// Conservative `Retry-After` value in seconds. This is the
+        /// endpoint's constant rate-limit window, not the exact remaining
+        /// time for this client key.
+        retry_after_seconds: u64,
+    },
     IdempotencyKeyRequired(String),
     InvalidIdempotencyKey(String),
     IdempotencyReused,
@@ -148,6 +157,13 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        let retry_after_seconds = match &self {
+            AppError::TooManyRequests {
+                retry_after_seconds,
+                ..
+            } => Some(*retry_after_seconds),
+            _ => None,
+        };
         let (status, detail, code, details) = match self {
             AppError::InvalidPoW => (
                 StatusCode::FORBIDDEN,
@@ -184,9 +200,9 @@ impl IntoResponse for AppError {
                 (StatusCode::BAD_REQUEST, msg, ProblemType::BadRequest, None)
             }
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg, ProblemType::Conflict, None),
-            AppError::TooManyRequests(msg) => (
+            AppError::TooManyRequests { detail, .. } => (
                 StatusCode::TOO_MANY_REQUESTS,
-                msg,
+                detail,
                 ProblemType::RateLimited,
                 None,
             ),
@@ -252,6 +268,13 @@ impl IntoResponse for AppError {
             CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
+        if let Some(seconds) = retry_after_seconds {
+            response.headers_mut().insert(
+                RETRY_AFTER,
+                HeaderValue::from_str(&seconds.to_string())
+                    .expect("numeric Retry-After is a valid header value"),
+            );
+        }
         response
     }
 }
@@ -285,6 +308,21 @@ mod tests {
             "This Idempotency-Key was already used with a different request."
         );
         assert_eq!(body["code"], "idempotency-key-reused");
+    }
+
+    #[test]
+    fn rate_limited_response_carries_retry_after() {
+        let response = AppError::TooManyRequests {
+            detail: "slow down".to_string(),
+            retry_after_seconds: 3600,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(RETRY_AFTER).unwrap(),
+            "3600",
+            "429 must advertise the endpoint's fixed retry window"
+        );
     }
 
     #[test]

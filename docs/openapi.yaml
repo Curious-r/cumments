@@ -50,7 +50,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ChallengeResponse"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/comments:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -87,7 +87,7 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     patch:
       tags: [Comments]
       summary: Edit a comment (body carries comment_id)
@@ -120,7 +120,7 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Comments]
       summary: Delete a comment (body carries comment_id)
@@ -153,7 +153,7 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     x-cumments-query:
       operationId: queryComments
       summary: List comments (QUERY)
@@ -234,7 +234,7 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Comments]
       summary: Delete a comment (legacy path form)
@@ -267,7 +267,7 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/sse:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -284,7 +284,7 @@ paths:
               schema:
                 type: string
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites:
     post:
       tags: [Sites]
@@ -298,7 +298,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RegisterSiteResponse"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/verifications:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -324,7 +324,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/verifications/confirm:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -348,7 +348,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/secret:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -594,7 +594,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/room:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -713,7 +713,7 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/stickers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -774,7 +774,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -814,7 +814,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/location:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -875,7 +875,7 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/owners:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -905,7 +905,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Governance]
       summary: Remove a site owner
@@ -932,7 +932,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/co-managers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -962,7 +962,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Governance]
       summary: Remove a site co-manager
@@ -989,7 +989,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/moderators:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1033,7 +1033,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Governance]
       summary: Remove a room moderator
@@ -1060,7 +1060,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/roles:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1104,7 +1104,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Admin]
       summary: Remove a site owner (operator)
@@ -1131,7 +1131,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
   /api/v1/admin/sites/{site_id}/co-managers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1161,7 +1161,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Admin]
       summary: Remove a site co-manager (operator)
@@ -1188,7 +1188,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "429":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     adminToken:
@@ -1252,6 +1252,22 @@ components:
   responses:
     Error:
       description: RFC 9457 problem details response
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: |
+        Rate limit exceeded (RFC 9457 problem details). `Retry-After` is the
+        endpoint's fixed limit window in seconds; it is a conservative
+        constant, not the exact remaining time for this client key.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
       content:
         application/problem+json:
           schema:

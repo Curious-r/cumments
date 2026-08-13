@@ -169,9 +169,10 @@ pub(crate) async fn register_site_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.registration_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "site registration is rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "site registration is rate limited; try again later".to_string(),
+            retry_after_seconds: state.registration_limiter.window().as_secs(),
+        });
     }
     let registered = register_site(&*state.store)
         .await
@@ -196,9 +197,10 @@ pub(crate) async fn start_verification_handler(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.verification_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "verification issuance is rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "verification issuance is rate limited; try again later".to_string(),
+            retry_after_seconds: state.verification_limiter.window().as_secs(),
+        });
     }
     req.validate().map_err(AppError::Validation)?;
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
@@ -250,9 +252,10 @@ pub(crate) async fn confirm_verification_handler(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.confirm_limiter.allow(&key) {
-        return Err(AppError::TooManyRequests(
-            "verification confirmation is rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "verification confirmation is rate limited; try again later".to_string(),
+            retry_after_seconds: state.confirm_limiter.window().as_secs(),
+        });
     }
 
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;

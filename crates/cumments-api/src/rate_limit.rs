@@ -74,6 +74,12 @@ impl RateLimiter {
         }
     }
 
+    /// The endpoint's fixed rate-limit window. Used as the conservative
+    /// `Retry-After` value on 429 responses.
+    pub fn window(&self) -> Duration {
+        self.window
+    }
+
     /// Whether a request from `key` is within the limit. Records the request
     /// on success only, so denied clients do not extend their own window.
     pub fn allow(&self, key: &str) -> bool {

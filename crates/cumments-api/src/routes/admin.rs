@@ -131,8 +131,11 @@ pub async fn require_admin(
     // quota by simply rotating the token on every attempt.
     let key = client_key(req.headers(), Some(addr), &state.trusted_proxies);
     if !state.admin_limiter.allow(&key) {
-        return AppError::TooManyRequests("admin API is rate limited; try again later".to_string())
-            .into_response();
+        return AppError::TooManyRequests {
+            detail: "admin API is rate limited; try again later".to_string(),
+            retry_after_seconds: state.admin_limiter.window().as_secs(),
+        }
+        .into_response();
     }
     if state.admin_token_hash.is_none() {
         return AppError::Unauthorized(

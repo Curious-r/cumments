@@ -26,6 +26,9 @@ const SSE_RECONNECT_GRACE: Duration = Duration::from_secs(30);
 const SSE_MAX_FREE_RECONNECTS_PER_WINDOW: u32 = 20;
 /// Rolling window for the free-reconnect counter.
 const SSE_RECONNECT_WINDOW: Duration = Duration::from_secs(300);
+/// Conservative `Retry-After` for the global concurrent-connection cap. The
+/// cap is not time-windowed, so a short fixed backoff is the best estimate.
+const CONCURRENT_SSE_RETRY_AFTER_SECONDS: u64 = 60;
 
 /// Per-client reconnect bookkeeping so EventSource auto-reconnects and page
 /// refreshes do not silently exhaust the SSE connection budget.
@@ -113,9 +116,10 @@ pub(crate) async fn sse_handler(
             .expect("sse reconnect registry mutex poisoned")
             .allow_reconnect(&key, now);
     if !allowed {
-        return Err(AppError::TooManyRequests(
-            "SSE connections are rate limited; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "SSE connections are rate limited; try again later".to_string(),
+            retry_after_seconds: state.sse_limiter.window().as_secs(),
+        });
     }
     // Validate the path parameters before touching the connection counter so
     // a rejected request can never leak a permanent +1 on the global budget
@@ -123,9 +127,10 @@ pub(crate) async fn sse_handler(
     let site_id_val = SiteId::new(site_id.clone()).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug.clone()).map_err(AppError::Validation)?;
     if state.active_sse_connections.load(Ordering::Relaxed) >= state.max_sse_connections {
-        return Err(AppError::TooManyRequests(
-            "too many concurrent SSE connections; try again later".to_string(),
-        ));
+        return Err(AppError::TooManyRequests {
+            detail: "too many concurrent SSE connections; try again later".to_string(),
+            retry_after_seconds: CONCURRENT_SSE_RETRY_AFTER_SECONDS,
+        });
     }
     state.active_sse_connections.fetch_add(1, Ordering::Relaxed);
     let ephemeral_room_id = state

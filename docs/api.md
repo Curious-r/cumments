@@ -587,6 +587,10 @@ rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
 writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE connections to
 20/hour with a global cap of 500 concurrent streams. Site governance writes
 are limited to 60/hour.
+Every `429` response carries a `Retry-After` header set to the endpoint's
+fixed limit window (3600 seconds for hourly limits, 60 seconds for the admin
+API). It is a conservative constant, not the exact remaining time for the
+requesting client.
 SSE reconnects within 30 seconds of a disconnect do not consume the hourly
 new-connection budget (bounded to 20 free reconnects per client per 5-minute
 window), so EventSource auto-reconnect and normal page refreshes do not
