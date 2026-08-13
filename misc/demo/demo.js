@@ -1730,13 +1730,14 @@
                     const cfg = getSettings();
                     const chal = await getChallenge(cfg);
                     const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    const contentHash = await sha256Hex(await blob.arrayBuffer());
                     const { publicKey, signature } = await authorSignature([
                         "UPLOAD",
                         cfg.siteId,
                         cfg.slug,
                         mime,
                         filename,
-                        String(blob.size),
+                        contentHash,
                         chal.prefix,
                     ]);
                     const params = new URLSearchParams({
@@ -2201,6 +2202,13 @@
                         await new Promise((resolve) => setTimeout(resolve, 0));
                     }
                 }
+            }
+
+            async function sha256Hex(bytes) {
+                const hashBuf = await crypto.subtle.digest("SHA-256", bytes);
+                return Array.from(new Uint8Array(hashBuf))
+                    .map((b) => b.toString(16).padStart(2, "0"))
+                    .join("");
             }
 
             // ==========================================

@@ -458,7 +458,7 @@ thumbnail.
 Uploads raw image/video/audio/file bytes as the guest's virtual user and returns
 `{ "url", "filename", "mimetype", "size", "voice" }` with an `mxc://` URL.
 The signature covers
-`["UPLOAD", site_id, post_slug, mime, filename, size, challenge]`;
+`["UPLOAD", site_id, post_slug, mime, filename, sha256_hex(body), challenge]`;
 the upload is rate limited and size/type capped. The returned `url` is then
 used in a POST comment request with `media` (the signature covers the media
 URL instead of text content).
