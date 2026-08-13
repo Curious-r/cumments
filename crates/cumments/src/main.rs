@@ -271,6 +271,7 @@ async fn main() -> Result<()> {
     let reconciler = cumments_reconciler::Reconciler::new(
         db_store.clone(), // IntentStore
         db_store.clone(), // RegistryStore
+        db_store.clone(), // SiteStore
         db_store.clone(), // MessageStore
         driver.clone(),
         site_service.clone(),

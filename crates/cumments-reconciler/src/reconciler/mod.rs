@@ -1,4 +1,5 @@
 mod deletions;
+mod moderation;
 mod posts;
 mod timeouts;
 mod updates;
@@ -7,7 +8,7 @@ use anyhow::Result;
 use cumments_core::{
     matrix_error::MatrixError,
     models::{PostSlug, QuarantinedRoom, SiteId},
-    ports::{IntentStore, MatrixDriver, MessageStore, RegistryStore},
+    ports::{IntentStore, MatrixDriver, MessageStore, RegistryStore, SiteStore},
     site_service::SiteService,
 };
 use std::sync::Arc;
@@ -105,6 +106,7 @@ fn quarantine_target(err: &anyhow::Error) -> Option<String> {
 pub struct Reconciler {
     intent_store: Arc<dyn IntentStore>,
     registry_store: Arc<dyn RegistryStore>,
+    site_store: Arc<dyn SiteStore>,
     message_store: Arc<dyn MessageStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
@@ -115,6 +117,7 @@ impl Reconciler {
     pub fn new(
         intent_store: Arc<dyn IntentStore>,
         registry_store: Arc<dyn RegistryStore>,
+        site_store: Arc<dyn SiteStore>,
         message_store: Arc<dyn MessageStore>,
         driver: Arc<dyn MatrixDriver>,
         site_service: Arc<SiteService>,
@@ -123,6 +126,7 @@ impl Reconciler {
         Self {
             intent_store,
             registry_store,
+            site_store,
             message_store,
             driver,
             site_service,
@@ -245,7 +249,14 @@ impl Reconciler {
                 0
             }
         };
-        Ok(post_count + delete_count + update_count + timeout_count)
+        let moderation_count = match self.reconcile_moderation().await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Reconcile moderation phase failed: {:#}", e);
+                0
+            }
+        };
+        Ok(post_count + delete_count + update_count + timeout_count + moderation_count)
     }
 }
 
