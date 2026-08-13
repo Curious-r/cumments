@@ -1,0 +1,188 @@
+# Data model
+
+This page describes how Matrix events are shaped into the typed comment model
+that the API and SSE stream expose. It documents the mapping and the storage
+layout; the runtime system around them is covered in
+[architecture](architecture.md).
+
+The read model is disposable: every row can be rebuilt from Matrix history
+with `cumments backfill`. Nothing here is the source of truth — Matrix events
+are.
+
+## Design principles
+
+1. **Content is a sealed type system.** Each displayable kind of content has
+   its own structured payload instead of one universal JSON blob. Clients
+   dispatch on the `type` tag.
+2. **Raw JSON is the escape hatch.** The protocol keeps evolving; unknown or
+   future types keep their original payload so history is never lost and can
+   be reinterpreted later.
+3. **Relations are not content.** Replies, edits, threads, reactions and
+   deletions are attributes or edges of a message, modeled separately from
+   the body.
+4. **Authors are snapshotted.** Display name and avatar are captured when the
+   message is projected; later profile changes do not rewrite history.
+5. **Boundaries are explicit.** Voice/video calls are out of scope, and
+   encrypted content is modeled only as a placeholder.
+
+## Message shape
+
+```rust
+Message {
+    event_id,               // the Matrix event ID
+    site_id, post_slug,     // which site and post this comment belongs to
+    author: AuthorSnapshot, // guest (public_key) or matrix (mxid)
+    content: Content,       // sealed enum, see below
+    timestamp,              // Matrix origin_server_ts
+    edited_at,              // last m.replace timestamp, if any
+    reply_to, thread_root,  // relation targets, if any
+    intent_id,              // set when submitted through the API
+    status,                 // active | redacted
+    redacted_at, redacted_by,
+    reactions: [ReactionSummary],
+}
+```
+
+The full revision history of every edit is kept in a dedicated
+`message_revisions` table, but the API currently exposes only `edited_at`.
+`room_id`, `sender_mxid` and the raw Matrix `content` are internal integrity
+fields and are never serialized to API or SSE clients.
+
+Guest authors carry an Ed25519 `public_key`; their virtual-user Matrix ID is
+an implementation detail and is not exposed. Matrix-native authors carry
+their `mxid` and never a `public_key`.
+
+### Content types
+
+| Type | Payload |
+|---|---|
+| `text` | `body`, optional HTML `formatted_body`, `style` (`normal`/`emote`/`notice`) |
+| `media` | `kind` (image/video/audio/file/sticker), `url`, optional filename, mimetype, size, dimensions, thumbnail, alt text, `voice` flag |
+| `location` | `geo_uri`, optional description and thumbnail |
+| `poll` | `question`, `options`, aggregated `responses` |
+| `encrypted` | algorithm and sender key placeholder only |
+| `unknown` | optional `fallback` text plus the original raw JSON |
+
+## Matrix event mapping
+
+| Matrix event | Model result |
+|---|---|
+| `m.room.message` with `m.text` / `m.notice` / `m.emote` | `Content::Text` |
+| `m.image` | `Content::Media(Image)` |
+| `m.video` / `m.audio` (with the MSC3245 voice flag) | `Content::Media(Video/Audio)` |
+| `m.file` | `Content::Media(File)` |
+| `m.sticker` | `Content::Media(Sticker)` |
+| `m.location` (MSC3488) | `Content::Location` |
+| `m.poll.start` (MSC3381) | `Content::Poll` |
+| `m.poll.response` | Aggregated into `PollContent.responses` |
+| `m.reaction` | Reaction annotation, aggregated into `Message.reactions` |
+| `m.replace` | Edit; appends a revision and updates `edited_at` |
+| `m.room.redaction` | `status = redacted` |
+| `m.room.encrypted` | `Content::Encrypted` placeholder |
+| Anything else | `Content::Unknown` with the raw payload kept |
+
+Reactions and poll responses are annotation edges, not comment messages: they
+are stored in their own tables and aggregated onto the target message.
+
+## Not part of the comment stream
+
+Two classes of events are deliberately excluded from the `Message` model:
+
+- **Ephemeral events** (`m.typing`, receipts, presence) are not part of room
+  history and cannot be backfilled; they flow through a separate channel, see
+  [Ephemeral events](#ephemeral-events).
+- **Room state events** (`m.room.member`, name, topic, avatar,
+  `m.room.power_levels`, tombstones, `m.space.*`) *are* in room history, but
+  they are room metadata rather than comments. A light metadata model
+  (`room_members` + `room_state_events`) records joins/leaves and name, topic
+  and avatar changes; `GET .../room` returns that metadata and the most
+  recent system messages. Power levels feed the governance projection instead
+  (see [site governance](site-governance.md)).
+
+Voice/video calls are not modeled at all.
+
+## Storage
+
+```sql
+messages (
+  event_id TEXT PRIMARY KEY,
+  room_id, site_id, post_slug,
+  author_type, author_mxid, author_display_name, author_avatar_url,
+  author_public_key,
+  content_json JSON,          -- the serialized Content enum
+  raw_content_json JSON,      -- original Matrix content (escape hatch)
+  reply_to_event_id, thread_root_event_id,
+  timestamp, edited_at,
+  status, redacted_at, redacted_by,
+  intent_id
+)
+
+message_revisions (message_id, event_id PK, content_json, edited_at, editor)
+
+reactions (event_id UNIQUE, message_event_id, sender_mxid, key, timestamp, redacted_at)
+
+poll_responses (
+  event_id, poll_message_id, sender_mxid, option_index, timestamp, redacted_at,
+  UNIQUE (poll_message_id, sender_mxid)
+)
+```
+
+Notes on the layout:
+
+- The author proof (`signature`, `challenge`) is verified at projection time
+  and is **not** stored in the read model; only the public key is kept for
+  edit/delete authorization.
+- `reactions` is keyed by event ID, making push redelivery and backfill
+  idempotent; the poll unique index collapses duplicate redeliveries and
+  keeps the latest vote authoritative.
+- `formatted_body` is passed through unchanged. The demo renders plain text
+  only; any client rendering HTML must sanitize it first.
+
+## Ephemeral events
+
+Typing indicators, read receipts and presence are not comments, but they make
+the comment section feel alive. Cumments keeps a resident `/sync` connection
+with the AppService token and bot identity (the push transaction stream does
+not carry ephemeral events), filters for ephemeral/presence only, and keeps
+per-room in-memory state:
+
+- Subscribing SSE clients receive the current snapshot first, then
+  incremental `ephemeral` events (`type: typing` / `receipt` / `presence`).
+- Presence is filtered to users who are joined members of a subscribed room,
+  so it cannot leak across sites; the typing snapshot carries the member's
+  display name from `room_members`.
+- Nothing is persisted or projected; it is an in-memory event channel.
+- Protocol limits still apply: private read receipts (MSC2285) are invisible
+  to the AppService, so only public receipts (MSC2666) can be surfaced.
+
+## Guest sending capability
+
+The API turns typed requests into Matrix events sent by each guest's virtual
+user. Every event carries a signed proof block under the
+`host.curious.cumments` content namespace, which the projector verifies
+before trusting the projection.
+
+| Content kind | Guest sending | Mechanism |
+|---|---|---|
+| Text | Supported | `m.text` with reply/edit/delete, queued as an intent |
+| Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; orphaned uploads are garbage-collected |
+| Sticker | Supported | Choose from the deployment's preset sticker list; the API sends the reference, guests cannot upload stickers |
+| Location | Supported | `m.location` (MSC3488), queued like a comment |
+| Poll | Supported | API proxies `m.poll.start` / `m.poll.response` with proof |
+| Reaction | Supported | API proxies `m.reaction` with proof; deduplicated per sender + key |
+| Encrypted | Excluded | Conflicts with guest verification, AS proxying and auditing |
+| Unknown / arbitrary raw events | Excluded | Guests may only send the whitelisted typed requests |
+
+Reactions and votes are sent synchronously and are naturally idempotent
+(reaction dedupe by sender + key, latest-vote-wins); text, media, location
+and other comment-shaped writes go through the async intent queue with an
+`Idempotency-Key` (see [API](api.md#idempotent-writes)).
+
+## Media proxy
+
+`mxc://` URIs require Matrix credentials to download, so Cumments exposes a
+public, read-only proxy with short-lived signed URLs. The proxy is limited to
+the configured homeserver, rate limited, size-capped, filtered by content
+type, and answers media and thumbnail requests. It is deliberately
+read-only: site administrators browse media directly in their Matrix client,
+which is one benefit of building on Matrix (see [API](api.md#media-proxy)).
