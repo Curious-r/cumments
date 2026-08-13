@@ -15,7 +15,6 @@ use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
-    SubmissionStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,

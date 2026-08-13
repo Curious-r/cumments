@@ -82,16 +82,29 @@ pub trait SubmissionStore: Send + Sync {
     ) -> Result<IdempotencyOutcome>;
 
     /// Returns at most `limit` due pending post submissions, oldest first.
-    async fn get_pending_post_submissions(&self, limit: u64) -> Result<Vec<PendingPostSubmission>>;
-    /// Returns at most `limit` due pending delete submissions, oldest first.
-    async fn get_pending_delete_submissions(
+    /// Resets `processing` rows whose lease has expired back to `pending`,
+    /// so a crashed reconciler's in-flight work is recovered. Returns how
+    /// many rows were recovered.
+    async fn recover_expired_submission_leases(&self) -> Result<u64>;
+
+    /// Atomically claims up to `limit` due post submissions, oldest first,
+    /// marking them `processing` with a lease expiring at `lease_until`.
+    async fn claim_pending_post_submissions(
         &self,
         limit: u64,
+        lease_until: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<PendingPostSubmission>>;
+    /// Atomically claims up to `limit` due delete submissions, oldest first.
+    async fn claim_pending_delete_submissions(
+        &self,
+        limit: u64,
+        lease_until: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<PendingDeleteSubmission>>;
-    /// Returns at most `limit` due pending update submissions, oldest first.
-    async fn get_pending_update_submissions(
+    /// Atomically claims up to `limit` due update submissions, oldest first.
+    async fn claim_pending_update_submissions(
         &self,
         limit: u64,
+        lease_until: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<PendingUpdateSubmission>>;
 
     /// Transitions a post submission to 'waiting_for_sync' and records the Matrix event ID.

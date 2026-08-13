@@ -17,10 +17,15 @@ impl PostsPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
+        self.deps
+            .submission_store
+            .recover_expired_submission_leases()
+            .await?;
+        let lease_until = chrono::Utc::now() + SUBMISSION_LEASE;
         let submissions = self
             .deps
             .submission_store
-            .get_pending_post_submissions(SUBMISSION_BATCH_SIZE)
+            .claim_pending_post_submissions(SUBMISSION_BATCH_SIZE, lease_until)
             .await?;
 
         if submissions.is_empty() {

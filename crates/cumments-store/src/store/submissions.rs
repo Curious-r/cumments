@@ -52,6 +52,55 @@ where
         .add(column.lte(chrono::Utc::now()))
 }
 
+/// Claims up to `limit` due rows in `table` under one transaction: selects
+/// the candidate ids, then flips only rows that are still `pending` to
+/// `processing` with the given lease. Returns the claimed ids.
+async fn claim_ids(
+    db: &sea_orm::DatabaseConnection,
+    table: &str,
+    limit: u64,
+    lease_until: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<i64>> {
+    let txn = db.begin().await?;
+    let select = format!(
+        "SELECT id FROM {table} \
+         WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) \
+         ORDER BY created_at ASC LIMIT ?"
+    );
+    let rows = txn
+        .query_all_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            &select,
+            vec![chrono::Utc::now().into(), (limit as i64).into()],
+        ))
+        .await?;
+    let ids = rows
+        .iter()
+        .filter_map(|row| row.try_get_by_index::<i64>(0).ok())
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        txn.commit().await?;
+        return Ok(ids);
+    }
+
+    let placeholders = vec!["?"; ids.len()].join(", ");
+    let mut values: Vec<Value> = vec![lease_until.into(), chrono::Utc::now().into()];
+    values.extend(ids.iter().map(|id| (*id).into()));
+    let update = format!(
+        "UPDATE {table} \
+         SET status = 'processing', lease_expires_at = ?, updated_at = ? \
+         WHERE status = 'pending' AND id IN ({placeholders})"
+    );
+    txn.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        &update,
+        values,
+    ))
+    .await?;
+    txn.commit().await?;
+    Ok(ids)
+}
+
 #[async_trait]
 impl SubmissionStore for DbStore {
     async fn lookup_idempotency(
@@ -273,19 +322,64 @@ impl SubmissionStore for DbStore {
         Ok(outcome)
     }
 
-    async fn get_pending_post_submissions(&self, limit: u64) -> Result<Vec<PendingPostSubmission>> {
-        let models = post_submissions::Entity::find()
-            .filter(
-                post_submissions::COLUMN
-                    .status
-                    .eq(SubmissionStatus::Pending),
+    async fn recover_expired_submission_leases(&self) -> Result<u64> {
+        let now = chrono::Utc::now();
+        let mut recovered = 0u64;
+        recovered += post_submissions::Entity::update_many()
+            .col_expr(
+                post_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Pending),
             )
-            .filter(attempt_due(post_submissions::Column::NextAttemptAt))
-            .order_by_asc(post_submissions::Column::CreatedAt)
-            .limit(limit)
+            .col_expr(
+                post_submissions::Column::LeaseExpiresAt,
+                sea_orm::sea_query::Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None),
+            )
+            .filter(post_submissions::Column::Status.eq(SubmissionStatus::Processing))
+            .filter(post_submissions::Column::LeaseExpiresAt.lte(now))
+            .exec(&self.db)
+            .await?
+            .rows_affected;
+        recovered += update_submissions::Entity::update_many()
+            .col_expr(
+                update_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Pending),
+            )
+            .col_expr(
+                update_submissions::Column::LeaseExpiresAt,
+                sea_orm::sea_query::Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None),
+            )
+            .filter(update_submissions::Column::Status.eq(SubmissionStatus::Processing))
+            .filter(update_submissions::Column::LeaseExpiresAt.lte(now))
+            .exec(&self.db)
+            .await?
+            .rows_affected;
+        recovered += delete_submissions::Entity::update_many()
+            .col_expr(
+                delete_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Pending),
+            )
+            .col_expr(
+                delete_submissions::Column::LeaseExpiresAt,
+                sea_orm::sea_query::Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None),
+            )
+            .filter(delete_submissions::Column::Status.eq(SubmissionStatus::Processing))
+            .filter(delete_submissions::Column::LeaseExpiresAt.lte(now))
+            .exec(&self.db)
+            .await?
+            .rows_affected;
+        Ok(recovered)
+    }
+
+    async fn claim_pending_post_submissions(
+        &self,
+        limit: u64,
+        lease_until: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<PendingPostSubmission>> {
+        let ids = claim_ids(&self.db, "post_submissions", limit, lease_until).await?;
+        let models = post_submissions::Entity::find()
+            .filter(post_submissions::Column::Id.is_in(ids))
             .all(&self.db)
             .await?;
-
         let mut submissions = Vec::new();
         for m in models {
             match serde_json::from_str::<PostCommentCommand>(&m.payload) {
@@ -299,22 +393,16 @@ impl SubmissionStore for DbStore {
         Ok(submissions)
     }
 
-    async fn get_pending_delete_submissions(
+    async fn claim_pending_delete_submissions(
         &self,
         limit: u64,
+        lease_until: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<PendingDeleteSubmission>> {
+        let ids = claim_ids(&self.db, "delete_submissions", limit, lease_until).await?;
         let models = delete_submissions::Entity::find()
-            .filter(
-                delete_submissions::COLUMN
-                    .status
-                    .eq(SubmissionStatus::Pending),
-            )
-            .filter(attempt_due(delete_submissions::Column::NextAttemptAt))
-            .order_by_asc(delete_submissions::Column::CreatedAt)
-            .limit(limit)
+            .filter(delete_submissions::Column::Id.is_in(ids))
             .all(&self.db)
             .await?;
-
         let mut submissions = Vec::new();
         for m in models {
             match serde_json::from_str::<DeleteCommentCommand>(&m.payload) {
@@ -328,36 +416,31 @@ impl SubmissionStore for DbStore {
         Ok(submissions)
     }
 
-    async fn get_pending_update_submissions(
+    async fn claim_pending_update_submissions(
         &self,
         limit: u64,
+        lease_until: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<PendingUpdateSubmission>> {
+        let ids = claim_ids(&self.db, "update_submissions", limit, lease_until).await?;
         let models = update_submissions::Entity::find()
-            .filter(
-                update_submissions::COLUMN
-                    .status
-                    .eq(SubmissionStatus::Pending),
-            )
-            .filter(attempt_due(update_submissions::Column::NextAttemptAt))
-            .order_by_asc(update_submissions::Column::CreatedAt)
-            .limit(limit)
+            .filter(update_submissions::Column::Id.is_in(ids))
             .all(&self.db)
             .await?;
-
-        let mut submissions = Vec::new();
-        for m in models {
-            let command = UpdateCommentCommand {
-                site_id: m.site_id.into(),
-                post_slug: m.post_slug.into(),
-                event_id: m.event_id,
-                content: m.content,
-                author_public_key: m.author_public_key.unwrap_or_default(),
-                author_signature: m.author_signature.unwrap_or_default(),
-                author_challenge: m.author_challenge.unwrap_or_default(),
-            };
-            submissions.push(PendingUpdateSubmission { id: m.id, command });
-        }
-        Ok(submissions)
+        Ok(models
+            .into_iter()
+            .map(|m| PendingUpdateSubmission {
+                id: m.id,
+                command: UpdateCommentCommand {
+                    site_id: m.site_id.into(),
+                    post_slug: m.post_slug.into(),
+                    event_id: m.event_id,
+                    content: m.content,
+                    author_public_key: m.author_public_key.unwrap_or_default(),
+                    author_signature: m.author_signature.unwrap_or_default(),
+                    author_challenge: m.author_challenge.unwrap_or_default(),
+                },
+            })
+            .collect())
     }
 
     async fn mark_post_submission_waiting_for_sync(
@@ -380,6 +463,12 @@ impl SubmissionStore for DbStore {
                         post_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
                     )
+                    .col_expr(
+                        post_submissions::COLUMN.lease_expires_at,
+                        sea_orm::sea_query::Expr::value(
+                            Option::<chrono::DateTime<chrono::Utc>>::None,
+                        ),
+                    )
                     .filter(post_submissions::COLUMN.id.eq(id))
                     // Never regress an already-completed command: if the
                     // projector closed the loop before this write-back
@@ -387,7 +476,7 @@ impl SubmissionStore for DbStore {
                     .filter(
                         post_submissions::COLUMN
                             .status
-                            .eq(SubmissionStatus::Pending),
+                            .is_in([SubmissionStatus::Pending, SubmissionStatus::Processing]),
                     )
             },
         )
@@ -407,6 +496,7 @@ impl SubmissionStore for DbStore {
                     // been a false dead-letter from the timeout pass.
                     .filter(post_submissions::COLUMN.status.is_in([
                         SubmissionStatus::Pending,
+                        SubmissionStatus::Processing,
                         SubmissionStatus::WaitingForSync,
                         SubmissionStatus::Failed,
                     ]))
@@ -426,13 +516,19 @@ impl SubmissionStore for DbStore {
                         update_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
                     )
+                    .col_expr(
+                        update_submissions::COLUMN.lease_expires_at,
+                        sea_orm::sea_query::Expr::value(
+                            Option::<chrono::DateTime<chrono::Utc>>::None,
+                        ),
+                    )
                     .filter(update_submissions::COLUMN.id.eq(id))
                     // Never regress an already-completed command (push may have
                     // arrived before this write-back).
                     .filter(
                         update_submissions::COLUMN
                             .status
-                            .eq(SubmissionStatus::Pending),
+                            .is_in([SubmissionStatus::Pending, SubmissionStatus::Processing]),
                     )
             },
         )
@@ -448,11 +544,11 @@ impl SubmissionStore for DbStore {
                 query
                     .filter(update_submissions::COLUMN.id.eq(id))
                     // Never resurrect a failed or already-completed command.
-                    .filter(
-                        update_submissions::COLUMN
-                            .status
-                            .is_in([SubmissionStatus::Pending, SubmissionStatus::WaitingForSync]),
-                    )
+                    .filter(update_submissions::COLUMN.status.is_in([
+                        SubmissionStatus::Pending,
+                        SubmissionStatus::Processing,
+                        SubmissionStatus::WaitingForSync,
+                    ]))
             },
         )
         .await
@@ -469,13 +565,19 @@ impl SubmissionStore for DbStore {
                         delete_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
                     )
+                    .col_expr(
+                        delete_submissions::COLUMN.lease_expires_at,
+                        sea_orm::sea_query::Expr::value(
+                            Option::<chrono::DateTime<chrono::Utc>>::None,
+                        ),
+                    )
                     .filter(delete_submissions::COLUMN.id.eq(id))
                     // Never regress an already-completed command (push may have
                     // arrived before this write-back).
                     .filter(
                         delete_submissions::COLUMN
                             .status
-                            .eq(SubmissionStatus::Pending),
+                            .is_in([SubmissionStatus::Pending, SubmissionStatus::Processing]),
                     )
             },
         )
@@ -870,11 +972,11 @@ impl SubmissionStore for DbStore {
                             .eq(target_event_id),
                     )
                     // Never resurrect a failed or already-completed command.
-                    .filter(
-                        delete_submissions::COLUMN
-                            .status
-                            .is_in([SubmissionStatus::Pending, SubmissionStatus::WaitingForSync]),
-                    )
+                    .filter(delete_submissions::COLUMN.status.is_in([
+                        SubmissionStatus::Pending,
+                        SubmissionStatus::Processing,
+                        SubmissionStatus::WaitingForSync,
+                    ]))
             },
         )
         .await
@@ -899,11 +1001,10 @@ impl SubmissionStore for DbStore {
                     // Only close submissions that were actually sent; pending rows
                     // must wait for their own `host.curious.cumments.submission_id`
                     // correlation.
-                    .filter(
-                        update_submissions::COLUMN
-                            .status
-                            .eq(SubmissionStatus::WaitingForSync),
-                    )
+                    .filter(update_submissions::COLUMN.status.is_in([
+                        SubmissionStatus::Processing,
+                        SubmissionStatus::WaitingForSync,
+                    ]))
             },
         )
         .await
@@ -1002,6 +1103,102 @@ impl DbStore {
         } else {
             Ok(IdempotencyOutcome::Reused)
         }
+    }
+}
+
+impl DbStore {
+    /// Peek at up to `limit` due pending post submissions without claiming
+    /// them. Inspection/testing helper; production passes claim instead.
+    pub async fn get_pending_post_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingPostSubmission>> {
+        let models = post_submissions::Entity::find()
+            .filter(
+                post_submissions::COLUMN
+                    .status
+                    .eq(SubmissionStatus::Pending),
+            )
+            .filter(attempt_due(post_submissions::Column::NextAttemptAt))
+            .order_by_asc(post_submissions::Column::CreatedAt)
+            .limit(limit)
+            .all(&self.db)
+            .await?;
+        let mut submissions = Vec::new();
+        for m in models {
+            match serde_json::from_str::<PostCommentCommand>(&m.payload) {
+                Ok(command) => submissions.push(PendingPostSubmission { id: m.id, command }),
+                Err(e) => warn!(
+                    "Skipping corrupt post command {} (will not block the batch): {:#}",
+                    m.id, e
+                ),
+            }
+        }
+        Ok(submissions)
+    }
+
+    /// Peek at up to `limit` due pending delete submissions without claiming
+    /// them. Inspection/testing helper.
+    pub async fn get_pending_delete_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingDeleteSubmission>> {
+        let models = delete_submissions::Entity::find()
+            .filter(
+                delete_submissions::COLUMN
+                    .status
+                    .eq(SubmissionStatus::Pending),
+            )
+            .filter(attempt_due(delete_submissions::Column::NextAttemptAt))
+            .order_by_asc(delete_submissions::Column::CreatedAt)
+            .limit(limit)
+            .all(&self.db)
+            .await?;
+        let mut submissions = Vec::new();
+        for m in models {
+            match serde_json::from_str::<DeleteCommentCommand>(&m.payload) {
+                Ok(command) => submissions.push(PendingDeleteSubmission { id: m.id, command }),
+                Err(e) => warn!(
+                    "Skipping corrupt delete command {} (will not block the batch): {:#}",
+                    m.id, e
+                ),
+            }
+        }
+        Ok(submissions)
+    }
+
+    /// Peek at up to `limit` due pending update submissions without claiming
+    /// them. Inspection/testing helper.
+    pub async fn get_pending_update_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingUpdateSubmission>> {
+        let models = update_submissions::Entity::find()
+            .filter(
+                update_submissions::COLUMN
+                    .status
+                    .eq(SubmissionStatus::Pending),
+            )
+            .filter(attempt_due(update_submissions::Column::NextAttemptAt))
+            .order_by_asc(update_submissions::Column::CreatedAt)
+            .limit(limit)
+            .all(&self.db)
+            .await?;
+        Ok(models
+            .into_iter()
+            .map(|m| PendingUpdateSubmission {
+                id: m.id,
+                command: UpdateCommentCommand {
+                    site_id: m.site_id.into(),
+                    post_slug: m.post_slug.into(),
+                    event_id: m.event_id,
+                    content: m.content,
+                    author_public_key: m.author_public_key.unwrap_or_default(),
+                    author_signature: m.author_signature.unwrap_or_default(),
+                    author_challenge: m.author_challenge.unwrap_or_default(),
+                },
+            })
+            .collect())
     }
 }
 

@@ -21,6 +21,8 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
     pub retry_count: i64,
     pub next_attempt_at: Option<DateTimeUtc>,
+    /// When the processing lease expires; `NULL` unless claimed.
+    pub lease_expires_at: Option<DateTimeUtc>,
     pub last_error: Option<String>,
 }
 

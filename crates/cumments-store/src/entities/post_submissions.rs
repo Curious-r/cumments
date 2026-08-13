@@ -18,6 +18,8 @@ pub struct Model {
     pub room_id: Option<String>,
     pub author_public_key: Option<String>,
     pub next_attempt_at: Option<DateTimeUtc>,
+    /// When the processing lease expires; `NULL` unless claimed.
+    pub lease_expires_at: Option<DateTimeUtc>,
     pub last_error: Option<String>,
     /// How many consecutive timeout passes observed the event as existing
     /// on the homeserver. Dead-lettering requires several confirmations so a

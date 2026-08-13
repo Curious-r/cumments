@@ -6,6 +6,10 @@ use cumments_core::{
 };
 use cumments_store::DbStore;
 
+fn lease(duration: chrono::Duration) -> chrono::DateTime<Utc> {
+    Utc::now() + duration
+}
+
 fn post_command() -> PostCommentCommand {
     PostCommentCommand {
         site_id: SiteId::from("my-blog"),
@@ -44,6 +48,77 @@ fn test_db_url(name: &str) -> String {
     ));
     let _ = std::fs::remove_file(&path);
     format!("sqlite://{}", path.display())
+}
+
+#[tokio::test]
+async fn claim_holds_a_lease() {
+    let store = DbStore::connect(&test_db_url("lease"))
+        .await
+        .expect("connect db");
+    store
+        .save_post_submission(&post_command())
+        .await
+        .expect("save submission");
+
+    // A held lease excludes the row from the pending view and from further
+    // claims, and recovery does not touch it while it is still valid.
+    let claimed = store
+        .claim_pending_post_submissions(100, lease(Duration::minutes(5)))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert!(
+        store
+            .get_pending_post_submissions(100)
+            .await
+            .expect("pending")
+            .is_empty(),
+        "claimed rows are not pending"
+    );
+    assert!(
+        store
+            .claim_pending_post_submissions(100, lease(Duration::minutes(5)))
+            .await
+            .expect("second claim")
+            .is_empty(),
+        "a held lease cannot be claimed twice"
+    );
+    let recovered = store
+        .recover_expired_submission_leases()
+        .await
+        .expect("recover while held");
+    assert_eq!(recovered, 0, "a valid lease must not be recovered");
+}
+
+#[tokio::test]
+async fn expired_lease_is_recovered() {
+    let store = DbStore::connect(&test_db_url("lease-expired"))
+        .await
+        .expect("connect db");
+    store
+        .save_post_submission(&post_command())
+        .await
+        .expect("save submission");
+
+    // Claiming with an already-expired lease models a crashed reconciler.
+    let claimed = store
+        .claim_pending_post_submissions(100, Utc::now() - Duration::seconds(1))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    let recovered = store
+        .recover_expired_submission_leases()
+        .await
+        .expect("recover");
+    assert_eq!(recovered, 1);
+    assert_eq!(
+        store
+            .get_pending_post_submissions(100)
+            .await
+            .expect("pending after recovery")
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

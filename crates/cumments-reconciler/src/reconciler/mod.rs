@@ -41,6 +41,9 @@ const SUBMISSION_BATCH_SIZE: u64 = 100;
 /// calls (room creation, joins, sends). Prevents one stuck homeserver request
 /// from stalling the whole write path.
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long a claimed submission stays `processing` before a crashed pass's
+/// lease expires and the row becomes claimable again.
+const SUBMISSION_LEASE: Duration = Duration::from_secs(5 * 60);
 /// Adoption-retry backoff schedule for quarantined rooms.
 const QUARANTINE_BACKOFFS: [Duration; 3] = [
     Duration::from_secs(60 * 60),

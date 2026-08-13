@@ -6,6 +6,8 @@ use sea_orm::entity::prelude::*;
 pub enum SubmissionStatus {
     #[sea_orm(string_value = "pending")]
     Pending,
+    #[sea_orm(string_value = "processing")]
+    Processing,
     #[sea_orm(string_value = "waiting_for_sync")]
     WaitingForSync,
     #[sea_orm(string_value = "failed")]
