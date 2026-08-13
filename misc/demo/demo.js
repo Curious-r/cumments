@@ -172,6 +172,7 @@
                     open_map: "在地图中打开",
                     votes: "票",
                     members: "成员",
+                    members_online: "人在线",
                     member_joined: "加入了房间",
                     member_left: "离开了房间",
                     room_name_changed: "修改了房间名：",
@@ -324,6 +325,7 @@
                     open_map: "Open in map",
                     votes: "votes",
                     members: "members",
+                    members_online: "online",
                     member_joined: "joined the room",
                     member_left: "left the room",
                     room_name_changed: "changed the room name to: ",
@@ -433,6 +435,7 @@
                 mineTotal: 0,
                 replyingTo: null,
                 pendingComment: null,
+                presenceOnline: new Set(),
             };
 
             let identity = null;
@@ -1362,11 +1365,16 @@
                         ${avatar}
                         <div class="min-w-0">
                             <div class="font-semibold text-slate-900 text-sm truncate">${name}</div>
-                            <div class="text-xs text-slate-400">${info.member_count ?? 0} ${t("members")}</div>
+                            <div id="roomMemberInfo" class="text-xs text-slate-400">${info.member_count ?? 0} ${t("members")}</div>
                         </div>
                     </div>
                     ${system ? `<div class="space-y-1 mb-4">${system}</div>` : ""}
                 `;
+                const memberInfo = header.querySelector("#roomMemberInfo");
+                if (memberInfo) {
+                    memberInfo.dataset.memberCount = String(info.member_count ?? 0);
+                }
+                updatePresenceIndicator();
             }
 
             function renderSystemMessage(event) {
@@ -2237,14 +2245,32 @@
                 const typingUsers = new Map();
                 sse.addEventListener("ephemeral", (event) => {
                     const ev = JSON.parse(event.data);
-                    if (ev.type !== "typing") return;
-                    if (ev.typing) {
-                        typingUsers.set(ev.user_id, ev.display_name || ev.user_id);
-                    } else {
-                        typingUsers.delete(ev.user_id);
+                    if (ev.type === "typing") {
+                        if (ev.typing) {
+                            typingUsers.set(ev.user_id, ev.display_name || ev.user_id);
+                        } else {
+                            typingUsers.delete(ev.user_id);
+                        }
+                        renderTyping(typingUsers);
+                    } else if (ev.type === "presence") {
+                        if (ev.presence === "online") {
+                            state.presenceOnline.add(ev.user_id);
+                        } else {
+                            state.presenceOnline.delete(ev.user_id);
+                        }
+                        updatePresenceIndicator();
                     }
-                    renderTyping(typingUsers);
                 });
+            }
+
+            function updatePresenceIndicator() {
+                const el = document.getElementById("roomMemberInfo");
+                if (!el) return;
+                const online = state.presenceOnline.size;
+                const count = el.dataset.memberCount || "0";
+                el.textContent = online
+                    ? `${count} ${t("members")} · ${online} ${t("members_online")}`
+                    : `${count} ${t("members")}`;
             }
 
             function renderTyping(typingUsers) {
