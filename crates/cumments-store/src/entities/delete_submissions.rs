@@ -1,24 +1,20 @@
 use sea_orm::entity::prelude::*;
 
-use super::active_enums::IntentStatus;
+use super::active_enums::SubmissionStatus;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "intent_queue_update_comment")]
+#[sea_orm(table_name = "delete_submissions")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
-    pub site_id: String,
-    pub post_slug: String,
-    pub event_id: String,
-    pub room_id: Option<String>,
-    pub content: String,
-    pub author_public_key: Option<String>,
-    pub author_signature: Option<String>,
-    pub author_challenge: Option<String>,
-    pub status: IntentStatus,
+    #[sea_orm(column_type = "Text")]
+    pub payload: String,
+    pub status: SubmissionStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    pub target_event_id: Option<String>,
+    pub room_id: Option<String>,
     pub retry_count: i64,
     pub next_attempt_at: Option<DateTimeUtc>,
     pub last_error: Option<String>,

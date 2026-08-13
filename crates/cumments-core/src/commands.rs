@@ -1,7 +1,7 @@
-//! Defines the "Intents" of the system.
-//! An intent is a serializable struct that represents a user's desire
-//! for the system to perform an action. It's the primary object written
-//! by the API layer and consumed by the Reconciler layer.
+//! The commands of the system: serializable, signature-verified declarations
+//! of a write the user wants performed. The API layer writes a command into
+//! the submission queue; the reconciler executes it against Matrix. The
+//! user's *intent* is a mental concept — commands are its concrete form.
 
 use crate::models::{CommentMedia, PostSlug, SiteId};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Represents the user's desire to post a comment.
 /// This is a command to be processed asynchronously by the reconciler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostCommentIntent {
+pub struct PostCommentCommand {
     /// The site this comment belongs to.
     pub site_id: SiteId,
     /// The post/page this comment belongs to.
@@ -54,7 +54,7 @@ pub struct LocationPayload {
 /// Represents the user's desire to delete a comment.
 /// This is a command to be processed asynchronously by the reconciler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteCommentIntent {
+pub struct DeleteCommentCommand {
     /// The site this comment belongs to.
     pub site_id: SiteId,
     /// The post/page this comment belongs to.
@@ -75,7 +75,7 @@ pub struct DeleteCommentIntent {
 /// Represents the user's desire to edit/update a comment.
 /// This is a command to be processed asynchronously by the reconciler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateCommentIntent {
+pub struct UpdateCommentCommand {
     /// The site this comment belongs to.
     pub site_id: SiteId,
     /// The post/page this comment belongs to.
@@ -94,31 +94,31 @@ pub struct UpdateCommentIntent {
     pub author_challenge: String,
 }
 
-/// A post intent together with its queue row id.
+/// A post submission together with its queue row id.
 #[derive(Debug, Clone)]
-pub struct PendingPostIntent {
+pub struct PendingPostSubmission {
     pub id: i64,
-    pub intent: PostCommentIntent,
+    pub command: PostCommentCommand,
 }
 
-/// A delete intent together with its queue row id.
+/// A delete submission together with its queue row id.
 #[derive(Debug, Clone)]
-pub struct PendingDeleteIntent {
+pub struct PendingDeleteSubmission {
     pub id: i64,
-    pub intent: DeleteCommentIntent,
+    pub command: DeleteCommentCommand,
 }
 
-/// An update intent together with its queue row id.
+/// An update submission together with its queue row id.
 #[derive(Debug, Clone)]
-pub struct PendingUpdateIntent {
+pub struct PendingUpdateSubmission {
     pub id: i64,
-    pub intent: UpdateCommentIntent,
+    pub command: UpdateCommentCommand,
 }
 
-/// A post intent stuck in `waiting_for_sync`, with the recorded Matrix event
+/// A post submission stuck in `waiting_for_sync`, with the recorded Matrix event
 /// and room ids used to verify whether the event actually exists.
 #[derive(Debug, Clone)]
-pub struct StuckPostIntent {
+pub struct StuckPostSubmission {
     pub id: i64,
     pub event_id: String,
     pub room_id: Option<String>,

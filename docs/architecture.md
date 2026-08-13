@@ -17,26 +17,26 @@ Everything below follows from three invariants:
    `cumments backfill` can rebuild. Nothing local is authoritative.
 2. **One write seam.** Every mutation of Matrix state goes through the
    AppService sender (the creator of every Space and room). The API and CLI
-   never talk to the homeserver directly: they persist an intent locally and
+   never talk to the homeserver directly: they persist a submission locally and
    let the background reconciler perform the Matrix write.
 3. **Push closes the loop.** The homeserver pushes events back, the projector
    updates the read model, and the reconciler confirms its work. The same
    idempotent projection serves both live pushes and `backfill`.
 
 Together these collapse the design space: a new feature has only one shape it
-can fit into — durable local intent, background convergence on Matrix, then
+can fit into — durable local submission of the user's intent, background convergence on Matrix, then
 projection of the result. That is the controller/reconciler pattern
 (observe → diff → act), and it matches Matrix itself, which is an append-only
 event log with full-state events.
 
-### Intent intensity spectrum
+### Background-action intensity spectrum
 
-Not every background action is a full intent queue. The mechanisms form a
+Not every background action is a full submission queue. The mechanisms form a
 spectrum of how much machinery they need:
 
 | Mechanism | Weight | Idempotency anchor |
 |---|---|---|
-| Comment intents (post, edit, delete, location) | Heavy | `Idempotency-Key` + request fingerprint + intent row, with timeouts, dead-lettering and room quarantine |
+| Comment submissions (post, edit, delete, location) | Heavy | `Idempotency-Key` + request fingerprint + submission row, with timeouts, dead-lettering and room quarantine |
 | Role claims (token-DM) | Light state machine | Claim row plus sender/token match (`pending` → `activated` → `applied`) |
 | Moderation sync | Pure convergence | Matrix power levels are full state, so read → diff → write is naturally idempotent |
 | Site decommission | One-shot marker, retry until converged | `lifecycle_status` plus idempotent rename / alias removal / leave (404-tolerant) |
@@ -54,7 +54,7 @@ idempotency for work that merely has to converge.
 - Rate limiters and the reconcile loop assume a single instance. Distributed
   deployments would need a shared limiter store and leader election /
   partitioning — a documented platform limitation.
-- Lightweight intent mechanisms have now appeared three times (claims,
+- Lightweight background-action mechanisms have now appeared three times (claims,
   decommission, orphan media cleanup). If another one arrives, consolidating
   them into a generic background-action ledger may beat adding one table and
   one pass per feature.
@@ -71,9 +71,9 @@ idempotency for work that merely has to converge.
                 │      cumments-api       │
                 │ (HTTP, PoW, Ed25519)    │
                 └────────────┬────────────┘
-                             │ intent
+                             │ submission
                 ┌────────────▼────────────┐
-                │      Intent Queue       │
+                │    Submission Queue     │
                 │         (SQLite)        │
                 └────────────┬────────────┘
                              │
@@ -111,8 +111,8 @@ idempotency for work that merely has to converge.
                 └─────────────────────────┘
 ```
 
-The **write path** is intent-driven: the API validates the proof-of-work and
-an Ed25519 signature, enqueues an intent, and the **Reconciler** sends the
+The **write path** is submission-driven: the API validates the proof-of-work and
+an Ed25519 signature, enqueues a submission, and the **Reconciler** sends the
 corresponding event to Matrix. The **read path** is projection-based: in
 AppService mode, `PushReceiver` receives events via homeserver push and feeds
 them into **EventProcessor**, which updates the SQLite read model and emits
@@ -171,7 +171,7 @@ rebuild after a database reset. See
 ### Logging mode (local development)
 
 The `LoggingMatrixDriver` logs actions instead of talking to a homeserver.
-Useful for exercising the API and the intent queue without Matrix side
+Useful for exercising the API and the submission queue without Matrix side
 effects. Comments are **not** projected into the read model because there is
 no homeserver pushing events back.
 
@@ -189,10 +189,10 @@ stream as comment updates. See
 
 | Crate | Responsibility |
 |---|---|
-| `cumments-core` | Domain models, ports (traits), intents, events, governance helpers |
+| `cumments-core` | Domain models, ports (traits), commands, submissions, events, governance helpers |
 | `cumments-api` | HTTP API, PoW verification, validation, SSE |
 | `cumments-store` | SQLite persistence (SeaORM), migrations, backup |
-| `cumments-reconciler` | Background writer — reads intents, calls MatrixDriver, waits for projection to close the loop, reconciles site roles |
+| `cumments-reconciler` | Background writer — reads submissions, calls MatrixDriver, waits for projection to close the loop, reconciles site roles |
 | `cumments-matrix` | MatrixDriver implementations (AppService, Logging) |
 | `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver, claim-DM matching, ephemeral sync, backfill) |
 | `cumments` | CLI entry point, configuration, assembly |

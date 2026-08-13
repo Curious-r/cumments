@@ -116,7 +116,7 @@ window (3600 seconds for hourly limits, 60 seconds for the admin API).
 - `status`: `400`
 
 The `Idempotency-Key` header is mandatory on `POST`, `PATCH` and `DELETE`
-write intents.
+write submissions.
 
 ## Invalid Idempotency-Key {#invalid-idempotency-key}
 

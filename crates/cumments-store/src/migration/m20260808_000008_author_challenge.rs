@@ -11,11 +11,11 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if !column_exists(manager, "intent_queue_update_comment", "author_challenge").await? {
+        if !column_exists(manager, "update_submissions", "author_challenge").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_update_comment"))
+                        .table(Alias::new("update_submissions"))
                         .add_column(
                             ColumnDef::new(Alias::new("author_challenge"))
                                 .string()
@@ -30,11 +30,11 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if column_exists(manager, "intent_queue_update_comment", "author_challenge").await? {
+        if column_exists(manager, "update_submissions", "author_challenge").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_update_comment"))
+                        .table(Alias::new("update_submissions"))
                         .drop_column(Alias::new("author_challenge"))
                         .to_owned(),
                 )

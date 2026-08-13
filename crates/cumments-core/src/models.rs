@@ -112,11 +112,11 @@ pub struct Message {
     /// thread.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_root: Option<String>,
-    /// Queue row ID of the intent that produced this message, when it was
+    /// Queue row ID of the submission that produced this message, when it was
     /// submitted through the Cumments API. Lets clients correlate a `202`
     /// response with the projected message/SSE event.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub intent_id: Option<i64>,
+    pub submission_id: Option<i64>,
     /// Lifecycle status of the message.
     pub status: MessageStatus,
     /// When the message was redacted; `None` while active.

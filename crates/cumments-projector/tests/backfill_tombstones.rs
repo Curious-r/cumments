@@ -42,7 +42,7 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
         room_store: store.clone() as Arc<dyn cumments_core::ports::RoomStore>,
         governance_store: store.clone() as Arc<dyn cumments_core::ports::GovernanceStore>,
         role_claim_store: store.clone() as Arc<dyn cumments_core::ports::RoleClaimStore>,
-        intent_store: store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
+        submission_store: store.clone() as Arc<dyn cumments_core::ports::SubmissionStore>,
         event_bus: tx,
         projection_notify: Arc::new(tokio::sync::Notify::new()),
         server_name: server_name.map(|s| s.to_string()),
@@ -64,7 +64,7 @@ fn message(event_id: &str) -> ParsedRoomMessage {
         author_signature: None,
         author_challenge: None,
         is_virtual_user_sender: false,
-        intent_id: None,
+        submission_id: None,
         reply_to: None,
         thread_root: None,
         origin_server_ts: 100,
@@ -223,7 +223,7 @@ async fn reaction_redaction_removes_it_and_prevents_resurrection() {
             origin_server_ts: 300,
             redacts: Some("$reaction:hs".to_string()),
             proof: None,
-            intent_id: None,
+            submission_id: None,
             room_identity: Some(identity()),
         })
         .await
@@ -325,7 +325,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
             origin_server_ts: 300,
             redacts: Some("$vote:hs".to_string()),
             proof: None,
-            intent_id: None,
+            submission_id: None,
             room_identity: Some(identity()),
         })
         .await
@@ -381,7 +381,7 @@ async fn redaction_seen_before_target_prevents_resurrection() {
             origin_server_ts: 100,
             redacts: Some("$target:hs".to_string()),
             proof: None,
-            intent_id: None,
+            submission_id: None,
             room_identity: Some(identity()),
         })
         .await

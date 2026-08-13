@@ -9,7 +9,7 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Statement, Value,
 };
 
-use crate::entities::{intent_queue_delete_comment, intent_queue_post_comment, room_registry};
+use crate::entities::{delete_submissions, post_submissions, room_registry};
 
 /// Deletes every local trace of `site_id`, in dependency order.
 pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Result<()> {
@@ -32,14 +32,14 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
         delete_by_values(db, table, column, &room_ids).await?;
     }
 
-    // Intent rows whose payload names this site. Post/delete intents carry
-    // the site only inside their JSON payload; update intents have a
+    // Submission rows whose payload names this site. Post/delete submissions carry
+    // the site only inside their JSON payload; update submissions have a
     // denormalized column.
-    delete_post_intents_for_site(db, site_id).await?;
-    delete_delete_intents_for_site(db, site_id).await?;
+    delete_post_submissions_for_site(db, site_id).await?;
+    delete_delete_submissions_for_site(db, site_id).await?;
     exec(
         db,
-        "DELETE FROM intent_queue_update_comment WHERE site_id = ?",
+        "DELETE FROM update_submissions WHERE site_id = ?",
         vec![site_id.into()],
     )
     .await?;
@@ -88,9 +88,9 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
     Ok(())
 }
 
-/// Deletes post intents whose serialized payload names `site_id`.
-async fn delete_post_intents_for_site(db: &DatabaseConnection, site_id: &str) -> Result<()> {
-    let models = intent_queue_post_comment::Entity::find().all(db).await?;
+/// Deletes post submissions whose serialized payload names `site_id`.
+async fn delete_post_submissions_for_site(db: &DatabaseConnection, site_id: &str) -> Result<()> {
+    let models = post_submissions::Entity::find().all(db).await?;
     let mut ids = Vec::new();
     for model in models {
         if payload_site(&model.payload).is_some_and(|id| id == site_id) {
@@ -100,16 +100,16 @@ async fn delete_post_intents_for_site(db: &DatabaseConnection, site_id: &str) ->
     if ids.is_empty() {
         return Ok(());
     }
-    intent_queue_post_comment::Entity::delete_many()
-        .filter(intent_queue_post_comment::Column::Id.is_in(ids))
+    post_submissions::Entity::delete_many()
+        .filter(post_submissions::Column::Id.is_in(ids))
         .exec(db)
         .await?;
     Ok(())
 }
 
-/// Deletes delete intents whose serialized payload names `site_id`.
-async fn delete_delete_intents_for_site(db: &DatabaseConnection, site_id: &str) -> Result<()> {
-    let models = intent_queue_delete_comment::Entity::find().all(db).await?;
+/// Deletes delete submissions whose serialized payload names `site_id`.
+async fn delete_delete_submissions_for_site(db: &DatabaseConnection, site_id: &str) -> Result<()> {
+    let models = delete_submissions::Entity::find().all(db).await?;
     let mut ids = Vec::new();
     for model in models {
         if payload_site(&model.payload).is_some_and(|id| id == site_id) {
@@ -119,8 +119,8 @@ async fn delete_delete_intents_for_site(db: &DatabaseConnection, site_id: &str) 
     if ids.is_empty() {
         return Ok(());
     }
-    intent_queue_delete_comment::Entity::delete_many()
-        .filter(intent_queue_delete_comment::Column::Id.is_in(ids))
+    delete_submissions::Entity::delete_many()
+        .filter(delete_submissions::Column::Id.is_in(ids))
         .exec(db)
         .await?;
     Ok(())

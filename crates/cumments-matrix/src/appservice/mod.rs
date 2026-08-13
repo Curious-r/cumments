@@ -100,18 +100,18 @@ impl AppServiceMatrixDriver {
 
     /// Generate a transaction ID for idempotent requests.
     ///
-    /// When an intent ID is available the txn ID is deterministic: if the
+    /// When a submission ID is available the txn ID is deterministic: if the
     /// homeserver accepted the first attempt but the response was lost, a
     /// retry with the same txn ID returns the original event instead of
     /// creating a duplicate.
     ///
     /// The `kind` is part of the ID because homeservers scope transaction-ID
     /// deduplication per (user, device, txn_id) without considering the
-    /// endpoint. Post and update intents are both sent by the same virtual
+    /// endpoint. Post and update submissions are both sent by the same virtual
     /// user through `/send`, so separate queues with colliding ids would
     /// otherwise make an edit replay the original post.
-    fn txn_id(&self, kind: &str, intent_id: Option<i64>) -> String {
-        format_txn_id(kind, intent_id)
+    fn txn_id(&self, kind: &str, submission_id: Option<i64>) -> String {
+        format_txn_id(kind, submission_id)
     }
 
     /// Make an authenticated CS API request with optional virtual user.

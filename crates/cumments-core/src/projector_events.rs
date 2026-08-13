@@ -26,9 +26,9 @@ pub enum ProjectorEvent {
         site_id: String,
         post_slug: String,
         event_id: String,
-        /// Queue row ID of the delete intent, when the deletion was issued
+        /// Queue row ID of the delete submission, when the deletion was issued
         /// through the Cumments API.
         #[serde(skip_serializing_if = "Option::is_none")]
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     },
 }

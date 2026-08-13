@@ -12,8 +12,8 @@ use cumments_core::{
     matrix_error::MatrixError,
     models::{PostSlug, QuarantinedRoom, SiteId},
     ports::{
-        IntentStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
-        SiteStore,
+        MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
+        SubmissionStore,
     },
     site_service::SiteService,
 };
@@ -24,23 +24,23 @@ use tracing::info;
 
 use tokio::sync::Notify;
 
-/// How long an intent may sit in `waiting_for_sync` (event sent, projection
+/// How long a submission may sit in `waiting_for_sync` (event sent, projection
 /// not observed) before the timeout reconciliation pass intervenes.
 const WAITING_FOR_SYNC_TIMEOUT_MINUTES: i64 = 10;
 /// How many consecutive timeout passes must observe the event as existing
-/// before the intent is dead-lettered. Projection can be delayed by push
+/// before the submission is dead-lettered. Projection can be delayed by push
 /// retries or restarts, so a single confirmation is not treated as failure.
 const TIMEOUT_CONFIRMATION_LIMIT: u32 = 3;
 /// Consecutive event-existence check failures before dead-lettering a post
-/// intent; prevents indefinite limbo on persistent homeserver errors.
+/// submission; prevent indefinite limbo on persistent homeserver errors.
 const TIMEOUT_ERROR_LIMIT: u32 = 5;
-/// Maximum number of pending intents loaded per queue per pass. Keeps memory
+/// Maximum number of pending submissions loaded per queue per pass. Keeps memory
 /// bounded under write floods.
-const INTENT_BATCH_SIZE: u64 = 100;
-/// Upper bound for processing a single intent, including all Matrix driver
+const SUBMISSION_BATCH_SIZE: u64 = 100;
+/// Upper bound for processing a single submission, including all Matrix driver
 /// calls (room creation, joins, sends). Prevents one stuck homeserver request
 /// from stalling the whole write path.
-const INTENT_TIMEOUT: Duration = Duration::from_secs(90);
+const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(90);
 /// Adoption-retry backoff schedule for quarantined rooms.
 const QUARANTINE_BACKOFFS: [Duration; 3] = [
     Duration::from_secs(60 * 60),
@@ -51,24 +51,24 @@ const QUARANTINE_BACKOFFS: [Duration; 3] = [
 /// requires manual `reinstate`. Failures 1-3 schedule the 1h/6h/24h retries;
 /// the fourth failure escalates.
 const QUARANTINE_ESCALATION: u32 = 4;
-/// Resync interval for intent passes; wakeups keep them prompt.
-const INTENT_PASS_INTERVAL: Duration = Duration::from_secs(5);
+/// Resync interval for submission passes; wakeups keep them prompt.
+const SUBMISSION_PASS_INTERVAL: Duration = Duration::from_secs(5);
 /// Resync interval for governance passes.
 const GOVERNANCE_PASS_INTERVAL: Duration = Duration::from_secs(60);
 /// Interval for the orphan-media sweep; it has no event source, so the
 /// interval alone drives it.
 const MEDIA_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Run one intent's processing future with a hard time budget.
-async fn run_intent<F>(future: F) -> Result<()>
+/// Run one submission.s processing future with a hard time budget.
+async fn run_submission<F>(future: F) -> Result<()>
 where
     F: std::future::Future<Output = Result<()>>,
 {
-    match tokio::time::timeout(INTENT_TIMEOUT, future).await {
+    match tokio::time::timeout(SUBMISSION_TIMEOUT, future).await {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!(
-            "intent processing timed out after {:?}",
-            INTENT_TIMEOUT
+            "submission processing timed out after {:?}",
+            SUBMISSION_TIMEOUT
         )),
     }
 }
@@ -118,7 +118,7 @@ fn quarantine_target(err: &anyhow::Error) -> Option<String> {
 /// Shared dependencies of every reconcile pass. Each pass is scheduled by
 /// the [`Reconciler`]; none owns Matrix-write authority beyond the driver.
 pub struct ReconcilerDeps {
-    pub intent_store: Arc<dyn IntentStore>,
+    pub submission_store: Arc<dyn SubmissionStore>,
     pub registry_store: Arc<dyn RegistryStore>,
     pub site_store: Arc<dyn SiteStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
@@ -131,8 +131,8 @@ pub struct ReconcilerDeps {
 /// The event sources that wake the reconcile passes. Each pass subscribes to
 /// exactly one; routing is a first-class part of the design.
 pub struct PassWakeups {
-    /// API-saved comment write intents.
-    pub intent: Arc<Notify>,
+    /// API-saved comment write submissions.
+    pub submission: Arc<Notify>,
     /// API-side governance writes (role changes, site retirement).
     pub governance: Arc<Notify>,
     /// Projection-driven governance changes (token-DM activation, Space
@@ -206,10 +206,10 @@ struct PassSchedule {
 }
 
 fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
-    let intent = |name: &'static str| PassConfig {
+    let submission = |name: &'static str| PassConfig {
         name,
-        interval: INTENT_PASS_INTERVAL,
-        wakeup: wakeups.intent.clone(),
+        interval: SUBMISSION_PASS_INTERVAL,
+        wakeup: wakeups.submission.clone(),
     };
     let governance = |name: &'static str| PassConfig {
         name,
@@ -223,10 +223,10 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
     };
 
     PassSchedule {
-        posts: intent("posts"),
-        deletions: intent("deletions"),
-        updates: intent("updates"),
-        timeouts: intent("timeouts"),
+        posts: submission("posts"),
+        deletions: submission("deletions"),
+        updates: submission("updates"),
+        timeouts: submission("timeouts"),
         claims: projection("claims"),
         moderation: projection("moderation"),
         decommission: governance("decommission"),
@@ -304,11 +304,11 @@ mod tests {
 
     #[test]
     fn pass_schedule_routes_each_wakeup() {
-        let intent = Arc::new(Notify::new());
+        let submission = Arc::new(Notify::new());
         let governance = Arc::new(Notify::new());
         let projection = Arc::new(Notify::new());
         let schedule = pass_schedule(&PassWakeups {
-            intent: intent.clone(),
+            submission: submission.clone(),
             governance: governance.clone(),
             projection: projection.clone(),
         });
@@ -319,8 +319,8 @@ mod tests {
             &schedule.updates,
             &schedule.timeouts,
         ] {
-            assert_eq!(config.interval, INTENT_PASS_INTERVAL);
-            assert!(Arc::ptr_eq(&config.wakeup, &intent), "{}", config.name);
+            assert_eq!(config.interval, SUBMISSION_PASS_INTERVAL);
+            assert!(Arc::ptr_eq(&config.wakeup, &submission), "{}", config.name);
         }
         for config in [&schedule.claims, &schedule.moderation] {
             assert_eq!(config.interval, GOVERNANCE_PASS_INTERVAL);

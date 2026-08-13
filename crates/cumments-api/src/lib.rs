@@ -33,8 +33,8 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        GovernanceStore, IntentStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore,
-        RoomStore, SiteAuthStore, SiteStore, VirtualUserStore,
+        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
+        SiteAuthStore, SiteStore, SubmissionStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -59,7 +59,7 @@ pub mod site_auth;
 // Define a new trait that combines the store traits for API use.
 pub trait ApiStore:
     MessageStore
-    + IntentStore
+    + SubmissionStore
     + SiteStore
     + SiteAuthStore
     + RegistryStore
@@ -73,7 +73,7 @@ pub trait ApiStore:
 }
 impl<
     T: MessageStore
-        + IntentStore
+        + SubmissionStore
         + SiteStore
         + SiteAuthStore
         + RegistryStore
@@ -95,8 +95,8 @@ pub struct ApiState {
     pub site_service: Arc<SiteService>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
-    /// Wakes the intent reconcile passes when a write intent is saved.
-    pub intent_notify: Arc<Notify>,
+    /// Wakes the submission reconcile passes when a write submission is saved.
+    pub submission_notify: Arc<Notify>,
     /// Wakes the site-governance passes when the API writes governance state
     /// (role writes, site retirement).
     pub governance_notify: Arc<Notify>,
@@ -117,7 +117,7 @@ pub struct ApiState {
     pub trusted_proxies: Arc<HashSet<IpAddr>>,
     /// Allow verification of loopback/private/link-local IP-literal origins.
     pub allow_private_verification_origins: bool,
-    /// Per-client-key limiter for comment write intents (POST/PATCH/DELETE).
+    /// Per-client-key limiter for comment write submissions (POST/PATCH/DELETE).
     pub write_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for new SSE connections.
     pub sse_limiter: Arc<rate_limit::RateLimiter>,
@@ -149,7 +149,7 @@ pub fn build_router(state: ApiState) -> Router {
     let comment_router = Router::new()
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments",
-            // POST for writing intents, fallback handles QUERY for reading.
+            // POST for writing submissions, fallback handles QUERY for reading.
             post(post_comment_handler)
                 .patch(update_comment_body_handler)
                 .delete(delete_comment_handler)
@@ -402,7 +402,7 @@ mod tests {
             edited_at: None,
             reply_to: None,
             thread_root: None,
-            intent_id: Some(42),
+            submission_id: Some(42),
             status: MessageStatus::Active,
             redacted_at: None,
             redacted_by: None,
@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(json["content"]["type"], "text");
         assert_eq!(json["content"]["body"], "hi");
         assert_eq!(json["status"], "active");
-        assert_eq!(json["intent_id"], 42);
+        assert_eq!(json["submission_id"], 42);
         assert!(json.get("sender_mxid").is_none());
         assert!(json.get("room_id").is_none());
     }

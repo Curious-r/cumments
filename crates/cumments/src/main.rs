@@ -141,7 +141,7 @@ async fn main() -> Result<()> {
     // 4. Initialize Event Bus for real-time updates (SSE)
     // ─────────────────────────────────────────────────────────────
     let (event_bus, _) = broadcast::channel(100);
-    let intent_notify = Arc::new(tokio::sync::Notify::new());
+    let submission_notify = Arc::new(tokio::sync::Notify::new());
     let governance_notify = Arc::new(tokio::sync::Notify::new());
     let projection_notify = Arc::new(tokio::sync::Notify::new());
 
@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
             room_store: db_store.clone(),
             governance_store: db_store.clone(),
             role_claim_store: db_store.clone(),
-            intent_store: db_store.clone(),
+            submission_store: db_store.clone(),
             event_bus: event_bus.clone(),
             projection_notify: projection_notify.clone(),
             server_name: settings
@@ -270,7 +270,7 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     let reconciler = cumments_reconciler::Reconciler::new(
         cumments_reconciler::ReconcilerDeps {
-            intent_store: db_store.clone(),
+            submission_store: db_store.clone(),
             registry_store: db_store.clone(),
             site_store: db_store.clone(),
             role_claim_store: db_store.clone(),
@@ -280,7 +280,7 @@ async fn main() -> Result<()> {
             site_service: site_service.clone(),
         },
         cumments_reconciler::PassWakeups {
-            intent: intent_notify.clone(),
+            submission: submission_notify.clone(),
             governance: governance_notify.clone(),
             projection: projection_notify.clone(),
         },
@@ -375,7 +375,7 @@ async fn main() -> Result<()> {
         site_service: site_service.clone(),
         pow: Arc::new(pow),
         event_bus,
-        intent_notify,
+        submission_notify,
         governance_notify,
         site_auth_policy,
         admin_token_hash,

@@ -21,13 +21,13 @@ impl MigrationTrait for Migration {
             .create_table(schema.create_table_from_entity(room_registry::Entity))
             .await?;
         manager
-            .create_table(schema.create_table_from_entity(intent_queue_post_comment::Entity))
+            .create_table(schema.create_table_from_entity(post_submissions::Entity))
             .await?;
         manager
-            .create_table(schema.create_table_from_entity(intent_queue_delete_comment::Entity))
+            .create_table(schema.create_table_from_entity(delete_submissions::Entity))
             .await?;
         manager
-            .create_table(schema.create_table_from_entity(intent_queue_update_comment::Entity))
+            .create_table(schema.create_table_from_entity(update_submissions::Entity))
             .await?;
 
         // Manual indexes not captured by basic entity derivation: composite
@@ -61,25 +61,13 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(
-                Table::drop()
-                    .table(intent_queue_update_comment::Entity)
-                    .to_owned(),
-            )
+            .drop_table(Table::drop().table(update_submissions::Entity).to_owned())
             .await?;
         manager
-            .drop_table(
-                Table::drop()
-                    .table(intent_queue_delete_comment::Entity)
-                    .to_owned(),
-            )
+            .drop_table(Table::drop().table(delete_submissions::Entity).to_owned())
             .await?;
         manager
-            .drop_table(
-                Table::drop()
-                    .table(intent_queue_post_comment::Entity)
-                    .to_owned(),
-            )
+            .drop_table(Table::drop().table(post_submissions::Entity).to_owned())
             .await?;
         manager
             .drop_table(Table::drop().table(room_registry::Entity).to_owned())

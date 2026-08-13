@@ -1,13 +1,13 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
-    intents::{PostCommentIntent, UpdateCommentIntent},
+    commands::{PostCommentCommand, UpdateCommentCommand},
     models::{PostSlug, SiteId},
-    ports::IntentStore,
+    ports::SubmissionStore,
 };
 use cumments_store::DbStore;
 
-fn post_intent() -> PostCommentIntent {
-    PostCommentIntent {
+fn post_command() -> PostCommentCommand {
+    PostCommentCommand {
         site_id: SiteId::from("my-blog"),
         post_slug: PostSlug::from("hello-world"),
         content: "hello".to_string(),
@@ -21,8 +21,8 @@ fn post_intent() -> PostCommentIntent {
     }
 }
 
-fn update_intent() -> UpdateCommentIntent {
-    UpdateCommentIntent {
+fn update_command() -> UpdateCommentCommand {
+    UpdateCommentCommand {
         site_id: SiteId::from("my-blog"),
         post_slug: PostSlug::from("hello-world"),
         event_id: "$original:hs".to_string(),
@@ -53,28 +53,31 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
         .expect("connect in-memory db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     assert_eq!(pending.len(), 1);
     let id = pending[0].id;
 
     store
-        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
         .await
         .expect("mark waiting");
 
     // Not stuck yet when the cutoff predates the write.
     let fresh = store
-        .get_stuck_post_intents(Utc::now() - Duration::minutes(10), 100)
+        .get_stuck_post_submissions(Utc::now() - Duration::minutes(10), 100)
         .await
         .expect("fresh query");
     assert!(fresh.is_empty());
 
     // Stuck once the cutoff passes the write time, with event_id/room_id.
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_post_submissions(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert_eq!(stuck.len(), 1);
@@ -84,17 +87,17 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
 
     // Dead-lettering removes it from both stuck and pending views.
     store
-        .dead_letter_post_intent(id, "event exists but never projected")
+        .dead_letter_post_submission(id, "event exists but never projected")
         .await
         .expect("dead letter");
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_post_submissions(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck after dead letter");
     assert!(stuck.is_empty());
     assert!(
         store
-            .get_pending_post_intents(100)
+            .get_pending_post_submissions(100)
             .await
             .expect("pending after dead letter")
             .is_empty()
@@ -102,26 +105,26 @@ async fn waiting_for_sync_timeout_query_and_dead_letter() {
 }
 
 #[tokio::test]
-async fn pending_intent_batch_is_limited() {
+async fn pending_submission_batch_is_limited() {
     let store = DbStore::connect(&test_db_url("batch-limit"))
         .await
         .expect("connect db");
 
     for _ in 0..3 {
         store
-            .save_post_intent(&post_intent())
+            .save_post_submission(&post_command())
             .await
-            .expect("save intent");
+            .expect("save submission");
     }
 
     let batch = store
-        .get_pending_post_intents(2)
+        .get_pending_post_submissions(2)
         .await
         .expect("limited batch");
     assert_eq!(batch.len(), 2);
 
     let all = store
-        .get_pending_post_intents(100)
+        .get_pending_post_submissions(100)
         .await
         .expect("full batch");
     assert_eq!(all.len(), 3);
@@ -134,57 +137,60 @@ async fn failure_records_schedule_retry_then_dead_letters() {
         .expect("connect in-memory db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
 
     // First failure: retried (back to pending, but not due immediately).
     let retrying = store
-        .record_post_intent_failure(id, "hs unreachable")
+        .record_post_submission_failure(id, "hs unreachable")
         .await
         .expect("record failure");
     assert!(retrying);
 
     let due_now = store
-        .get_pending_post_intents(100)
+        .get_pending_post_submissions(100)
         .await
         .expect("pending query");
     assert!(
         due_now.is_empty(),
-        "retried intent must wait out its backoff window"
+        "retried submission must wait out its backoff window"
     );
 
     // Exhaust the retry budget (4 more failures -> 5 total).
     for _ in 0..4 {
         store
-            .record_post_intent_failure(id, "still failing")
+            .record_post_submission_failure(id, "still failing")
             .await
             .expect("record failure");
     }
     let retrying = store
-        .record_post_intent_failure(id, "last failure")
+        .record_post_submission_failure(id, "last failure")
         .await
         .expect("record final failure");
     assert!(
         !retrying,
-        "intent should be dead-lettered after budget exhaustion"
+        "submission should be dead-lettered after budget exhaustion"
     );
 }
 
 #[tokio::test]
-async fn update_intent_completion_closes_loop_and_never_regresses() {
+async fn update_submission_completion_closes_loop_and_never_regresses() {
     let store = DbStore::connect(&test_db_url("update-complete"))
         .await
         .expect("connect in-memory db");
 
     store
-        .save_update_intent(&update_intent())
+        .save_update_submission(&update_command())
         .await
-        .expect("save update intent");
+        .expect("save update submission");
     let pending = store
-        .get_pending_update_intents(100)
+        .get_pending_update_submissions(100)
         .await
         .expect("pending");
     let id = pending[0].id;
@@ -192,56 +198,56 @@ async fn update_intent_completion_closes_loop_and_never_regresses() {
     // Simulate the projector seeing the replacement before the reconciler's
     // write-back: complete first, then attempt the write-back.
     store
-        .mark_update_intent_completed_by_id(id)
+        .mark_update_submission_completed_by_id(id)
         .await
         .expect("complete");
     store
-        .mark_update_intent_waiting_for_sync(id, "!room:hs")
+        .mark_update_submission_waiting_for_sync(id, "!room:hs")
         .await
         .expect("late write-back");
 
     let stuck = store
-        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_update_submission_ids(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(
         stuck.is_empty(),
-        "completed update intent must not be regressed to waiting_for_sync"
+        "completed update submission must not be regressed to waiting_for_sync"
     );
 
-    // A late failure must not resurrect a completed intent.
+    // A late failure must not resurrect a completed submission.
     let retrying = store
-        .record_update_intent_failure(id, "late failure")
+        .record_update_submission_failure(id, "late failure")
         .await
         .expect("record failure");
-    assert!(!retrying, "completed intent must not be rescheduled");
+    assert!(!retrying, "completed submission must not be rescheduled");
     assert!(
         store
-            .get_pending_update_intents(100)
+            .get_pending_update_submissions(100)
             .await
             .expect("pending query")
             .is_empty(),
-        "completed intent must not reappear as pending"
+        "completed submission must not reappear as pending"
     );
 }
 
 #[tokio::test]
-async fn update_completion_by_event_id_only_closes_waiting_intents() {
+async fn update_completion_by_event_id_only_closes_waiting_submissions() {
     let store = DbStore::connect(&test_db_url("update-complete-scope"))
         .await
         .expect("connect in-memory db");
 
     store
-        .save_update_intent(&update_intent())
+        .save_update_submission(&update_command())
         .await
         .expect("save first update");
     store
-        .save_update_intent(&update_intent())
+        .save_update_submission(&update_command())
         .await
         .expect("save second update");
 
     let pending = store
-        .get_pending_update_intents(100)
+        .get_pending_update_submissions(100)
         .await
         .expect("pending");
     assert_eq!(pending.len(), 2);
@@ -250,11 +256,11 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
 
     // One edit is observed after its write-back; the other is still pending.
     store
-        .mark_update_intent_waiting_for_sync(first_id, "!room:hs")
+        .mark_update_submission_waiting_for_sync(first_id, "!room:hs")
         .await
         .expect("mark first waiting");
     store
-        .mark_update_intent_completed(
+        .mark_update_submission_completed(
             "$original:hs",
             Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"),
         )
@@ -262,7 +268,7 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
         .expect("complete observed edit");
 
     let pending = store
-        .get_pending_update_intents(100)
+        .get_pending_update_submissions(100)
         .await
         .expect("pending");
     assert_eq!(
@@ -273,7 +279,7 @@ async fn update_completion_by_event_id_only_closes_waiting_intents() {
     assert_eq!(pending[0].id, second_id);
 
     let stuck = store
-        .get_stuck_update_intent_ids(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_update_submission_ids(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(stuck.is_empty(), "observed edit must not remain waiting");
@@ -286,13 +292,16 @@ async fn timeout_confirmations_increment_and_reset() {
         .expect("connect db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
     store
-        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
         .await
         .expect("mark waiting");
 
@@ -330,17 +339,20 @@ async fn timeout_confirmation_enforces_cooldown_between_passes() {
         .expect("connect db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
     store
-        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
         .await
         .expect("mark waiting");
 
-    // A future cutoff makes the intent eligible by age; the first
+    // A future cutoff makes the submission eligible by age; the first
     // confirmation must still put it into the cooldown window so the same
     // reconcile loop cannot select it again immediately.
     store
@@ -348,12 +360,12 @@ async fn timeout_confirmation_enforces_cooldown_between_passes() {
         .await
         .expect("increment");
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_post_submissions(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(
         stuck.is_empty(),
-        "confirmed intent must wait for the next confirmation cooldown"
+        "confirmed submission must wait for the next confirmation cooldown"
     );
 }
 
@@ -364,13 +376,16 @@ async fn timeout_check_errors_increment_and_reset() {
         .expect("connect db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
     store
-        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
         .await
         .expect("mark waiting");
 
@@ -399,36 +414,42 @@ async fn timeout_check_errors_increment_and_reset() {
 }
 
 #[tokio::test]
-async fn failed_post_intent_can_complete_when_event_is_observed() {
+async fn failed_post_submission_can_complete_when_event_is_observed() {
     let store = DbStore::connect(&test_db_url("failed-complete"))
         .await
         .expect("connect db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
     store
-        .mark_post_intent_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
         .await
         .expect("mark waiting");
     store
-        .dead_letter_post_intent(id, "event exists but never projected")
+        .dead_letter_post_submission(id, "event exists but never projected")
         .await
         .expect("dead letter");
 
     // The projector later observes the event (push arrived after the timeout
-    // pass); a failed intent may now transition to completed.
+    // pass); a failed submission may now transition to completed.
     store
-        .mark_post_intent_completed_by_id(id)
+        .mark_post_submission_completed_by_id(id)
         .await
-        .expect("complete failed intent");
+        .expect("complete failed submission");
 
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let stuck = store
-        .get_stuck_post_intents(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_post_submissions(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck");
     assert!(pending.is_empty());
@@ -436,35 +457,38 @@ async fn failed_post_intent_can_complete_when_event_is_observed() {
 }
 
 #[tokio::test]
-async fn failure_records_do_not_resurrect_failed_intents() {
+async fn failure_records_do_not_resurrect_failed_submissions() {
     let store = DbStore::connect(&test_db_url("no-resurrect"))
         .await
         .expect("connect in-memory db");
 
     store
-        .save_post_intent(&post_intent())
+        .save_post_submission(&post_command())
         .await
-        .expect("save intent");
-    let pending = store.get_pending_post_intents(100).await.expect("pending");
+        .expect("save submission");
+    let pending = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending");
     let id = pending[0].id;
 
     // Dead-letter directly (retry_count stays below the budget).
     store
-        .dead_letter_post_intent(id, "event exists but never projected")
+        .dead_letter_post_submission(id, "event exists but never projected")
         .await
         .expect("dead letter");
 
     let retrying = store
-        .record_post_intent_failure(id, "late failure")
+        .record_post_submission_failure(id, "late failure")
         .await
         .expect("record failure");
     assert!(
         !retrying,
-        "dead-lettered intent must not be resurrected by a late failure"
+        "dead-lettered submission must not be resurrected by a late failure"
     );
     assert!(
         store
-            .get_pending_post_intents(100)
+            .get_pending_post_submissions(100)
             .await
             .expect("pending query")
             .is_empty()

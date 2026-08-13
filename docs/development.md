@@ -62,5 +62,5 @@ for testing before a release), keep these points in mind:
 ## Testing locally without a homeserver
 
 Set `mode = "logging"` in the config (see docs/configuration.md). The API and
-the intent queue run, but nothing is written to Matrix and comments are not
+the submission queue run, but nothing is written to Matrix and comments are not
 projected back.

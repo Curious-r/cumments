@@ -101,7 +101,7 @@ pub(crate) fn has_state_power(power_levels: &serde_json::Value, sender_user_id: 
 
 /// Whether `sender_user_id` meets the room's `redact` threshold. Redactions
 /// of other users' events require this power, so adopted rooms must satisfy
-/// it or every Cumments delete intent will fail.
+/// it or every Cumments delete submission will fail.
 pub(crate) fn has_redact_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
     let user_power = power_levels
         .get("users")
@@ -154,7 +154,7 @@ pub(crate) fn build_message_body(
     author_signature: &str,
     author_challenge: &str,
     guest_id: &str,
-    intent_id: Option<i64>,
+    submission_id: Option<i64>,
     reply_to: Option<&str>,
     reply_to_body: Option<&str>,
     reply_to_sender: Option<&str>,
@@ -181,7 +181,7 @@ pub(crate) fn build_message_body(
         // and displayname instead of parsing them back out of the body.
         "content": content,
         "displayname": display_name,
-        "intent_id": intent_id,
+        "submission_id": submission_id,
     });
     if let Some(parent_event_id) = reply_to {
         message_body["m.relates_to"] = serde_json::json!({
@@ -202,7 +202,7 @@ pub(crate) fn build_media_body(
     author_signature: &str,
     author_challenge: &str,
     guest_id: &str,
-    intent_id: Option<i64>,
+    submission_id: Option<i64>,
 ) -> serde_json::Value {
     let msgtype = match media.kind {
         Some(MediaKind::Sticker) => "m.sticker",
@@ -255,7 +255,7 @@ pub(crate) fn build_media_body(
         "challenge": author_challenge,
         "content": media.url,
         "displayname": display_name,
-        "intent_id": intent_id,
+        "submission_id": submission_id,
     });
     message_body
 }
@@ -324,7 +324,7 @@ pub(crate) fn build_location_body(
     author_signature: &str,
     author_challenge: &str,
     guest_id: &str,
-    intent_id: Option<i64>,
+    submission_id: Option<i64>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "msgtype": "org.matrix.msc3488.location",
@@ -336,7 +336,7 @@ pub(crate) fn build_location_body(
             "challenge": author_challenge,
             "content": geo_uri,
             "displayname": display_name,
-            "intent_id": intent_id,
+            "submission_id": submission_id,
         }
     });
     if let Some(description) = description {
@@ -354,7 +354,7 @@ pub(crate) fn build_edit_body(
     author_signature: &str,
     author_challenge: &str,
     guest_id: &str,
-    intent_id: Option<i64>,
+    submission_id: Option<i64>,
 ) -> serde_json::Value {
     let mut new_content_obj = serde_json::json!({
         "msgtype": "m.text",
@@ -367,7 +367,7 @@ pub(crate) fn build_edit_body(
         "challenge": author_challenge,
         "content": new_content,
         "displayname": display_name,
-        "intent_id": intent_id,
+        "submission_id": submission_id,
     });
     serde_json::json!({
         "msgtype": "m.text",
@@ -382,7 +382,7 @@ pub(crate) fn build_edit_body(
 }
 /// Build the `m.room.redaction` content. When a delete proof is available it
 /// is embedded as a JSON string in `reason` so the event log carries the
-/// authorization independently of the intent queue.
+/// authorization independently of the submission queue.
 pub(crate) fn build_redaction_body(proof: Option<&serde_json::Value>) -> serde_json::Value {
     match proof {
         Some(proof) => serde_json::json!({ "reason": proof.to_string() }),
@@ -408,12 +408,12 @@ pub(crate) fn percent_encode(s: &str) -> String {
     result
 }
 
-/// Deterministic transaction ID for intent-driven requests.
+/// Deterministic transaction ID for submission-driven requests.
 ///
-/// The operation kind is part of the ID so distinct intent queues can never
+/// The operation kind is part of the ID so distinct submission queues can never
 /// collide on a homeserver that deduplicates by `(user, device, txn_id)`.
-pub(crate) fn format_txn_id(kind: &str, intent_id: Option<i64>) -> String {
-    match intent_id {
+pub(crate) fn format_txn_id(kind: &str, submission_id: Option<i64>) -> String {
+    match submission_id {
         Some(id) => format!("cumments_{}_{}", kind, id),
         None => {
             let ts = SystemTime::now()
@@ -556,10 +556,10 @@ mod tests {
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("hello <b>"));
         assert_eq!(ns["displayname"].as_str(), Some("Alice"));
-        assert_eq!(ns["intent_id"].as_i64(), Some(7));
+        assert_eq!(ns["submission_id"].as_i64(), Some(7));
 
         assert!(body.get("cumments_guest_id").is_none());
-        assert!(body.get("cumments_intent_id").is_none());
+        assert!(body.get("cumments_submission_id").is_none());
     }
 
     #[test]
@@ -588,7 +588,7 @@ mod tests {
         assert_eq!(body["info"]["mimetype"], "image/png");
         assert_eq!(body["info"]["width"], 100);
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "mxc://hs/abc");
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["intent_id"], 7);
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["submission_id"], 7);
         assert!(body.get("org.matrix.msc3245.voice").is_none());
     }
 
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(body["body"], "here");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "geo:31.2,121.5");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["displayname"], "Alice");
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["intent_id"], 9);
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["submission_id"], 9);
     }
 
     #[test]
@@ -748,10 +748,10 @@ mod tests {
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("edited <b>"));
         assert_eq!(ns["displayname"].as_str(), Some("Alice"));
-        assert_eq!(ns["intent_id"].as_i64(), Some(42));
+        assert_eq!(ns["submission_id"].as_i64(), Some(42));
 
         assert!(body.get(MESSAGE_CONTENT_KEY).is_none());
-        assert!(body.get("cumments_intent_id").is_none());
+        assert!(body.get("cumments_submission_id").is_none());
     }
 
     #[test]
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!(format_txn_id("post", Some(7)), "cumments_post_7");
         assert_eq!(format_txn_id("update", Some(7)), "cumments_update_7");
         assert_eq!(format_txn_id("delete", Some(7)), "cumments_delete_7");
-        // Same intent id in different queues must never produce the same txn id.
+        // Same submission id in different queues must never produce the same txn id.
         let ids: std::collections::HashSet<_> = [
             format_txn_id("post", Some(7)),
             format_txn_id("update", Some(7)),
@@ -785,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn txn_ids_without_intent_are_random_but_namespaced() {
+    fn txn_ids_without_submission_are_random_but_namespaced() {
         let a = format_txn_id("post", None);
         let b = format_txn_id("post", None);
         assert!(a.starts_with("cumments_post_"));

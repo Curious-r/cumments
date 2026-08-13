@@ -24,11 +24,11 @@ impl MigrationTrait for Migration {
                 .await?;
         }
 
-        if !column_exists(manager, "intent_queue_post_comment", "author_token_hash").await? {
+        if !column_exists(manager, "post_submissions", "author_token_hash").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(intent_queue_post_comment::Entity)
+                        .table(post_submissions::Entity)
                         .add_column(
                             ColumnDef::new(Alias::new("author_token_hash"))
                                 .string()
@@ -54,11 +54,11 @@ impl MigrationTrait for Migration {
                 .await?;
         }
 
-        if column_exists(manager, "intent_queue_post_comment", "author_token_hash").await? {
+        if column_exists(manager, "post_submissions", "author_token_hash").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(intent_queue_post_comment::Entity)
+                        .table(post_submissions::Entity)
                         .drop_column(Alias::new("author_token_hash"))
                         .to_owned(),
                 )

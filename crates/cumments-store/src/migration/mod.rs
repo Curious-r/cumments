@@ -43,6 +43,7 @@ pub mod m20260813_000037_site_governance_roles;
 pub mod m20260813_000038_role_claims;
 pub mod m20260814_000039_sites_custom_id;
 pub mod m20260814_000040_sites_lifecycle;
+pub mod m20260814_000041_submissions_rename;
 
 pub struct Migrator;
 
@@ -72,6 +73,22 @@ pub(crate) async fn column_exists(
         }
     }
     Ok(false)
+}
+
+/// Whether a table exists in the current SQLite database.
+pub(crate) async fn table_exists(manager: &SchemaManager<'_>, table: &str) -> Result<bool, DbErr> {
+    let db = manager.get_connection();
+    // Table names come from internal constants, so direct interpolation is safe.
+    let sql =
+        format!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}'");
+    let rows = db
+        .query_all_raw(Statement::from_string(manager.get_database_backend(), sql))
+        .await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.try_get::<i64>("", "COUNT(*)").ok())
+        .unwrap_or(0)
+        > 0)
 }
 
 #[async_trait::async_trait]
@@ -118,6 +135,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260813_000038_role_claims::Migration),
             Box::new(m20260814_000039_sites_custom_id::Migration),
             Box::new(m20260814_000040_sites_lifecycle::Migration),
+            Box::new(m20260814_000041_submissions_rename::Migration),
         ]
     }
 }

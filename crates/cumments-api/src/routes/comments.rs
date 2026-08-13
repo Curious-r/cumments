@@ -14,8 +14,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cumments_core::{
+    commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
     identity::{post_signature_message, signature_message, verify_signature},
-    intents::{DeleteCommentIntent, LocationPayload, PostCommentIntent, UpdateCommentIntent},
     models::{AuthorKind, Content, MediaKind, PostSlug, SiteId},
     ports::{IdempotencyInput, IdempotencyOutcome},
     site_auth::sha256_hex,
@@ -30,7 +30,7 @@ pub(crate) static QUERY_METHOD: std::sync::LazyLock<Method> =
 pub(crate) static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
 
-/// Mandatory `Idempotency-Key` header for POST/PATCH/DELETE intents.
+/// Mandatory `Idempotency-Key` header for POST/PATCH/DELETE submissions.
 static IDEMPOTENCY_KEY_HEADER: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("idempotency-key"));
 
@@ -143,11 +143,11 @@ fn request_fingerprint(method: &str, path: &str, body: &str) -> String {
     format!("{}\n{}\n{}", method, path, sha256_hex(body.as_bytes()))
 }
 
-/// Builds the `202 { intent_id }` response, marking replays explicitly.
-fn accepted_response(intent_id: i64, replayed: bool) -> Response {
+/// Builds the `202 { submission_id }` response, marking replays explicitly.
+fn accepted_response(submission_id: i64, replayed: bool) -> Response {
     let mut response = (
         StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "intent_id": intent_id })),
+        Json(serde_json::json!({ "submission_id": submission_id })),
     )
         .into_response();
     if replayed {
@@ -160,7 +160,7 @@ fn accepted_response(intent_id: i64, replayed: bool) -> Response {
 }
 
 /// Short-circuits an already-accepted idempotency key before PoW/signature
-/// verification: a replay returns the original intent ID (and the replay
+/// verification: a replay returns the original submission ID (and the replay
 /// marker) without consuming a fresh PoW challenge, while reusing the key
 /// with a different request is rejected.
 async fn idempotency_short_circuit(
@@ -168,9 +168,12 @@ async fn idempotency_short_circuit(
     idempotency: &IdempotencyInput,
 ) -> Result<Option<Response>, AppError> {
     match state.store.lookup_idempotency(idempotency).await {
-        Ok(Some(IdempotencyOutcome::Replayed { intent_id })) => {
-            tracing::info!("Replayed idempotent request for intent_id {}", intent_id);
-            Ok(Some(accepted_response(intent_id, true)))
+        Ok(Some(IdempotencyOutcome::Replayed { submission_id })) => {
+            tracing::info!(
+                "Replayed idempotent request for submission_id {}",
+                submission_id
+            );
+            Ok(Some(accepted_response(submission_id, true)))
         }
         Ok(Some(IdempotencyOutcome::Reused)) => Err(AppError::IdempotencyReused),
         // `Accepted` is never produced by a lookup; treat it as free so the
@@ -371,7 +374,7 @@ pub(crate) async fn post_comment_handler(
     }
 
     // 1b. Idempotency replay short-circuit: an identical request must return
-    // the original intent without consuming a new PoW challenge.
+    // the original submission without consuming a new PoW challenge.
     if let Some(response) = idempotency_short_circuit(
         &state,
         &IdempotencyInput {
@@ -432,11 +435,11 @@ pub(crate) async fn post_comment_handler(
         }
     }
 
-    // 3. Create the business intent
+    // 3. Create the business command
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
 
-    let intent = PostCommentIntent {
+    let command = PostCommentCommand {
         site_id: site_id_val,
         post_slug: post_slug_val,
         content: req.content,
@@ -449,32 +452,35 @@ pub(crate) async fn post_comment_handler(
         reply_to: req.reply_to,
     };
 
-    // 4. Save the intent for the reconciler, atomically with its idempotency
+    // 4. Save the command for the reconciler, atomically with its idempotency
     // record so retries can never queue duplicate work.
     match state
         .store
-        .save_post_intent_idempotent(
-            &intent,
+        .save_post_submission_idempotent(
+            &command,
             &IdempotencyInput {
-                author_public_key: intent.author_public_key.clone(),
+                author_public_key: command.author_public_key.clone(),
                 key: idempotency_key,
                 request_fingerprint: fingerprint,
             },
         )
         .await
     {
-        Ok(IdempotencyOutcome::Accepted { intent_id }) => {
-            tracing::info!("Successfully saved a new comment intent.");
-            state.intent_notify.notify_one();
-            Ok(accepted_response(intent_id, false))
+        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
+            tracing::info!("Successfully saved a new a comment submission.");
+            state.submission_notify.notify_one();
+            Ok(accepted_response(submission_id, false))
         }
-        Ok(IdempotencyOutcome::Replayed { intent_id }) => {
-            tracing::info!("Replayed idempotent POST with intent_id {}", intent_id);
-            Ok(accepted_response(intent_id, true))
+        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
+            tracing::info!(
+                "Replayed idempotent POST with submission_id {}",
+                submission_id
+            );
+            Ok(accepted_response(submission_id, true))
         }
         Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
         Err(e) => {
-            tracing::error!("Failed to save comment intent: {:?}", e);
+            tracing::error!("Failed to save a comment submission: {:?}", e);
             Err(AppError::Internal("Failed to queue comment.".to_string()))
         }
     }
@@ -607,10 +613,10 @@ async fn delete_comment_common(
         }
     }
 
-    // 3. Create the business intent
+    // 3. Create the business command
     let site_id_val = SiteId::new(path.site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(path.post_slug).map_err(AppError::Validation)?;
-    let intent = DeleteCommentIntent {
+    let command = DeleteCommentCommand {
         site_id: site_id_val,
         post_slug: post_slug_val,
         event_id: path.comment_id,
@@ -619,32 +625,35 @@ async fn delete_comment_common(
         author_challenge: challenge.to_string(),
     };
 
-    // 4. Save the intent for the reconciler, atomically with its idempotency
+    // 4. Save the command for the reconciler, atomically with its idempotency
     // record so retries can never queue duplicate work.
     match state
         .store
-        .save_delete_intent_idempotent(
-            &intent,
+        .save_delete_submission_idempotent(
+            &command,
             &IdempotencyInput {
-                author_public_key: intent.author_public_key.clone(),
+                author_public_key: command.author_public_key.clone(),
                 key: idempotency_key,
                 request_fingerprint: fingerprint,
             },
         )
         .await
     {
-        Ok(IdempotencyOutcome::Accepted { intent_id }) => {
-            tracing::info!("Successfully saved a delete comment intent.");
-            state.intent_notify.notify_one();
-            Ok(accepted_response(intent_id, false))
+        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
+            tracing::info!("Successfully saved a delete a comment submission.");
+            state.submission_notify.notify_one();
+            Ok(accepted_response(submission_id, false))
         }
-        Ok(IdempotencyOutcome::Replayed { intent_id }) => {
-            tracing::info!("Replayed idempotent DELETE with intent_id {}", intent_id);
-            Ok(accepted_response(intent_id, true))
+        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
+            tracing::info!(
+                "Replayed idempotent DELETE with submission_id {}",
+                submission_id
+            );
+            Ok(accepted_response(submission_id, true))
         }
         Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
         Err(e) => {
-            tracing::error!("Failed to save delete comment intent: {:?}", e);
+            tracing::error!("Failed to save delete a comment submission: {:?}", e);
             Err(AppError::Internal(
                 "Failed to queue delete request.".to_string(),
             ))
@@ -790,10 +799,10 @@ async fn update_comment_common(
         }
     }
 
-    // 4. Create the business intent
+    // 4. Create the business command
     let site_id_val = SiteId::new(path.site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(path.post_slug).map_err(AppError::Validation)?;
-    let intent = UpdateCommentIntent {
+    let command = UpdateCommentCommand {
         site_id: site_id_val,
         post_slug: post_slug_val,
         event_id: path.comment_id,
@@ -803,32 +812,35 @@ async fn update_comment_common(
         author_challenge: challenge.to_string(),
     };
 
-    // 5. Save the intent for the reconciler, atomically with its idempotency
+    // 5. Save the command for the reconciler, atomically with its idempotency
     // record so retries can never queue duplicate work.
     match state
         .store
-        .save_update_intent_idempotent(
-            &intent,
+        .save_update_submission_idempotent(
+            &command,
             &IdempotencyInput {
-                author_public_key: intent.author_public_key.clone(),
+                author_public_key: command.author_public_key.clone(),
                 key: idempotency_key,
                 request_fingerprint: fingerprint,
             },
         )
         .await
     {
-        Ok(IdempotencyOutcome::Accepted { intent_id }) => {
-            tracing::info!("Successfully saved an update comment intent.");
-            state.intent_notify.notify_one();
-            Ok(accepted_response(intent_id, false))
+        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
+            tracing::info!("Successfully saved an update a comment submission.");
+            state.submission_notify.notify_one();
+            Ok(accepted_response(submission_id, false))
         }
-        Ok(IdempotencyOutcome::Replayed { intent_id }) => {
-            tracing::info!("Replayed idempotent PATCH with intent_id {}", intent_id);
-            Ok(accepted_response(intent_id, true))
+        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
+            tracing::info!(
+                "Replayed idempotent PATCH with submission_id {}",
+                submission_id
+            );
+            Ok(accepted_response(submission_id, true))
         }
         Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
         Err(e) => {
-            tracing::error!("Failed to save update comment intent: {:?}", e);
+            tracing::error!("Failed to save update a comment submission: {:?}", e);
             Err(AppError::Internal(
                 "Failed to queue update request.".to_string(),
             ))
@@ -1047,7 +1059,7 @@ pub(crate) async fn location_handler(
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-    let intent = PostCommentIntent {
+    let command = PostCommentCommand {
         site_id: site_id_val,
         post_slug: post_slug_val,
         content: String::new(),
@@ -1065,28 +1077,31 @@ pub(crate) async fn location_handler(
 
     match state
         .store
-        .save_post_intent_idempotent(
-            &intent,
+        .save_post_submission_idempotent(
+            &command,
             &IdempotencyInput {
-                author_public_key: intent.author_public_key.clone(),
+                author_public_key: command.author_public_key.clone(),
                 key: idempotency_key,
                 request_fingerprint: fingerprint,
             },
         )
         .await
     {
-        Ok(IdempotencyOutcome::Accepted { intent_id }) => {
-            tracing::info!("Successfully saved a new location intent.");
-            state.intent_notify.notify_one();
-            Ok(accepted_response(intent_id, false))
+        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
+            tracing::info!("Successfully saved a new location submission.");
+            state.submission_notify.notify_one();
+            Ok(accepted_response(submission_id, false))
         }
-        Ok(IdempotencyOutcome::Replayed { intent_id }) => {
-            tracing::info!("Replayed idempotent LOCATE with intent_id {}", intent_id);
-            Ok(accepted_response(intent_id, true))
+        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
+            tracing::info!(
+                "Replayed idempotent LOCATE with submission_id {}",
+                submission_id
+            );
+            Ok(accepted_response(submission_id, true))
         }
         Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
         Err(e) => {
-            tracing::error!("Failed to save location intent: {:?}", e);
+            tracing::error!("Failed to save location submission: {:?}", e);
             Err(AppError::Internal("Failed to queue location.".to_string()))
         }
     }

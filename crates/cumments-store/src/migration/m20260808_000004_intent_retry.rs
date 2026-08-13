@@ -11,9 +11,9 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
-            "intent_queue_post_comment",
-            "intent_queue_delete_comment",
-            "intent_queue_update_comment",
+            "post_submissions",
+            "delete_submissions",
+            "update_submissions",
         ] {
             if !column_exists(manager, table, "next_attempt_at").await? {
                 manager
@@ -41,7 +41,7 @@ impl MigrationTrait for Migration {
             }
         }
 
-        for table in ["intent_queue_delete_comment", "intent_queue_update_comment"] {
+        for table in ["delete_submissions", "update_submissions"] {
             if !column_exists(manager, table, "retry_count").await? {
                 manager
                     .alter_table(
@@ -64,9 +64,9 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
-            "intent_queue_post_comment",
-            "intent_queue_delete_comment",
-            "intent_queue_update_comment",
+            "post_submissions",
+            "delete_submissions",
+            "update_submissions",
         ] {
             for column in ["next_attempt_at", "last_error"] {
                 if column_exists(manager, table, column).await? {
@@ -81,7 +81,7 @@ impl MigrationTrait for Migration {
                 }
             }
         }
-        for table in ["intent_queue_delete_comment", "intent_queue_update_comment"] {
+        for table in ["delete_submissions", "update_submissions"] {
             if column_exists(manager, table, "retry_count").await? {
                 manager
                     .alter_table(

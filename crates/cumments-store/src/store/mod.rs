@@ -4,18 +4,18 @@ use sea_orm::{DatabaseConnection, EntityTrait};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-use crate::entities::active_enums::IntentStatus;
+use crate::entities::active_enums::SubmissionStatus;
 
 pub mod backfill;
 pub mod decommission;
 pub mod governance;
 pub mod identity;
-pub mod intents;
 pub mod messages;
 pub mod registry;
 pub mod role_claims;
 pub mod rooms;
 pub mod site_auth;
+pub mod submissions;
 
 /// A database-backed implementation of the storage ports.
 #[derive(Clone)]
@@ -165,13 +165,13 @@ mod backup_tests {
 }
 
 impl DbStore {
-    /// Applies a status transition to an intent-queue row, stamping `updated_at`.
+    /// Applies a status transition to an submission-queue row, stamping `updated_at`.
     ///
     /// `customize` scopes the update (filter) and can set extra columns, e.g. the
-    /// Matrix event ID recorded when an intent transitions to `waiting_for_sync`.
+    /// Matrix event ID recorded when a submission transitions to `waiting_for_sync`.
     async fn transition_status<E>(
         &self,
-        status: IntentStatus,
+        status: SubmissionStatus,
         status_column: E::Column,
         updated_at_column: E::Column,
         customize: impl FnOnce(sea_orm::UpdateMany<E>) -> sea_orm::UpdateMany<E>,

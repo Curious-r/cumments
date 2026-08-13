@@ -1,4 +1,4 @@
-//! Delete-intent reconciliation: locate the room and redact the event.
+//! Delete-command reconciliation: locate the room and redact the event.
 
 use super::*;
 use anyhow::Result;
@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cumments_core::protocol::REDACTION_PROOF_KEY;
 use tracing::{error, warn};
 
-/// Reconciles pending delete intents toward Matrix.
+/// Reconciles pending delete submissions toward Matrix.
 pub struct DeletionsPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
@@ -18,33 +18,33 @@ impl DeletionsPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
-        let intents = self
+        let submissions = self
             .deps
-            .intent_store
-            .get_pending_delete_intents(INTENT_BATCH_SIZE)
+            .submission_store
+            .get_pending_delete_submissions(SUBMISSION_BATCH_SIZE)
             .await?;
 
-        if intents.is_empty() {
+        if submissions.is_empty() {
             return Ok(0);
         }
-        let num_intents = intents.len() as u64;
+        let num_submissions = submissions.len() as u64;
 
-        for pending in intents {
+        for pending in submissions {
             let id = pending.id;
-            let intent = pending.intent;
-            let process_result = run_intent(async {
+            let command = pending.command;
+            let process_result = run_submission(async {
                 // 1. Brain: Ensure the site space is ready (same as posts).
                 let space_id = self
                     .deps
                     .site_service
-                    .ensure_space(&intent.site_id, self.deps.driver.as_ref())
+                    .ensure_space(&command.site_id, self.deps.driver.as_ref())
                     .await?;
 
                 // 2. Registry: Locate the room ID for this deletion.
                 let candidate_room_id = self
                     .deps
                     .registry_store
-                    .get_registered_room(&intent.site_id, &intent.post_slug)
+                    .get_registered_room(&command.site_id, &command.post_slug)
                     .await?;
 
                 // Quarantine gate: fail fast while a quarantined room's retry
@@ -52,8 +52,8 @@ impl DeletionsPass {
                 if candidate_room_id.is_none()
                     && let Some(room) = quarantined_room_for(
                         &self.deps,
-                        &intent.site_id,
-                        &intent.post_slug,
+                        &command.site_id,
+                        &command.post_slug,
                     )
                     .await?
                 {
@@ -83,8 +83,8 @@ impl DeletionsPass {
                     .deps
                     .driver
                     .ensure_comment_room(
-                        &intent.site_id,
-                        &intent.post_slug,
+                        &command.site_id,
+                        &command.post_slug,
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
@@ -109,32 +109,32 @@ impl DeletionsPass {
                 };
                 self.deps
                     .registry_store
-                    .register_room(&room_id, &intent.site_id, &intent.post_slug)
+                    .register_room(&room_id, &command.site_id, &command.post_slug)
                     .await?;
 
                 // 4. Hands: Perform the redaction
                 let proof = serde_json::json!({
                     (REDACTION_PROOF_KEY): {
-                        "site_id": intent.site_id.as_str(),
-                        "post_slug": intent.post_slug.as_str(),
-                        "target_event_id": intent.event_id.as_str(),
-                        "public_key": intent.author_public_key.as_str(),
-                        "signature": intent.author_signature.as_str(),
-                        "challenge": intent.author_challenge.as_str(),
-                        "intent_id": id,
+                        "site_id": command.site_id.as_str(),
+                        "post_slug": command.post_slug.as_str(),
+                        "target_event_id": command.event_id.as_str(),
+                        "public_key": command.author_public_key.as_str(),
+                        "signature": command.author_signature.as_str(),
+                        "challenge": command.author_challenge.as_str(),
+                        "submission_id": id,
                     }
                 });
                 match self
                     .deps
                     .driver
-                    .redact_message(&room_id, &intent.event_id, Some(id), Some(&proof))
+                    .redact_message(&room_id, &command.event_id, Some(id), Some(&proof))
                     .await
                 {
                     Ok(()) => {}
                     Err(e) => {
                         if is_room_gone(&e) {
                             warn!(
-                                "Delete intent [{}] failed on room {}; retiring registry entry: {:#}",
+                                "Delete submission [{}] failed on room {}; retiring registry entry: {:#}",
                                 id, room_id, e
                             );
                             let _ = self.deps.registry_store.retire_room(&room_id).await;
@@ -145,8 +145,8 @@ impl DeletionsPass {
 
                 // 5. Concepts: Move to waiting_for_sync
                 self.deps
-                    .intent_store
-                    .mark_delete_intent_waiting_for_sync(id, &room_id)
+                    .submission_store
+                    .mark_delete_submission_waiting_for_sync(id, &room_id)
                     .await?;
 
                 Ok(())
@@ -156,23 +156,23 @@ impl DeletionsPass {
             if let Err(e) = process_result {
                 let retrying = self
                     .deps
-                    .intent_store
-                    .record_delete_intent_failure(id, &e.to_string())
+                    .submission_store
+                    .record_delete_submission_failure(id, &e.to_string())
                     .await?;
                 if retrying {
                     warn!(
-                        "Delete intent [{}] failed, will retry after backoff: {:?}",
+                        "Delete submission [{}] failed, will retry after backoff: {:?}",
                         id, e
                     );
                 } else {
                     error!(
-                        "Delete intent [{}] exhausted retries, moved to failed: {:?}",
+                        "Delete submission [{}] exhausted retries, moved to failed: {:?}",
                         id, e
                     );
                 }
             }
         }
-        Ok(num_intents)
+        Ok(num_submissions)
     }
 }
 

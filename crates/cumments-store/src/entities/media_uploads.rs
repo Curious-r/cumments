@@ -14,7 +14,7 @@ pub struct Model {
     /// Site/post the upload was authorized for.
     pub site_id: String,
     pub post_slug: String,
-    /// When a comment intent referencing this media was queued/sent; used by
+    /// When a a comment submission referencing this media was queued/sent; used by
     /// orphan cleanup.
     pub used_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,

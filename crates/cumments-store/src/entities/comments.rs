@@ -20,9 +20,9 @@ pub struct Model {
     pub content: String,
     pub timestamp: DateTimeUtc,
     pub reply_to: Option<String>,
-    /// Queue row ID of the intent that produced this comment, when submitted
+    /// Queue row ID of the submission that produced this comment, when submitted
     /// through the Cumments API; `None` for Matrix-native comments.
-    pub intent_id: Option<i64>,
+    pub submission_id: Option<i64>,
     pub created_at: DateTimeUtc,
     pub author_public_key: Option<String>,
     /// Local read-model write time (when this row was last projected/updated

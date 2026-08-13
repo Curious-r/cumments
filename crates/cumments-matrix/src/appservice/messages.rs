@@ -63,7 +63,7 @@ impl AppServiceMatrixDriver {
         reply_to: Option<&str>,
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user via the store (includes site_id)
         let virtual_user = self
@@ -89,7 +89,7 @@ impl AppServiceMatrixDriver {
                 author_signature,
                 author_challenge,
                 &guest_id,
-                intent_id,
+                submission_id,
             ),
             None => build_message_body(
                 content,
@@ -98,14 +98,14 @@ impl AppServiceMatrixDriver {
                 author_signature,
                 author_challenge,
                 &guest_id,
-                intent_id,
+                submission_id,
                 reply_to,
                 reply_to_body,
                 reply_to_sender,
             ),
         };
 
-        let txn_id = self.txn_id("post", intent_id);
+        let txn_id = self.txn_id("post", submission_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -246,7 +246,7 @@ impl AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
@@ -266,9 +266,9 @@ impl AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             &guest_id,
-            intent_id,
+            submission_id,
         );
-        let txn_id = self.txn_id("locate", intent_id);
+        let txn_id = self.txn_id("locate", submission_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -308,7 +308,7 @@ impl AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         site_id: &SiteId,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         // 1. Resolve virtual user (includes site_id)
         let virtual_user = self
@@ -334,10 +334,10 @@ impl AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             &guest_id,
-            intent_id,
+            submission_id,
         );
 
-        let txn_id = self.txn_id("update", intent_id);
+        let txn_id = self.txn_id("update", submission_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -379,11 +379,11 @@ impl AppServiceMatrixDriver {
         &self,
         room_id: &str,
         event_id: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
     ) -> Result<()> {
         // Redact as the sender user (has admin power level in the room).
-        let txn_id = self.txn_id("delete", intent_id);
+        let txn_id = self.txn_id("delete", submission_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/redact/{}/{}",
             percent_encode(room_id),

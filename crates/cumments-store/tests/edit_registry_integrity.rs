@@ -39,7 +39,7 @@ async fn save_message(store: &DbStore, event_id: &str, room_id: &str, content: &
         edited_at: None,
         reply_to: None,
         thread_root: None,
-        intent_id: None,
+        submission_id: None,
         status: MessageStatus::Active,
         redacted_at: None,
         redacted_by: None,

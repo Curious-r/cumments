@@ -1,10 +1,10 @@
 pub use super::backfill_tombstones::Entity as BackfillTombstones;
 pub use super::comments::Entity as Comments;
-pub use super::intent_queue_delete_comment::Entity as IntentQueueDeleteComment;
-pub use super::intent_queue_post_comment::Entity as IntentQueuePostComment;
-pub use super::intent_queue_update_comment::Entity as IntentQueueUpdateComment;
+pub use super::delete_submissions::Entity as DeleteSubmissions;
+pub use super::post_submissions::Entity as PostSubmissions;
 pub use super::room_registry::Entity as RoomRegistry;
 pub use super::site_verified_origins::Entity as SiteVerifiedOrigins;
 pub use super::sites::Entity as Sites;
+pub use super::update_submissions::Entity as UpdateSubmissions;
 pub use super::verification_tokens::Entity as VerificationTokens;
 pub use super::virtual_users::Entity as VirtualUsers;

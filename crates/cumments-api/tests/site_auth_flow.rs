@@ -14,8 +14,8 @@ use cumments_core::governance::RoleEntry;
 use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{
-    GovernanceStore, IntentStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
-    SiteStore,
+    GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
+    SubmissionStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
@@ -52,7 +52,7 @@ async fn test_state(
         site_service: Arc::new(SiteService::new(site_service_store)),
         pow: Arc::new(Pow::new("test-secret".to_string(), 1)),
         event_bus,
-        intent_notify: Arc::new(tokio::sync::Notify::new()),
+        submission_notify: Arc::new(tokio::sync::Notify::new()),
         governance_notify: Arc::new(tokio::sync::Notify::new()),
         site_auth_policy: Arc::new(SiteAuthPolicy {
             verification: policy,
@@ -1042,8 +1042,12 @@ async fn location_posts_are_queued_and_idempotent() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use ed25519_dalek::{Signer, SigningKey};
 
-    let (state, store) =
-        test_state("location-intent", SiteVerificationPolicy::Disabled, None).await;
+    let (state, store) = test_state(
+        "location-submission",
+        SiteVerificationPolicy::Disabled,
+        None,
+    )
+    .await;
     let site = SiteId::from("test-blog");
     let slug = PostSlug::from("hello");
     store
@@ -1094,20 +1098,24 @@ async fn location_posts_are_queued_and_idempotent() {
     assert_eq!(post.status(), StatusCode::ACCEPTED);
     let post_text = body_text(post).await;
     let json: serde_json::Value = serde_json::from_str(&post_text).expect("json");
-    let intent_id = json["intent_id"].as_i64().expect("intent_id");
+    let submission_id = json["submission_id"].as_i64().expect("submission_id");
 
     let pending = store
-        .get_pending_post_intents(10)
+        .get_pending_post_submissions(10)
         .await
-        .expect("pending intents");
-    assert_eq!(pending.len(), 1, "location must be queued as a post intent");
-    assert_eq!(pending[0].id, intent_id);
+        .expect("pending submissions");
+    assert_eq!(
+        pending.len(),
+        1,
+        "location must be queued as a post submission"
+    );
+    assert_eq!(pending[0].id, submission_id);
     assert!(
-        pending[0].intent.location.is_some(),
-        "intent must carry the location payload"
+        pending[0].command.location.is_some(),
+        "submission must carry the location payload"
     );
 
-    // Replays with the same key and body return the original intent without
+    // Replays with the same key and body return the original submission without
     // consuming a new PoW challenge.
     let replayed = router
         .clone()
@@ -1130,11 +1138,11 @@ async fn location_posts_are_queued_and_idempotent() {
     );
     let replayed_json: serde_json::Value =
         serde_json::from_str(&body_text(replayed).await).expect("json");
-    assert_eq!(replayed_json["intent_id"].as_i64(), Some(intent_id));
+    assert_eq!(replayed_json["submission_id"].as_i64(), Some(submission_id));
 }
 
 #[tokio::test]
-async fn comment_replay_returns_original_intent_without_consuming_pow() {
+async fn comment_replay_returns_original_submission_without_consuming_pow() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use ed25519_dalek::{Signer, SigningKey};
 
@@ -1182,7 +1190,7 @@ async fn comment_replay_returns_original_intent_without_consuming_pow() {
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     let first_json: serde_json::Value =
         serde_json::from_str(&body_text(first).await).expect("json");
-    let intent_id = first_json["intent_id"].as_i64().expect("intent_id");
+    let submission_id = first_json["submission_id"].as_i64().expect("submission_id");
 
     let second = post().await.expect("call router");
     assert_eq!(second.status(), StatusCode::ACCEPTED);
@@ -1195,15 +1203,15 @@ async fn comment_replay_returns_original_intent_without_consuming_pow() {
     );
     let second_json: serde_json::Value =
         serde_json::from_str(&body_text(second).await).expect("json");
-    assert_eq!(second_json["intent_id"].as_i64(), Some(intent_id));
+    assert_eq!(second_json["submission_id"].as_i64(), Some(submission_id));
     assert_eq!(
         store
-            .get_pending_post_intents(10)
+            .get_pending_post_submissions(10)
             .await
-            .expect("pending intents")
+            .expect("pending submissions")
             .len(),
         1,
-        "replay must not queue a second intent"
+        "replay must not queue a second submission"
     );
 }
 

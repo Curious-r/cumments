@@ -1,8 +1,8 @@
-use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
-use crate::intents::{
-    DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
-    PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
+use crate::commands::{
+    DeleteCommentCommand, PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission,
+    PostCommentCommand, StuckPostSubmission, UpdateCommentCommand,
 };
+use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
 use crate::models::{
     CommentMedia, Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom,
     Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
@@ -25,23 +25,23 @@ pub struct IdempotencyInput {
     pub request_fingerprint: String,
 }
 
-/// Result of an idempotency-aware intent save.
+/// Result of an idempotency-aware submission save.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdempotencyOutcome {
-    /// A new intent was queued.
-    Accepted { intent_id: i64 },
+    /// A new submission was queued.
+    Accepted { submission_id: i64 },
     /// The exact same request was already accepted; return the original id.
-    Replayed { intent_id: i64 },
+    Replayed { submission_id: i64 },
     /// The key is already bound to a different request fingerprint.
     Reused,
 }
 
-/// The port for all intent storage operations.
+/// The port for all submission storage operations.
 #[async_trait]
-pub trait IntentStore: Send + Sync {
+pub trait SubmissionStore: Send + Sync {
     /// Looks up an already-accepted idempotency record without queueing
     /// anything or consuming the request's PoW challenge. Returns `Replayed`
-    /// with the original intent ID when the key/fingerprint pair matches,
+    /// with the original submission ID when the key/fingerprint pair matches,
     /// `Reused` when the key is bound to a different request, and `None`
     /// when the key is free.
     async fn lookup_idempotency(
@@ -49,111 +49,117 @@ pub trait IntentStore: Send + Sync {
         idempotency: &IdempotencyInput,
     ) -> Result<Option<IdempotencyOutcome>>;
 
-    /// Persists a new post intent and returns its queue row ID.
-    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<i64>;
-    /// Persists a new delete intent and returns its queue row ID.
-    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<i64>;
-    /// Persists a new update intent and returns its queue row ID.
-    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<i64>;
+    /// Persists a new post submission and returns its queue row ID.
+    async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64>;
+    /// Persists a new delete submission and returns its queue row ID.
+    async fn save_delete_submission(&self, command: &DeleteCommentCommand) -> Result<i64>;
+    /// Persists a new update submission and returns its queue row ID.
+    async fn save_update_submission(&self, command: &UpdateCommentCommand) -> Result<i64>;
 
-    /// Saves a post intent and its idempotency record atomically.
+    /// Saves a post submission and its idempotency record atomically.
     ///
     /// The lookup, fingerprint comparison and inserts happen in one
     /// transaction so concurrent retries of the same key cannot queue
-    /// duplicate intents.
-    async fn save_post_intent_idempotent(
+    /// duplicate submissions.
+    async fn save_post_submission_idempotent(
         &self,
-        intent: &PostCommentIntent,
+        command: &PostCommentCommand,
         idempotency: &IdempotencyInput,
     ) -> Result<IdempotencyOutcome>;
 
-    /// Saves a delete intent and its idempotency record atomically.
-    async fn save_delete_intent_idempotent(
+    /// Saves a delete submission and its idempotency record atomically.
+    async fn save_delete_submission_idempotent(
         &self,
-        intent: &DeleteCommentIntent,
+        command: &DeleteCommentCommand,
         idempotency: &IdempotencyInput,
     ) -> Result<IdempotencyOutcome>;
 
-    /// Saves an update intent and its idempotency record atomically.
-    async fn save_update_intent_idempotent(
+    /// Saves an update submission and its idempotency record atomically.
+    async fn save_update_submission_idempotent(
         &self,
-        intent: &UpdateCommentIntent,
+        command: &UpdateCommentCommand,
         idempotency: &IdempotencyInput,
     ) -> Result<IdempotencyOutcome>;
 
-    /// Returns at most `limit` due pending post intents, oldest first.
-    async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>>;
-    /// Returns at most `limit` due pending delete intents, oldest first.
-    async fn get_pending_delete_intents(&self, limit: u64) -> Result<Vec<PendingDeleteIntent>>;
-    /// Returns at most `limit` due pending update intents, oldest first.
-    async fn get_pending_update_intents(&self, limit: u64) -> Result<Vec<PendingUpdateIntent>>;
+    /// Returns at most `limit` due pending post submissions, oldest first.
+    async fn get_pending_post_submissions(&self, limit: u64) -> Result<Vec<PendingPostSubmission>>;
+    /// Returns at most `limit` due pending delete submissions, oldest first.
+    async fn get_pending_delete_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingDeleteSubmission>>;
+    /// Returns at most `limit` due pending update submissions, oldest first.
+    async fn get_pending_update_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingUpdateSubmission>>;
 
-    /// Transitions a post intent to 'waiting_for_sync' and records the Matrix event ID.
-    async fn mark_post_intent_waiting_for_sync(
+    /// Transitions a post submission to 'waiting_for_sync' and records the Matrix event ID.
+    async fn mark_post_submission_waiting_for_sync(
         &self,
         id: i64,
         event_id: &str,
         room_id: &str,
     ) -> Result<()>;
 
-    /// Completes a post intent by its queue ID (used when the projector sees
+    /// Completes a post submission by its queue ID (used when the projector sees
     /// the event before the reconciler has written back the Matrix event ID).
-    async fn mark_post_intent_completed_by_id(&self, id: i64) -> Result<()>;
+    async fn mark_post_submission_completed_by_id(&self, id: i64) -> Result<()>;
 
-    /// Transitions an update intent to 'waiting_for_sync'.
-    async fn mark_update_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
+    /// Transitions an update submission to 'waiting_for_sync'.
+    async fn mark_update_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
-    /// Completes a specific update intent by its queue ID. Used when the edit
-    /// event carries `host.curious.cumments.intent_id`, so completing one edit
+    /// Completes a specific update submission by its queue ID. Used when the edit
+    /// event carries `host.curious.cumments.submission_id`, so completing one edit
     /// never closes a different queued edit targeting the same original
     /// comment.
-    async fn mark_update_intent_completed_by_id(&self, id: i64) -> Result<()>;
+    async fn mark_update_submission_completed_by_id(&self, id: i64) -> Result<()>;
 
-    /// Transitions a delete intent to 'waiting_for_sync'.
-    async fn mark_delete_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
+    /// Transitions a delete submission to 'waiting_for_sync'.
+    async fn mark_delete_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
 
-    /// Records a processing failure. Returns `true` if the intent was
+    /// Records a processing failure. Returns `true` if the submission was
     /// scheduled for another attempt (pending + backoff), `false` if the
-    /// retry budget is exhausted and the intent moves to 'failed'.
-    async fn record_post_intent_failure(&self, id: i64, error: &str) -> Result<bool>;
-    async fn record_delete_intent_failure(&self, id: i64, error: &str) -> Result<bool>;
-    async fn record_update_intent_failure(&self, id: i64, error: &str) -> Result<bool>;
+    /// retry budget is exhausted and the submission moves to 'failed'.
+    async fn record_post_submission_failure(&self, id: i64, error: &str) -> Result<bool>;
+    async fn record_delete_submission_failure(&self, id: i64, error: &str) -> Result<bool>;
+    async fn record_update_submission_failure(&self, id: i64, error: &str) -> Result<bool>;
 
-    /// Transitions a post intent to 'completed' when the projector sees the event.
-    async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()>;
+    /// Transitions a post submission to 'completed' when the projector sees the event.
+    async fn mark_post_submission_completed(&self, event_id: &str) -> Result<()>;
 
-    /// Post intents stuck in `waiting_for_sync` since before `cutoff`.
-    async fn get_stuck_post_intents(
+    /// Post submissions stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_post_submissions(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<StuckPostIntent>>;
+    ) -> Result<Vec<StuckPostSubmission>>;
 
-    /// IDs of delete intents stuck in `waiting_for_sync` since before `cutoff`.
-    async fn get_stuck_delete_intent_ids(
-        &self,
-        cutoff: chrono::DateTime<chrono::Utc>,
-        limit: u64,
-    ) -> Result<Vec<i64>>;
-
-    /// IDs of update intents stuck in `waiting_for_sync` since before `cutoff`.
-    async fn get_stuck_update_intent_ids(
+    /// IDs of delete submissions stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_delete_submission_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
     ) -> Result<Vec<i64>>;
 
-    /// Moves a post intent to 'failed' without further retries. Used when the
+    /// IDs of update submissions stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_update_submission_ids(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        limit: u64,
+    ) -> Result<Vec<i64>>;
+
+    /// Moves a post submission to 'failed' without further retries. Used when the
     /// event exists on the homeserver but was never projected – resending
     /// would create a duplicate comment.
-    async fn dead_letter_post_intent(&self, id: i64, error: &str) -> Result<()>;
+    async fn dead_letter_post_submission(&self, id: i64, error: &str) -> Result<()>;
 
     /// Records one more consecutive timeout pass in which the event was
     /// observed on the homeserver. Returns the new confirmation count.
     async fn increment_post_timeout_confirmation(&self, id: i64) -> Result<u32>;
 
     /// Resets the consecutive timeout-confirmation counter (e.g. after the
-    /// event was found absent and the intent was rescheduled).
+    /// event was found absent and the submission was rescheduled).
     async fn reset_post_timeout_confirmations(&self, id: i64) -> Result<()>;
 
     /// Records one more consecutive timeout-pass error (network/homeserver
@@ -163,13 +169,13 @@ pub trait IntentStore: Send + Sync {
     /// Resets the consecutive timeout-error counter after a successful check.
     async fn reset_post_timeout_errors(&self, id: i64) -> Result<()>;
 
-    /// Transitions a delete intent to 'completed' when the projector sees the redaction.
-    async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()>;
+    /// Transitions a delete submission to 'completed' when the projector sees the redaction.
+    async fn mark_delete_submission_completed(&self, target_event_id: &str) -> Result<()>;
 
-    /// Transitions update intents for `event_id` to 'completed' when the
+    /// Transitions update submissions for `event_id` to 'completed' when the
     /// projector sees the replacement. The fallback is scoped to the projected
-    /// author key so an external edit cannot close unrelated queued intents.
-    async fn mark_update_intent_completed(
+    /// author key so an external edit cannot close unrelated queued submissions.
+    async fn mark_update_submission_completed(
         &self,
         event_id: &str,
         author_public_key: Option<&str>,
@@ -247,7 +253,7 @@ pub trait MessageStore: Send + Sync {
         redacted_by: &str,
     ) -> Result<bool>;
 
-    /// Records a guest upload so comment intents can later prove ownership.
+    /// Records a guest upload so comment submissions can later prove ownership.
     async fn record_media_upload(
         &self,
         mxc_url: &str,
@@ -265,7 +271,7 @@ pub trait MessageStore: Send + Sync {
         post_slug: &str,
     ) -> Result<bool>;
 
-    /// Marks a media URL as referenced by a comment intent.
+    /// Marks a media URL as referenced by a a comment submission.
     async fn mark_media_used(&self, mxc_url: &str) -> Result<()>;
 
     /// MXC URLs uploaded before `cutoff` that are still unreferenced.
@@ -476,7 +482,7 @@ pub trait SiteAuthStore: Send + Sync {
     async fn list_retiring_sites(&self) -> Result<Vec<String>>;
 
     /// Removes every local trace of a decommissioned site (auth row,
-    /// projections, rooms, intents). Callers must have already retired the
+    /// projections, rooms, submissions). Callers must have already retired the
     /// Matrix side; this is the final, idempotent cleanup.
     async fn delete_site(&self, site_id: &str) -> Result<()>;
 
@@ -592,10 +598,10 @@ pub trait MatrixDriver: Send + Sync {
         // support. `None` when the original event is unknown.
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
-        // Correlation hint: the intent queue row ID, published in the event so
+        // Correlation hint: the submission queue row ID, published in the event so
         // the projector can close the loop even if the push arrives before the
         // reconciler's write-back.
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String>;
 
     /// Sends a reaction (`m.reaction`) as the guest's virtual user.
@@ -623,7 +629,7 @@ pub trait MatrixDriver: Send + Sync {
     ) -> Result<()>;
 
     /// Sends a location message (`m.location`, MSC3488) as the guest's
-    /// virtual user. Returns the Matrix event ID and carries the intent
+    /// virtual user. Returns the Matrix event ID and carries the submission
     /// correlation hint, like [`Self::post_message`].
     async fn post_location(
         &self,
@@ -635,7 +641,7 @@ pub trait MatrixDriver: Send + Sync {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.
@@ -649,7 +655,7 @@ pub trait MatrixDriver: Send + Sync {
         author_signature: &str,
         author_challenge: &str,
         site_id: &SiteId,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String>;
 
     /// Redacts a message in a specific room.
@@ -661,7 +667,7 @@ pub trait MatrixDriver: Send + Sync {
         &self,
         room_id: &str,
         event_id: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
     ) -> Result<()>;
 
@@ -684,7 +690,7 @@ pub trait MatrixDriver: Send + Sync {
     async fn get_room_canonical_alias(&self, room_id: &str) -> Result<Option<String>>;
 
     /// Checks whether an event exists on the homeserver. Used to decide if a
-    /// timed-out `waiting_for_sync` intent can be safely resent.
+    /// timed-out `waiting_for_sync` submission can be safely resent.
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
 
     /// The AppService sender user ID, or `None` when this driver has no

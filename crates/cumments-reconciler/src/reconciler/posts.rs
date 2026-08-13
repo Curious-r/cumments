@@ -1,11 +1,11 @@
-//! Post-intent reconciliation: ensure the comment room, then send.
+//! Post-command reconciliation: ensure the comment room, then send.
 
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{error, warn};
 
-/// Reconciles pending post (and location) intents toward Matrix.
+/// Reconciles pending post (and location) submissions toward Matrix.
 pub struct PostsPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
@@ -17,33 +17,33 @@ impl PostsPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
-        let intents = self
+        let submissions = self
             .deps
-            .intent_store
-            .get_pending_post_intents(INTENT_BATCH_SIZE)
+            .submission_store
+            .get_pending_post_submissions(SUBMISSION_BATCH_SIZE)
             .await?;
 
-        if intents.is_empty() {
+        if submissions.is_empty() {
             return Ok(0);
         }
-        let num_intents = intents.len() as u64;
+        let num_submissions = submissions.len() as u64;
 
-        for pending in intents {
+        for pending in submissions {
             let id = pending.id;
-            let intent = pending.intent;
-            let process_result = run_intent(async {
+            let command = pending.command;
+            let process_result = run_submission(async {
                 // 1. Brain: Ensure the site space is ready
                 let space_id = self
                     .deps
                     .site_service
-                    .ensure_space(&intent.site_id, self.deps.driver.as_ref())
+                    .ensure_space(&command.site_id, self.deps.driver.as_ref())
                     .await?;
 
                 // 2. Registry: Check for existing room in local cache (O(1) hint)
                 let candidate_room_id = self
                     .deps
                     .registry_store
-                    .get_registered_room(&intent.site_id, &intent.post_slug)
+                    .get_registered_room(&command.site_id, &command.post_slug)
                     .await?;
 
                 // Quarantine gate: without an active candidate the driver
@@ -52,8 +52,8 @@ impl PostsPass {
                 if candidate_room_id.is_none()
                     && let Some(room) = quarantined_room_for(
                         &self.deps,
-                        &intent.site_id,
-                        &intent.post_slug,
+                        &command.site_id,
+                        &command.post_slug,
                     )
                     .await?
                 {
@@ -82,8 +82,8 @@ impl PostsPass {
                     .deps
                     .driver
                     .ensure_comment_room(
-                        &intent.site_id,
-                        &intent.post_slug,
+                        &command.site_id,
+                        &command.post_slug,
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
@@ -113,14 +113,14 @@ impl PostsPass {
                 // before any event can arrive.
                 self.deps
                     .registry_store
-                    .register_room(&room_id, &intent.site_id, &intent.post_slug)
+                    .register_room(&room_id, &command.site_id, &command.post_slug)
                     .await?;
 
                 // 3c. Resolve the replied-to comment from the read model so
                 // the Matrix message can carry a rich-reply fallback quote.
                 // Unknown originals (e.g. replies to a not-yet-projected
                 // event) simply skip the quote.
-                let (reply_to_body, reply_to_sender) = match intent.reply_to.as_deref() {
+                let (reply_to_body, reply_to_sender) = match command.reply_to.as_deref() {
                     Some(event_id) => {
                         match self.deps.message_store.get_message(event_id).await? {
                             Some(message) => {
@@ -140,18 +140,18 @@ impl PostsPass {
 
                 // 4. Hands: Post the actual message
                 let event_id = {
-                    let result = if let Some(location) = &intent.location {
+                    let result = if let Some(location) = &command.location {
                         self.deps
                             .driver
                             .post_location(
                                 &room_id,
                                 &location.geo_uri,
                                 location.description.as_deref(),
-                                &intent.display_name,
-                                &intent.site_id,
-                                &intent.author_public_key,
-                                &intent.author_signature,
-                                &intent.author_challenge,
+                                &command.display_name,
+                                &command.site_id,
+                                &command.author_public_key,
+                                &command.author_signature,
+                                &command.author_challenge,
                                 Some(id),
                             )
                             .await
@@ -160,14 +160,14 @@ impl PostsPass {
                             .driver
                             .post_message(
                                 &room_id,
-                                &intent.content,
-                                intent.media.as_ref(),
-                                &intent.display_name,
-                                &intent.author_public_key,
-                                &intent.author_signature,
-                                &intent.author_challenge,
-                                &intent.site_id,
-                                intent.reply_to.as_deref(),
+                                &command.content,
+                                command.media.as_ref(),
+                                &command.display_name,
+                                &command.author_public_key,
+                                &command.author_signature,
+                                &command.author_challenge,
+                                &command.site_id,
+                                command.reply_to.as_deref(),
                                 reply_to_body.as_deref(),
                                 reply_to_sender.as_deref(),
                                 Some(id),
@@ -183,7 +183,7 @@ impl PostsPass {
                             // the successor.
                             if is_room_gone(&e) {
                                 warn!(
-                                    "Post intent [{}] failed on room {}; retiring registry entry: {:#}",
+                                    "Post submission [{}] failed on room {}; retiring registry entry: {:#}",
                                     id, room_id, e
                                 );
                                 let _ = self.deps.registry_store.retire_room(&room_id).await;
@@ -194,14 +194,14 @@ impl PostsPass {
                 };
                 // The media is now referenced by a real room event; mark it
                 // used so orphan cleanup does not delete it.
-                if let Some(media) = &intent.media {
+                if let Some(media) = &command.media {
                     let _ = self.deps.message_store.mark_media_used(&media.url).await;
                 }
 
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.deps
-                    .intent_store
-                    .mark_post_intent_waiting_for_sync(id, &event_id, &room_id)
+                    .submission_store
+                    .mark_post_submission_waiting_for_sync(id, &event_id, &room_id)
                     .await?;
 
                 Ok(())
@@ -211,23 +211,23 @@ impl PostsPass {
             if let Err(e) = process_result {
                 let retrying = self
                     .deps
-                    .intent_store
-                    .record_post_intent_failure(id, &e.to_string())
+                    .submission_store
+                    .record_post_submission_failure(id, &e.to_string())
                     .await?;
                 if retrying {
                     warn!(
-                        "Post intent [{}] failed, will retry after backoff: {:?}",
+                        "Post submission [{}] failed, will retry after backoff: {:?}",
                         id, e
                     );
                 } else {
                     error!(
-                        "Post intent [{}] exhausted retries, moved to failed: {:?}",
+                        "Post submission [{}] exhausted retries, moved to failed: {:?}",
                         id, e
                     );
                 }
             }
         }
-        Ok(num_intents)
+        Ok(num_submissions)
     }
 }
 

@@ -4,8 +4,8 @@ info:
   version: 0.22.1
   description: |
     Backend-only comment API backed by Matrix. Writes are asynchronous:
-    POST/PATCH/DELETE accept an intent and return `202 { "intent_id" }`;
-    the projected comment later carries the same `intent_id`.
+    POST/PATCH/DELETE accept a submission and return `202 { "submission_id" }`;
+    the projected comment later carries the same `submission_id`.
 
     Comment reads use the RFC 10008 `QUERY` method. OpenAPI does not support
     custom verbs, so each QUERY operation is represented with the
@@ -69,7 +69,7 @@ paths:
               $ref: "#/components/schemas/PostCommentRequest"
       responses:
         "202":
-          description: "Intent accepted (replays carry Idempotent-Replayed: true)"
+          description: "Submission accepted (replays carry Idempotent-Replayed: true)"
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -79,7 +79,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IntentAccepted"
+                $ref: "#/components/schemas/SubmissionAccepted"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -104,7 +104,7 @@ paths:
               $ref: "#/components/schemas/UpdateCommentRequest"
       responses:
         "202":
-          description: "Edit intent accepted (replays carry Idempotent-Replayed: true)"
+          description: "Edit submission accepted (replays carry Idempotent-Replayed: true)"
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -114,7 +114,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IntentAccepted"
+                $ref: "#/components/schemas/SubmissionAccepted"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -140,7 +140,7 @@ paths:
               $ref: "#/components/schemas/DeleteCommentRequest"
       responses:
         "202":
-          description: "Delete intent accepted (replays carry Idempotent-Replayed: true)"
+          description: "Delete submission accepted (replays carry Idempotent-Replayed: true)"
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -150,7 +150,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IntentAccepted"
+                $ref: "#/components/schemas/SubmissionAccepted"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -223,7 +223,7 @@ paths:
               $ref: "#/components/schemas/UpdateCommentRequest"
       responses:
         "202":
-          description: "Edit intent accepted (replays carry Idempotent-Replayed: true)"
+          description: "Edit submission accepted (replays carry Idempotent-Replayed: true)"
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -233,7 +233,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IntentAccepted"
+                $ref: "#/components/schemas/SubmissionAccepted"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -885,7 +885,7 @@ paths:
                   type: string
       responses:
         "202":
-          description: "Location intent accepted (replays carry Idempotent-Replayed: true)"
+          description: "Location submission accepted (replays carry Idempotent-Replayed: true)"
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -895,7 +895,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IntentAccepted"
+                $ref: "#/components/schemas/SubmissionAccepted"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1256,9 +1256,9 @@ components:
       in: header
       required: true
       description: |
-        Mandatory for all write intents. 8-255 printable ASCII characters,
+        Mandatory for all write submissions. 8-255 printable ASCII characters,
         scoped to the author's public key. Retrying an accepted request with
-        the same key and body returns the original `intent_id` with
+        the same key and body returns the original `submission_id` with
         `Idempotent-Replayed: true`; a different body with the same key
         returns `409 code=idempotency-key-reused`. Keys are retained
         for 24 hours.
@@ -1337,11 +1337,11 @@ components:
         difficulty:
           type: integer
           minimum: 1
-    IntentAccepted:
+    SubmissionAccepted:
       type: object
-      required: [intent_id]
+      required: [submission_id]
       properties:
-        intent_id:
+        submission_id:
           type: integer
           format: int64
     PaginationMeta:
@@ -1419,7 +1419,7 @@ components:
         thread_root:
           type: string
           nullable: true
-        intent_id:
+        submission_id:
           type: integer
           format: int64
           nullable: true

@@ -36,7 +36,7 @@ Message {
     timestamp,              // Matrix origin_server_ts
     edited_at,              // last m.replace timestamp, if any
     reply_to, thread_root,  // relation targets, if any
-    intent_id,              // set when submitted through the API
+    submission_id,              // set when submitted through the API
     status,                 // active | redacted
     redacted_at, redacted_by,
     reactions: [ReactionSummary],
@@ -114,7 +114,7 @@ messages (
   reply_to_event_id, thread_root_event_id,
   timestamp, edited_at,
   status, redacted_at, redacted_by,
-  intent_id
+  submission_id
 )
 
 message_revisions (message_id, event_id PK, content_json, edited_at, editor)
@@ -164,7 +164,7 @@ before trusting the projection.
 
 | Content kind | Guest sending | Mechanism |
 |---|---|---|
-| Text | Supported | `m.text` with reply/edit/delete, queued as an intent |
+| Text | Supported | `m.text` with reply/edit/delete, queued as a submission |
 | Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; orphaned uploads are garbage-collected |
 | Sticker | Supported | Choose from the deployment's preset sticker list; the API sends the reference, guests cannot upload stickers |
 | Location | Supported | `m.location` (MSC3488), queued like a comment |
@@ -175,7 +175,7 @@ before trusting the projection.
 
 Reactions and votes are sent synchronously and are naturally idempotent
 (reaction dedupe by sender + key, latest-vote-wins); text, media, location
-and other comment-shaped writes go through the async intent queue with an
+and other comment-shaped writes go through the async submission queue with an
 `Idempotency-Key` (see [API](api/index.md#idempotent-writes)).
 
 ## Media proxy

@@ -46,22 +46,22 @@ impl MigrationTrait for Migration {
                 .await?;
         }
 
-        // post intent queue: token hash -> public key
-        if column_exists(manager, "intent_queue_post_comment", "author_token_hash").await? {
+        // post submission queue: token hash -> public key
+        if column_exists(manager, "post_submissions", "author_token_hash").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_post_comment"))
+                        .table(Alias::new("post_submissions"))
                         .drop_column(Alias::new("author_token_hash"))
                         .to_owned(),
                 )
                 .await?;
         }
-        if !column_exists(manager, "intent_queue_post_comment", "author_public_key").await? {
+        if !column_exists(manager, "post_submissions", "author_public_key").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_post_comment"))
+                        .table(Alias::new("post_submissions"))
                         .add_column(
                             ColumnDef::new(Alias::new("author_public_key"))
                                 .string()
@@ -72,22 +72,22 @@ impl MigrationTrait for Migration {
                 .await?;
         }
 
-        // update intent queue: fingerprint -> public key + signature
-        if column_exists(manager, "intent_queue_update_comment", "author_fingerprint").await? {
+        // update submission queue: fingerprint -> public key + signature
+        if column_exists(manager, "update_submissions", "author_fingerprint").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_update_comment"))
+                        .table(Alias::new("update_submissions"))
                         .drop_column(Alias::new("author_fingerprint"))
                         .to_owned(),
                 )
                 .await?;
         }
-        if !column_exists(manager, "intent_queue_update_comment", "author_public_key").await? {
+        if !column_exists(manager, "update_submissions", "author_public_key").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_update_comment"))
+                        .table(Alias::new("update_submissions"))
                         .add_column(
                             ColumnDef::new(Alias::new("author_public_key"))
                                 .string()
@@ -97,11 +97,11 @@ impl MigrationTrait for Migration {
                 )
                 .await?;
         }
-        if !column_exists(manager, "intent_queue_update_comment", "author_signature").await? {
+        if !column_exists(manager, "update_submissions", "author_signature").await? {
             manager
                 .alter_table(
                     Table::alter()
-                        .table(Alias::new("intent_queue_update_comment"))
+                        .table(Alias::new("update_submissions"))
                         .add_column(
                             ColumnDef::new(Alias::new("author_signature"))
                                 .string()

@@ -1,11 +1,11 @@
-//! Update-intent reconciliation: locate the room and send the m.replace.
+//! Update-command reconciliation: locate the room and send the m.replace.
 
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{error, warn};
 
-/// Reconciles pending update (edit) intents toward Matrix.
+/// Reconciles pending update (edit) submissions toward Matrix.
 pub struct UpdatesPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
@@ -17,33 +17,33 @@ impl UpdatesPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
-        let intents = self
+        let submissions = self
             .deps
-            .intent_store
-            .get_pending_update_intents(INTENT_BATCH_SIZE)
+            .submission_store
+            .get_pending_update_submissions(SUBMISSION_BATCH_SIZE)
             .await?;
 
-        if intents.is_empty() {
+        if submissions.is_empty() {
             return Ok(0);
         }
-        let num_intents = intents.len() as u64;
+        let num_submissions = submissions.len() as u64;
 
-        for pending in intents {
+        for pending in submissions {
             let id = pending.id;
-            let intent = pending.intent;
-            let process_result = run_intent(async {
+            let command = pending.command;
+            let process_result = run_submission(async {
                 // 1. Brain: Ensure site space
                 let space_id = self
                     .deps
                     .site_service
-                    .ensure_space(&intent.site_id, self.deps.driver.as_ref())
+                    .ensure_space(&command.site_id, self.deps.driver.as_ref())
                     .await?;
 
                 // 2. Registry: Check for existing room in local cache (O(1) hint)
                 let candidate_room_id = self
                     .deps
                     .registry_store
-                    .get_registered_room(&intent.site_id, &intent.post_slug)
+                    .get_registered_room(&command.site_id, &command.post_slug)
                     .await?;
 
                 // Quarantine gate: fail fast while a quarantined room's retry
@@ -51,8 +51,8 @@ impl UpdatesPass {
                 if candidate_room_id.is_none()
                     && let Some(room) = quarantined_room_for(
                         &self.deps,
-                        &intent.site_id,
-                        &intent.post_slug,
+                        &command.site_id,
+                        &command.post_slug,
                     )
                     .await?
                 {
@@ -81,8 +81,8 @@ impl UpdatesPass {
                     .deps
                     .driver
                     .ensure_comment_room(
-                        &intent.site_id,
-                        &intent.post_slug,
+                        &command.site_id,
+                        &command.post_slug,
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
@@ -109,14 +109,14 @@ impl UpdatesPass {
                 // 3b. Registry: Write back the room mapping immediately
                 self.deps
                     .registry_store
-                    .register_room(&room_id, &intent.site_id, &intent.post_slug)
+                    .register_room(&room_id, &command.site_id, &command.post_slug)
                     .await?;
 
                 // 4. Hands: Fetch original display name to maintain it
                 let display_name = self
                     .deps
                     .message_store
-                    .get_author_display_name(&intent.event_id)
+                    .get_author_display_name(&command.event_id)
                     .await?
                     .flatten()
                     .unwrap_or_else(|| "Guest".to_string());
@@ -127,13 +127,13 @@ impl UpdatesPass {
                     .driver
                     .update_message(
                         &room_id,
-                        &intent.event_id,
-                        &intent.content,
+                        &command.event_id,
+                        &command.content,
                         &display_name,
-                        &intent.author_public_key,
-                        &intent.author_signature,
-                        &intent.author_challenge,
-                        &intent.site_id,
+                        &command.author_public_key,
+                        &command.author_signature,
+                        &command.author_challenge,
+                        &command.site_id,
                         Some(id),
                     )
                     .await
@@ -142,7 +142,7 @@ impl UpdatesPass {
                     Err(e) => {
                         if is_room_gone(&e) {
                             warn!(
-                                "Update intent [{}] failed on room {}; retiring registry entry: {:#}",
+                                "Update submission [{}] failed on room {}; retiring registry entry: {:#}",
                                 id, room_id, e
                             );
                             let _ = self.deps.registry_store.retire_room(&room_id).await;
@@ -153,8 +153,8 @@ impl UpdatesPass {
 
                 // 6. Closed-loop: Mark as waiting for sync
                 self.deps
-                    .intent_store
-                    .mark_update_intent_waiting_for_sync(id, &room_id)
+                    .submission_store
+                    .mark_update_submission_waiting_for_sync(id, &room_id)
                     .await?;
 
                 Ok(())
@@ -164,23 +164,23 @@ impl UpdatesPass {
             if let Err(e) = process_result {
                 let retrying = self
                     .deps
-                    .intent_store
-                    .record_update_intent_failure(id, &e.to_string())
+                    .submission_store
+                    .record_update_submission_failure(id, &e.to_string())
                     .await?;
                 if retrying {
                     warn!(
-                        "Update intent [{}] failed, will retry after backoff: {:?}",
+                        "Update submission [{}] failed, will retry after backoff: {:?}",
                         id, e
                     );
                 } else {
                     error!(
-                        "Update intent [{}] exhausted retries, moved to failed: {:?}",
+                        "Update submission [{}] exhausted retries, moved to failed: {:?}",
                         id, e
                     );
                 }
             }
         }
-        Ok(num_intents)
+        Ok(num_submissions)
     }
 }
 

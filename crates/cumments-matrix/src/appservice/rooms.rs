@@ -415,7 +415,7 @@ impl AppServiceMatrixDriver {
                 room_id,
                 format!(
                     "Refusing to adopt room {room_id}: AS sender cannot meet the room's \
-                     redact threshold (delete intents would fail)"
+                     redact threshold (delete submissions would fail)"
                 ),
             ));
         }
@@ -492,7 +492,7 @@ impl AppServiceMatrixDriver {
 
     /// Idempotently link a comment room into its site Space (`m.space.child`
     /// on the Space, `m.space.parent` on the room). Errors are returned so
-    /// the caller retries the intent, which re-enters `ensure_comment_room`
+    /// the caller retries the submission, which re-enters `ensure_comment_room`
     /// and re-links the room.
     async fn link_room_to_space(&self, space_id: &str, room_id: &str) -> Result<()> {
         let child_content = serde_json::json!({ "via": [self.server_name] });

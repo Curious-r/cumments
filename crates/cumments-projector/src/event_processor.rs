@@ -23,8 +23,8 @@ use cumments_core::{
         TextStyle,
     },
     ports::{
-        GovernanceStore, IntentStore, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteStore,
+        GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, RoomStore, SiteStore,
+        SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
@@ -44,7 +44,7 @@ pub struct EventProcessor {
     room_store: Arc<dyn RoomStore>,
     governance_store: Arc<dyn GovernanceStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
-    intent_store: Arc<dyn IntentStore>,
+    submission_store: Arc<dyn SubmissionStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
@@ -62,7 +62,7 @@ pub struct EventProcessorDeps {
     pub room_store: Arc<dyn RoomStore>,
     pub governance_store: Arc<dyn GovernanceStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
-    pub intent_store: Arc<dyn IntentStore>,
+    pub submission_store: Arc<dyn SubmissionStore>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
@@ -77,7 +77,7 @@ impl EventProcessor {
             room_store: deps.room_store,
             governance_store: deps.governance_store,
             role_claim_store: deps.role_claim_store,
-            intent_store: deps.intent_store,
+            submission_store: deps.submission_store,
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
@@ -288,17 +288,17 @@ impl EventProcessor {
                 // Closed-loop only after the projection succeeded: the
                 // correlation ID lets concurrent edits close independently;
                 // legacy events fall back to target-event matching (waiting
-                // intents only). A failed projection leaves the intent open
+                // submissions only). A failed projection leaves the submission open
                 // for the timeout/backfill safety net.
-                match event.intent_id {
+                match event.submission_id {
                     Some(id) => {
-                        self.intent_store
-                            .mark_update_intent_completed_by_id(id)
+                        self.submission_store
+                            .mark_update_submission_completed_by_id(id)
                             .await?
                     }
                     None => {
-                        self.intent_store
-                            .mark_update_intent_completed(
+                        self.submission_store
+                            .mark_update_submission_completed(
                                 &relation.target_event_id,
                                 event.author_public_key.as_deref(),
                             )
@@ -407,7 +407,7 @@ impl EventProcessor {
             edited_at: None,
             reply_to: event.reply_to.clone(),
             thread_root: event.thread_root.clone(),
-            intent_id: event.intent_id,
+            submission_id: event.submission_id,
             status: MessageStatus::Active,
             redacted_at: None,
             redacted_by: None,
@@ -422,16 +422,16 @@ impl EventProcessor {
         // Closed-loop only after the projection succeeded. Prefer the
         // correlation ID when present – the push may arrive before the
         // reconciler's write-back, so the event_id is not yet stored on the
-        // intent row. Fall back to event_id matching for external messages.
-        match event.intent_id {
+        // submission row. Fall back to event_id matching for external messages.
+        match event.submission_id {
             Some(id) => {
-                self.intent_store
-                    .mark_post_intent_completed_by_id(id)
+                self.submission_store
+                    .mark_post_submission_completed_by_id(id)
                     .await?
             }
             None => {
-                self.intent_store
-                    .mark_post_intent_completed(&event.event_id)
+                self.submission_store
+                    .mark_post_submission_completed(&event.event_id)
                     .await?
             }
         };
@@ -834,15 +834,15 @@ impl EventProcessor {
                     .await?;
                 info!("Successfully redacted message {}", target_event_id);
                 // Closed-loop only after the projection succeeded; a failed
-                // delete leaves the intent open for the timeout safety net.
-                self.intent_store
-                    .mark_delete_intent_completed(&target_event_id)
+                // delete leaves the submission open for the timeout safety net.
+                self.submission_store
+                    .mark_delete_submission_completed(&target_event_id)
                     .await?;
                 let _ = self.event_bus.send(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
                     post_slug: c.post_slug,
                     event_id: target_event_id,
-                    intent_id: event.intent_id,
+                    submission_id: event.submission_id,
                 });
             } else {
                 self.message_store

@@ -46,7 +46,7 @@ Response:
       "edited_at": null,
       "reply_to": null,
       "thread_root": null,
-      "intent_id": 42,
+      "submission_id": 42,
       "status": "active",
       "redacted_at": null,
       "redacted_by": null,
@@ -101,13 +101,13 @@ of `content`; `content` then only serves as the fallback filename/text.
 Successful writes are asynchronous and return `202` with the queue row ID:
 
 ```json
-{ "intent_id": 42 }
+{ "submission_id": 42 }
 ```
 
 The projected comment (list/SSE `message_created`) carries the same
-`intent_id` when it was submitted through the Cumments API, so clients can
+`submission_id` when it was submitted through the Cumments API, so clients can
 correlate the accepted request with the final comment. Matrix-native comments
-omit `intent_id`.
+omit `submission_id`.
 
 Signature message:
 
@@ -202,7 +202,7 @@ Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author
 The signature covers
 `["LOCATE", site_id, post_slug, geo_uri, display_name, challenge]`;
 the message is queued like a comment (same `Idempotency-Key` and
-`202 { "intent_id" }` contract) and sent as `m.location` (MSC3488) with the
+`202 { "submission_id" }` contract) and sent as `m.location` (MSC3488) with the
 signed proof block, closing the loop through the same projection path.
 
 ## Room info

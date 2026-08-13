@@ -84,7 +84,7 @@ impl AppServiceMatrixDriver {
     /// configured one. Homeservers that reject appservice credentials (401)
     /// or do not advertise room versions are treated as unknown — the
     /// authoritative decision is left to `createRoom`, whose error surfaces
-    /// in the intent's `last_error`.
+    /// in the submission.s `last_error`.
     pub(super) async fn validate_room_version_override(&self) -> Result<()> {
         let Some(version) = &self.room_version_override else {
             return Ok(());

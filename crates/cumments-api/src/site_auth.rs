@@ -252,7 +252,7 @@ pub async fn authorize_site_write(
     // A site must exist before it can be written to, in every verification
     // policy. This is what keeps an unknown `site_id` from provisioning a
     // Matrix Space on its first comment: only registered (API/CLI) or
-    // operator-declared (`[sites]`) sites reach the intent queue.
+    // operator-declared (`[sites]`) sites reach the submission queue.
     if config_entry.is_none() && db_auth.is_none() {
         return Err(AppError::SiteNotRegistered(format!(
             "site `{site_id}` is not registered; create it with POST /api/v1/sites \

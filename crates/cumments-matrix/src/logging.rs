@@ -77,24 +77,24 @@ impl MatrixDriver for LoggingMatrixDriver {
         reply_to: Option<&str>,
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Post message to room={}. Author={} (guest={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, intent={:?}): {}",
+            "LOGGING: Post message to room={}. Author={} (guest={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, submission={:?}): {}",
             room_id,
             display_name,
             guest_id,
             reply_to,
             reply_to_body,
             reply_to_sender,
-            intent_id,
+            submission_id,
             media.as_ref().map(|m| m.url.as_str()).unwrap_or(content)
         );
         Ok(format!(
             "log_event_{}_{}",
-            intent_id.unwrap_or(0),
+            submission_id.unwrap_or(0),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         ))
     }
@@ -137,13 +137,13 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         info!(
-            "LOGGING: Post location {geo_uri} in {room_id} ({}) as {} intent {}",
+            "LOGGING: Post location {geo_uri} in {room_id} ({}) as {} submission {}",
             description.unwrap_or(""),
             display_name,
-            intent_id.map_or_else(|| "-".to_string(), |id| id.to_string())
+            submission_id.map_or_else(|| "-".to_string(), |id| id.to_string())
         );
         Ok(format!("$logging-location-{geo_uri}"))
     }
@@ -158,13 +158,13 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_signature: &str,
         _author_challenge: &str,
         _site_id: &SiteId,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Update message {} in room={}. Author={} (guest={}, intent={:?}): {}",
-            event_id, room_id, display_name, guest_id, intent_id, new_content
+            "LOGGING: Update message {} in room={}. Author={} (guest={}, submission={:?}): {}",
+            event_id, room_id, display_name, guest_id, submission_id, new_content
         );
         Ok(format!("log_update_{}", event_id))
     }
@@ -173,14 +173,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         &self,
         room_id: &str,
         event_id: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
     ) -> Result<()> {
         info!(
-            "LOGGING: Redact message {} in room={} (intent={:?}, proof={})",
+            "LOGGING: Redact message {} in room={} (submission={:?}, proof={})",
             event_id,
             room_id,
-            intent_id,
+            submission_id,
             proof.is_some()
         );
         Ok(())

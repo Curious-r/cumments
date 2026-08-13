@@ -39,7 +39,7 @@ fn guest_message(event_id: &str, body: &str) -> Message {
         edited_at: None,
         reply_to: Some("$parent:hs".to_string()),
         thread_root: None,
-        intent_id: Some(42),
+        submission_id: Some(42),
         status: MessageStatus::Active,
         redacted_at: None,
         redacted_by: None,
@@ -74,7 +74,7 @@ async fn save_message_records_typed_content_and_internal_fields() {
         Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc")
     );
     assert_eq!(stored.reply_to.as_deref(), Some("$parent:hs"));
-    assert_eq!(stored.intent_id, Some(42));
+    assert_eq!(stored.submission_id, Some(42));
     assert_eq!(
         stored.content,
         Content::Text(TextContent {

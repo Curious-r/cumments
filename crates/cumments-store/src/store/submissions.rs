@@ -1,29 +1,29 @@
 use super::DbStore;
 use crate::entities::{
-    active_enums::IntentStatus, idempotency_keys, intent_queue_delete_comment,
-    intent_queue_post_comment, intent_queue_update_comment,
+    active_enums::SubmissionStatus, delete_submissions, idempotency_keys, post_submissions,
+    update_submissions,
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::intents::{
-    DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
-    PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
+use cumments_core::commands::{
+    DeleteCommentCommand, PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission,
+    PostCommentCommand, StuckPostSubmission, UpdateCommentCommand,
 };
-use cumments_core::ports::{IdempotencyInput, IdempotencyOutcome, IntentStore};
+use cumments_core::ports::{IdempotencyInput, IdempotencyOutcome, SubmissionStore};
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
     QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait, UpdateMany, Value,
 };
 use tracing::warn;
 
-/// Maximum failed attempts before an intent is marked `failed` (dead-lettered).
+/// Maximum failed attempts before an command is marked `failed` (dead-lettered).
 const MAX_RETRIES: i64 = 5;
 /// Base exponential-backoff delay after the first failure.
 const BASE_BACKOFF_SECS: i64 = 30;
 /// Upper bound for the backoff delay.
 const MAX_BACKOFF_SECS: i64 = 1800;
 /// Minimum time between two timeout confirmation passes for the same post
-/// intent. Matches the reconciler's 60s fallback interval so the three
+/// command. Matches the reconciler's 60s fallback interval so the three
 /// confirmations required before dead-lettering are genuinely spread across
 /// reconcile cycles.
 const TIMEOUT_CONFIRMATION_COOLDOWN_MS: i64 = 60_000;
@@ -53,7 +53,7 @@ where
 }
 
 #[async_trait]
-impl IntentStore for DbStore {
+impl SubmissionStore for DbStore {
     async fn lookup_idempotency(
         &self,
         idempotency: &IdempotencyInput,
@@ -65,72 +65,72 @@ impl IntentStore for DbStore {
         Ok(outcome)
     }
 
-    async fn save_post_intent(&self, intent: &PostCommentIntent) -> Result<i64> {
-        let payload = serde_json::to_string(intent)?;
+    async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64> {
+        let payload = serde_json::to_string(command)?;
 
-        let active_model = intent_queue_post_comment::ActiveModel {
+        let active_model = post_submissions::ActiveModel {
             payload: Set(payload),
-            status: Set(IntentStatus::Pending),
+            status: Set(SubmissionStatus::Pending),
             retry_count: Set(0),
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
-            author_public_key: Set(Some(intent.author_public_key.clone())),
+            author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
-        let result = intent_queue_post_comment::Entity::insert(active_model)
+        let result = post_submissions::Entity::insert(active_model)
             .exec(&self.db)
             .await?;
         Ok(result.last_insert_id)
     }
 
-    async fn save_delete_intent(&self, intent: &DeleteCommentIntent) -> Result<i64> {
-        let payload = serde_json::to_string(intent)?;
+    async fn save_delete_submission(&self, command: &DeleteCommentCommand) -> Result<i64> {
+        let payload = serde_json::to_string(command)?;
 
-        let active_model = intent_queue_delete_comment::ActiveModel {
+        let active_model = delete_submissions::ActiveModel {
             payload: Set(payload),
-            status: Set(IntentStatus::Pending),
-            target_event_id: Set(Some(intent.event_id.clone())),
+            status: Set(SubmissionStatus::Pending),
+            target_event_id: Set(Some(command.event_id.clone())),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
-        let result = intent_queue_delete_comment::Entity::insert(active_model)
+        let result = delete_submissions::Entity::insert(active_model)
             .exec(&self.db)
             .await?;
         Ok(result.last_insert_id)
     }
 
-    async fn save_update_intent(&self, intent: &UpdateCommentIntent) -> Result<i64> {
-        let active_model = intent_queue_update_comment::ActiveModel {
-            site_id: Set(intent.site_id.as_str().to_owned()),
-            post_slug: Set(intent.post_slug.as_str().to_owned()),
-            event_id: Set(intent.event_id.clone()),
-            content: Set(intent.content.clone()),
-            author_public_key: Set(Some(intent.author_public_key.clone())),
-            author_signature: Set(Some(intent.author_signature.clone())),
-            author_challenge: Set(Some(intent.author_challenge.clone())),
-            status: Set(IntentStatus::Pending),
+    async fn save_update_submission(&self, command: &UpdateCommentCommand) -> Result<i64> {
+        let active_model = update_submissions::ActiveModel {
+            site_id: Set(command.site_id.as_str().to_owned()),
+            post_slug: Set(command.post_slug.as_str().to_owned()),
+            event_id: Set(command.event_id.clone()),
+            content: Set(command.content.clone()),
+            author_public_key: Set(Some(command.author_public_key.clone())),
+            author_signature: Set(Some(command.author_signature.clone())),
+            author_challenge: Set(Some(command.author_challenge.clone())),
+            status: Set(SubmissionStatus::Pending),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
 
-        let result = intent_queue_update_comment::Entity::insert(active_model)
+        let result = update_submissions::Entity::insert(active_model)
             .exec(&self.db)
             .await?;
         Ok(result.last_insert_id)
     }
 
-    async fn save_post_intent_idempotent(
+    async fn save_post_submission_idempotent(
         &self,
-        intent: &PostCommentIntent,
+        command: &PostCommentCommand,
         idempotency: &IdempotencyInput,
     ) -> Result<IdempotencyOutcome> {
         let txn = self.db.begin().await?;
@@ -139,49 +139,49 @@ impl IntentStore for DbStore {
             return Ok(outcome);
         }
 
-        let payload = serde_json::to_string(intent)?;
-        let active_model = intent_queue_post_comment::ActiveModel {
+        let payload = serde_json::to_string(command)?;
+        let active_model = post_submissions::ActiveModel {
             payload: Set(payload),
-            status: Set(IntentStatus::Pending),
+            status: Set(SubmissionStatus::Pending),
             retry_count: Set(0),
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
-            author_public_key: Set(Some(intent.author_public_key.clone())),
+            author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
-        let result = intent_queue_post_comment::Entity::insert(active_model)
+        let result = post_submissions::Entity::insert(active_model)
             .exec(&txn)
             .await?;
-        let intent_id = result.last_insert_id;
+        let submission_id = result.last_insert_id;
 
         let outcome = self
-            .save_idempotency_record(&txn, idempotency, intent_id)
+            .save_idempotency_record(&txn, idempotency, submission_id)
             .await?;
         if let IdempotencyOutcome::Replayed {
-            intent_id: existing_id,
+            submission_id: existing_id,
         } = &outcome
-            && *existing_id != intent_id
+            && *existing_id != submission_id
         {
-            // Another writer won the key race: drop the intent this request
+            // Another writer won the key race: drop the command this request
             // just queued so only the winner's work is ever processed.
-            intent_queue_post_comment::Entity::delete_by_id(intent_id)
+            post_submissions::Entity::delete_by_id(submission_id)
                 .exec(&txn)
                 .await?;
         }
         if matches!(outcome, IdempotencyOutcome::Reused) {
-            // Roll back the duplicate intent; invalid reuse is not recorded.
+            // Roll back the duplicate command; invalid reuse is not recorded.
             return Ok(outcome);
         }
         txn.commit().await?;
         Ok(outcome)
     }
 
-    async fn save_delete_intent_idempotent(
+    async fn save_delete_submission_idempotent(
         &self,
-        intent: &DeleteCommentIntent,
+        command: &DeleteCommentCommand,
         idempotency: &IdempotencyInput,
     ) -> Result<IdempotencyOutcome> {
         let txn = self.db.begin().await?;
@@ -190,30 +190,30 @@ impl IntentStore for DbStore {
             return Ok(outcome);
         }
 
-        let payload = serde_json::to_string(intent)?;
-        let active_model = intent_queue_delete_comment::ActiveModel {
+        let payload = serde_json::to_string(command)?;
+        let active_model = delete_submissions::ActiveModel {
             payload: Set(payload),
-            status: Set(IntentStatus::Pending),
-            target_event_id: Set(Some(intent.event_id.clone())),
+            status: Set(SubmissionStatus::Pending),
+            target_event_id: Set(Some(command.event_id.clone())),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
-        let result = intent_queue_delete_comment::Entity::insert(active_model)
+        let result = delete_submissions::Entity::insert(active_model)
             .exec(&txn)
             .await?;
-        let intent_id = result.last_insert_id;
+        let submission_id = result.last_insert_id;
 
         let outcome = self
-            .save_idempotency_record(&txn, idempotency, intent_id)
+            .save_idempotency_record(&txn, idempotency, submission_id)
             .await?;
         if let IdempotencyOutcome::Replayed {
-            intent_id: existing_id,
+            submission_id: existing_id,
         } = &outcome
-            && *existing_id != intent_id
+            && *existing_id != submission_id
         {
-            intent_queue_delete_comment::Entity::delete_by_id(intent_id)
+            delete_submissions::Entity::delete_by_id(submission_id)
                 .exec(&txn)
                 .await?;
         }
@@ -224,9 +224,9 @@ impl IntentStore for DbStore {
         Ok(outcome)
     }
 
-    async fn save_update_intent_idempotent(
+    async fn save_update_submission_idempotent(
         &self,
-        intent: &UpdateCommentIntent,
+        command: &UpdateCommentCommand,
         idempotency: &IdempotencyInput,
     ) -> Result<IdempotencyOutcome> {
         let txn = self.db.begin().await?;
@@ -235,34 +235,34 @@ impl IntentStore for DbStore {
             return Ok(outcome);
         }
 
-        let active_model = intent_queue_update_comment::ActiveModel {
-            site_id: Set(intent.site_id.as_str().to_owned()),
-            post_slug: Set(intent.post_slug.as_str().to_owned()),
-            event_id: Set(intent.event_id.clone()),
-            content: Set(intent.content.clone()),
-            author_public_key: Set(Some(intent.author_public_key.clone())),
-            author_signature: Set(Some(intent.author_signature.clone())),
-            author_challenge: Set(Some(intent.author_challenge.clone())),
-            status: Set(IntentStatus::Pending),
+        let active_model = update_submissions::ActiveModel {
+            site_id: Set(command.site_id.as_str().to_owned()),
+            post_slug: Set(command.post_slug.as_str().to_owned()),
+            event_id: Set(command.event_id.clone()),
+            content: Set(command.content.clone()),
+            author_public_key: Set(Some(command.author_public_key.clone())),
+            author_signature: Set(Some(command.author_signature.clone())),
+            author_challenge: Set(Some(command.author_challenge.clone())),
+            status: Set(SubmissionStatus::Pending),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
-        let result = intent_queue_update_comment::Entity::insert(active_model)
+        let result = update_submissions::Entity::insert(active_model)
             .exec(&txn)
             .await?;
-        let intent_id = result.last_insert_id;
+        let submission_id = result.last_insert_id;
 
         let outcome = self
-            .save_idempotency_record(&txn, idempotency, intent_id)
+            .save_idempotency_record(&txn, idempotency, submission_id)
             .await?;
         if let IdempotencyOutcome::Replayed {
-            intent_id: existing_id,
+            submission_id: existing_id,
         } = &outcome
-            && *existing_id != intent_id
+            && *existing_id != submission_id
         {
-            intent_queue_update_comment::Entity::delete_by_id(intent_id)
+            update_submissions::Entity::delete_by_id(submission_id)
                 .exec(&txn)
                 .await?;
         }
@@ -273,80 +273,80 @@ impl IntentStore for DbStore {
         Ok(outcome)
     }
 
-    async fn get_pending_post_intents(&self, limit: u64) -> Result<Vec<PendingPostIntent>> {
-        let models = intent_queue_post_comment::Entity::find()
+    async fn get_pending_post_submissions(&self, limit: u64) -> Result<Vec<PendingPostSubmission>> {
+        let models = post_submissions::Entity::find()
             .filter(
-                intent_queue_post_comment::COLUMN
+                post_submissions::COLUMN
                     .status
-                    .eq(IntentStatus::Pending),
+                    .eq(SubmissionStatus::Pending),
             )
-            .filter(attempt_due(
-                intent_queue_post_comment::Column::NextAttemptAt,
-            ))
-            .order_by_asc(intent_queue_post_comment::Column::CreatedAt)
+            .filter(attempt_due(post_submissions::Column::NextAttemptAt))
+            .order_by_asc(post_submissions::Column::CreatedAt)
             .limit(limit)
             .all(&self.db)
             .await?;
 
-        let mut intents = Vec::new();
+        let mut submissions = Vec::new();
         for m in models {
-            match serde_json::from_str::<PostCommentIntent>(&m.payload) {
-                Ok(intent) => intents.push(PendingPostIntent { id: m.id, intent }),
+            match serde_json::from_str::<PostCommentCommand>(&m.payload) {
+                Ok(command) => submissions.push(PendingPostSubmission { id: m.id, command }),
                 Err(e) => warn!(
-                    "Skipping corrupt post intent {} (will not block the batch): {:#}",
+                    "Skipping corrupt post command {} (will not block the batch): {:#}",
                     m.id, e
                 ),
             }
         }
-        Ok(intents)
+        Ok(submissions)
     }
 
-    async fn get_pending_delete_intents(&self, limit: u64) -> Result<Vec<PendingDeleteIntent>> {
-        let models = intent_queue_delete_comment::Entity::find()
+    async fn get_pending_delete_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingDeleteSubmission>> {
+        let models = delete_submissions::Entity::find()
             .filter(
-                intent_queue_delete_comment::COLUMN
+                delete_submissions::COLUMN
                     .status
-                    .eq(IntentStatus::Pending),
+                    .eq(SubmissionStatus::Pending),
             )
-            .filter(attempt_due(
-                intent_queue_delete_comment::Column::NextAttemptAt,
-            ))
-            .order_by_asc(intent_queue_delete_comment::Column::CreatedAt)
+            .filter(attempt_due(delete_submissions::Column::NextAttemptAt))
+            .order_by_asc(delete_submissions::Column::CreatedAt)
             .limit(limit)
             .all(&self.db)
             .await?;
 
-        let mut intents = Vec::new();
+        let mut submissions = Vec::new();
         for m in models {
-            match serde_json::from_str::<DeleteCommentIntent>(&m.payload) {
-                Ok(intent) => intents.push(PendingDeleteIntent { id: m.id, intent }),
+            match serde_json::from_str::<DeleteCommentCommand>(&m.payload) {
+                Ok(command) => submissions.push(PendingDeleteSubmission { id: m.id, command }),
                 Err(e) => warn!(
-                    "Skipping corrupt delete intent {} (will not block the batch): {:#}",
+                    "Skipping corrupt delete command {} (will not block the batch): {:#}",
                     m.id, e
                 ),
             }
         }
-        Ok(intents)
+        Ok(submissions)
     }
 
-    async fn get_pending_update_intents(&self, limit: u64) -> Result<Vec<PendingUpdateIntent>> {
-        let models = intent_queue_update_comment::Entity::find()
+    async fn get_pending_update_submissions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<PendingUpdateSubmission>> {
+        let models = update_submissions::Entity::find()
             .filter(
-                intent_queue_update_comment::COLUMN
+                update_submissions::COLUMN
                     .status
-                    .eq(IntentStatus::Pending),
+                    .eq(SubmissionStatus::Pending),
             )
-            .filter(attempt_due(
-                intent_queue_update_comment::Column::NextAttemptAt,
-            ))
-            .order_by_asc(intent_queue_update_comment::Column::CreatedAt)
+            .filter(attempt_due(update_submissions::Column::NextAttemptAt))
+            .order_by_asc(update_submissions::Column::CreatedAt)
             .limit(limit)
             .all(&self.db)
             .await?;
 
-        let mut intents = Vec::new();
+        let mut submissions = Vec::new();
         for m in models {
-            let intent = UpdateCommentIntent {
+            let command = UpdateCommentCommand {
                 site_id: m.site_id.into(),
                 post_slug: m.post_slug.into(),
                 event_id: m.event_id,
@@ -355,163 +355,163 @@ impl IntentStore for DbStore {
                 author_signature: m.author_signature.unwrap_or_default(),
                 author_challenge: m.author_challenge.unwrap_or_default(),
             };
-            intents.push(PendingUpdateIntent { id: m.id, intent });
+            submissions.push(PendingUpdateSubmission { id: m.id, command });
         }
-        Ok(intents)
+        Ok(submissions)
     }
 
-    async fn mark_post_intent_waiting_for_sync(
+    async fn mark_post_submission_waiting_for_sync(
         &self,
         id: i64,
         event_id: &str,
         room_id: &str,
     ) -> Result<()> {
         self.transition_status(
-            IntentStatus::WaitingForSync,
-            intent_queue_post_comment::Column::Status,
-            intent_queue_post_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_post_comment::Entity>| {
+            SubmissionStatus::WaitingForSync,
+            post_submissions::Column::Status,
+            post_submissions::Column::UpdatedAt,
+            |query: UpdateMany<post_submissions::Entity>| {
                 query
                     .col_expr(
-                        intent_queue_post_comment::COLUMN.matrix_event_id,
+                        post_submissions::COLUMN.matrix_event_id,
                         sea_orm::sea_query::Expr::value(event_id),
                     )
                     .col_expr(
-                        intent_queue_post_comment::COLUMN.room_id,
+                        post_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
                     )
-                    .filter(intent_queue_post_comment::COLUMN.id.eq(id))
-                    // Never regress an already-completed intent: if the
+                    .filter(post_submissions::COLUMN.id.eq(id))
+                    // Never regress an already-completed command: if the
                     // projector closed the loop before this write-back
                     // (push arrived first), keep the completed status.
                     .filter(
-                        intent_queue_post_comment::COLUMN
+                        post_submissions::COLUMN
                             .status
-                            .eq(IntentStatus::Pending),
+                            .eq(SubmissionStatus::Pending),
                     )
             },
         )
         .await
     }
 
-    async fn mark_post_intent_completed_by_id(&self, id: i64) -> Result<()> {
+    async fn mark_post_submission_completed_by_id(&self, id: i64) -> Result<()> {
         self.transition_status(
-            IntentStatus::Completed,
-            intent_queue_post_comment::Column::Status,
-            intent_queue_post_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_post_comment::Entity>| {
+            SubmissionStatus::Completed,
+            post_submissions::Column::Status,
+            post_submissions::Column::UpdatedAt,
+            |query: UpdateMany<post_submissions::Entity>| {
                 query
-                    .filter(intent_queue_post_comment::COLUMN.id.eq(id))
-                    // Allow a failed intent to be completed when the
+                    .filter(post_submissions::COLUMN.id.eq(id))
+                    // Allow a failed command to be completed when the
                     // projector later observes its event: failure may have
                     // been a false dead-letter from the timeout pass.
-                    .filter(intent_queue_post_comment::COLUMN.status.is_in([
-                        IntentStatus::Pending,
-                        IntentStatus::WaitingForSync,
-                        IntentStatus::Failed,
+                    .filter(post_submissions::COLUMN.status.is_in([
+                        SubmissionStatus::Pending,
+                        SubmissionStatus::WaitingForSync,
+                        SubmissionStatus::Failed,
                     ]))
             },
         )
         .await
     }
 
-    async fn mark_update_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
+    async fn mark_update_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
         self.transition_status(
-            IntentStatus::WaitingForSync,
-            intent_queue_update_comment::Column::Status,
-            intent_queue_update_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_update_comment::Entity>| {
+            SubmissionStatus::WaitingForSync,
+            update_submissions::Column::Status,
+            update_submissions::Column::UpdatedAt,
+            |query: UpdateMany<update_submissions::Entity>| {
                 query
                     .col_expr(
-                        intent_queue_update_comment::COLUMN.room_id,
+                        update_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
                     )
-                    .filter(intent_queue_update_comment::COLUMN.id.eq(id))
-                    // Never regress an already-completed intent (push may have
+                    .filter(update_submissions::COLUMN.id.eq(id))
+                    // Never regress an already-completed command (push may have
                     // arrived before this write-back).
                     .filter(
-                        intent_queue_update_comment::COLUMN
+                        update_submissions::COLUMN
                             .status
-                            .eq(IntentStatus::Pending),
+                            .eq(SubmissionStatus::Pending),
                     )
             },
         )
         .await
     }
 
-    async fn mark_update_intent_completed_by_id(&self, id: i64) -> Result<()> {
+    async fn mark_update_submission_completed_by_id(&self, id: i64) -> Result<()> {
         self.transition_status(
-            IntentStatus::Completed,
-            intent_queue_update_comment::Column::Status,
-            intent_queue_update_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_update_comment::Entity>| {
+            SubmissionStatus::Completed,
+            update_submissions::Column::Status,
+            update_submissions::Column::UpdatedAt,
+            |query: UpdateMany<update_submissions::Entity>| {
                 query
-                    .filter(intent_queue_update_comment::COLUMN.id.eq(id))
-                    // Never resurrect a failed or already-completed intent.
+                    .filter(update_submissions::COLUMN.id.eq(id))
+                    // Never resurrect a failed or already-completed command.
                     .filter(
-                        intent_queue_update_comment::COLUMN
+                        update_submissions::COLUMN
                             .status
-                            .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+                            .is_in([SubmissionStatus::Pending, SubmissionStatus::WaitingForSync]),
                     )
             },
         )
         .await
     }
 
-    async fn mark_delete_intent_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
+    async fn mark_delete_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
         self.transition_status(
-            IntentStatus::WaitingForSync,
-            intent_queue_delete_comment::Column::Status,
-            intent_queue_delete_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_delete_comment::Entity>| {
+            SubmissionStatus::WaitingForSync,
+            delete_submissions::Column::Status,
+            delete_submissions::Column::UpdatedAt,
+            |query: UpdateMany<delete_submissions::Entity>| {
                 query
                     .col_expr(
-                        intent_queue_delete_comment::COLUMN.room_id,
+                        delete_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
                     )
-                    .filter(intent_queue_delete_comment::COLUMN.id.eq(id))
-                    // Never regress an already-completed intent (push may have
+                    .filter(delete_submissions::COLUMN.id.eq(id))
+                    // Never regress an already-completed command (push may have
                     // arrived before this write-back).
                     .filter(
-                        intent_queue_delete_comment::COLUMN
+                        delete_submissions::COLUMN
                             .status
-                            .eq(IntentStatus::Pending),
+                            .eq(SubmissionStatus::Pending),
                     )
             },
         )
         .await
     }
 
-    async fn record_post_intent_failure(&self, id: i64, error: &str) -> Result<bool> {
-        let Some(model) = intent_queue_post_comment::Entity::find_by_id(id)
+    async fn record_post_submission_failure(&self, id: i64, error: &str) -> Result<bool> {
+        let Some(model) = post_submissions::Entity::find_by_id(id)
             .one(&self.db)
             .await?
         else {
             return Ok(false);
         };
 
-        // Completed or dead-lettered intents must not be resurrected.
-        if model.status == IntentStatus::Completed || model.status == IntentStatus::Failed {
+        // Completed or dead-lettered submissions must not be resurrected.
+        if model.status == SubmissionStatus::Completed || model.status == SubmissionStatus::Failed {
             return Ok(false);
         }
 
         if model.retry_count >= MAX_RETRIES {
-            let result = intent_queue_post_comment::Entity::update_many()
+            let result = post_submissions::Entity::update_many()
                 .col_expr(
-                    intent_queue_post_comment::Column::Status,
-                    sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                    post_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
                 )
                 .col_expr(
-                    intent_queue_post_comment::Column::UpdatedAt,
+                    post_submissions::Column::UpdatedAt,
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .col_expr(
-                    intent_queue_post_comment::Column::LastError,
+                    post_submissions::Column::LastError,
                     sea_orm::sea_query::Expr::value(error),
                 )
-                .filter(intent_queue_post_comment::Column::Id.eq(id))
-                .filter(intent_queue_post_comment::Column::Status.eq(model.status))
-                .filter(intent_queue_post_comment::Column::RetryCount.eq(model.retry_count))
+                .filter(post_submissions::Column::Id.eq(id))
+                .filter(post_submissions::Column::Status.eq(model.status))
+                .filter(post_submissions::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
             if result.rows_affected == 0 {
@@ -520,30 +520,30 @@ impl IntentStore for DbStore {
             Ok(false)
         } else {
             let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
-            let result = intent_queue_post_comment::Entity::update_many()
+            let result = post_submissions::Entity::update_many()
                 .col_expr(
-                    intent_queue_post_comment::Column::Status,
-                    sea_orm::sea_query::Expr::value(IntentStatus::Pending),
+                    post_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Pending),
                 )
                 .col_expr(
-                    intent_queue_post_comment::Column::RetryCount,
+                    post_submissions::Column::RetryCount,
                     sea_orm::sea_query::Expr::value(model.retry_count + 1),
                 )
                 .col_expr(
-                    intent_queue_post_comment::Column::NextAttemptAt,
+                    post_submissions::Column::NextAttemptAt,
                     sea_orm::sea_query::Expr::value(next_attempt),
                 )
                 .col_expr(
-                    intent_queue_post_comment::Column::LastError,
+                    post_submissions::Column::LastError,
                     sea_orm::sea_query::Expr::value(error),
                 )
                 .col_expr(
-                    intent_queue_post_comment::Column::UpdatedAt,
+                    post_submissions::Column::UpdatedAt,
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
-                .filter(intent_queue_post_comment::Column::Id.eq(id))
-                .filter(intent_queue_post_comment::Column::Status.eq(model.status))
-                .filter(intent_queue_post_comment::Column::RetryCount.eq(model.retry_count))
+                .filter(post_submissions::Column::Id.eq(id))
+                .filter(post_submissions::Column::Status.eq(model.status))
+                .filter(post_submissions::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
             if result.rows_affected == 0 {
@@ -553,36 +553,36 @@ impl IntentStore for DbStore {
         }
     }
 
-    async fn record_delete_intent_failure(&self, id: i64, error: &str) -> Result<bool> {
-        let Some(model) = intent_queue_delete_comment::Entity::find_by_id(id)
+    async fn record_delete_submission_failure(&self, id: i64, error: &str) -> Result<bool> {
+        let Some(model) = delete_submissions::Entity::find_by_id(id)
             .one(&self.db)
             .await?
         else {
             return Ok(false);
         };
 
-        // Completed or dead-lettered intents must not be resurrected.
-        if model.status == IntentStatus::Completed || model.status == IntentStatus::Failed {
+        // Completed or dead-lettered submissions must not be resurrected.
+        if model.status == SubmissionStatus::Completed || model.status == SubmissionStatus::Failed {
             return Ok(false);
         }
 
         if model.retry_count >= MAX_RETRIES {
-            let result = intent_queue_delete_comment::Entity::update_many()
+            let result = delete_submissions::Entity::update_many()
                 .col_expr(
-                    intent_queue_delete_comment::Column::Status,
-                    sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                    delete_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
                 )
                 .col_expr(
-                    intent_queue_delete_comment::Column::UpdatedAt,
+                    delete_submissions::Column::UpdatedAt,
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .col_expr(
-                    intent_queue_delete_comment::Column::LastError,
+                    delete_submissions::Column::LastError,
                     sea_orm::sea_query::Expr::value(error),
                 )
-                .filter(intent_queue_delete_comment::Column::Id.eq(id))
-                .filter(intent_queue_delete_comment::Column::Status.eq(model.status))
-                .filter(intent_queue_delete_comment::Column::RetryCount.eq(model.retry_count))
+                .filter(delete_submissions::Column::Id.eq(id))
+                .filter(delete_submissions::Column::Status.eq(model.status))
+                .filter(delete_submissions::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
             if result.rows_affected == 0 {
@@ -591,30 +591,30 @@ impl IntentStore for DbStore {
             Ok(false)
         } else {
             let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
-            let result = intent_queue_delete_comment::Entity::update_many()
+            let result = delete_submissions::Entity::update_many()
                 .col_expr(
-                    intent_queue_delete_comment::Column::Status,
-                    sea_orm::sea_query::Expr::value(IntentStatus::Pending),
+                    delete_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Pending),
                 )
                 .col_expr(
-                    intent_queue_delete_comment::Column::RetryCount,
+                    delete_submissions::Column::RetryCount,
                     sea_orm::sea_query::Expr::value(model.retry_count + 1),
                 )
                 .col_expr(
-                    intent_queue_delete_comment::Column::NextAttemptAt,
+                    delete_submissions::Column::NextAttemptAt,
                     sea_orm::sea_query::Expr::value(next_attempt),
                 )
                 .col_expr(
-                    intent_queue_delete_comment::Column::LastError,
+                    delete_submissions::Column::LastError,
                     sea_orm::sea_query::Expr::value(error),
                 )
                 .col_expr(
-                    intent_queue_delete_comment::Column::UpdatedAt,
+                    delete_submissions::Column::UpdatedAt,
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
-                .filter(intent_queue_delete_comment::Column::Id.eq(id))
-                .filter(intent_queue_delete_comment::Column::Status.eq(model.status))
-                .filter(intent_queue_delete_comment::Column::RetryCount.eq(model.retry_count))
+                .filter(delete_submissions::Column::Id.eq(id))
+                .filter(delete_submissions::Column::Status.eq(model.status))
+                .filter(delete_submissions::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
             if result.rows_affected == 0 {
@@ -624,36 +624,36 @@ impl IntentStore for DbStore {
         }
     }
 
-    async fn record_update_intent_failure(&self, id: i64, error: &str) -> Result<bool> {
-        let Some(model) = intent_queue_update_comment::Entity::find_by_id(id)
+    async fn record_update_submission_failure(&self, id: i64, error: &str) -> Result<bool> {
+        let Some(model) = update_submissions::Entity::find_by_id(id)
             .one(&self.db)
             .await?
         else {
             return Ok(false);
         };
 
-        // Completed or dead-lettered intents must not be resurrected.
-        if model.status == IntentStatus::Completed || model.status == IntentStatus::Failed {
+        // Completed or dead-lettered submissions must not be resurrected.
+        if model.status == SubmissionStatus::Completed || model.status == SubmissionStatus::Failed {
             return Ok(false);
         }
 
         if model.retry_count >= MAX_RETRIES {
-            let result = intent_queue_update_comment::Entity::update_many()
+            let result = update_submissions::Entity::update_many()
                 .col_expr(
-                    intent_queue_update_comment::Column::Status,
-                    sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                    update_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
                 )
                 .col_expr(
-                    intent_queue_update_comment::Column::UpdatedAt,
+                    update_submissions::Column::UpdatedAt,
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
                 .col_expr(
-                    intent_queue_update_comment::Column::LastError,
+                    update_submissions::Column::LastError,
                     sea_orm::sea_query::Expr::value(error),
                 )
-                .filter(intent_queue_update_comment::Column::Id.eq(id))
-                .filter(intent_queue_update_comment::Column::Status.eq(model.status))
-                .filter(intent_queue_update_comment::Column::RetryCount.eq(model.retry_count))
+                .filter(update_submissions::Column::Id.eq(id))
+                .filter(update_submissions::Column::Status.eq(model.status))
+                .filter(update_submissions::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
             if result.rows_affected == 0 {
@@ -662,30 +662,30 @@ impl IntentStore for DbStore {
             Ok(false)
         } else {
             let next_attempt = chrono::Utc::now() + backoff_after(model.retry_count);
-            let result = intent_queue_update_comment::Entity::update_many()
+            let result = update_submissions::Entity::update_many()
                 .col_expr(
-                    intent_queue_update_comment::Column::Status,
-                    sea_orm::sea_query::Expr::value(IntentStatus::Pending),
+                    update_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Pending),
                 )
                 .col_expr(
-                    intent_queue_update_comment::Column::RetryCount,
+                    update_submissions::Column::RetryCount,
                     sea_orm::sea_query::Expr::value(model.retry_count + 1),
                 )
                 .col_expr(
-                    intent_queue_update_comment::Column::NextAttemptAt,
+                    update_submissions::Column::NextAttemptAt,
                     sea_orm::sea_query::Expr::value(next_attempt),
                 )
                 .col_expr(
-                    intent_queue_update_comment::Column::LastError,
+                    update_submissions::Column::LastError,
                     sea_orm::sea_query::Expr::value(error),
                 )
                 .col_expr(
-                    intent_queue_update_comment::Column::UpdatedAt,
+                    update_submissions::Column::UpdatedAt,
                     sea_orm::sea_query::Expr::value(chrono::Utc::now()),
                 )
-                .filter(intent_queue_update_comment::Column::Id.eq(id))
-                .filter(intent_queue_update_comment::Column::Status.eq(model.status))
-                .filter(intent_queue_update_comment::Column::RetryCount.eq(model.retry_count))
+                .filter(update_submissions::Column::Id.eq(id))
+                .filter(update_submissions::Column::Status.eq(model.status))
+                .filter(update_submissions::Column::RetryCount.eq(model.retry_count))
                 .exec(&self.db)
                 .await?;
             if result.rows_affected == 0 {
@@ -695,43 +695,36 @@ impl IntentStore for DbStore {
         }
     }
 
-    async fn mark_post_intent_completed(&self, event_id: &str) -> Result<()> {
+    async fn mark_post_submission_completed(&self, event_id: &str) -> Result<()> {
         self.transition_status(
-            IntentStatus::Completed,
-            intent_queue_post_comment::Column::Status,
-            intent_queue_post_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_post_comment::Entity>| {
-                query.filter(
-                    intent_queue_post_comment::COLUMN
-                        .matrix_event_id
-                        .eq(event_id),
-                )
+            SubmissionStatus::Completed,
+            post_submissions::Column::Status,
+            post_submissions::Column::UpdatedAt,
+            |query: UpdateMany<post_submissions::Entity>| {
+                query.filter(post_submissions::COLUMN.matrix_event_id.eq(event_id))
             },
         )
         .await
     }
 
-    async fn get_stuck_post_intents(
+    async fn get_stuck_post_submissions(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<StuckPostIntent>> {
-        let models = intent_queue_post_comment::Entity::find()
+    ) -> Result<Vec<StuckPostSubmission>> {
+        let models = post_submissions::Entity::find()
             .filter(
-                intent_queue_post_comment::COLUMN
+                post_submissions::COLUMN
                     .status
-                    .eq(IntentStatus::WaitingForSync),
+                    .eq(SubmissionStatus::WaitingForSync),
             )
-            .filter(intent_queue_post_comment::Column::UpdatedAt.lte(cutoff))
+            .filter(post_submissions::Column::UpdatedAt.lte(cutoff))
             .filter(
                 Condition::any()
-                    .add(intent_queue_post_comment::Column::LastTimeoutConfirmationAt.is_null())
-                    .add(
-                        intent_queue_post_comment::Column::LastTimeoutConfirmationAt.lte(
-                            chrono::Utc::now().timestamp_millis()
-                                - TIMEOUT_CONFIRMATION_COOLDOWN_MS,
-                        ),
-                    ),
+                    .add(post_submissions::Column::LastTimeoutConfirmationAt.is_null())
+                    .add(post_submissions::Column::LastTimeoutConfirmationAt.lte(
+                        chrono::Utc::now().timestamp_millis() - TIMEOUT_CONFIRMATION_COOLDOWN_MS,
+                    )),
             )
             .limit(limit)
             .all(&self.db)
@@ -739,7 +732,7 @@ impl IntentStore for DbStore {
 
         Ok(models
             .into_iter()
-            .map(|m| StuckPostIntent {
+            .map(|m| StuckPostSubmission {
                 id: m.id,
                 event_id: m.matrix_event_id.unwrap_or_default(),
                 room_id: m.room_id,
@@ -747,18 +740,18 @@ impl IntentStore for DbStore {
             .collect())
     }
 
-    async fn get_stuck_delete_intent_ids(
+    async fn get_stuck_delete_submission_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
     ) -> Result<Vec<i64>> {
-        let models = intent_queue_delete_comment::Entity::find()
+        let models = delete_submissions::Entity::find()
             .filter(
-                intent_queue_delete_comment::COLUMN
+                delete_submissions::COLUMN
                     .status
-                    .eq(IntentStatus::WaitingForSync),
+                    .eq(SubmissionStatus::WaitingForSync),
             )
-            .filter(intent_queue_delete_comment::Column::UpdatedAt.lte(cutoff))
+            .filter(delete_submissions::Column::UpdatedAt.lte(cutoff))
             .limit(limit)
             .all(&self.db)
             .await?;
@@ -766,18 +759,18 @@ impl IntentStore for DbStore {
         Ok(models.into_iter().map(|m| m.id).collect())
     }
 
-    async fn get_stuck_update_intent_ids(
+    async fn get_stuck_update_submission_ids(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
     ) -> Result<Vec<i64>> {
-        let models = intent_queue_update_comment::Entity::find()
+        let models = update_submissions::Entity::find()
             .filter(
-                intent_queue_update_comment::COLUMN
+                update_submissions::COLUMN
                     .status
-                    .eq(IntentStatus::WaitingForSync),
+                    .eq(SubmissionStatus::WaitingForSync),
             )
-            .filter(intent_queue_update_comment::Column::UpdatedAt.lte(cutoff))
+            .filter(update_submissions::Column::UpdatedAt.lte(cutoff))
             .limit(limit)
             .all(&self.db)
             .await?;
@@ -785,25 +778,25 @@ impl IntentStore for DbStore {
         Ok(models.into_iter().map(|m| m.id).collect())
     }
 
-    async fn dead_letter_post_intent(&self, id: i64, error: &str) -> Result<()> {
-        intent_queue_post_comment::Entity::update_many()
+    async fn dead_letter_post_submission(&self, id: i64, error: &str) -> Result<()> {
+        post_submissions::Entity::update_many()
             .col_expr(
-                intent_queue_post_comment::Column::Status,
-                sea_orm::sea_query::Expr::value(IntentStatus::Failed),
+                post_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
             )
             .col_expr(
-                intent_queue_post_comment::Column::UpdatedAt,
+                post_submissions::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .col_expr(
-                intent_queue_post_comment::Column::LastError,
+                post_submissions::Column::LastError,
                 sea_orm::sea_query::Expr::value(error),
             )
-            .filter(intent_queue_post_comment::Column::Id.eq(id))
-            // Never dead-letter an intent that already completed.
+            .filter(post_submissions::Column::Id.eq(id))
+            // Never dead-letter an command that already completed.
             .filter(
-                intent_queue_post_comment::Column::Status
-                    .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+                post_submissions::Column::Status
+                    .is_in([SubmissionStatus::Pending, SubmissionStatus::WaitingForSync]),
             )
             .exec(&self.db)
             .await?;
@@ -814,14 +807,14 @@ impl IntentStore for DbStore {
         let now_ms = chrono::Utc::now().timestamp_millis();
         self.db
             .execute_unprepared(&format!(
-                "UPDATE intent_queue_post_comment \
+                "UPDATE post_submissions \
                  SET timeout_confirmations = timeout_confirmations + 1, \
                      last_timeout_confirmation_at = {now_ms} \
                  WHERE id = {id}"
             ))
             .await?;
 
-        let model = intent_queue_post_comment::Entity::find_by_id(id)
+        let model = post_submissions::Entity::find_by_id(id)
             .one(&self.db)
             .await?;
         Ok(model.map(|m| m.timeout_confirmations as u32).unwrap_or(0))
@@ -830,7 +823,7 @@ impl IntentStore for DbStore {
     async fn reset_post_timeout_confirmations(&self, id: i64) -> Result<()> {
         self.db
             .execute_unprepared(&format!(
-                "UPDATE intent_queue_post_comment \
+                "UPDATE post_submissions \
                  SET timeout_confirmations = 0, \
                      last_timeout_confirmation_at = NULL \
                  WHERE id = {id}"
@@ -842,12 +835,12 @@ impl IntentStore for DbStore {
     async fn increment_post_timeout_error(&self, id: i64) -> Result<u32> {
         self.db
             .execute_unprepared(&format!(
-                "UPDATE intent_queue_post_comment \
+                "UPDATE post_submissions \
                  SET timeout_check_errors = timeout_check_errors + 1 \
                  WHERE id = {id}"
             ))
             .await?;
-        let model = intent_queue_post_comment::Entity::find_by_id(id)
+        let model = post_submissions::Entity::find_by_id(id)
             .one(&self.db)
             .await?;
         Ok(model.map(|m| m.timeout_check_errors as u32).unwrap_or(0))
@@ -856,7 +849,7 @@ impl IntentStore for DbStore {
     async fn reset_post_timeout_errors(&self, id: i64) -> Result<()> {
         self.db
             .execute_unprepared(&format!(
-                "UPDATE intent_queue_post_comment \
+                "UPDATE post_submissions \
                  SET timeout_check_errors = 0 \
                  WHERE id = {id}"
             ))
@@ -864,60 +857,52 @@ impl IntentStore for DbStore {
         Ok(())
     }
 
-    async fn mark_delete_intent_completed(&self, target_event_id: &str) -> Result<()> {
+    async fn mark_delete_submission_completed(&self, target_event_id: &str) -> Result<()> {
         self.transition_status(
-            IntentStatus::Completed,
-            intent_queue_delete_comment::Column::Status,
-            intent_queue_delete_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_delete_comment::Entity>| {
+            SubmissionStatus::Completed,
+            delete_submissions::Column::Status,
+            delete_submissions::Column::UpdatedAt,
+            |query: UpdateMany<delete_submissions::Entity>| {
                 query
                     .filter(
-                        intent_queue_delete_comment::COLUMN
+                        delete_submissions::COLUMN
                             .target_event_id
                             .eq(target_event_id),
                     )
-                    // Never resurrect a failed or already-completed intent.
+                    // Never resurrect a failed or already-completed command.
                     .filter(
-                        intent_queue_delete_comment::COLUMN
+                        delete_submissions::COLUMN
                             .status
-                            .is_in([IntentStatus::Pending, IntentStatus::WaitingForSync]),
+                            .is_in([SubmissionStatus::Pending, SubmissionStatus::WaitingForSync]),
                     )
             },
         )
         .await
     }
 
-    async fn mark_update_intent_completed(
+    async fn mark_update_submission_completed(
         &self,
         event_id: &str,
         author_public_key: Option<&str>,
     ) -> Result<()> {
         self.transition_status(
-            IntentStatus::Completed,
-            intent_queue_update_comment::Column::Status,
-            intent_queue_update_comment::Column::UpdatedAt,
-            |query: UpdateMany<intent_queue_update_comment::Entity>| {
-                let query = query.filter(intent_queue_update_comment::COLUMN.event_id.eq(event_id));
+            SubmissionStatus::Completed,
+            update_submissions::Column::Status,
+            update_submissions::Column::UpdatedAt,
+            |query: UpdateMany<update_submissions::Entity>| {
+                let query = query.filter(update_submissions::COLUMN.event_id.eq(event_id));
                 let query = match author_public_key {
-                    Some(key) => query.filter(
-                        intent_queue_update_comment::COLUMN
-                            .author_public_key
-                            .eq(key),
-                    ),
-                    None => query.filter(
-                        intent_queue_update_comment::COLUMN
-                            .author_public_key
-                            .is_null(),
-                    ),
+                    Some(key) => query.filter(update_submissions::COLUMN.author_public_key.eq(key)),
+                    None => query.filter(update_submissions::COLUMN.author_public_key.is_null()),
                 };
                 query
-                    // Only close intents that were actually sent; pending rows
-                    // must wait for their own `host.curious.cumments.intent_id`
+                    // Only close submissions that were actually sent; pending rows
+                    // must wait for their own `host.curious.cumments.submission_id`
                     // correlation.
                     .filter(
-                        intent_queue_update_comment::COLUMN
+                        update_submissions::COLUMN
                             .status
-                            .eq(IntentStatus::WaitingForSync),
+                            .eq(SubmissionStatus::WaitingForSync),
                     )
             },
         )
@@ -957,32 +942,32 @@ impl DbStore {
         };
         if row.request_fingerprint == idempotency.request_fingerprint {
             Ok(Some(IdempotencyOutcome::Replayed {
-                intent_id: row.intent_id,
+                submission_id: row.submission_id,
             }))
         } else {
             Ok(Some(IdempotencyOutcome::Reused))
         }
     }
 
-    /// Inserts the idempotency record for a freshly queued intent.
+    /// Inserts the idempotency record for a freshly queued command.
     ///
     /// The insert ignores unique-constraint conflicts; when two writers race
     /// for the same key, the loser reads the winner's row and reports replay
-    /// or reuse instead of queueing a duplicate intent.
+    /// or reuse instead of queueing a duplicate command.
     async fn save_idempotency_record(
         &self,
         txn: &DatabaseTransaction,
         idempotency: &IdempotencyInput,
-        intent_id: i64,
+        submission_id: i64,
     ) -> Result<IdempotencyOutcome> {
         let backend = txn.get_database_backend();
         let sql = if backend == DatabaseBackend::Sqlite {
             "INSERT OR IGNORE INTO idempotency_keys \
-             (author_public_key, idempotency_key, request_fingerprint, intent_id, created_at) \
+             (author_public_key, idempotency_key, request_fingerprint, submission_id, created_at) \
              VALUES (?, ?, ?, ?, ?)"
         } else {
             "INSERT INTO idempotency_keys \
-             (author_public_key, idempotency_key, request_fingerprint, intent_id, created_at) \
+             (author_public_key, idempotency_key, request_fingerprint, submission_id, created_at) \
              VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT (author_public_key, idempotency_key) DO NOTHING"
         };
@@ -994,13 +979,13 @@ impl DbStore {
                     Value::from(idempotency.author_public_key.clone()),
                     Value::from(idempotency.key.clone()),
                     Value::from(idempotency.request_fingerprint.clone()),
-                    Value::from(intent_id),
+                    Value::from(submission_id),
                     Value::from(chrono::Utc::now()),
                 ],
             ))
             .await?;
         if inserted.rows_affected() > 0 {
-            return Ok(IdempotencyOutcome::Accepted { intent_id });
+            return Ok(IdempotencyOutcome::Accepted { submission_id });
         }
 
         let existing = idempotency_keys::Entity::find()
@@ -1012,7 +997,7 @@ impl DbStore {
 
         if existing.request_fingerprint == idempotency.request_fingerprint {
             Ok(IdempotencyOutcome::Replayed {
-                intent_id: existing.intent_id,
+                submission_id: existing.submission_id,
             })
         } else {
             Ok(IdempotencyOutcome::Reused)

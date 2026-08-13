@@ -288,8 +288,8 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
             None
         },
         is_virtual_user_sender: is_virtual_sender,
-        intent_id: if trusted_block {
-            namespaced_i64(content, "intent_id")
+        submission_id: if trusted_block {
+            namespaced_i64(content, "submission_id")
         } else {
             None
         },
@@ -533,10 +533,10 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
         .and_then(|c| c.get("reason"))
         .and_then(|v| v.as_str())
         .and_then(|reason| serde_json::from_str(reason).ok());
-    let intent_id = proof
+    let submission_id = proof
         .as_ref()
         .and_then(|proof: &serde_json::Value| proof.get(REDACTION_PROOF_KEY))
-        .and_then(|block| block.get("intent_id"))
+        .and_then(|block| block.get("submission_id"))
         .and_then(|value| value.as_i64());
 
     // Room identity is resolved by the caller from the local registry.
@@ -549,7 +549,7 @@ fn parse_push_redaction(event: &PushEvent) -> Option<ParsedRoomRedaction> {
         origin_server_ts: event.origin_server_ts.unwrap_or(0),
         redacts,
         proof,
-        intent_id,
+        submission_id,
         room_identity,
     })
 }
@@ -637,7 +637,7 @@ mod tests {
             origin_server_ts: Some(1000),
             state_key: None,
             content: Some(serde_json::json!({
-                "reason": "{\"host.curious.cumments.redaction\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\",\"intent_id\":7}}",
+                "reason": "{\"host.curious.cumments.redaction\":{\"site_id\":\"my-blog\",\"target_event_id\":\"$target:hs\",\"submission_id\":7}}",
                 "redacts": "$target:hs",
             })),
             redacts: None,
@@ -651,7 +651,7 @@ mod tests {
             proof["host.curious.cumments.redaction"]["site_id"].as_str(),
             Some("my-blog")
         );
-        assert_eq!(parsed.intent_id, Some(7));
+        assert_eq!(parsed.submission_id, Some(7));
     }
 
     #[test]
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_event_carries_intent_id_for_precise_closed_loop() {
+    fn edit_event_carries_submission_id_for_precise_closed_loop() {
         let event = PushEvent {
             event_type: "m.room.message".to_string(),
             event_id: Some("$edit:hs".to_string()),
@@ -691,7 +691,7 @@ mod tests {
                         "challenge": "chal",
                         "content": "edited",
                         "displayname": "Alice",
-                        "intent_id": 42,
+                        "submission_id": 42,
                     }
                 },
                 "m.relates_to": {
@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert!(matches!(&parsed.content, Content::Text(t) if t.body == "edited"));
-        assert_eq!(parsed.intent_id, Some(42));
+        assert_eq!(parsed.submission_id, Some(42));
         assert_eq!(
             parsed
                 .relates_to
@@ -747,7 +747,7 @@ mod tests {
                     "challenge": "chal",
                     "content": "hello",
                     "displayname": "Alice",
-                    "intent_id": 7,
+                    "submission_id": 7,
                 }
             })),
             redacts: None,
@@ -759,7 +759,7 @@ mod tests {
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert!(matches!(&parsed.content, Content::Text(t) if t.body == "hello"));
-        assert_eq!(parsed.intent_id, Some(7));
+        assert_eq!(parsed.submission_id, Some(7));
         assert!(parsed.relates_to.is_none());
     }
 
@@ -787,7 +787,7 @@ mod tests {
                     "challenge": "chal",
                     "content": "hello",
                     "displayname": "Alice",
-                    "intent_id": 7,
+                    "submission_id": 7,
                 }
             })),
             redacts: None,
@@ -818,7 +818,7 @@ mod tests {
                     "challenge": "fake-challenge",
                     "content": "spoofed content",
                     "displayname": "Spoofed",
-                    "intent_id": 42,
+                    "submission_id": 42,
                 }
             })),
             redacts: None,
@@ -832,7 +832,7 @@ mod tests {
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
         assert!(parsed.display_name.is_none());
-        assert!(parsed.intent_id.is_none());
+        assert!(parsed.submission_id.is_none());
     }
 
     #[test]
@@ -857,7 +857,7 @@ mod tests {
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
-        assert!(parsed.intent_id.is_none());
+        assert!(parsed.submission_id.is_none());
     }
 
     fn event_with_content(event_type: &str, content: serde_json::Value) -> PushEvent {

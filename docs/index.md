@@ -3,7 +3,7 @@
 Cumments is a Matrix-native comment system. Comments are first-class Matrix
 events: posts, edits and deletes live in Matrix rooms, are stored by a
 projector into a local read model, and are exposed to websites through an
-HTTP API with async write intents.
+HTTP API with async write submissions.
 
 Matrix is the **source of truth**. SQLite is only a disposable read model:
 `cumments backfill` rebuilds it from Matrix history.

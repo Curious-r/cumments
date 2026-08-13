@@ -12,8 +12,8 @@ pub struct Model {
     pub idempotency_key: String,
     /// Fingerprint of the accepted request (`METHOD\npath\nsha256(body)`).
     pub request_fingerprint: String,
-    /// Queue row ID of the intent the key is bound to.
-    pub intent_id: i64,
+    /// Queue row ID of the submission the key is bound to.
+    pub submission_id: i64,
     pub created_at: DateTimeUtc,
 }
 

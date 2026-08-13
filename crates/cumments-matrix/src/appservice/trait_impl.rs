@@ -63,7 +63,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         reply_to: Option<&str>,
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         self.post_message_impl(
             room_id,
@@ -77,7 +77,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             reply_to,
             reply_to_body,
             reply_to_sender,
-            intent_id,
+            submission_id,
         )
         .await
     }
@@ -136,7 +136,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         self.post_location_impl(
             room_id,
@@ -147,7 +147,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_public_key,
             author_signature,
             author_challenge,
-            intent_id,
+            submission_id,
         )
         .await
     }
@@ -162,7 +162,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         site_id: &SiteId,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
     ) -> Result<String> {
         self.update_message_impl(
             room_id,
@@ -173,7 +173,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             site_id,
-            intent_id,
+            submission_id,
         )
         .await
     }
@@ -182,10 +182,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         &self,
         room_id: &str,
         event_id: &str,
-        intent_id: Option<i64>,
+        submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
     ) -> Result<()> {
-        self.redact_message_impl(room_id, event_id, intent_id, proof)
+        self.redact_message_impl(room_id, event_id, submission_id, proof)
             .await
     }
 

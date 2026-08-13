@@ -22,9 +22,9 @@ pub struct ParsedRoomMessage {
     pub author_challenge: Option<String>,
     /// Whether the sender is one of our exclusive AS virtual users.
     pub is_virtual_user_sender: bool,
-    /// Correlation hint: the intent queue row ID that produced this event,
+    /// Correlation hint: the submission queue row ID that produced this event,
     /// if the message was sent by Cumments.
-    pub intent_id: Option<i64>,
+    pub submission_id: Option<i64>,
     /// Matrix event ID of the parent comment, if this event is a rich reply.
     pub reply_to: Option<String>,
     /// Matrix event ID of the thread root, when this event belongs to a
@@ -131,8 +131,8 @@ pub struct ParsedRoomRedaction {
     /// The Cumments delete proof embedded in `reason`, if the redaction was
     /// issued through the Cumments API.
     pub proof: Option<serde_json::Value>,
-    /// Correlation hint: the delete intent queue row ID embedded in the proof.
-    pub intent_id: Option<i64>,
+    /// Correlation hint: the delete submission queue row ID embedded in the proof.
+    pub submission_id: Option<i64>,
     /// The room's Cumments identity, if available.
     pub room_identity: Option<RoomIdentity>,
 }

@@ -2,7 +2,7 @@ use sea_orm_migration::prelude::*;
 
 use crate::migration::column_exists;
 
-const TABLE: &str = "intent_queue_post_comment";
+const TABLE: &str = "post_submissions";
 const COLUMN: &str = "last_timeout_confirmation_at";
 
 #[derive(DeriveMigrationName)]

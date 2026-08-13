@@ -11,43 +11,43 @@ impl MigrationTrait for Migration {
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_post_intent_status_attempt \
-                 ON intent_queue_post_comment(status, next_attempt_at)",
+                "CREATE INDEX IF NOT EXISTS idx_post_submission_status_attempt \
+                 ON post_submissions(status, next_attempt_at)",
             )
             .await?;
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_delete_intent_status_attempt \
-                 ON intent_queue_delete_comment(status, next_attempt_at)",
+                "CREATE INDEX IF NOT EXISTS idx_delete_submission_status_attempt \
+                 ON delete_submissions(status, next_attempt_at)",
             )
             .await?;
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_update_intent_status_attempt \
-                 ON intent_queue_update_comment(status, next_attempt_at)",
+                "CREATE INDEX IF NOT EXISTS idx_update_submission_status_attempt \
+                 ON update_submissions(status, next_attempt_at)",
             )
             .await?;
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_post_intent_event_id \
-                 ON intent_queue_post_comment(matrix_event_id)",
+                "CREATE INDEX IF NOT EXISTS idx_post_submission_event_id \
+                 ON post_submissions(matrix_event_id)",
             )
             .await?;
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_delete_intent_target \
-                 ON intent_queue_delete_comment(target_event_id)",
+                "CREATE INDEX IF NOT EXISTS idx_delete_submission_target \
+                 ON delete_submissions(target_event_id)",
             )
             .await?;
         manager
             .get_connection()
             .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_update_intent_event_id \
-                 ON intent_queue_update_comment(event_id)",
+                "CREATE INDEX IF NOT EXISTS idx_update_submission_event_id \
+                 ON update_submissions(event_id)",
             )
             .await?;
         Ok(())
@@ -55,12 +55,12 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for index in [
-            "idx_post_intent_status_attempt",
-            "idx_delete_intent_status_attempt",
-            "idx_update_intent_status_attempt",
-            "idx_post_intent_event_id",
-            "idx_delete_intent_target",
-            "idx_update_intent_event_id",
+            "idx_post_submission_status_attempt",
+            "idx_delete_submission_status_attempt",
+            "idx_update_submission_status_attempt",
+            "idx_post_submission_event_id",
+            "idx_delete_submission_target",
+            "idx_update_submission_event_id",
         ] {
             manager
                 .get_connection()

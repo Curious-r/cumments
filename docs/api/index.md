@@ -55,12 +55,12 @@ Authors come in two forms:
 
 ## Idempotent writes
 
-`POST`, `PATCH` and `DELETE` are asynchronous: they accept an intent and
-return `202 { "intent_id": ... }` before the comment actually lands in Matrix.
+`POST`, `PATCH` and `DELETE` are asynchronous: they accept a submission and
+return `202 { "submission_id": ... }` before the comment actually lands in Matrix.
 If the client loses the response (network failure, timeout, browser crash) it
 can retry the exact same request with the same `Idempotency-Key` header; the
-server detects the duplicate and returns the original `intent_id` again with
-`Idempotent-Replayed: true`, without queueing a second intent.
+server detects the duplicate and returns the original `submission_id` again with
+`Idempotent-Replayed: true`, without queueing a second submission.
 
 Rules:
 
@@ -97,7 +97,7 @@ type: ephemeral
 The `message_created` and `message_updated` payloads contain the full
 `Message` object (the same shape as the [list response](comments.md#list-comments));
 `message_deleted` contains the deleted `event_id` and, when the deletion went
-through the Cumments API, the `intent_id`. `message_annotations_changed`
+through the Cumments API, the `submission_id`. `message_annotations_changed`
 signals that reaction or poll counts changed; `ephemeral` carries live room
 state such as typing indicators:
 
@@ -207,8 +207,8 @@ rather than the exact remaining time for that client: it is conservative,
 simple, and does not leak per-key limiter state. Multi-instance deployments
 would need a shared limiter store — a documented platform limitation.
 
-**Asynchronous write intents.** `POST`/`PATCH`/`DELETE` enqueue an intent
-and return `202 { "intent_id" }` before the comment lands in Matrix. This
+**Asynchronous write submissions.** `POST`/`PATCH`/`DELETE` enqueue a submission
+and return `202 { "submission_id" }` before the comment lands in Matrix. This
 keeps request latency bounded by the queue write, decouples clients from
 homeserver timing, and pairs with `Idempotency-Key` (scoped to the author's
 public key, 24-hour retention) to make retries safe.

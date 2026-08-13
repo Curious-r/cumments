@@ -28,7 +28,7 @@ pub struct Model {
     pub status: String,
     pub redacted_at: Option<DateTimeUtc>,
     pub redacted_by: Option<String>,
-    pub intent_id: Option<i64>,
+    pub submission_id: Option<i64>,
     /// `origin_server_ts` of the last applied edit, used for recency checks.
     pub last_edit_ts: Option<i64>,
     /// Event ID of the last applied edit (deterministic tie-breaker).
