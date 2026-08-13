@@ -266,15 +266,16 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     // 9. Initialize and run Reconciler (Orchestrator)
     // ─────────────────────────────────────────────────────────────
-    let reconciler = cumments_reconciler::Reconciler::new(
-        db_store.clone(), // IntentStore
-        db_store.clone(), // RegistryStore
-        db_store.clone(), // SiteStore
-        db_store.clone(), // MessageStore
-        driver.clone(),
-        site_service.clone(),
-        reconciler_notify.clone(),
-    );
+    let reconciler = cumments_reconciler::Reconciler::new(cumments_reconciler::ReconcilerDeps {
+        intent_store: db_store.clone(),
+        registry_store: db_store.clone(),
+        site_store: db_store.clone(),
+        role_claim_store: db_store.clone(),
+        message_store: db_store.clone(),
+        driver: driver.clone(),
+        site_service: site_service.clone(),
+        notify: reconciler_notify.clone(),
+    });
     tokio::spawn(async move {
         reconciler.run().await;
     });

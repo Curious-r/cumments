@@ -8,7 +8,7 @@ use anyhow::Result;
 use cumments_core::{
     matrix_error::MatrixError,
     models::{PostSlug, QuarantinedRoom, SiteId},
-    ports::{IntentStore, MatrixDriver, MessageStore, RegistryStore, SiteStore},
+    ports::{IntentStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteStore},
     site_service::SiteService,
 };
 use std::sync::Arc;
@@ -107,30 +107,37 @@ pub struct Reconciler {
     intent_store: Arc<dyn IntentStore>,
     registry_store: Arc<dyn RegistryStore>,
     site_store: Arc<dyn SiteStore>,
+    role_claim_store: Arc<dyn RoleClaimStore>,
     message_store: Arc<dyn MessageStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
     notify: Arc<Notify>,
 }
 
+/// Dependencies of the [`Reconciler`], kept as one struct so the growing set
+/// of stores stays readable at construction sites.
+pub struct ReconcilerDeps {
+    pub intent_store: Arc<dyn IntentStore>,
+    pub registry_store: Arc<dyn RegistryStore>,
+    pub site_store: Arc<dyn SiteStore>,
+    pub role_claim_store: Arc<dyn RoleClaimStore>,
+    pub message_store: Arc<dyn MessageStore>,
+    pub driver: Arc<dyn MatrixDriver>,
+    pub site_service: Arc<SiteService>,
+    pub notify: Arc<Notify>,
+}
+
 impl Reconciler {
-    pub fn new(
-        intent_store: Arc<dyn IntentStore>,
-        registry_store: Arc<dyn RegistryStore>,
-        site_store: Arc<dyn SiteStore>,
-        message_store: Arc<dyn MessageStore>,
-        driver: Arc<dyn MatrixDriver>,
-        site_service: Arc<SiteService>,
-        notify: Arc<Notify>,
-    ) -> Self {
+    pub fn new(deps: ReconcilerDeps) -> Self {
         Self {
-            intent_store,
-            registry_store,
-            site_store,
-            message_store,
-            driver,
-            site_service,
-            notify,
+            intent_store: deps.intent_store,
+            registry_store: deps.registry_store,
+            site_store: deps.site_store,
+            role_claim_store: deps.role_claim_store,
+            message_store: deps.message_store,
+            driver: deps.driver,
+            site_service: deps.site_service,
+            notify: deps.notify,
         }
     }
 
@@ -249,6 +256,13 @@ impl Reconciler {
                 0
             }
         };
+        let claim_count = match self.reconcile_claims().await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Reconcile claims phase failed: {:#}", e);
+                0
+            }
+        };
         let moderation_count = match self.reconcile_moderation().await {
             Ok(n) => n,
             Err(e) => {
@@ -256,7 +270,12 @@ impl Reconciler {
                 0
             }
         };
-        Ok(post_count + delete_count + update_count + timeout_count + moderation_count)
+        Ok(post_count
+            + delete_count
+            + update_count
+            + timeout_count
+            + claim_count
+            + moderation_count)
     }
 }
 
