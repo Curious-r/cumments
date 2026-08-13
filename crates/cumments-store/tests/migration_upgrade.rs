@@ -161,6 +161,41 @@ async fn message_read_model_replaces_legacy_comments_table() {
 }
 
 #[tokio::test]
+async fn fresh_database_has_no_legacy_blocked_reason_column() {
+    let url = test_db_url("fresh-schema");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let rows = db
+        .query_all_raw(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "PRAGMA table_info(room_registry)",
+        ))
+        .await
+        .expect("read room_registry columns");
+    let names: Vec<String> = rows
+        .into_iter()
+        .filter_map(|row| row.try_get("", "name").ok())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "blocked_reason"),
+        "fresh schema must not retain the legacy blocked_reason column: {names:?}"
+    );
+    for expected in [
+        "status",
+        "quarantine_reason",
+        "quarantined_at",
+        "adoption_failures",
+        "next_attempt_at",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "missing room_registry column {expected}: {names:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn room_quarantine_state_backfills_legacy_encoding() {
     let url = test_db_url("quarantine-state");
     let db = Database::connect(&url).await.expect("connect db");
