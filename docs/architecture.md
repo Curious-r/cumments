@@ -8,6 +8,57 @@ that can be rebuilt from Matrix history with `cumments backfill`.
 How Matrix events are shaped into the typed comment model is documented in
 [Data model](data-model.md).
 
+## Design philosophy
+
+Everything below follows from three invariants:
+
+1. **Matrix is the only source of truth.** Comments, roles and room state
+   live in Matrix events; the local SQLite is a disposable projection that
+   `cumments backfill` can rebuild. Nothing local is authoritative.
+2. **One write seam.** Every mutation of Matrix state goes through the
+   AppService sender (the creator of every Space and room). The API and CLI
+   never talk to the homeserver directly: they persist an intent locally and
+   let the background reconciler perform the Matrix write.
+3. **Push closes the loop.** The homeserver pushes events back, the projector
+   updates the read model, and the reconciler confirms its work. The same
+   idempotent projection serves both live pushes and `backfill`.
+
+Together these collapse the design space: a new feature has only one shape it
+can fit into — durable local intent, background convergence on Matrix, then
+projection of the result. That is the controller/reconciler pattern
+(observe → diff → act), and it matches Matrix itself, which is an append-only
+event log with full-state events.
+
+### Intent intensity spectrum
+
+Not every background action is a full intent queue. The mechanisms form a
+spectrum of how much machinery they need:
+
+| Mechanism | Weight | Idempotency anchor |
+|---|---|---|
+| Comment intents (post, edit, delete, location) | Heavy | `Idempotency-Key` + request fingerprint + intent row, with timeouts, dead-lettering and room quarantine |
+| Role claims (token-DM) | Light state machine | Claim row plus sender/token match (`pending` → `activated` → `applied`) |
+| Moderation sync | Pure convergence | Matrix power levels are full state, so read → diff → write is naturally idempotent |
+| Site decommission | One-shot marker, retry until converged | `lifecycle_status` plus idempotent rename / alias removal / leave (404-tolerant) |
+| Orphan media cleanup | Periodic sweep | Unreferenced-upload marker |
+
+The deciding question for each is how strong the once-only guarantee must be:
+write-side idempotency keys for work that must not duplicate, natural
+idempotency for work that merely has to converge.
+
+### Boundaries to watch
+
+- The reconciler is a single loop with several passes; per-pass failure
+  isolation, scheduling priorities and observability deserve attention as the
+  pass count grows.
+- Rate limiters and the reconcile loop assume a single instance. Distributed
+  deployments would need a shared limiter store and leader election /
+  partitioning — a documented platform limitation.
+- Lightweight intent mechanisms have now appeared three times (claims,
+  decommission, orphan media cleanup). If another one arrives, consolidating
+  them into a generic background-action ledger may beat adding one table and
+  one pass per feature.
+
 ## System overview
 
 ```

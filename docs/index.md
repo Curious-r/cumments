@@ -17,8 +17,9 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 
 ## Concepts
 
-- [Architecture](architecture.md) — how the API, reconciler, projector and
-  AppService fit together, plus recovery.
+- [Architecture](architecture.md) — the design philosophy (Matrix as truth,
+  one write seam, disposable projection), how the API, reconciler, projector
+  and AppService fit together, plus recovery.
 - [Data model](data-model.md) — how Matrix events map to the typed comment
   model and its storage layout.
 - [Site trust](site-trust.md) — origin and HMAC write-path trust
