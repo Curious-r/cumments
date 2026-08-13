@@ -166,7 +166,7 @@ fn is_write_method(method: &Method) -> bool {
 }
 
 /// `/api/v1/sites/{site_id}/posts/...` → the site id segment.
-fn site_id_from_path(path: &str) -> Option<String> {
+pub(crate) fn site_id_from_path(path: &str) -> Option<String> {
     let segments = path
         .split('/')
         .filter(|s| !s.is_empty())

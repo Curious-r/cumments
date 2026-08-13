@@ -414,6 +414,7 @@ async fn main() -> Result<()> {
     let api_state = cumments_api::ApiState {
         store: db_store,
         driver: driver.clone(),
+        site_service: site_service.clone(),
         pow: Arc::new(pow),
         event_bus,
         reconciler_notify,
@@ -453,6 +454,10 @@ async fn main() -> Result<()> {
         media_proxy,
         media_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             120,
+            std::time::Duration::from_secs(3600),
+        )),
+        moderation_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            60,
             std::time::Duration::from_secs(3600),
         )),
         ephemeral_bus: ephemeral_bus.clone(),

@@ -12,6 +12,11 @@ use crate::routes::media::{
     MEDIA_MAX_BYTES, MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
+use crate::routes::moderation::{
+    add_co_manager_handler, add_owner_handler, add_room_moderator_handler,
+    list_room_moderators_handler, list_site_roles_handler, remove_co_manager_handler,
+    remove_owner_handler, remove_room_moderator_handler, require_claim_token,
+};
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
     confirm_verification_handler, issue_secret_handler, register_site_handler,
@@ -29,11 +34,12 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        IntentStore, MatrixDriver, MessageStore, RegistryStore, RoomStore, SiteAuthStore,
-        SiteStore, VirtualUserStore,
+        GovernanceStore, IntentStore, MatrixDriver, MessageStore, RegistryStore, RoomStore,
+        SiteAuthStore, SiteStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
+    site_service::SiteService,
 };
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -59,6 +65,7 @@ pub trait ApiStore:
     + SiteAuthStore
     + RegistryStore
     + RoomStore
+    + GovernanceStore
     + VirtualUserStore
     + Send
     + Sync
@@ -71,6 +78,7 @@ impl<
         + SiteAuthStore
         + RegistryStore
         + RoomStore
+        + GovernanceStore
         + VirtualUserStore
         + Send
         + Sync,
@@ -83,6 +91,7 @@ impl<
 pub struct ApiState {
     pub store: Arc<dyn ApiStore>,
     pub driver: Arc<dyn MatrixDriver>,
+    pub site_service: Arc<SiteService>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub reconciler_notify: Arc<Notify>,
@@ -118,6 +127,8 @@ pub struct ApiState {
     pub media_proxy: Option<Arc<MediaProxy>>,
     /// Per-client-key limiter for media proxy requests.
     pub media_limiter: Arc<rate_limit::RateLimiter>,
+    /// Per-client-key limiter for site governance writes.
+    pub moderation_limiter: Arc<rate_limit::RateLimiter>,
     /// Live ephemeral events (typing/receipts/presence) for SSE.
     pub ephemeral_bus: broadcast::Sender<EphemeralEvent>,
     /// Shared typing state for SSE snapshots, when ephemeral sync is enabled.
@@ -191,6 +202,14 @@ pub fn build_router(state: ApiState) -> Router {
             get(list_stickers_handler).fallback(method_not_allowed_handler),
         )
         .route(
+            "/api/v1/sites/{site_id}/roles",
+            get(list_site_roles_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/moderators",
+            get(list_room_moderators_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
             "/api/v1/media/{server}/{media_id}",
             get(media_handler).fallback(method_not_allowed_handler),
         )
@@ -215,6 +234,25 @@ pub fn build_router(state: ApiState) -> Router {
             get(health_handler).fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn(public_cors));
+
+    // Site governance writes, authenticated with the site's claim token.
+    let moderation_router = Router::new()
+        .route(
+            "/api/v1/sites/{site_id}/owners",
+            post(add_owner_handler).delete(remove_owner_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/co-managers",
+            post(add_co_manager_handler).delete(remove_co_manager_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/moderators",
+            post(add_room_moderator_handler).delete(remove_room_moderator_handler),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_claim_token,
+        ));
 
     let admin_router = Router::new()
         .route(
@@ -242,6 +280,19 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/v1/admin/sites/{site_id}/claim-token/rotate",
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
+        // Operator fallback for site ownership takeover.
+        .route(
+            "/api/v1/admin/sites/{site_id}/owners",
+            axum::routing::post(add_owner_handler)
+                .delete(remove_owner_handler)
+                .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}/co-managers",
+            axum::routing::post(add_co_manager_handler)
+                .delete(remove_co_manager_handler)
+                .fallback(method_not_allowed_handler),
+        )
         .route(
             "/api/v1/admin/rooms/quarantined",
             axum::routing::get(method_not_allowed_handler).fallback(list_quarantined_rooms_handler),
@@ -264,6 +315,7 @@ pub fn build_router(state: ApiState) -> Router {
 
     Router::new()
         .merge(comment_router)
+        .merge(moderation_router)
         .merge(public_router)
         .merge(admin_router)
         .fallback(not_found_handler)

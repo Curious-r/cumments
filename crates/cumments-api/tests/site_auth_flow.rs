@@ -10,12 +10,16 @@ use axum::{
     routing::{get, post},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
+use cumments_core::governance::RoleEntry;
 use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
-use cumments_core::ports::{IntentStore, MessageStore, RegistryStore, SiteAuthStore};
+use cumments_core::ports::{
+    GovernanceStore, IntentStore, MessageStore, RegistryStore, SiteAuthStore, SiteStore,
+};
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
 };
+use cumments_core::site_service::SiteService;
 use cumments_store::DbStore;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,9 +44,11 @@ async fn test_state(
         .await
         .expect("connect test database");
     let (event_bus, _) = tokio::sync::broadcast::channel(100);
+    let site_service_store: Arc<dyn cumments_core::ports::SiteStore> = Arc::new(store.clone());
     let state = ApiState {
         store: Arc::new(store.clone()),
         driver: Arc::new(cumments_matrix::LoggingMatrixDriver),
+        site_service: Arc::new(SiteService::new(site_service_store)),
         pow: Arc::new(Pow::new("test-secret".to_string(), 1)),
         event_bus,
         reconciler_notify: Arc::new(tokio::sync::Notify::new()),
@@ -67,6 +73,7 @@ async fn test_state(
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
         preset_stickers: Arc::new(Vec::new()),
@@ -1234,4 +1241,134 @@ async fn comment_media_must_reference_an_owned_upload() {
         .await
         .expect("call router");
     assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn site_governance_roles_are_claim_token_scoped_and_projected() {
+    let (state, store) = test_state(
+        "governance",
+        SiteVerificationPolicy::Required,
+        Some("test-admin-token"),
+    )
+    .await;
+    let site_id = "gov-flow-123";
+    store
+        .register_site(site_id, &token_hash("claim-token"))
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+
+    let owner_uri = format!("/api/v1/sites/{site_id}/owners");
+    let owner_body = serde_json::json!({ "user_id": "@owner:hs" }).to_string();
+
+    // Missing claim token is rejected before any Matrix write.
+    let denied = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            &owner_uri,
+            None,
+            &[],
+            &owner_body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    // With the claim token the logging driver records the space PL update and
+    // the response reflects the computed roster.
+    let added = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            &owner_uri,
+            None,
+            &[("x-cumments-claim-token", "claim-token".to_string())],
+            &owner_body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(added.status(), StatusCode::OK);
+    let added_json: serde_json::Value =
+        serde_json::from_str(&body_text(added).await).expect("parse response");
+    assert_eq!(added_json["owners"], serde_json::json!(["@owner:hs"]));
+    assert_eq!(added_json["co_managers"], serde_json::json!([]));
+
+    // First owner registration provisions the site Space on demand.
+    let provisioned = store
+        .get_site(&SiteId::new(site_id.to_string()).expect("valid site id"))
+        .await
+        .expect("load site")
+        .expect("site exists");
+    assert_eq!(provisioned.matrix_space_id, format!("log_space_{site_id}"));
+
+    // Malformed and service-account user IDs are rejected up front.
+    for (raw, label) in [
+        ("@not-an-mxid", "garbage"),
+        ("@_cumments_bot:hs", "as-account"),
+    ] {
+        let bad = router
+            .clone()
+            .oneshot(request_with_body(
+                Method::POST,
+                &owner_uri,
+                None,
+                &[("x-cumments-claim-token", "claim-token".to_string())],
+                &serde_json::json!({ "user_id": raw }).to_string(),
+            ))
+            .await
+            .expect("call router");
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST, "{label}");
+    }
+
+    // The admin mirror works without a claim token.
+    let co_uri = format!("/api/v1/admin/sites/{site_id}/co-managers");
+    let added_co = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            &co_uri,
+            None,
+            &[("authorization", "Bearer test-admin-token".to_string())],
+            &serde_json::json!({ "user_id": "@co:hs" }).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(added_co.status(), StatusCode::OK);
+    let co_json: serde_json::Value =
+        serde_json::from_str(&body_text(added_co).await).expect("parse response");
+    assert_eq!(co_json["co_managers"], serde_json::json!(["@co:hs"]));
+
+    // GET reads the projected read model.
+    store
+        .replace_site_roles(
+            site_id,
+            &[
+                RoleEntry {
+                    user_id: "@owner:hs".into(),
+                    level: 100,
+                },
+                RoleEntry {
+                    user_id: "@co:hs".into(),
+                    level: 75,
+                },
+            ],
+        )
+        .await
+        .expect("project roles");
+    let listed = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/sites/{site_id}/roles"),
+            None,
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_json: serde_json::Value =
+        serde_json::from_str(&body_text(listed).await).expect("parse response");
+    assert_eq!(listed_json["owners"], serde_json::json!(["@owner:hs"]));
+    assert_eq!(listed_json["co_managers"], serde_json::json!(["@co:hs"]));
 }
