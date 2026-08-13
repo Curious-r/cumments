@@ -146,17 +146,20 @@ async fn main() -> Result<()> {
     // 5. Initialize EventProcessor (shared across all modes)
     // ─────────────────────────────────────────────────────────────
     let event_processor = Arc::new(cumments_projector::event_processor::EventProcessor::new(
-        db_store.clone(), // SiteStore
-        db_store.clone(), // RegistryStore
-        db_store.clone(), // MessageStore
-        db_store.clone(), // RoomStore
-        db_store.clone(), // IntentStore
-        event_bus.clone(),
-        settings
-            .matrix
-            .homeserver
-            .as_ref()
-            .and_then(|h| h.domain.clone()),
+        cumments_projector::event_processor::EventProcessorDeps {
+            site_store: db_store.clone(),
+            registry_store: db_store.clone(),
+            message_store: db_store.clone(),
+            room_store: db_store.clone(),
+            governance_store: db_store.clone(),
+            intent_store: db_store.clone(),
+            event_bus: event_bus.clone(),
+            server_name: settings
+                .matrix
+                .homeserver
+                .as_ref()
+                .and_then(|h| h.domain.clone()),
+        },
     ));
     tracing::info!("EventProcessor initialized.");
 

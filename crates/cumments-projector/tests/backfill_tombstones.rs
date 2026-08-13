@@ -4,7 +4,7 @@ use cumments_core::models::{
     TextStyle,
 };
 use cumments_core::ports::{MessageStore, RegistryStore};
-use cumments_projector::event_processor::EventProcessor;
+use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
     ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction,
 };
@@ -35,15 +35,16 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
 
 async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
-    EventProcessor::new(
-        store.clone() as Arc<dyn cumments_core::ports::SiteStore>,
-        store.clone() as Arc<dyn cumments_core::ports::RegistryStore>,
-        store.clone() as Arc<dyn cumments_core::ports::MessageStore>,
-        store.clone() as Arc<dyn cumments_core::ports::RoomStore>,
-        store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
-        tx,
-        server_name.map(|s| s.to_string()),
-    )
+    EventProcessor::new(EventProcessorDeps {
+        site_store: store.clone() as Arc<dyn cumments_core::ports::SiteStore>,
+        registry_store: store.clone() as Arc<dyn cumments_core::ports::RegistryStore>,
+        message_store: store.clone() as Arc<dyn cumments_core::ports::MessageStore>,
+        room_store: store.clone() as Arc<dyn cumments_core::ports::RoomStore>,
+        governance_store: store.clone() as Arc<dyn cumments_core::ports::GovernanceStore>,
+        intent_store: store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
+        event_bus: tx,
+        server_name: server_name.map(|s| s.to_string()),
+    })
 }
 
 fn message(event_id: &str) -> ParsedRoomMessage {

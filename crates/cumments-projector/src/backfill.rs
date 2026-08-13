@@ -46,6 +46,14 @@ pub struct BackfillSummary {
     pub events: usize,
 }
 
+/// A joined room that participates in backfill.
+enum DiscoveredRoom {
+    /// A comment room; backfilled to rebuild messages and room roles.
+    Comment(String),
+    /// A site Space; backfilled to rebuild site roles (and space state).
+    Space(String),
+}
+
 impl Backfiller {
     pub fn new(
         driver: Arc<dyn MatrixDriver>,
@@ -67,11 +75,13 @@ impl Backfiller {
     /// every comment room. A failure in one room is logged and skipped so a
     /// single broken room does not abort the whole run.
     pub async fn run(&self, max_pages: u32) -> anyhow::Result<BackfillSummary> {
-        let mut rooms = Vec::new();
+        let mut comment_rooms = Vec::new();
+        let mut space_rooms = Vec::new();
 
         for room_id in self.driver.get_joined_rooms().await? {
-            match self.discover_comment_room(&room_id).await {
-                Ok(Some(room_id)) => rooms.push(room_id),
+            match self.discover_room(&room_id).await {
+                Ok(Some(DiscoveredRoom::Comment(room_id))) => comment_rooms.push(room_id),
+                Ok(Some(DiscoveredRoom::Space(room_id))) => space_rooms.push(room_id),
                 Ok(None) => {}
                 Err(e) => warn!(
                     "Backfill: discovery failed for {}: {:#}; skipping",
@@ -81,10 +91,10 @@ impl Backfiller {
         }
 
         let mut summary = BackfillSummary {
-            rooms: rooms.len(),
+            rooms: comment_rooms.len() + space_rooms.len(),
             ..Default::default()
         };
-        for room_id in rooms {
+        for room_id in comment_rooms.into_iter().chain(space_rooms) {
             // 0 means "unlimited" (u32::MAX is effectively unbounded).
             let room_max_pages = if max_pages == 0 { u32::MAX } else { max_pages };
             match self.backfill_room(&room_id, room_max_pages).await {
@@ -98,13 +108,13 @@ impl Backfiller {
         Ok(summary)
     }
 
-    /// Rebuild the site/registry entries for one joined room. Returns
-    /// `Some(room_id)` when the room is a comment room that should be
-    /// backfilled, `None` for spaces and non-Cumments rooms.
+    /// Rebuild the site/registry entries for one joined room. Returns a
+    /// `Comment` room (messages + room roles), a `Space` room (site roles
+    /// and space state), or `None` for non-Cumments rooms.
     ///
     /// Errors are returned per room so the caller can log and continue; one
     /// broken room must not abort the whole discovery pass.
-    async fn discover_comment_room(&self, room_id: &str) -> anyhow::Result<Option<String>> {
+    async fn discover_room(&self, room_id: &str) -> anyhow::Result<Option<DiscoveredRoom>> {
         let meta = match self.driver.get_room_metadata(room_id).await {
             Ok(meta) => meta,
             Err(e) => {
@@ -120,13 +130,13 @@ impl Backfiller {
             // event existed) can still be identified from their canonical
             // alias, which lives in our exclusive `#_cumments_*` namespace.
             if self.register_legacy_room_by_alias(room_id).await? {
-                return Ok(Some(room_id.to_string()));
+                return Ok(Some(DiscoveredRoom::Comment(room_id.to_string())));
             }
             return Ok(None);
         };
         let Some(site_id) = meta.get("site_id").and_then(|v| v.as_str()) else {
             if self.register_legacy_room_by_alias(room_id).await? {
-                return Ok(Some(room_id.to_string()));
+                return Ok(Some(DiscoveredRoom::Comment(room_id.to_string())));
             }
             return Ok(None);
         };
@@ -143,6 +153,7 @@ impl Backfiller {
                         site_id_val.as_str(),
                         room_id
                     );
+                    return Ok(Some(DiscoveredRoom::Space(room_id.to_string())));
                 }
                 Err(_) => warn!(
                     "Backfill: skipping space {} with invalid site id {}",
@@ -165,7 +176,7 @@ impl Backfiller {
                             site_id_val.as_str(),
                             post_slug_val.as_str()
                         );
-                        return Ok(Some(room_id.to_string()));
+                        return Ok(Some(DiscoveredRoom::Comment(room_id.to_string())));
                     }
                     _ => warn!(
                         "Backfill: skipping room {} with invalid identity {}/{}",

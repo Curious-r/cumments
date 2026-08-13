@@ -13,12 +13,15 @@ use crate::parsed::{
 use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
 use cumments_core::{
+    governance::{
+        MODERATOR_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry, is_as_managed_user, role_entries,
+    },
     identity::{post_signature_message, signature_message},
     models::{
         AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PollVote,
         PostSlug, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId,
     },
-    ports::{IntentStore, MessageStore, RegistryStore, RoomStore, SiteStore},
+    ports::{GovernanceStore, IntentStore, MessageStore, RegistryStore, RoomStore, SiteStore},
     projector_events::ProjectorEvent,
 };
 use std::sync::Arc;
@@ -33,29 +36,36 @@ pub struct EventProcessor {
     registry_store: Arc<dyn RegistryStore>,
     message_store: Arc<dyn MessageStore>,
     room_store: Arc<dyn RoomStore>,
+    governance_store: Arc<dyn GovernanceStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     server_name: Option<String>,
 }
 
+/// Dependencies of the [`EventProcessor`], kept as one struct so the growing
+/// set of stores stays readable at construction sites.
+pub struct EventProcessorDeps {
+    pub site_store: Arc<dyn SiteStore>,
+    pub registry_store: Arc<dyn RegistryStore>,
+    pub message_store: Arc<dyn MessageStore>,
+    pub room_store: Arc<dyn RoomStore>,
+    pub governance_store: Arc<dyn GovernanceStore>,
+    pub intent_store: Arc<dyn IntentStore>,
+    pub event_bus: broadcast::Sender<ProjectorEvent>,
+    pub server_name: Option<String>,
+}
+
 impl EventProcessor {
-    pub fn new(
-        site_store: Arc<dyn SiteStore>,
-        registry_store: Arc<dyn RegistryStore>,
-        message_store: Arc<dyn MessageStore>,
-        room_store: Arc<dyn RoomStore>,
-        intent_store: Arc<dyn IntentStore>,
-        event_bus: broadcast::Sender<ProjectorEvent>,
-        server_name: Option<String>,
-    ) -> Self {
+    pub fn new(deps: EventProcessorDeps) -> Self {
         Self {
-            site_store,
-            registry_store,
-            message_store,
-            room_store,
-            intent_store,
-            event_bus,
-            server_name,
+            site_store: deps.site_store,
+            registry_store: deps.registry_store,
+            message_store: deps.message_store,
+            room_store: deps.room_store,
+            governance_store: deps.governance_store,
+            intent_store: deps.intent_store,
+            event_bus: deps.event_bus,
+            server_name: deps.server_name,
         }
     }
 
@@ -633,6 +643,28 @@ impl EventProcessor {
                 })
                 .await?;
         }
+        if event.event_type == POWER_LEVELS_EVENT_TYPE {
+            let roles: Vec<RoleEntry> = role_entries(&event.content, MODERATOR_LEVEL)
+                .into_iter()
+                .filter(|role| !is_as_managed_user(&role.user_id))
+                .collect();
+            // A site Space's power levels define the site roles; a comment
+            // room's power levels define its room roles. Other rooms (or
+            // unregistered rooms) carry no governance meaning.
+            if let Some(site) = self.site_store.get_site_by_space_id(&event.room_id).await? {
+                self.governance_store
+                    .replace_site_roles(&site.id, &roles)
+                    .await?;
+            } else if matches!(
+                self.registry_store.get_room_status(&event.room_id).await?,
+                Some(RoomStatus::Active)
+            ) {
+                self.governance_store
+                    .replace_room_roles(&event.room_id, &roles)
+                    .await?;
+            }
+        }
+
         self.room_store
             .save_state_event(&RoomStateEvent {
                 event_id: event.event_id,
