@@ -545,51 +545,6 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/rooms/blocked:
-    x-cumments-query:
-      tags: [Admin]
-      summary: List quarantined rooms (QUERY, deprecated alias)
-      operationId: listBlockedRooms
-      deprecated: true
-      description: |
-        Deprecated alias for `/api/v1/admin/rooms/quarantined`, kept for one
-        release.
-      security:
-        - adminToken: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminListQuery"
-      responses:
-        "200":
-          description: Paginated quarantined rooms
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminQuarantinedRoomPage"
-        "400":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-  /api/v1/admin/rooms/blocked/{room_id}:
-    parameters:
-      - $ref: "#/components/parameters/RoomId"
-    delete:
-      tags: [Admin]
-      summary: Reinstate a room (deprecated alias)
-      operationId: unblockBlockedRoom
-      deprecated: true
-      security:
-        - adminToken: []
-      responses:
-        "204":
-          description: Room reinstated (idempotent)
-        "403":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
   /api/v1/media/{server}/{media_id}:
     parameters:
       - name: server

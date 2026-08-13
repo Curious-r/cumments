@@ -301,16 +301,6 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/v1/admin/rooms/quarantined/{room_id}",
             axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
         )
-        // Deprecated aliases kept for one release; remove with the next
-        // breaking change.
-        .route(
-            "/api/v1/admin/rooms/blocked",
-            axum::routing::get(method_not_allowed_handler).fallback(list_quarantined_rooms_handler),
-        )
-        .route(
-            "/api/v1/admin/rooms/blocked/{room_id}",
-            axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
-        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
     Router::new()

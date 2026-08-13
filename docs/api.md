@@ -435,9 +435,6 @@ active room for the same post is superseded). The operation is idempotent:
 reinstating an already-active room also returns `204`; an unknown room
 returns `404`.
 
-The old `/api/v1/admin/rooms/blocked` paths are kept as deprecated aliases
-for one release.
-
 ## Site governance
 
 Site-owner operations authenticate with the claim token returned at site
