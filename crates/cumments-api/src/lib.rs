@@ -95,7 +95,11 @@ pub struct ApiState {
     pub site_service: Arc<SiteService>,
     pub pow: Arc<pow::Pow>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
-    pub reconciler_notify: Arc<Notify>,
+    /// Wakes the intent reconcile passes when a write intent is saved.
+    pub intent_notify: Arc<Notify>,
+    /// Wakes the site-governance passes when the API writes governance state
+    /// (role writes, site retirement).
+    pub governance_notify: Arc<Notify>,
     /// Instance-wide site verification policy plus the operator-declared
     /// per-site overlay.
     pub site_auth_policy: Arc<SiteAuthPolicy>,

@@ -44,7 +44,7 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
         role_claim_store: store.clone() as Arc<dyn cumments_core::ports::RoleClaimStore>,
         intent_store: store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
         event_bus: tx,
-        moderation_notify: Arc::new(tokio::sync::Notify::new()),
+        projection_notify: Arc::new(tokio::sync::Notify::new()),
         server_name: server_name.map(|s| s.to_string()),
     })
 }

@@ -2,11 +2,23 @@
 
 use super::*;
 use anyhow::Result;
+use async_trait::async_trait;
 use tracing::{error, warn};
 
-impl Reconciler {
-    pub(super) async fn reconcile_posts(&self) -> Result<u64> {
+/// Reconciles pending post (and location) intents toward Matrix.
+pub struct PostsPass {
+    deps: Arc<ReconcilerDeps>,
+    config: PassConfig,
+}
+
+impl PostsPass {
+    pub fn new(deps: Arc<ReconcilerDeps>, config: PassConfig) -> Self {
+        Self { deps, config }
+    }
+
+    async fn reconcile(&self) -> Result<u64> {
         let intents = self
+            .deps
             .intent_store
             .get_pending_post_intents(INTENT_BATCH_SIZE)
             .await?;
@@ -20,15 +32,16 @@ impl Reconciler {
             let id = pending.id;
             let intent = pending.intent;
             let process_result = run_intent(async {
-                // ORCHESTRATION START
                 // 1. Brain: Ensure the site space is ready
                 let space_id = self
+                    .deps
                     .site_service
-                    .ensure_space(&intent.site_id, self.driver.as_ref())
+                    .ensure_space(&intent.site_id, self.deps.driver.as_ref())
                     .await?;
 
                 // 2. Registry: Check for existing room in local cache (O(1) hint)
                 let candidate_room_id = self
+                    .deps
                     .registry_store
                     .get_registered_room(&intent.site_id, &intent.post_slug)
                     .await?;
@@ -37,9 +50,12 @@ impl Reconciler {
                 // would retry the quarantined room through alias recovery on
                 // every comment. Fail fast instead until its retry is due.
                 if candidate_room_id.is_none()
-                    && let Some(room) = self
-                        .quarantined_room_for(&intent.site_id, &intent.post_slug)
-                        .await?
+                    && let Some(room) = quarantined_room_for(
+                        &self.deps,
+                        &intent.site_id,
+                        &intent.post_slug,
+                    )
+                    .await?
                 {
                     match room.next_attempt_at {
                         Some(next) if next > chrono::Utc::now() => {
@@ -63,6 +79,7 @@ impl Reconciler {
 
                 // 3. Hands: Ensure the post-specific room exists and is linked
                 let room_id = match self
+                    .deps
                     .driver
                     .ensure_comment_room(
                         &intent.site_id,
@@ -78,8 +95,12 @@ impl Reconciler {
                             let room_id =
                                 quarantine_target(&e).or_else(|| candidate_room_id.clone());
                             if let Some(room_id) = room_id {
-                                let _ =
-                                    self.record_adoption_failure(&room_id, &e.to_string()).await;
+                                let _ = record_adoption_failure(
+                                    &self.deps,
+                                    &room_id,
+                                    &e.to_string(),
+                                )
+                                .await;
                             }
                         }
                         return Err(e);
@@ -90,7 +111,8 @@ impl Reconciler {
                 // This is critical in AppService mode: pushes resolve room
                 // identity from this registry, so the mapping must be durable
                 // before any event can arrive.
-                self.registry_store
+                self.deps
+                    .registry_store
                     .register_room(&room_id, &intent.site_id, &intent.post_slug)
                     .await?;
 
@@ -99,25 +121,28 @@ impl Reconciler {
                 // Unknown originals (e.g. replies to a not-yet-projected
                 // event) simply skip the quote.
                 let (reply_to_body, reply_to_sender) = match intent.reply_to.as_deref() {
-                    Some(event_id) => match self.message_store.get_message(event_id).await? {
-                        Some(message) => {
-                            let body = match &message.content {
-                                cumments_core::models::Content::Text(text) => {
-                                    Some(text.body.clone())
-                                }
-                                _ => None,
-                            };
-                            (body, Some(message.sender_mxid))
+                    Some(event_id) => {
+                        match self.deps.message_store.get_message(event_id).await? {
+                            Some(message) => {
+                                let body = match &message.content {
+                                    cumments_core::models::Content::Text(text) => {
+                                        Some(text.body.clone())
+                                    }
+                                    _ => None,
+                                };
+                                (body, Some(message.sender_mxid))
+                            }
+                            None => (None, None),
                         }
-                        None => (None, None),
-                    },
+                    }
                     None => (None, None),
                 };
 
                 // 4. Hands: Post the actual message
                 let event_id = {
                     let result = if let Some(location) = &intent.location {
-                        self.driver
+                        self.deps
+                            .driver
                             .post_location(
                                 &room_id,
                                 &location.geo_uri,
@@ -131,7 +156,8 @@ impl Reconciler {
                             )
                             .await
                     } else {
-                        self.driver
+                        self.deps
+                            .driver
                             .post_message(
                                 &room_id,
                                 &intent.content,
@@ -160,7 +186,7 @@ impl Reconciler {
                                     "Post intent [{}] failed on room {}; retiring registry entry: {:#}",
                                     id, room_id, e
                                 );
-                                let _ = self.registry_store.retire_room(&room_id).await;
+                                let _ = self.deps.registry_store.retire_room(&room_id).await;
                             }
                             return Err(e);
                         }
@@ -169,14 +195,14 @@ impl Reconciler {
                 // The media is now referenced by a real room event; mark it
                 // used so orphan cleanup does not delete it.
                 if let Some(media) = &intent.media {
-                    let _ = self.message_store.mark_media_used(&media.url).await;
+                    let _ = self.deps.message_store.mark_media_used(&media.url).await;
                 }
 
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
-                self.intent_store
+                self.deps
+                    .intent_store
                     .mark_post_intent_waiting_for_sync(id, &event_id, &room_id)
                     .await?;
-                // ORCHESTRATION END
 
                 Ok(())
             })
@@ -184,6 +210,7 @@ impl Reconciler {
 
             if let Err(e) = process_result {
                 let retrying = self
+                    .deps
                     .intent_store
                     .record_post_intent_failure(id, &e.to_string())
                     .await?;
@@ -201,5 +228,16 @@ impl Reconciler {
             }
         }
         Ok(num_intents)
+    }
+}
+
+#[async_trait]
+impl ReconcilePass for PostsPass {
+    fn config(&self) -> &PassConfig {
+        &self.config
+    }
+
+    async fn run(&self) -> Result<u64> {
+        self.reconcile().await
     }
 }

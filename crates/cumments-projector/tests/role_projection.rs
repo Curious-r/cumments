@@ -76,7 +76,7 @@ async fn power_levels_project_site_and_room_roles() {
         .expect("room");
 
     let (tx, _rx) = broadcast::channel(16);
-    let moderation_notify = Arc::new(Notify::new());
+    let projection_notify = Arc::new(Notify::new());
     let processor = EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
         registry_store: store.clone(),
@@ -86,7 +86,7 @@ async fn power_levels_project_site_and_room_roles() {
         role_claim_store: store.clone(),
         intent_store: store.clone(),
         event_bus: tx,
-        moderation_notify: moderation_notify.clone(),
+        projection_notify: projection_notify.clone(),
         server_name: Some("hs".to_string()),
     });
 
@@ -122,7 +122,7 @@ async fn power_levels_project_site_and_room_roles() {
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            moderation_notify.notified()
+            projection_notify.notified()
         )
         .await
         .is_ok(),
@@ -166,7 +166,7 @@ async fn claim_dm_activates_only_the_matching_token() {
             .expect("connect db"),
     );
     let (tx, _rx) = broadcast::channel(16);
-    let moderation_notify = Arc::new(Notify::new());
+    let projection_notify = Arc::new(Notify::new());
     let processor = EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
         registry_store: store.clone(),
@@ -176,7 +176,7 @@ async fn claim_dm_activates_only_the_matching_token() {
         role_claim_store: store.clone(),
         intent_store: store.clone(),
         event_bus: tx,
-        moderation_notify: moderation_notify.clone(),
+        projection_notify: projection_notify.clone(),
         server_name: Some("hs".to_string()),
     });
 
@@ -235,7 +235,7 @@ async fn claim_dm_activates_only_the_matching_token() {
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            moderation_notify.notified(),
+            projection_notify.notified(),
         )
         .await
         .is_ok(),

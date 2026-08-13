@@ -141,7 +141,9 @@ async fn main() -> Result<()> {
     // 4. Initialize Event Bus for real-time updates (SSE)
     // ─────────────────────────────────────────────────────────────
     let (event_bus, _) = broadcast::channel(100);
-    let reconciler_notify = Arc::new(tokio::sync::Notify::new());
+    let intent_notify = Arc::new(tokio::sync::Notify::new());
+    let governance_notify = Arc::new(tokio::sync::Notify::new());
+    let projection_notify = Arc::new(tokio::sync::Notify::new());
 
     // ─────────────────────────────────────────────────────────────
     // 5. Initialize EventProcessor (shared across all modes)
@@ -156,7 +158,7 @@ async fn main() -> Result<()> {
             role_claim_store: db_store.clone(),
             intent_store: db_store.clone(),
             event_bus: event_bus.clone(),
-            moderation_notify: reconciler_notify.clone(),
+            projection_notify: projection_notify.clone(),
             server_name: settings
                 .matrix
                 .homeserver
@@ -266,17 +268,23 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     // 9. Initialize and run Reconciler (Orchestrator)
     // ─────────────────────────────────────────────────────────────
-    let reconciler = cumments_reconciler::Reconciler::new(cumments_reconciler::ReconcilerDeps {
-        intent_store: db_store.clone(),
-        registry_store: db_store.clone(),
-        site_store: db_store.clone(),
-        role_claim_store: db_store.clone(),
-        message_store: db_store.clone(),
-        site_auth_store: db_store.clone(),
-        driver: driver.clone(),
-        site_service: site_service.clone(),
-        notify: reconciler_notify.clone(),
-    });
+    let reconciler = cumments_reconciler::Reconciler::new(
+        cumments_reconciler::ReconcilerDeps {
+            intent_store: db_store.clone(),
+            registry_store: db_store.clone(),
+            site_store: db_store.clone(),
+            role_claim_store: db_store.clone(),
+            message_store: db_store.clone(),
+            site_auth_store: db_store.clone(),
+            driver: driver.clone(),
+            site_service: site_service.clone(),
+        },
+        cumments_reconciler::PassWakeups {
+            intent: intent_notify.clone(),
+            governance: governance_notify.clone(),
+            projection: projection_notify.clone(),
+        },
+    );
     tokio::spawn(async move {
         reconciler.run().await;
     });
@@ -418,7 +426,8 @@ async fn main() -> Result<()> {
         site_service: site_service.clone(),
         pow: Arc::new(pow),
         event_bus,
-        reconciler_notify,
+        intent_notify,
+        governance_notify,
         site_auth_policy,
         admin_token_hash,
         registration_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(

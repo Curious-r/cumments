@@ -1001,6 +1001,7 @@ name = "cumments-reconciler"
 version = "0.22.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "cumments-core",
  "serde_json",

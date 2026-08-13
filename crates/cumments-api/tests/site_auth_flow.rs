@@ -52,7 +52,8 @@ async fn test_state(
         site_service: Arc::new(SiteService::new(site_service_store)),
         pow: Arc::new(Pow::new("test-secret".to_string(), 1)),
         event_bus,
-        reconciler_notify: Arc::new(tokio::sync::Notify::new()),
+        intent_notify: Arc::new(tokio::sync::Notify::new()),
+        governance_notify: Arc::new(tokio::sync::Notify::new()),
         site_auth_policy: Arc::new(SiteAuthPolicy {
             verification: policy,
             sites: Default::default(),

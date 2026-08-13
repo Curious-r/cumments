@@ -1,6 +1,7 @@
 mod decommission;
 mod deletions;
 mod moderation;
+mod pass;
 mod posts;
 mod timeouts;
 mod updates;
@@ -15,9 +16,10 @@ use cumments_core::{
     },
     site_service::SiteService,
 };
+use pass::{PassConfig, ReconcilePass};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::info;
 
 use tokio::sync::Notify;
 
@@ -32,7 +34,7 @@ const TIMEOUT_CONFIRMATION_LIMIT: u32 = 3;
 /// intent; prevents indefinite limbo on persistent homeserver errors.
 const TIMEOUT_ERROR_LIMIT: u32 = 5;
 /// Maximum number of pending intents loaded per queue per pass. Keeps memory
-/// bounded under write floods; `reconcile()` loops until a batch is empty.
+/// bounded under write floods.
 const INTENT_BATCH_SIZE: u64 = 100;
 /// Upper bound for processing a single intent, including all Matrix driver
 /// calls (room creation, joins, sends). Prevents one stuck homeserver request
@@ -48,6 +50,10 @@ const QUARANTINE_BACKOFFS: [Duration; 3] = [
 /// requires manual `reinstate`. Failures 1-3 schedule the 1h/6h/24h retries;
 /// the fourth failure escalates.
 const QUARANTINE_ESCALATION: u32 = 4;
+/// Resync interval for intent passes; wakeups keep them prompt.
+const INTENT_PASS_INTERVAL: Duration = Duration::from_secs(5);
+/// Resync interval for governance passes.
+const GOVERNANCE_PASS_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Run one intent's processing future with a hard time budget.
 async fn run_intent<F>(future: F) -> Result<()>
@@ -105,22 +111,8 @@ fn quarantine_target(err: &anyhow::Error) -> Option<String> {
         })
 }
 
-/// The Reconciler acts as the Orchestrator of the background process.
-/// It coordinates between the SiteService (Brain) and the MatrixDriver (Hands).
-pub struct Reconciler {
-    intent_store: Arc<dyn IntentStore>,
-    registry_store: Arc<dyn RegistryStore>,
-    site_store: Arc<dyn SiteStore>,
-    role_claim_store: Arc<dyn RoleClaimStore>,
-    message_store: Arc<dyn MessageStore>,
-    site_auth_store: Arc<dyn SiteAuthStore>,
-    driver: Arc<dyn MatrixDriver>,
-    site_service: Arc<SiteService>,
-    notify: Arc<Notify>,
-}
-
-/// Dependencies of the [`Reconciler`], kept as one struct so the growing set
-/// of stores stays readable at construction sites.
+/// Shared dependencies of every reconcile pass. Each pass is scheduled by
+/// the [`Reconciler`]; none owns Matrix-write authority beyond the driver.
 pub struct ReconcilerDeps {
     pub intent_store: Arc<dyn IntentStore>,
     pub registry_store: Arc<dyn RegistryStore>,
@@ -130,168 +122,130 @@ pub struct ReconcilerDeps {
     pub site_auth_store: Arc<dyn SiteAuthStore>,
     pub driver: Arc<dyn MatrixDriver>,
     pub site_service: Arc<SiteService>,
-    pub notify: Arc<Notify>,
+}
+
+/// The event sources that wake the reconcile passes. Each pass subscribes to
+/// exactly one; routing is a first-class part of the design.
+pub struct PassWakeups {
+    /// API-saved comment write intents.
+    pub intent: Arc<Notify>,
+    /// API-side governance writes (role changes, site retirement).
+    pub governance: Arc<Notify>,
+    /// Projection-driven governance changes (token-DM activation, Space
+    /// power-level pushes).
+    pub projection: Arc<Notify>,
+}
+
+/// The reconciler: a set of independent [`ReconcilePass`] controllers.
+/// It owns no scheduling logic of its own beyond spawning one task per pass.
+pub struct Reconciler {
+    passes: Vec<Arc<dyn ReconcilePass>>,
 }
 
 impl Reconciler {
-    pub fn new(deps: ReconcilerDeps) -> Self {
-        Self {
-            intent_store: deps.intent_store,
-            registry_store: deps.registry_store,
-            site_store: deps.site_store,
-            role_claim_store: deps.role_claim_store,
-            message_store: deps.message_store,
-            site_auth_store: deps.site_auth_store,
-            driver: deps.driver,
-            site_service: deps.site_service,
-            notify: deps.notify,
-        }
+    pub fn new(deps: ReconcilerDeps, wakeups: PassWakeups) -> Self {
+        let deps = Arc::new(deps);
+        let schedule = pass_schedule(&wakeups);
+
+        let passes: Vec<Arc<dyn ReconcilePass>> = vec![
+            Arc::new(posts::PostsPass::new(deps.clone(), schedule.posts)),
+            Arc::new(deletions::DeletionsPass::new(
+                deps.clone(),
+                schedule.deletions,
+            )),
+            Arc::new(updates::UpdatesPass::new(deps.clone(), schedule.updates)),
+            Arc::new(timeouts::TimeoutsPass::new(deps.clone(), schedule.timeouts)),
+            Arc::new(moderation::ClaimsPass::new(deps.clone(), schedule.claims)),
+            Arc::new(moderation::ModerationPass::new(
+                deps.clone(),
+                schedule.moderation,
+            )),
+            Arc::new(decommission::DecommissionPass::new(
+                deps.clone(),
+                schedule.decommission,
+            )),
+        ];
+        Self { passes }
     }
 
-    /// The quarantined room for a site/post, if any.
-    async fn quarantined_room_for(
-        &self,
-        site_id: &SiteId,
-        post_slug: &PostSlug,
-    ) -> Result<Option<QuarantinedRoom>> {
-        let rooms = self.registry_store.get_quarantined_rooms().await?;
-        Ok(rooms
-            .into_iter()
-            .find(|r| r.site_id == site_id.as_str() && r.post_slug == post_slug.as_str()))
-    }
-
-    /// Records one more adoption failure for a room, applying the backoff
-    /// schedule and escalating to manual attention after repeated failures.
-    async fn record_adoption_failure(&self, room_id: &str, reason: &str) -> Result<()> {
-        let failures = self
-            .registry_store
-            .get_quarantined_rooms()
-            .await?
-            .into_iter()
-            .find(|r| r.room_id == room_id)
-            .map(|r| r.adoption_failures + 1)
-            .unwrap_or(1);
-        self.registry_store
-            .quarantine_room(room_id, reason, failures, next_quarantine_attempt(failures))
-            .await?;
-        Ok(())
-    }
-
-    /// Runs the main reconciliation loop.
+    /// Spawns one task per pass and waits forever. Pass failures are logged
+    /// per pass and never stop the others.
     pub async fn run(&self) {
-        info!("Starting reactive reconciler loop...");
-        // Fallback interval for retries and periodic cleanup
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    tracing::debug!("Reconciler: Periodic scan triggered.");
-                }
-                _ = self.notify.notified() => {
-                    tracing::debug!("Reconciler: Instant wake-up triggered by notification.");
-                }
-            }
-
-            match self.reconcile().await {
-                Ok(count) => {
-                    if count > 0 {
-                        info!("Successfully reconciled {} intents.", count);
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Reconciliation failed: {:?}", e);
-                }
-            }
+        info!("Starting {} reconcile passes.", self.passes.len());
+        for pass in &self.passes {
+            tokio::spawn(pass::run_pass(Arc::clone(pass)));
         }
+        std::future::pending::<()>().await;
     }
+}
 
-    /// Reconciles all types of pending intents from the database.
-    async fn reconcile(&self) -> Result<u64> {
-        let mut post_count = 0;
-        loop {
-            match self.reconcile_posts().await {
-                Ok(batch) => {
-                    post_count += batch;
-                    if batch < INTENT_BATCH_SIZE {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!("Reconcile posts phase failed: {:#}", e);
-                    break;
-                }
-            }
-        }
+/// The pass-to-wakeup routing table, kept as a pure function so the routing
+/// is unit-testable without constructing any store mocks.
+struct PassSchedule {
+    posts: PassConfig,
+    deletions: PassConfig,
+    updates: PassConfig,
+    timeouts: PassConfig,
+    claims: PassConfig,
+    moderation: PassConfig,
+    decommission: PassConfig,
+}
 
-        let mut delete_count = 0;
-        loop {
-            match self.reconcile_deletions().await {
-                Ok(batch) => {
-                    delete_count += batch;
-                    if batch < INTENT_BATCH_SIZE {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!("Reconcile deletions phase failed: {:#}", e);
-                    break;
-                }
-            }
-        }
+fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
+    let intent = |name: &'static str| PassConfig {
+        name,
+        interval: INTENT_PASS_INTERVAL,
+        wakeup: wakeups.intent.clone(),
+    };
+    let governance = |name: &'static str| PassConfig {
+        name,
+        interval: GOVERNANCE_PASS_INTERVAL,
+        wakeup: wakeups.governance.clone(),
+    };
+    let projection = |name: &'static str| PassConfig {
+        name,
+        interval: GOVERNANCE_PASS_INTERVAL,
+        wakeup: wakeups.projection.clone(),
+    };
 
-        let mut update_count = 0;
-        loop {
-            match self.reconcile_updates().await {
-                Ok(batch) => {
-                    update_count += batch;
-                    if batch < INTENT_BATCH_SIZE {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!("Reconcile updates phase failed: {:#}", e);
-                    break;
-                }
-            }
-        }
-
-        let timeout_count = match self.reconcile_timeouts().await {
-            Ok(n) => n,
-            Err(e) => {
-                error!("Reconcile timeouts phase failed: {:#}", e);
-                0
-            }
-        };
-        let claim_count = match self.reconcile_claims().await {
-            Ok(n) => n,
-            Err(e) => {
-                error!("Reconcile claims phase failed: {:#}", e);
-                0
-            }
-        };
-        let moderation_count = match self.reconcile_moderation().await {
-            Ok(n) => n,
-            Err(e) => {
-                error!("Reconcile moderation phase failed: {:#}", e);
-                0
-            }
-        };
-        let decommission_count = match self.reconcile_decommissions().await {
-            Ok(n) => n,
-            Err(e) => {
-                error!("Reconcile decommission phase failed: {:#}", e);
-                0
-            }
-        };
-        Ok(post_count
-            + delete_count
-            + update_count
-            + timeout_count
-            + claim_count
-            + moderation_count
-            + decommission_count)
+    PassSchedule {
+        posts: intent("posts"),
+        deletions: intent("deletions"),
+        updates: intent("updates"),
+        timeouts: intent("timeouts"),
+        claims: projection("claims"),
+        moderation: projection("moderation"),
+        decommission: governance("decommission"),
     }
+}
+
+/// The quarantined room for a site/post, if any.
+async fn quarantined_room_for(
+    deps: &ReconcilerDeps,
+    site_id: &SiteId,
+    post_slug: &PostSlug,
+) -> Result<Option<QuarantinedRoom>> {
+    let rooms = deps.registry_store.get_quarantined_rooms().await?;
+    Ok(rooms
+        .into_iter()
+        .find(|r| r.site_id == site_id.as_str() && r.post_slug == post_slug.as_str()))
+}
+
+/// Records one more adoption failure for a room, applying the backoff
+/// schedule and escalating to manual attention after repeated failures.
+async fn record_adoption_failure(deps: &ReconcilerDeps, room_id: &str, reason: &str) -> Result<()> {
+    let failures = deps
+        .registry_store
+        .get_quarantined_rooms()
+        .await?
+        .into_iter()
+        .find(|r| r.room_id == room_id)
+        .map(|r| r.adoption_failures + 1)
+        .unwrap_or(1);
+    deps.registry_store
+        .quarantine_room(room_id, reason, failures, next_quarantine_attempt(failures))
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -332,5 +286,33 @@ mod tests {
         let transient = anyhow::anyhow!("request timed out");
         assert!(!should_quarantine(&transient));
         assert!(!is_room_gone(&transient));
+    }
+
+    #[test]
+    fn pass_schedule_routes_each_wakeup() {
+        let intent = Arc::new(Notify::new());
+        let governance = Arc::new(Notify::new());
+        let projection = Arc::new(Notify::new());
+        let schedule = pass_schedule(&PassWakeups {
+            intent: intent.clone(),
+            governance: governance.clone(),
+            projection: projection.clone(),
+        });
+
+        for config in [
+            &schedule.posts,
+            &schedule.deletions,
+            &schedule.updates,
+            &schedule.timeouts,
+        ] {
+            assert_eq!(config.interval, INTENT_PASS_INTERVAL);
+            assert!(Arc::ptr_eq(&config.wakeup, &intent), "{}", config.name);
+        }
+        for config in [&schedule.claims, &schedule.moderation] {
+            assert_eq!(config.interval, GOVERNANCE_PASS_INTERVAL);
+            assert!(Arc::ptr_eq(&config.wakeup, &projection), "{}", config.name);
+        }
+        assert_eq!(schedule.decommission.interval, GOVERNANCE_PASS_INTERVAL);
+        assert!(Arc::ptr_eq(&schedule.decommission.wakeup, &governance));
     }
 }

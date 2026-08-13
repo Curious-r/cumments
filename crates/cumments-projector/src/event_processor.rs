@@ -49,7 +49,7 @@ pub struct EventProcessor {
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
     /// the periodic reconcile tick.
-    moderation_notify: Arc<Notify>,
+    projection_notify: Arc<Notify>,
     server_name: Option<String>,
 }
 
@@ -64,7 +64,7 @@ pub struct EventProcessorDeps {
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub intent_store: Arc<dyn IntentStore>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
-    pub moderation_notify: Arc<Notify>,
+    pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
 }
 
@@ -79,7 +79,7 @@ impl EventProcessor {
             role_claim_store: deps.role_claim_store,
             intent_store: deps.intent_store,
             event_bus: deps.event_bus,
-            moderation_notify: deps.moderation_notify,
+            projection_notify: deps.projection_notify,
             server_name: deps.server_name,
         }
     }
@@ -128,7 +128,7 @@ impl EventProcessor {
                 && self.role_claim_store.mark_claim_activated(claim.id).await?
             {
                 info!("Activated role claim {} for {}", claim.id, claim.user_id);
-                self.moderation_notify.notify_one();
+                self.projection_notify.notify_one();
                 return Ok(true);
             }
         }
@@ -712,7 +712,7 @@ impl EventProcessor {
                 self.governance_store
                     .replace_site_roles(&site.id, &roles)
                     .await?;
-                self.moderation_notify.notify_one();
+                self.projection_notify.notify_one();
             } else if matches!(
                 self.registry_store.get_room_status(&event.room_id).await?,
                 Some(RoomStatus::Active)

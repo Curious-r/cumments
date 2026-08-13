@@ -224,7 +224,7 @@ async fn remove_site_role(
     set_role_level(state.driver.as_ref(), &space_id, user_id, level, false)
         .await
         .map_err(|e| AppError::Internal(format!("failed to update space power levels: {e}")))?;
-    state.reconciler_notify.notify_one();
+    state.governance_notify.notify_one();
     Ok(())
 }
 
@@ -442,7 +442,7 @@ pub(crate) async fn retire_site_handler(
             "site not found or already decommissioned".to_string(),
         ));
     }
-    state.reconciler_notify.notify_one();
+    state.governance_notify.notify_one();
     Ok(Json(RetireSiteResponse {
         site_id: site_id.as_str().to_string(),
         status: "retiring",

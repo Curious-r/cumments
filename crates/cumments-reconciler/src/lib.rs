@@ -1,3 +1,3 @@
 mod reconciler;
 
-pub use reconciler::{Reconciler, ReconcilerDeps};
+pub use reconciler::{PassWakeups, Reconciler, ReconcilerDeps};

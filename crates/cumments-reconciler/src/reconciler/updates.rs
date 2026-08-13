@@ -2,11 +2,23 @@
 
 use super::*;
 use anyhow::Result;
+use async_trait::async_trait;
 use tracing::{error, warn};
 
-impl Reconciler {
-    pub(super) async fn reconcile_updates(&self) -> Result<u64> {
+/// Reconciles pending update (edit) intents toward Matrix.
+pub struct UpdatesPass {
+    deps: Arc<ReconcilerDeps>,
+    config: PassConfig,
+}
+
+impl UpdatesPass {
+    pub fn new(deps: Arc<ReconcilerDeps>, config: PassConfig) -> Self {
+        Self { deps, config }
+    }
+
+    async fn reconcile(&self) -> Result<u64> {
         let intents = self
+            .deps
             .intent_store
             .get_pending_update_intents(INTENT_BATCH_SIZE)
             .await?;
@@ -22,12 +34,14 @@ impl Reconciler {
             let process_result = run_intent(async {
                 // 1. Brain: Ensure site space
                 let space_id = self
+                    .deps
                     .site_service
-                    .ensure_space(&intent.site_id, self.driver.as_ref())
+                    .ensure_space(&intent.site_id, self.deps.driver.as_ref())
                     .await?;
 
                 // 2. Registry: Check for existing room in local cache (O(1) hint)
                 let candidate_room_id = self
+                    .deps
                     .registry_store
                     .get_registered_room(&intent.site_id, &intent.post_slug)
                     .await?;
@@ -35,9 +49,12 @@ impl Reconciler {
                 // Quarantine gate: fail fast while a quarantined room's retry
                 // is not due instead of hammering alias recovery per comment.
                 if candidate_room_id.is_none()
-                    && let Some(room) = self
-                        .quarantined_room_for(&intent.site_id, &intent.post_slug)
-                        .await?
+                    && let Some(room) = quarantined_room_for(
+                        &self.deps,
+                        &intent.site_id,
+                        &intent.post_slug,
+                    )
+                    .await?
                 {
                     match room.next_attempt_at {
                         Some(next) if next > chrono::Utc::now() => {
@@ -61,6 +78,7 @@ impl Reconciler {
 
                 // 3. Hands: Ensure room
                 let room_id = match self
+                    .deps
                     .driver
                     .ensure_comment_room(
                         &intent.site_id,
@@ -76,9 +94,12 @@ impl Reconciler {
                             let room_id = quarantine_target(&e)
                                 .or_else(|| candidate_room_id.clone());
                             if let Some(room_id) = room_id {
-                                let _ = self
-                                    .record_adoption_failure(&room_id, &e.to_string())
-                                    .await;
+                                let _ = record_adoption_failure(
+                                    &self.deps,
+                                    &room_id,
+                                    &e.to_string(),
+                                )
+                                .await;
                             }
                         }
                         return Err(e);
@@ -86,12 +107,14 @@ impl Reconciler {
                 };
 
                 // 3b. Registry: Write back the room mapping immediately
-                self.registry_store
+                self.deps
+                    .registry_store
                     .register_room(&room_id, &intent.site_id, &intent.post_slug)
                     .await?;
 
                 // 4. Hands: Fetch original display name to maintain it
                 let display_name = self
+                    .deps
                     .message_store
                     .get_author_display_name(&intent.event_id)
                     .await?
@@ -100,6 +123,7 @@ impl Reconciler {
 
                 // 5. Hands: Perform the update (m.replace)
                 match self
+                    .deps
                     .driver
                     .update_message(
                         &room_id,
@@ -121,14 +145,15 @@ impl Reconciler {
                                 "Update intent [{}] failed on room {}; retiring registry entry: {:#}",
                                 id, room_id, e
                             );
-                            let _ = self.registry_store.retire_room(&room_id).await;
+                            let _ = self.deps.registry_store.retire_room(&room_id).await;
                         }
                         return Err(e);
                     }
                 }
 
                 // 6. Closed-loop: Mark as waiting for sync
-                self.intent_store
+                self.deps
+                    .intent_store
                     .mark_update_intent_waiting_for_sync(id, &room_id)
                     .await?;
 
@@ -138,6 +163,7 @@ impl Reconciler {
 
             if let Err(e) = process_result {
                 let retrying = self
+                    .deps
                     .intent_store
                     .record_update_intent_failure(id, &e.to_string())
                     .await?;
@@ -155,5 +181,16 @@ impl Reconciler {
             }
         }
         Ok(num_intents)
+    }
+}
+
+#[async_trait]
+impl ReconcilePass for UpdatesPass {
+    fn config(&self) -> &PassConfig {
+        &self.config
+    }
+
+    async fn run(&self) -> Result<u64> {
+        self.reconcile().await
     }
 }

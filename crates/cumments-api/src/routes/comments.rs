@@ -465,7 +465,7 @@ pub(crate) async fn post_comment_handler(
     {
         Ok(IdempotencyOutcome::Accepted { intent_id }) => {
             tracing::info!("Successfully saved a new comment intent.");
-            state.reconciler_notify.notify_one();
+            state.intent_notify.notify_one();
             Ok(accepted_response(intent_id, false))
         }
         Ok(IdempotencyOutcome::Replayed { intent_id }) => {
@@ -635,7 +635,7 @@ async fn delete_comment_common(
     {
         Ok(IdempotencyOutcome::Accepted { intent_id }) => {
             tracing::info!("Successfully saved a delete comment intent.");
-            state.reconciler_notify.notify_one();
+            state.intent_notify.notify_one();
             Ok(accepted_response(intent_id, false))
         }
         Ok(IdempotencyOutcome::Replayed { intent_id }) => {
@@ -819,7 +819,7 @@ async fn update_comment_common(
     {
         Ok(IdempotencyOutcome::Accepted { intent_id }) => {
             tracing::info!("Successfully saved an update comment intent.");
-            state.reconciler_notify.notify_one();
+            state.intent_notify.notify_one();
             Ok(accepted_response(intent_id, false))
         }
         Ok(IdempotencyOutcome::Replayed { intent_id }) => {
@@ -1077,7 +1077,7 @@ pub(crate) async fn location_handler(
     {
         Ok(IdempotencyOutcome::Accepted { intent_id }) => {
             tracing::info!("Successfully saved a new location intent.");
-            state.reconciler_notify.notify_one();
+            state.intent_notify.notify_one();
             Ok(accepted_response(intent_id, false))
         }
         Ok(IdempotencyOutcome::Replayed { intent_id }) => {
