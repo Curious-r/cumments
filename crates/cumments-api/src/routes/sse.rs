@@ -117,14 +117,17 @@ pub(crate) async fn sse_handler(
             "SSE connections are rate limited; try again later".to_string(),
         ));
     }
+    // Validate the path parameters before touching the connection counter so
+    // a rejected request can never leak a permanent +1 on the global budget
+    // (the guard is created only after validation succeeds).
+    let site_id_val = SiteId::new(site_id.clone()).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug.clone()).map_err(AppError::Validation)?;
     if state.active_sse_connections.load(Ordering::Relaxed) >= state.max_sse_connections {
         return Err(AppError::TooManyRequests(
             "too many concurrent SSE connections; try again later".to_string(),
         ));
     }
     state.active_sse_connections.fetch_add(1, Ordering::Relaxed);
-    let site_id_val = SiteId::new(site_id.clone()).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug.clone()).map_err(AppError::Validation)?;
     let ephemeral_room_id = state
         .store
         .get_registered_room(&site_id_val, &post_slug_val)
