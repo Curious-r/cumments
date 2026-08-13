@@ -17,8 +17,10 @@ Everything below follows from three invariants:
    `cumments backfill` can rebuild. Nothing local is authoritative.
 2. **One write seam.** Every mutation of Matrix state goes through the
    AppService sender (the creator of every Space and room). The API and CLI
-   never talk to the homeserver directly: they persist a submission locally and
-   let the background reconciler perform the Matrix write.
+   never touch the homeserver through any other path: comment writes are
+   persisted locally as submissions for the reconciler, while governance
+   writes may go through the shared driver synchronously — the seam is
+   single, the path is not.
 3. **Push closes the loop.** The homeserver pushes events back, the projector
    updates the read model, and the reconciler confirms its work. The same
    idempotent projection serves both live pushes and `backfill`.
@@ -36,7 +38,7 @@ spectrum of how much machinery they need:
 
 | Mechanism | Weight | Idempotency anchor |
 |---|---|---|
-| Comment submissions (post, edit, delete, location) | Heavy | `Idempotency-Key` + request fingerprint + submission row, with timeouts, dead-lettering and room quarantine |
+| Comment submissions (post, edit, delete, location) | Heavy | `Idempotency-Key` + request fingerprint + claimable submission row (lease for crash recovery), with timeouts, dead-lettering and room quarantine |
 | Role claims (token-DM) | Light state machine | Claim row plus sender/token match (`pending` → `activated` → `applied`) |
 | Moderation sync | Pure convergence | Matrix power levels are full state, so read → diff → write is naturally idempotent |
 | Site decommission | One-shot marker, retry until converged | `lifecycle_status` plus idempotent rename / alias removal / leave (404-tolerant) |
@@ -48,16 +50,17 @@ idempotency for work that merely has to converge.
 
 ### Boundaries to watch
 
-- The reconciler is a single loop with several passes; per-pass failure
-  isolation, scheduling priorities and observability deserve attention as the
-  pass count grows.
+- The reconciler is a set of independent controllers, one task per pass, each
+  with its own wakeup channel and resync interval. As the pass count grows,
+  scheduling priorities and per-pass observability are the things to watch.
 - Rate limiters and the reconcile loop assume a single instance. Distributed
   deployments would need a shared limiter store and leader election /
   partitioning — a documented platform limitation.
-- Lightweight background-action mechanisms have now appeared three times (claims,
-  decommission, orphan media cleanup). If another one arrives, consolidating
-  them into a generic background-action ledger may beat adding one table and
-  one pass per feature.
+- Claims, decommission and orphan-media cleanup share the *concept* of a
+  background action but not its shape (a row machine, an entity lifecycle and
+  a table sweep, respectively). A generic action ledger is therefore deferred
+  until a second genuine per-action row machine appears — sharing a concept
+  does not imply sharing a table.
 
 ## System overview
 
