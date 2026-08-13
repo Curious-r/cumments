@@ -277,13 +277,42 @@ pub(crate) async fn upload_media_handler(
         .await
         .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
 
+    let kind = if mimetype.starts_with("image/") {
+        "image"
+    } else if mimetype.starts_with("audio/") {
+        "audio"
+    } else {
+        "file"
+    };
     Ok(Json(serde_json::json!({
         "url": url,
         "filename": filename,
         "mimetype": mimetype,
         "size": body.len(),
         "voice": false,
+        "kind": kind,
     })))
+}
+
+/// Lists preset stickers guests may reference in sticker messages.
+pub(crate) async fn list_stickers_handler(
+    State(state): State<ApiState>,
+    Path(_): Path<(String, String)>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let stickers = state
+        .preset_stickers
+        .iter()
+        .map(|url| {
+            let proxy_url = state
+                .media_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.proxify(url))
+                .unwrap_or_else(|| url.clone());
+            let alt = url.rsplit('/').next().unwrap_or(url).to_string();
+            serde_json::json!({ "url": url, "proxy_url": proxy_url, "alt": alt })
+        })
+        .collect();
+    Ok(Json(stickers))
 }
 
 /// Serves one media file to a public reader.

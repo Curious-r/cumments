@@ -756,6 +756,30 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/stickers:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    get:
+      tags: [Public]
+      summary: List preset stickers
+      responses:
+        "200":
+          description: Preset stickers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [url, proxy_url, alt]
+                  properties:
+                    url:
+                      type: string
+                    proxy_url:
+                      type: string
+                    alt:
+                      type: string
 components:
   securitySchemes:
     adminToken:

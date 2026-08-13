@@ -378,6 +378,9 @@ pub struct PollVote {
 /// Media attached to a guest message (image/voice/file).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommentMedia {
+    /// Explicit media kind; derived from `mimetype` when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MediaKind>,
     /// MXC URI of the uploaded media.
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]

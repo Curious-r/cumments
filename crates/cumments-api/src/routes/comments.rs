@@ -16,7 +16,7 @@ use axum::{
 use cumments_core::{
     identity::{post_signature_message, signature_message, verify_signature},
     intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
-    models::{AuthorKind, PostSlug, SiteId},
+    models::{AuthorKind, MediaKind, PostSlug, SiteId},
     ports::{IdempotencyInput, IdempotencyOutcome},
     site_auth::sha256_hex,
 };
@@ -287,6 +287,11 @@ pub(crate) async fn post_comment_handler(
         {
             return Err(AppError::BadRequest(
                 "media metadata is invalid.".to_string(),
+            ));
+        }
+        if media.kind == Some(MediaKind::Sticker) && !state.preset_stickers.contains(&media.url) {
+            return Err(AppError::BadRequest(
+                "sticker must reference a preset sticker".to_string(),
             ));
         }
     }

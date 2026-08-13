@@ -414,6 +414,16 @@ the upload is rate limited and size/type capped. The returned `url` is then
 used in a POST comment request with `media` (the signature covers the media
 URL instead of text content).
 
+### Preset stickers
+
+`GET /api/v1/sites/{site_id}/posts/{post_slug}/stickers`
+
+Returns the deployment's preset stickers as
+`[{ "url", "proxy_url", "alt" }]` (`url` is the `mxc://` reference used when
+posting, `proxy_url` is the signed preview URL). Guests send a sticker by
+posting a comment with `media.kind = "sticker"` referencing one of these
+`url` values; the API rejects stickers outside the preset list.
+
 ### Room info
 
 `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`

@@ -7,7 +7,9 @@ use crate::routes::comments::{
     delete_comment_body_handler, delete_comment_handler, post_comment_handler,
     query_comments_handler, update_comment_body_handler, update_comment_handler,
 };
-use crate::routes::media::{MediaProxy, media_handler, upload_media_handler};
+use crate::routes::media::{
+    MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
+};
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -116,6 +118,8 @@ pub struct ApiState {
     pub ephemeral_bus: broadcast::Sender<EphemeralEvent>,
     /// Shared typing state for SSE snapshots, when ephemeral sync is enabled.
     pub ephemeral_state: Option<Arc<EphemeralState>>,
+    /// Preset sticker MXC URIs guests may reference.
+    pub preset_stickers: Arc<Vec<String>>,
 }
 
 /// Builds the Axum router for the API.
@@ -160,6 +164,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/room",
             get(room_info_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/stickers",
+            get(list_stickers_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/media/{server}/{media_id}",

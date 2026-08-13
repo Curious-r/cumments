@@ -4,7 +4,7 @@
 //! Keeping the wire format separate from `appservice.rs` makes it reviewable
 //! and testable on its own.
 
-use cumments_core::models::CommentMedia;
+use cumments_core::models::{CommentMedia, MediaKind};
 use cumments_core::protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE};
 use rand::Rng;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -255,11 +255,18 @@ pub(crate) fn build_media_body(
     guest_id: &str,
     intent_id: Option<i64>,
 ) -> serde_json::Value {
-    let msgtype = match media.mimetype.as_deref() {
-        Some(mime) if mime.starts_with("image/") => "m.image",
-        Some(mime) if mime.starts_with("video/") => "m.video",
-        Some(mime) if mime.starts_with("audio/") => "m.audio",
-        _ => "m.file",
+    let msgtype = match media.kind {
+        Some(MediaKind::Sticker) => "m.sticker",
+        Some(MediaKind::Image) => "m.image",
+        Some(MediaKind::Video) => "m.video",
+        Some(MediaKind::Audio) => "m.audio",
+        Some(MediaKind::File) => "m.file",
+        None => match media.mimetype.as_deref() {
+            Some(mime) if mime.starts_with("image/") => "m.image",
+            Some(mime) if mime.starts_with("video/") => "m.video",
+            Some(mime) if mime.starts_with("audio/") => "m.audio",
+            _ => "m.file",
+        },
     };
     let fallback = media
         .filename
@@ -567,6 +574,7 @@ mod tests {
     fn media_body_uses_msgtype_and_embed_url_as_content() {
         let body = build_media_body(
             &CommentMedia {
+                kind: None,
                 url: "mxc://hs/abc".to_string(),
                 filename: Some("cat.png".to_string()),
                 mimetype: Some("image/png".to_string()),
@@ -596,6 +604,7 @@ mod tests {
     fn voice_media_uses_audio_msgtype_and_voice_flag() {
         let body = build_media_body(
             &CommentMedia {
+                kind: None,
                 url: "mxc://hs/voice".to_string(),
                 filename: None,
                 mimetype: Some("audio/webm".to_string()),

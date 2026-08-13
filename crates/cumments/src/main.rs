@@ -451,6 +451,7 @@ async fn main() -> Result<()> {
         )),
         ephemeral_bus: ephemeral_bus.clone(),
         ephemeral_state: Some(ephemeral_state),
+        preset_stickers: Arc::new(settings.security.preset_stickers.clone()),
     };
     let api_router = cumments_api::build_router(api_state);
 

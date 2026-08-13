@@ -216,6 +216,7 @@
                             <div class="flex items-center gap-2 pt-1 flex-wrap">
                                 <button id="imageBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">🖼 <span data-i18n="add_image">图片</span></button>
                                 <button id="voiceBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">🎤 <span data-i18n="record_voice">语音</span></button>
+                                <button id="stickerBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">✨ <span data-i18n="stickers">贴纸</span></button>
                                 <span id="mediaPreview" class="text-xs text-slate-500"></span>
                                 <input type="file" id="imageInput" accept="image/*" class="hidden">
                             </div>
@@ -681,6 +682,8 @@
                     record_voice: "语音",
                     stop_record: "停止",
                     upload_media_failed: "媒体上传失败：",
+                    stickers: "贴纸",
+                    no_stickers: "暂无预置贴纸",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -827,6 +830,8 @@
                     record_voice: "Voice",
                     stop_record: "Stop",
                     upload_media_failed: "Media upload failed: ",
+                    stickers: "Stickers",
+                    no_stickers: "No preset stickers",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -2237,12 +2242,76 @@
                 }
                 const label = media.voice
                     ? t("record_voice")
-                    : media.filename || media.url;
+                    : media.kind === "sticker"
+                      ? t("stickers")
+                      : media.filename || media.url;
                 el.innerHTML = `${escapeHtml(label)} <button type="button" class="text-red-500 hover:text-red-700" title="remove">✕</button>`;
                 el.querySelector("button").onclick = () => {
                     state.draftMedia = null;
                     renderMediaPreview(null);
                 };
+            }
+
+            async function loadStickers() {
+                const cfg = getSettings();
+                try {
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/stickers`,
+                    );
+                    if (!res.ok) return;
+                    state.stickers = await res.json();
+                } catch {
+                    state.stickers = [];
+                }
+            }
+
+            function pickSticker() {
+                const stickers = state.stickers || [];
+                if (!stickers.length) {
+                    toast(t("no_stickers"), "info");
+                    return;
+                }
+                const overlay = document.createElement("div");
+                overlay.className =
+                    "fixed inset-0 bg-black/40 flex items-center justify-center z-50";
+                overlay.innerHTML = `
+                    <div class="bg-white rounded-2xl p-4 max-w-md w-full mx-4 shadow-xl">
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="font-semibold text-sm">${t("stickers")}</span>
+                            <button type="button" class="text-slate-400 hover:text-slate-600 text-lg leading-none">×</button>
+                        </div>
+                        <div class="grid grid-cols-4 gap-2 max-h-72 overflow-y-auto">
+                            ${stickers
+                                .map(
+                                    (sticker) =>
+                                        `<button type="button" class="sticker-option rounded-lg hover:bg-slate-100 p-1"><img src="${escapeHtml(sticker.proxy_url)}" alt="${escapeHtml(sticker.alt)}" class="w-full rounded-lg" loading="lazy"></button>`,
+                                )
+                                .join("")}
+                        </div>
+                    </div>
+                `;
+                overlay.addEventListener("click", (event) => {
+                    if (event.target === overlay) overlay.remove();
+                });
+                overlay.querySelector("button").onclick = () => overlay.remove();
+                overlay.querySelectorAll(".sticker-option").forEach((btn, index) => {
+                    btn.onclick = () => {
+                        const sticker = stickers[index];
+                        state.draftMedia = {
+                            url: sticker.url,
+                            filename: sticker.alt,
+                            mimetype: "image/png",
+                            size: null,
+                            width: null,
+                            height: null,
+                            voice: false,
+                            kind: "sticker",
+                        };
+                        renderMediaPreview(state.draftMedia);
+                        overlay.remove();
+                    };
+                });
+                document.body.appendChild(overlay);
             }
 
             async function submitComment() {
@@ -2706,10 +2775,12 @@
                 showLoading();
                 await loadList();
                 connectSse();
+                await loadStickers();
             }
 
             document.getElementById("imageBtn").addEventListener("click", pickImage);
             document.getElementById("voiceBtn").addEventListener("click", toggleVoiceRecord);
+            document.getElementById("stickerBtn").addEventListener("click", pickSticker);
             document.getElementById("imageInput").addEventListener("change", (event) => {
                 const file = event.target.files && event.target.files[0];
                 if (file) {

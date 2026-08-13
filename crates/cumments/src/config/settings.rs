@@ -61,6 +61,11 @@ pub struct Security {
     /// address space. Off by default because confirm performs outbound probes.
     #[serde(default)]
     pub allow_private_verification_origins: bool,
+    /// Preset sticker MXC URIs guests may reference in sticker messages.
+    /// Stickers are served by the homeserver; Cumments only validates the
+    /// reference.
+    #[serde(default)]
+    pub preset_stickers: Vec<String>,
 }
 
 /// Operator-declared trust for one site.

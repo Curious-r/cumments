@@ -67,6 +67,7 @@ async fn test_state(
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
+        preset_stickers: Arc::new(Vec::new()),
     };
     (state, store)
 }
