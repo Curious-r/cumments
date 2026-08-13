@@ -5,7 +5,10 @@
 //! the transformations used by room creation, the moderation sync loop and
 //! the governance API.
 
+use crate::ports::MatrixDriver;
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
+use std::str::FromStr;
 
 /// Matrix state event type carrying room power levels.
 pub const POWER_LEVELS_EVENT_TYPE: &str = "m.room.power_levels";
@@ -30,6 +33,76 @@ pub const SITE_ROLE_MIN_LEVEL: i64 = CO_MANAGER_LEVEL;
 pub struct RoleEntry {
     pub user_id: String,
     pub level: i64,
+}
+
+/// Lifecycle of a token-DM role claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleClaimStatus {
+    /// The role is awaiting token verification from the target MXID.
+    Pending,
+    /// The target MXID proved ownership; the role has not been written to
+    /// Matrix yet.
+    Activated,
+    /// The role was written to Matrix power levels.
+    Applied,
+    /// The claim was cancelled before (or after) activation.
+    Revoked,
+}
+
+impl RoleClaimStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Activated => "activated",
+            Self::Applied => "applied",
+            Self::Revoked => "revoked",
+        }
+    }
+}
+
+impl FromStr for RoleClaimStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "activated" => Ok(Self::Activated),
+            "applied" => Ok(Self::Applied),
+            "revoked" => Ok(Self::Revoked),
+            other => Err(format!("unknown role claim status `{other}`")),
+        }
+    }
+}
+
+/// A pending (or completed) token-DM role claim. This is process state, not
+/// the source of truth: the authoritative role lives in Matrix power levels
+/// once the claim reaches `applied`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleClaim {
+    pub id: i64,
+    pub site_id: String,
+    /// Empty string for site-level roles (owner/co-manager); otherwise the
+    /// comment room this moderator claim targets.
+    pub room_id: String,
+    pub user_id: String,
+    pub level: i64,
+    pub token_hash: String,
+    pub status: RoleClaimStatus,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub activated_at: Option<DateTime<Utc>>,
+    pub applied_at: Option<DateTime<Utc>>,
+}
+
+/// Payload for creating or rotating a role claim.
+#[derive(Debug, Clone)]
+pub struct NewRoleClaim {
+    pub site_id: String,
+    pub room_id: String,
+    pub user_id: String,
+    pub level: i64,
+    pub token_hash: String,
+    pub expires_at: DateTime<Utc>,
 }
 
 fn users_map(power_levels: &Value) -> Option<&Map<String, Value>> {
@@ -172,6 +245,28 @@ pub fn without_user(power_levels: &Value, user_id: &str) -> Value {
     let mut updated = power_levels.clone();
     users_map_mut(&mut updated).remove(user_id);
     updated
+}
+
+/// Read-modify-write a single user's power level, shared by the governance API
+/// and the reconciler's claim application so both sides converge identically.
+pub async fn set_role_level(
+    driver: &dyn MatrixDriver,
+    room_id: &str,
+    user_id: &str,
+    level: i64,
+    add: bool,
+) -> anyhow::Result<Value> {
+    let current = driver
+        .get_room_power_levels(room_id)
+        .await?
+        .unwrap_or_else(|| serde_json::json!({}));
+    let updated = if add {
+        with_user_level(&current, user_id, level)
+    } else {
+        without_user(&current, user_id)
+    };
+    driver.set_room_power_levels(room_id, &updated).await?;
+    Ok(updated)
 }
 
 #[cfg(test)]

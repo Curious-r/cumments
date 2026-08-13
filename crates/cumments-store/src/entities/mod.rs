@@ -14,6 +14,7 @@ pub mod message_revisions;
 pub mod messages;
 pub mod poll_responses;
 pub mod reactions;
+pub mod role_claims;
 pub mod room_members;
 pub mod room_registry;
 pub mod room_roles;

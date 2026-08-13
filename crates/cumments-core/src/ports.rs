@@ -1,4 +1,4 @@
-use crate::governance::RoleEntry;
+use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
 use crate::intents::{
     DeleteCommentIntent, PendingDeleteIntent, PendingPostIntent, PendingUpdateIntent,
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
@@ -412,6 +412,43 @@ pub trait GovernanceStore: Send + Sync {
 
     /// The projected roles of one comment room, ordered by user ID.
     async fn list_room_roles(&self, room_id: &str) -> Result<Vec<RoleEntry>>;
+}
+
+/// Port for token-DM role claims: short-lived process state between role
+/// registration and the target MXID proving ownership.
+#[async_trait]
+pub trait RoleClaimStore: Send + Sync {
+    /// Creates a pending claim or rotates the token of an existing claim for
+    /// the same (site, room, user, level) scope.
+    async fn upsert_role_claim(&self, claim: &NewRoleClaim) -> Result<RoleClaim>;
+
+    /// Pending claims whose target MXID is `user_id` and which have not
+    /// expired yet.
+    async fn pending_claims_for_user(&self, user_id: &str) -> Result<Vec<RoleClaim>>;
+
+    /// Transitions a pending claim to `activated`. Returns `false` when the
+    /// claim was missing, expired or already in another state.
+    async fn mark_claim_activated(&self, id: i64) -> Result<bool>;
+
+    /// Claims that proved ownership but have not been written to Matrix yet.
+    async fn activated_unapplied_claims(&self) -> Result<Vec<RoleClaim>>;
+
+    /// Marks an activated claim as applied.
+    async fn mark_claim_applied(&self, id: i64) -> Result<()>;
+
+    /// Cancels a claim that has not been applied yet. Returns `false` when no
+    /// cancellable claim exists (e.g. it was already applied).
+    async fn revoke_role_claim(
+        &self,
+        site_id: &str,
+        room_id: &str,
+        user_id: &str,
+        level: i64,
+    ) -> Result<bool>;
+
+    /// Deletes expired claims that never reached `applied`. Applied claims
+    /// are kept for audit purposes.
+    async fn purge_expired_claims(&self) -> Result<u64>;
 }
 
 /// Port for site identity and write-path authentication state.

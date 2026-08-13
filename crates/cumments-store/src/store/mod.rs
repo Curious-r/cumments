@@ -12,6 +12,7 @@ pub mod identity;
 pub mod intents;
 pub mod messages;
 pub mod registry;
+pub mod role_claims;
 pub mod rooms;
 pub mod site_auth;
 
