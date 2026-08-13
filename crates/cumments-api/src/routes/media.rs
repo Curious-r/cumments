@@ -71,6 +71,16 @@ impl MediaProxy {
     /// Converts an `mxc://server/media_id` reference into a short-lived signed
     /// proxy URL, or `None` when the media is not served by our homeserver.
     pub fn proxify(&self, url: &str) -> Option<String> {
+        self.proxify_inner(url, false)
+    }
+
+    /// Like [`Self::proxify`], but requests the homeserver's 320×320
+    /// thumbnail variant (`thumbnail=1`).
+    pub fn proxify_thumbnail(&self, url: &str) -> Option<String> {
+        self.proxify_inner(url, true)
+    }
+
+    fn proxify_inner(&self, url: &str, thumbnail: bool) -> Option<String> {
         let rest = url.strip_prefix("mxc://")?;
         let (server, media_id) = rest.split_once('/')?;
         if server != self.server_name {
@@ -78,8 +88,9 @@ impl MediaProxy {
         }
         let expires = now_epoch_seconds() + MEDIA_URL_TTL_SECONDS;
         let signature = self.sign(server, media_id, expires);
+        let thumbnail_query = if thumbnail { "&thumbnail=1" } else { "" };
         Some(format!(
-            "/api/v1/media/{server}/{media_id}?expires={expires}&sig={signature}"
+            "/api/v1/media/{server}/{media_id}?expires={expires}&sig={signature}{thumbnail_query}"
         ))
     }
 
@@ -94,8 +105,10 @@ impl MediaProxy {
                 if let Some(url) = self.proxify(&media.url) {
                     media.url = url;
                 }
-                if let Some(thumbnail) =
-                    media.thumbnail_url.as_deref().and_then(|u| self.proxify(u))
+                if let Some(thumbnail) = media
+                    .thumbnail_url
+                    .as_deref()
+                    .and_then(|u| self.proxify_thumbnail(u))
                 {
                     media.thumbnail_url = Some(thumbnail);
                 }
@@ -104,7 +117,7 @@ impl MediaProxy {
                 if let Some(thumbnail) = location
                     .thumbnail_url
                     .as_deref()
-                    .and_then(|u| self.proxify(u))
+                    .and_then(|u| self.proxify_thumbnail(u))
                 {
                     location.thumbnail_url = Some(thumbnail);
                 }
@@ -496,11 +509,11 @@ mod tests {
         match message.content {
             Content::Media(media) => {
                 assert!(media.url.starts_with("/api/v1/media/hs/abc?"));
+                let thumbnail = media.thumbnail_url.expect("thumbnail rewritten");
                 assert!(
-                    media
-                        .thumbnail_url
-                        .unwrap()
-                        .starts_with("/api/v1/media/hs/thumb?")
+                    thumbnail.starts_with("/api/v1/media/hs/thumb?")
+                        && thumbnail.contains("&thumbnail=1"),
+                    "thumbnail URL must request the thumbnail variant: {thumbnail}"
                 );
             }
             other => panic!("expected media, got {other:?}"),
