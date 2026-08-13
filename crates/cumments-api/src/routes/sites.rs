@@ -12,8 +12,8 @@ use axum::{
 use chrono::Utc;
 use cumments_core::models::SiteId;
 use cumments_core::site_auth::{
-    CLAIM_TOKEN_HEADER, Origin, SiteVerificationStatus, VerificationChallenge, VerificationMethod,
-    VerificationToken, dns_proofs_match, is_private_ip_addr, issue_site_secret,
+    CLAIM_TOKEN_HEADER, Origin, SiteServiceError, SiteVerificationStatus, VerificationChallenge,
+    VerificationMethod, VerificationToken, dns_proofs_match, is_private_ip_addr, issue_site_secret,
     parse_well_known_proofs, register_site, start_site_verification, token_hash,
     well_known_proofs_match,
 };
@@ -376,14 +376,20 @@ fn claim_token_from_headers(headers: &HeaderMap) -> Result<String, AppError> {
         })
 }
 
-fn map_site_service_error(error: anyhow::Error) -> AppError {
-    let message = error.to_string();
-    if message.contains("claim token") {
-        AppError::Unauthorized(message)
-    } else if message.contains("already has a secret") || message.contains("already exists") {
-        AppError::Conflict(message)
-    } else {
-        AppError::BadRequest(message)
+fn map_site_service_error(error: SiteServiceError) -> AppError {
+    match error {
+        SiteServiceError::InvalidClaimToken => AppError::Unauthorized(error.to_string()),
+        SiteServiceError::SiteAlreadyExists(_) | SiteServiceError::SecretAlreadyIssued(_) => {
+            AppError::Conflict(error.to_string())
+        }
+        SiteServiceError::SiteNotFound(_) => AppError::NotFound(error.to_string()),
+        SiteServiceError::Validation(_)
+        | SiteServiceError::NotApiRegistered(_)
+        | SiteServiceError::NotVerified(_) => AppError::BadRequest(error.to_string()),
+        SiteServiceError::Store(source) => {
+            tracing::error!("site service storage failure: {:#}", source);
+            AppError::Internal("failed to access site storage".to_string())
+        }
     }
 }
 

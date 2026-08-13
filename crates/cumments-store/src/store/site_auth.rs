@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cumments_core::ports::SiteAuthStore;
 use cumments_core::site_auth::{
-    NewVerificationToken, Origin, SiteAuthInfo, SiteAuthMode, SiteVerificationStatus,
-    VerificationToken,
+    NewVerificationToken, Origin, SiteAuthInfo, SiteAuthMode, SiteServiceError,
+    SiteVerificationStatus, VerificationToken,
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, NotSet, QueryFilter, Set, TransactionTrait,
@@ -18,7 +18,11 @@ use std::collections::HashMap;
 
 #[async_trait]
 impl SiteAuthStore for DbStore {
-    async fn register_site(&self, site_id: &str, claim_token_hash: &str) -> Result<()> {
+    async fn register_site(
+        &self,
+        site_id: &str,
+        claim_token_hash: &str,
+    ) -> Result<(), SiteServiceError> {
         let now = Utc::now();
         let model = sites::ActiveModel {
             id: Set(site_id.to_owned()),
@@ -35,10 +39,10 @@ impl SiteAuthStore for DbStore {
 
         match sites::Entity::insert(model).exec(&self.db).await {
             Ok(_) => Ok(()),
-            Err(e) if e.to_string().contains("UNIQUE constraint failed") => {
-                anyhow::bail!("site id `{site_id}` already exists")
+            Err(e) if is_unique_violation(&e) => {
+                Err(SiteServiceError::SiteAlreadyExists(site_id.to_string()))
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(SiteServiceError::Store(anyhow::Error::new(e))),
         }
     }
 
@@ -398,6 +402,20 @@ impl SiteAuthStore for DbStore {
             .await?;
         Ok(result.rows_affected == 1)
     }
+}
+
+/// Whether a SeaORM error is a SQLite unique/primary-key constraint
+/// violation. Matching the error code keeps this independent of SQLite's
+/// human-readable message text.
+fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
+    let sqlx = match err {
+        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
+        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
+        _ => return false,
+    };
+    sqlx.as_database_error()
+        .and_then(|db| db.code())
+        .is_some_and(|code| code == "2067" || code == "1555")
 }
 
 fn core_auth_mode(mode: DbAuthMode) -> SiteAuthMode {

@@ -25,6 +25,33 @@ use url::Url;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Typed failures from the site-auth domain services.
+///
+/// Splitting the domain from transport lets the HTTP layer map failures to
+/// status codes by variant instead of matching error text.
+#[derive(Debug, thiserror::Error)]
+pub enum SiteServiceError {
+    #[error("invalid request: {0}")]
+    Validation(String),
+    #[error("site id `{0}` already exists")]
+    SiteAlreadyExists(String),
+    #[error(
+        "site `{0}` is not API-registered; operator-configured sites cannot be \
+         verified through the API"
+    )]
+    NotApiRegistered(String),
+    #[error("invalid claim token")]
+    InvalidClaimToken,
+    #[error("site `{0}` not found")]
+    SiteNotFound(String),
+    #[error("site `{0}` must be verified before a secret can be issued")]
+    NotVerified(String),
+    #[error("site `{0}` already has a secret; set `rotate` to replace it")]
+    SecretAlreadyIssued(String),
+    #[error(transparent)]
+    Store(#[from] anyhow::Error),
+}
+
 // ---------------------------------------------------------------------------
 // HTTP protocol constants
 // ---------------------------------------------------------------------------
@@ -594,7 +621,7 @@ pub fn well_known_proofs_match(proofs: &[SiteProof], site_id: &str, token: &str)
 // ---------------------------------------------------------------------------
 
 /// Registers a new site and returns its random id and one-time claim token.
-pub async fn register_site(store: &dyn SiteAuthStore) -> Result<RegisteredSite> {
+pub async fn register_site(store: &dyn SiteAuthStore) -> Result<RegisteredSite, SiteServiceError> {
     let site_id = generate_site_id();
     let claim_token = generate_token();
     store
@@ -616,15 +643,21 @@ pub async fn start_site_verification(
     origins: &[Origin],
     methods: &[VerificationMethod],
     claim_token: &str,
-) -> Result<VerificationChallenge> {
+) -> Result<VerificationChallenge, SiteServiceError> {
     if origins.is_empty() {
-        bail!("at least one origin is required");
+        return Err(SiteServiceError::Validation(
+            "at least one origin is required".to_string(),
+        ));
     }
     if origins.len() > MAX_ORIGINS_PER_CHALLENGE {
-        bail!("at most {MAX_ORIGINS_PER_CHALLENGE} origins per verification challenge");
+        return Err(SiteServiceError::Validation(format!(
+            "at most {MAX_ORIGINS_PER_CHALLENGE} origins per verification challenge"
+        )));
     }
     if methods.is_empty() {
-        bail!("at least one verification method is required");
+        return Err(SiteServiceError::Validation(
+            "at least one verification method is required".to_string(),
+        ));
     }
 
     let mut seen = HashSet::new();
@@ -638,15 +671,9 @@ pub async fn start_site_verification(
     let stored_hash = store
         .get_claim_token_hash(site_id.as_str())
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "site `{}` is not API-registered; operator-configured sites cannot be \
-                 verified through the API",
-                site_id.as_str()
-            )
-        })?;
+        .ok_or_else(|| SiteServiceError::NotApiRegistered(site_id.as_str().to_string()))?;
     if !constant_time_eq(stored_hash.as_bytes(), token_hash(claim_token).as_bytes()) {
-        bail!("invalid claim token");
+        return Err(SiteServiceError::InvalidClaimToken);
     }
 
     let raw_token = generate_token();
@@ -679,36 +706,26 @@ pub async fn issue_site_secret(
     site_id: &SiteId,
     claim_token: &str,
     rotate: bool,
-) -> Result<IssuedSiteSecret> {
+) -> Result<IssuedSiteSecret, SiteServiceError> {
     let stored_hash = store
         .get_claim_token_hash(site_id.as_str())
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "site `{}` is not API-registered; operator-configured sites manage \
-                 their secret through configuration",
-                site_id.as_str()
-            )
-        })?;
+        .ok_or_else(|| SiteServiceError::NotApiRegistered(site_id.as_str().to_string()))?;
     if !constant_time_eq(stored_hash.as_bytes(), token_hash(claim_token).as_bytes()) {
-        bail!("invalid claim token");
+        return Err(SiteServiceError::InvalidClaimToken);
     }
 
     let auth = store
         .get_site_auth(site_id.as_str())
         .await?
-        .ok_or_else(|| anyhow::anyhow!("site `{}` not found", site_id.as_str()))?;
+        .ok_or_else(|| SiteServiceError::SiteNotFound(site_id.as_str().to_string()))?;
     if auth.verification_status != SiteVerificationStatus::Verified {
-        bail!(
-            "site `{}` must be verified before a secret can be issued",
-            site_id.as_str()
-        );
+        return Err(SiteServiceError::NotVerified(site_id.as_str().to_string()));
     }
     if auth.secret.is_some() && !rotate {
-        bail!(
-            "site `{}` already has a secret; set `rotate` to replace it",
-            site_id.as_str()
-        );
+        return Err(SiteServiceError::SecretAlreadyIssued(
+            site_id.as_str().to_string(),
+        ));
     }
 
     let secret = generate_token();

@@ -8,7 +8,9 @@ use crate::models::{
     Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
     SiteId,
 };
-use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
+use crate::site_auth::{
+    NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -415,8 +417,14 @@ pub trait GovernanceStore: Send + Sync {
 /// Port for site identity and write-path authentication state.
 #[async_trait]
 pub trait SiteAuthStore: Send + Sync {
-    /// Creates a site row for an API-registered site (unverified, origin auth).
-    async fn register_site(&self, site_id: &str, claim_token_hash: &str) -> Result<()>;
+    /// Creates a site row for an API-registered site (unverified, origin
+    /// auth). Fails with [`SiteServiceError::SiteAlreadyExists`] when the
+    /// generated site ID collides with an existing row.
+    async fn register_site(
+        &self,
+        site_id: &str,
+        claim_token_hash: &str,
+    ) -> Result<(), SiteServiceError>;
 
     /// Full authentication state of a site, if a row exists.
     async fn get_site_auth(&self, site_id: &str) -> Result<Option<SiteAuthInfo>>;
