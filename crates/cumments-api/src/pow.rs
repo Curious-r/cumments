@@ -22,6 +22,12 @@ pub struct Pow {
     /// Challenges already used for a successful PoW, mapped to their expiry
     /// timestamp (seconds). Keeps a signed challenge single-use so the same
     /// request body cannot be replayed within the expiry window.
+    ///
+    /// This map is process-local by design: a restart forgets outstanding
+    /// challenges, so a challenge+nonce pair can be replayed once after a
+    /// restart as long as the challenge's 5-minute expiry has not passed.
+    /// The window is short and the replay still needs a valid signature, so
+    /// this is accepted as an operational trade-off rather than persisted.
     used_challenges: Arc<Mutex<HashMap<String, u64>>>,
 }
 
