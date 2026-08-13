@@ -128,8 +128,14 @@ caller-chosen id additionally need an origin verified before writes in
 | Value | Unverified sites | Verified / configured sites |
 |---|---|---|
 | `disabled` | writes allowed, no trust checks (local development) | no checks |
-| `optional` (default) | writes allowed, WARN log (migration) | enforced |
+| `optional` (default) | API-registered: allowed with WARN; no ownership proof: rejected | enforced |
 | `required` | writes rejected | enforced |
+
+In `optional` mode the WARN relaxation applies only to sites that were
+registered through the API and still hold a claim token. A site whose
+`[sites]` entry was removed (or a legacy/backfilled row with no claim token)
+is rejected with `site-verification-required`, so removing configuration
+tightens rather than opens the write path.
 
 Per-site trust comes from two sources whose union is the effective rule set:
 

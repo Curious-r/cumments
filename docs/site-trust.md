@@ -49,19 +49,26 @@ decision, so an unregistered site can never provision a Matrix Space.
 | Value | Unverified sites | Verified or operator-configured sites |
 |---|---|---|
 | `disabled` | Writes allowed, no trust checks (local development) | No checks either |
-| `optional` | Writes allowed, with a WARN log (migration default) | Enforced |
+| `optional` | API-registered: allowed with a WARN log; rows without ownership proof are rejected | Enforced |
 | `required` | Writes rejected with verification guidance | Enforced |
 
 `disabled` is the only mode that accepts the opaque `Origin: null` used by
 `file://` demo pages. `optional` and `required` reject it, together with
 missing or multiple `Origin` headers (see [Origin mode](#origin-mode)).
 
-There is one extra rule for caller-chosen ids: in `optional` mode a site
-registered with a custom `site_id` is **not** covered by the "unverified
-sites keep working" relaxation — it must verify at least one origin before
-writes are accepted (`403 code=site-verification-required`), while
-server-generated ids keep the migration behavior. The chosen name stays
-reserved while unverified.
+The `optional` relaxation only covers **API-registered** sites that simply
+have not verified yet (they still hold a claim token). Two cases are rejected
+instead, with `403 code=site-verification-required`:
+
+- a caller-chosen `site_id` — a readable alias has to be backed by a real
+  domain;
+- a site row with no ownership proof at all — a removed `[sites]` entry, a
+  legacy auto-created Space, or a row rebuilt by `backfill` after a database
+  reset.
+
+This keeps the migration escape hatch narrow and makes configuration removal
+an immediate tightening: deleting a `[sites]` entry removes the only trust
+anchor, so writes stop rather than falling back to "any origin accepted".
 
 ### Per-site auth mode: `sites.<id>.auth_mode`
 
@@ -163,7 +170,7 @@ signing and forwards the request, so the frontend talks to its own origin.
 | Policy | `origin` mode | `secret` mode |
 |---|---|---|
 | `disabled` | Any *registered* site: origin accepted, `Access-Control-Allow-Origin: *` | Any *registered* site accepted (no HMAC check) |
-| `optional` | Registered unverified sites: accepted with WARN; verified/config sites: origin must match | HMAC required whenever the site has a secret; sites without one follow the origin/unverified fallback |
+| `optional` | API-registered unverified sites: accepted with WARN; rows without ownership proof are rejected; verified/config sites: origin must match | HMAC required whenever the site has a secret; sites without one follow the origin/unverified fallback |
 | `required` | Origin must match a verified/config origin | HMAC required for any site configured with a secret; sites without a secret are rejected |
 
 Read methods (`GET`, `QUERY`, SSE) are unaffected by this matrix and remain

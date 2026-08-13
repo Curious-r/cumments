@@ -1656,6 +1656,36 @@ async fn custom_named_sites_require_verification_in_optional_mode() {
 }
 
 #[tokio::test]
+async fn optional_mode_rejects_orphan_rows_without_ownership_proof() {
+    let (state, store) = test_state("orphan-site", SiteVerificationPolicy::Optional, None).await;
+    // A row with a Space mapping but no claim token: what remains after the
+    // operator removes a `[sites]` entry, or what backfill rebuilds.
+    store
+        .ensure_site_exists("orphan-blog", "!space:hs")
+        .await
+        .expect("ensure orphan site");
+    let router = cumments_api::build_router(state);
+
+    let write = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/orphan-blog/posts/p1/comments",
+            Some("https://blog.example.com"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(write.status(), StatusCode::FORBIDDEN);
+    assert!(
+        body_text(write)
+            .await
+            .contains("site-verification-required"),
+        "orphan rows must not enjoy the optional-mode relaxation"
+    );
+}
+
+#[tokio::test]
 async fn retiring_a_site_stops_writes_and_requires_auth() {
     let (state, store) = test_state(
         "retire-site",

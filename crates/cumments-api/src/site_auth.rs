@@ -330,6 +330,20 @@ fn decide_origin_write_access(
                      to the `[sites]` configuration before writing comments"
                 )))
             }
+            // The `optional` migration relaxation only covers API-registered
+            // sites that merely have not verified yet (they still hold a
+            // claim token). A row without any ownership proof — a site whose
+            // `[sites]` entry was removed, a legacy auto-created Space, or a
+            // row rebuilt by backfill after a DB reset — is rejected like an
+            // unverified site in `required` mode.
+            SiteVerificationPolicy::Optional
+                if db_auth.is_some_and(|info| info.claim_token_hash.is_none()) =>
+            {
+                Err(AppError::SiteVerificationRequired(format!(
+                    "site `{site_id}` has no ownership proof; register it through the API, \
+                     or declare it in the `[sites]` configuration, before writing comments"
+                )))
+            }
             SiteVerificationPolicy::Optional => {
                 tracing::warn!(
                     site_id,
@@ -541,6 +555,35 @@ mod tests {
             Some(origin("https://anywhere.example.com")),
         );
         assert!(matches!(result, Err(AppError::SiteVerificationRequired(_))));
+    }
+
+    #[test]
+    fn optional_policy_rejects_rows_without_ownership_proof() {
+        // `db_auth` models a `sites` row without a claim token: a removed
+        // `[sites]` entry, a legacy auto-created Space, or a backfill rebuild.
+        let info = db_auth(&[]).expect("db auth");
+        let result = decide_origin_write_access(
+            SiteVerificationPolicy::Optional,
+            None,
+            Some(&info),
+            "test-site",
+            Some(origin("https://anywhere.example.com")),
+        );
+        assert!(matches!(result, Err(AppError::SiteVerificationRequired(_))));
+    }
+
+    #[test]
+    fn optional_policy_allows_unverified_api_registered_sites() {
+        let mut info = db_auth(&[]).expect("db auth");
+        info.claim_token_hash = Some("hash".to_string());
+        let result = decide_origin_write_access(
+            SiteVerificationPolicy::Optional,
+            None,
+            Some(&info),
+            "test-site",
+            Some(origin("https://anywhere.example.com")),
+        );
+        assert!(matches!(result, Ok(Some(_))));
     }
 
     #[test]

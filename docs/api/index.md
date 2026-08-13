@@ -188,7 +188,10 @@ Matrix Space on its first comment — the old lazy auto-creation amplified an
 open registration endpoint into unbounded homeserver resource use. See
 [Site trust](../site-trust.md). Caller-chosen ids add one more requirement:
 in `optional` mode they must verify an origin before writes, so a readable
-alias has to be backed by a real domain.
+alias has to be backed by a real domain; the same applies to any row without
+an ownership proof (a removed `[sites]` entry, a legacy Space, or a backfill
+rebuild), so the optional-mode relaxation is reserved for API-registered
+sites.
 
 **403 for authentication failures.** Missing or invalid claim tokens, origin
 mismatches, and unauthorized writes return `403` with a stable problem
