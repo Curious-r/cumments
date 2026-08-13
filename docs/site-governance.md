@@ -68,11 +68,11 @@ Site-owner operations authenticate with the claim token returned at site
 registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 `/api/v1/admin/sites/{site_id}/...` and use the admin token.
 
-| Endpoint | Method | Body | Effect |
+| Endpoint | Method | Payload | Effect |
 |---|---|---|---|
-| `/api/v1/sites/{site_id}/owners` | POST / DELETE | `{ "user_id": "@..." }` | Register/revoke a site owner (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/co-managers` | POST / DELETE | `{ "user_id": "@..." }` | Register/revoke a co-manager (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | POST / DELETE | `{ "user_id": "@..." }` | Register/revoke a room moderator (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/owners` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a site owner (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/co-managers` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a co-manager (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a room moderator (POST returns a pending claim + token) |
 | `/api/v1/sites/{site_id}/roles` | GET | — | Projected owners and co-managers |
 | `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | GET | — | Projected room moderators |
 
