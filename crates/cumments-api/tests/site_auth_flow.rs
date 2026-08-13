@@ -14,7 +14,8 @@ use cumments_core::governance::RoleEntry;
 use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{
-    GovernanceStore, IntentStore, MessageStore, RegistryStore, SiteAuthStore, SiteStore,
+    GovernanceStore, IntentStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
+    SiteStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
@@ -1275,8 +1276,8 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         .expect("call router");
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 
-    // With the claim token the logging driver records the space PL update and
-    // the response reflects the computed roster.
+    // With the claim token the API stores a pending claim and returns the
+    // one-time verification token. No Matrix write happens yet.
     let added = router
         .clone()
         .oneshot(request_with_body(
@@ -1291,16 +1292,33 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     assert_eq!(added.status(), StatusCode::OK);
     let added_json: serde_json::Value =
         serde_json::from_str(&body_text(added).await).expect("parse response");
-    assert_eq!(added_json["owners"], serde_json::json!(["@owner:hs"]));
-    assert_eq!(added_json["co_managers"], serde_json::json!([]));
+    assert_eq!(added_json["pending"], serde_json::json!(true));
+    assert_eq!(added_json["user_id"], "@owner:hs");
+    assert_eq!(added_json["level"], 100);
+    assert!(
+        added_json["verify_token"]
+            .as_str()
+            .unwrap_or_default()
+            .len()
+            >= 32,
+        "verification token must be returned once"
+    );
+    assert_eq!(
+        store
+            .pending_claims_for_user("@owner:hs")
+            .await
+            .expect("pending claims")
+            .len(),
+        1
+    );
 
-    // First owner registration provisions the site Space on demand.
+    // Nothing is provisioned before verification: the Space does not exist.
     let provisioned = store
         .get_site(&SiteId::new(site_id.to_string()).expect("valid site id"))
         .await
         .expect("load site")
         .expect("site exists");
-    assert_eq!(provisioned.matrix_space_id, format!("log_space_{site_id}"));
+    assert_eq!(provisioned.matrix_space_id, "");
 
     // Malformed and service-account user IDs are rejected up front.
     for (raw, label) in [
@@ -1337,7 +1355,32 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     assert_eq!(added_co.status(), StatusCode::OK);
     let co_json: serde_json::Value =
         serde_json::from_str(&body_text(added_co).await).expect("parse response");
-    assert_eq!(co_json["co_managers"], serde_json::json!(["@co:hs"]));
+    assert_eq!(co_json["pending"], serde_json::json!(true));
+    assert_eq!(co_json["level"], 75);
+
+    // Deleting a pending claim revokes it without touching Matrix.
+    let removed = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::DELETE,
+            &owner_uri,
+            None,
+            &[("x-cumments-claim-token", "claim-token".to_string())],
+            &owner_body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(removed.status(), StatusCode::OK);
+    let removed_json: serde_json::Value =
+        serde_json::from_str(&body_text(removed).await).expect("parse response");
+    assert_eq!(removed_json["revoked"], serde_json::json!(true));
+    assert!(
+        store
+            .pending_claims_for_user("@owner:hs")
+            .await
+            .expect("pending claims")
+            .is_empty()
+    );
 
     // GET reads the projected read model.
     store

@@ -34,8 +34,8 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        GovernanceStore, IntentStore, MatrixDriver, MessageStore, RegistryStore, RoomStore,
-        SiteAuthStore, SiteStore, VirtualUserStore,
+        GovernanceStore, IntentStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore,
+        RoomStore, SiteAuthStore, SiteStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -66,6 +66,7 @@ pub trait ApiStore:
     + RegistryStore
     + RoomStore
     + GovernanceStore
+    + RoleClaimStore
     + VirtualUserStore
     + Send
     + Sync
@@ -79,6 +80,7 @@ impl<
         + RegistryStore
         + RoomStore
         + GovernanceStore
+        + RoleClaimStore
         + VirtualUserStore
         + Send
         + Sync,
