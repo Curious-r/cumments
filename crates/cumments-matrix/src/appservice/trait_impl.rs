@@ -115,7 +115,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
-    ) -> Result<()> {
+        intent_id: Option<i64>,
+    ) -> Result<String> {
         self.post_location_impl(
             room_id,
             geo_uri,
@@ -124,6 +125,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_public_key,
             author_signature,
             author_challenge,
+            intent_id,
         )
         .await
     }

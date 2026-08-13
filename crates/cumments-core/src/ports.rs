@@ -478,7 +478,8 @@ pub trait MatrixDriver: Send + Sync {
     ) -> Result<()>;
 
     /// Sends a location message (`m.location`, MSC3488) as the guest's
-    /// virtual user.
+    /// virtual user. Returns the Matrix event ID and carries the intent
+    /// correlation hint, like [`Self::post_message`].
     async fn post_location(
         &self,
         room_id: &str,
@@ -488,7 +489,8 @@ pub trait MatrixDriver: Send + Sync {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
-    ) -> Result<()>;
+        intent_id: Option<i64>,
+    ) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.
     async fn update_message(

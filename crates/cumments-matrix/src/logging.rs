@@ -108,12 +108,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
-    ) -> Result<()> {
+        intent_id: Option<i64>,
+    ) -> Result<String> {
         info!(
-            "LOGGING: Post location {geo_uri} in {room_id} ({})",
-            description.unwrap_or("")
+            "LOGGING: Post location {geo_uri} in {room_id} ({}) intent {}",
+            description.unwrap_or(""),
+            intent_id.map_or_else(|| "-".to_string(), |id| id.to_string())
         );
-        Ok(())
+        Ok(format!("$logging-location-{geo_uri}"))
     }
 
     async fn update_message(

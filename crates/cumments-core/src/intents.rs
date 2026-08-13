@@ -21,6 +21,11 @@ pub struct PostCommentIntent {
     /// carries the fallback filename and the signature covers the media URL.
     #[serde(default)]
     pub media: Option<CommentMedia>,
+    /// A location message (MSC3488) instead of text/media. When present,
+    /// `content` is unused, `reply_to` must be `None`, and the signature
+    /// covers `location.geo_uri`.
+    #[serde(default)]
+    pub location: Option<LocationPayload>,
 
     /// Display name of the author. For guests, this is provided by them.
     pub display_name: String,
@@ -37,6 +42,13 @@ pub struct PostCommentIntent {
 
     /// If this comment is a reply, this field holds the ID of the parent comment.
     pub reply_to: Option<String>,
+}
+
+/// Payload for a guest location message (`m.location`, MSC3488).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocationPayload {
+    pub geo_uri: String,
+    pub description: Option<String>,
 }
 
 /// Represents the user's desire to delete a comment.

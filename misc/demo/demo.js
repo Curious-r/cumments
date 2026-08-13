@@ -1934,6 +1934,8 @@
                     toast(t("publish_failed") + "geolocation unsupported", "error");
                     return;
                 }
+                state.pendingComment = null;
+                stopPendingSyncPoll();
                 navigator.geolocation.getCurrentPosition(
                     async (position) => {
                         const geoUri = `geo:${position.coords.latitude},${position.coords.longitude}`;
@@ -1952,7 +1954,10 @@
                                 `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/location`,
                                 {
                                     method: "POST",
-                                    headers: { "Content-Type": "application/json" },
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                        "Idempotency-Key": newIdempotencyKey(),
+                                    },
                                     body: JSON.stringify({
                                         geo_uri: geoUri,
                                         description: t("location"),
@@ -1963,8 +1968,25 @@
                                 },
                             );
                             if (!res.ok) throw new Error(await apiError(res));
+                            let intentId = null;
+                            try {
+                                const accepted = await res.json();
+                                intentId = accepted && accepted.intent_id
+                                    ? accepted.intent_id
+                                    : null;
+                            } catch {
+                                // Older servers may return a plain 204; fall
+                                // back to public-key/content matching.
+                            }
+                            state.pendingComment = {
+                                intentId,
+                                publicKey,
+                                content: geoUri,
+                                submittedAt: Date.now(),
+                            };
                             toast(t("location_submitted"), "success");
-                            loadList();
+                            setTimeout(() => loadList(), 1200);
+                            startPendingSyncPoll();
                         } catch (e) {
                             toast(t("publish_failed") + e.message, "error");
                         }

@@ -10,8 +10,9 @@ use axum::{
     routing::{get, post},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
+use cumments_core::identity::signature_message;
 use cumments_core::models::{PostSlug, SiteId};
-use cumments_core::ports::{RegistryStore, SiteAuthStore};
+use cumments_core::ports::{IntentStore, RegistryStore, SiteAuthStore};
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
 };
@@ -130,6 +131,19 @@ fn request_with_body(
 
 fn query_method() -> Method {
     Method::from_bytes(b"QUERY").unwrap()
+}
+
+fn solve_pow(challenge: &cumments_api::pow::Challenge) -> String {
+    use sha2::{Digest, Sha256};
+    let mut nonce = 0u64;
+    loop {
+        let input = format!("{}{}", challenge.prefix, nonce);
+        let hash = Sha256::digest(input.as_bytes());
+        if hex::encode(hash).starts_with(&"0".repeat(challenge.difficulty as usize)) {
+            return format!("{}|{}", challenge.prefix, nonce);
+        }
+        nonce += 1;
+    }
 }
 
 fn response_origin(response: &axum::response::Response) -> Option<String> {
@@ -937,4 +951,73 @@ async fn challenge_response_is_never_cached() {
             .and_then(|value| value.to_str().ok()),
         Some("no-cache")
     );
+}
+
+#[tokio::test]
+async fn location_posts_are_queued_and_idempotent() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let (state, store) =
+        test_state("location-intent", SiteVerificationPolicy::Disabled, None).await;
+    let site = SiteId::from("test-blog");
+    let slug = PostSlug::from("hello");
+    store
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let message = signature_message(&[
+        "LOCATE",
+        "test-blog",
+        "hello",
+        "geo:31.2,121.5",
+        &challenge.prefix,
+    ]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "geo_uri": "geo:31.2,121.5",
+        "description": "here",
+        "author_public_key": public_key,
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+
+    let post = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/location",
+            Some("null"),
+            &[("idempotency-key", "locate-key-123456".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(post.status(), StatusCode::ACCEPTED);
+    let post_text = body_text(post).await;
+    let json: serde_json::Value = serde_json::from_str(&post_text).expect("json");
+    let intent_id = json["intent_id"].as_i64().expect("intent_id");
+
+    let pending = store
+        .get_pending_post_intents(10)
+        .await
+        .expect("pending intents");
+    assert_eq!(pending.len(), 1, "location must be queued as a post intent");
+    assert_eq!(pending[0].id, intent_id);
+    assert!(
+        pending[0].intent.location.is_some(),
+        "intent must carry the location payload"
+    );
+
+    // Note: HTTP-level replays with the exact same body are rejected earlier
+    // by the single-use PoW check (InvalidPoW/403), matching the behaviour of
+    // text/delete/update intents; store-level idempotent replay is covered by
+    // the cumments-store idempotency tests.
 }

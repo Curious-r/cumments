@@ -868,6 +868,8 @@ paths:
       tags: [Comments]
       summary: Post a location message
       operationId: postLocation
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -888,13 +890,25 @@ paths:
                 challenge_response:
                   type: string
       responses:
-        "204":
-          description: Location sent
+        "202":
+          description: "Location intent accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentAccepted"
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"

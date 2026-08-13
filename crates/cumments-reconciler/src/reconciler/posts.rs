@@ -115,37 +115,54 @@ impl Reconciler {
                 };
 
                 // 4. Hands: Post the actual message
-                let event_id = match self
-                    .driver
-                    .post_message(
-                        &room_id,
-                        &intent.content,
-                        intent.media.as_ref(),
-                        &intent.display_name,
-                        &intent.author_public_key,
-                        &intent.author_signature,
-                        &intent.author_challenge,
-                        &intent.site_id,
-                        intent.reply_to.as_deref(),
-                        reply_to_body.as_deref(),
-                        reply_to_sender.as_deref(),
-                        Some(id),
-                    )
-                    .await
-                {
-                    Ok(event_id) => event_id,
-                    Err(e) => {
-                        // The room may have been tombstoned or its alias moved:
-                        // retire the registry entry so the next retry goes
-                        // through alias recovery and adopts the successor.
-                        if is_room_gone(&e) {
-                            warn!(
-                                "Post intent [{}] failed on room {}; retiring registry entry: {:#}",
-                                id, room_id, e
-                            );
-                            let _ = self.registry_store.retire_room(&room_id).await;
+                let event_id = {
+                    let result = if let Some(location) = &intent.location {
+                        self.driver
+                            .post_location(
+                                &room_id,
+                                &location.geo_uri,
+                                location.description.as_deref(),
+                                &intent.site_id,
+                                &intent.author_public_key,
+                                &intent.author_signature,
+                                &intent.author_challenge,
+                                Some(id),
+                            )
+                            .await
+                    } else {
+                        self.driver
+                            .post_message(
+                                &room_id,
+                                &intent.content,
+                                intent.media.as_ref(),
+                                &intent.display_name,
+                                &intent.author_public_key,
+                                &intent.author_signature,
+                                &intent.author_challenge,
+                                &intent.site_id,
+                                intent.reply_to.as_deref(),
+                                reply_to_body.as_deref(),
+                                reply_to_sender.as_deref(),
+                                Some(id),
+                            )
+                            .await
+                    };
+                    match result {
+                        Ok(event_id) => event_id,
+                        Err(e) => {
+                            // The room may have been tombstoned or its alias
+                            // moved: retire the registry entry so the next
+                            // retry goes through alias recovery and adopts
+                            // the successor.
+                            if is_room_gone(&e) {
+                                warn!(
+                                    "Post intent [{}] failed on room {}; retiring registry entry: {:#}",
+                                    id, room_id, e
+                                );
+                                let _ = self.registry_store.retire_room(&room_id).await;
+                            }
+                            return Err(e);
                         }
-                        return Err(e);
                     }
                 };
 

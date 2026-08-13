@@ -497,7 +497,9 @@ and aggregated into the poll's response counts.
 
 Body: `{ "geo_uri", "description?", "author_public_key", "author_signature", "challenge_response" }`.
 The signature covers `["LOCATE", site_id, post_slug, geo_uri, challenge]`;
-the message is sent as `m.location` (MSC3488) with the signed proof block.
+the message is queued like a comment (same `Idempotency-Key` and `202
+{ "intent_id" }` contract) and sent as `m.location` (MSC3488) with the signed
+proof block, closing the loop through the same projection path.
 
 ### Room info
 

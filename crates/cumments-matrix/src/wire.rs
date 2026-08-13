@@ -373,6 +373,7 @@ pub(crate) fn build_location_body(
     author_signature: &str,
     author_challenge: &str,
     guest_id: &str,
+    intent_id: Option<i64>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "msgtype": "org.matrix.msc3488.location",
@@ -384,6 +385,7 @@ pub(crate) fn build_location_body(
             "challenge": author_challenge,
             "content": geo_uri,
             "displayname": "",
+            "intent_id": intent_id,
         }
     });
     if let Some(description) = description {
@@ -726,11 +728,20 @@ mod tests {
 
     #[test]
     fn location_body_carries_geo_uri_and_proof() {
-        let body = build_location_body("geo:31.2,121.5", Some("here"), "pk", "sig", "chal", "abcd");
+        let body = build_location_body(
+            "geo:31.2,121.5",
+            Some("here"),
+            "pk",
+            "sig",
+            "chal",
+            "abcd",
+            Some(9),
+        );
         assert_eq!(body["msgtype"], "org.matrix.msc3488.location");
         assert_eq!(body["geo_uri"], "geo:31.2,121.5");
         assert_eq!(body["body"], "here");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "geo:31.2,121.5");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["intent_id"], 9);
     }
 
     #[test]

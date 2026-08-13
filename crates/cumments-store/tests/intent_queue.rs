@@ -12,6 +12,7 @@ fn post_intent() -> PostCommentIntent {
         post_slug: PostSlug::from("hello-world"),
         content: "hello".to_string(),
         media: None,
+        location: None,
         display_name: "Alice".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),

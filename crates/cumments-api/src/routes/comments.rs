@@ -15,7 +15,7 @@ use axum::{
 };
 use cumments_core::{
     identity::{post_signature_message, signature_message, verify_signature},
-    intents::{DeleteCommentIntent, PostCommentIntent, UpdateCommentIntent},
+    intents::{DeleteCommentIntent, LocationPayload, PostCommentIntent, UpdateCommentIntent},
     models::{AuthorKind, Content, MediaKind, PostSlug, SiteId},
     ports::{IdempotencyInput, IdempotencyOutcome},
     site_auth::sha256_hex,
@@ -372,6 +372,7 @@ pub(crate) async fn post_comment_handler(
         post_slug: post_slug_val,
         content: req.content,
         media: req.media,
+        location: None,
         display_name: req.display_name,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
@@ -917,8 +918,14 @@ pub(crate) async fn location_handler(
             "comment writes are rate limited; try again later".to_string(),
         ));
     }
+    let idempotency_key = extract_idempotency_key(&headers)?;
     let req: LocationRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+    let fingerprint = request_fingerprint(
+        "POST",
+        &format!("/api/v1/sites/{}/posts/{}/location", site_id, post_slug),
+        &body,
+    );
     req.validate().map_err(AppError::Validation)?;
     if !is_valid_geo_uri(&req.geo_uri) {
         return Err(AppError::BadRequest(
@@ -936,30 +943,49 @@ pub(crate) async fn location_handler(
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-    let Some(room_id) = state
-        .store
-        .get_registered_room(&site_id_val, &post_slug_val)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
-    else {
-        return Err(AppError::NotFound(
-            "No room registered for this post.".to_string(),
-        ));
+    let intent = PostCommentIntent {
+        site_id: site_id_val,
+        post_slug: post_slug_val,
+        content: String::new(),
+        media: None,
+        location: Some(LocationPayload {
+            geo_uri: req.geo_uri,
+            description: req.description,
+        }),
+        display_name: String::new(),
+        author_public_key: req.author_public_key,
+        author_signature: req.author_signature,
+        author_challenge: challenge.to_string(),
+        reply_to: None,
     };
-    state
-        .driver
-        .post_location(
-            &room_id,
-            &req.geo_uri,
-            req.description.as_deref(),
-            &site_id_val,
-            &req.author_public_key,
-            &req.author_signature,
-            challenge,
+
+    match state
+        .store
+        .save_post_intent_idempotent(
+            &intent,
+            &IdempotencyInput {
+                author_public_key: intent.author_public_key.clone(),
+                key: idempotency_key,
+                request_fingerprint: fingerprint,
+            },
         )
         .await
-        .map_err(|e| AppError::Internal(format!("failed to send location: {e}")))?;
-    Ok(StatusCode::NO_CONTENT)
+    {
+        Ok(IdempotencyOutcome::Accepted { intent_id }) => {
+            tracing::info!("Successfully saved a new location intent.");
+            state.reconciler_notify.notify_one();
+            Ok(accepted_response(intent_id, false))
+        }
+        Ok(IdempotencyOutcome::Replayed { intent_id }) => {
+            tracing::info!("Replayed idempotent LOCATE with intent_id {}", intent_id);
+            Ok(accepted_response(intent_id, true))
+        }
+        Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
+        Err(e) => {
+            tracing::error!("Failed to save location intent: {:?}", e);
+            Err(AppError::Internal("Failed to queue location.".to_string()))
+        }
+    }
 }
 
 #[cfg(test)]

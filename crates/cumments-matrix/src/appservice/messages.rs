@@ -225,7 +225,8 @@ impl AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
-    ) -> Result<()> {
+        intent_id: Option<i64>,
+    ) -> Result<String> {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
@@ -239,8 +240,9 @@ impl AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             &guest_id,
+            intent_id,
         );
-        let txn_id = self.txn_id("locate", None);
+        let txn_id = self.txn_id("locate", intent_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -261,7 +263,11 @@ impl AppServiceMatrixDriver {
                 error_body
             ));
         }
-        Ok(())
+        let data: SendEventResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse send response: {}", e))?;
+        Ok(data.event_id)
     }
 
     #[instrument(skip(self))]
