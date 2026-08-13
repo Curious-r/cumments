@@ -14,20 +14,25 @@ use axum::{
     Json,
     body::{Body, Bytes},
     extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use cumments_core::identity::{signature_message, verify_signature};
 use cumments_core::models::{Content, Message, PostSlug, SiteId};
-use cumments_core::site_auth::constant_time_eq;
+use cumments_core::site_auth::{constant_time_eq, sha256_hex};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio_stream::StreamExt;
 
-/// Upper bound on a single proxied media response.
-const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
+/// Upper bound on a single proxied media response and on an uploaded file.
+///
+/// Shared with the write-auth middleware so secret-mode media uploads can be
+/// buffered for HMAC verification up to this same bound instead of the much
+/// smaller generic request-body limit.
+pub(crate) const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
 /// How long a signed media URL stays valid.
 const MEDIA_URL_TTL_SECONDS: i64 = 15 * 60;
 /// Mime prefixes allowed for guest uploads (image, video, audio, files).
@@ -40,6 +45,10 @@ const ALLOWED_MEDIA_TYPES: [&str; 5] = [
     "application/pdf",
     "application/octet-stream",
 ];
+/// CSP applied to proxied SVG documents: they render (inline styles and
+/// `data:` images) but cannot execute scripts, even when opened directly as a
+/// top-level document in the Cumments origin.
+const SVG_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -305,7 +314,7 @@ pub(crate) async fn upload_media_handler(
         post_slug_val.as_str(),
         &mimetype,
         &filename,
-        &body.len().to_string(),
+        &sha256_hex(&body),
         challenge,
     ]);
     if !verify_signature(&author_public_key, &message, &author_signature) {
@@ -431,26 +440,62 @@ pub(crate) async fn media_handler(
         )));
     }
 
-    let bytes = upstream
-        .bytes()
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to read media: {e}")))?;
-    if bytes.len() > MEDIA_MAX_BYTES {
+    // Reject obviously oversized responses from the header before reading, so
+    // the 400 is a proper error envelope rather than a truncated stream.
+    if upstream
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+        .is_some_and(|len| len > MEDIA_MAX_BYTES)
+    {
         return Err(AppError::BadRequest(
             "media exceeds the size limit".to_string(),
         ));
     }
 
-    Ok(Response::builder()
+    // Read in bounded chunks so the memory used is capped at the size limit
+    // even when the upstream omits Content-Length.
+    let mut bytes = Vec::new();
+    let mut stream = upstream.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AppError::Internal(format!("failed to read media: {e}")))?;
+        if bytes.len() + chunk.len() > MEDIA_MAX_BYTES {
+            return Err(AppError::BadRequest(
+                "media exceeds the size limit".to_string(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    let mut response = Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_TYPE, &content_type)
         .header(
             header::CONTENT_DISPOSITION,
             format!("inline; filename=\"{}\"", media_id),
         )
         .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from(bytes))
-        .expect("static response builds"))
+        .expect("static response builds");
+    if is_svg_content_type(&content_type) {
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(SVG_CSP),
+        );
+    }
+    Ok(response)
+}
+
+/// Whether a media content type is an SVG document. Parameters (e.g.
+/// `image/svg+xml; charset=utf-8`) are ignored, matching how the upstream
+/// content-type is normally emitted.
+fn is_svg_content_type(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/svg+xml"))
 }
 
 fn now_epoch_seconds() -> i64 {
@@ -603,5 +648,14 @@ mod tests {
         };
         p.proxify_message(&mut message);
         assert!(matches!(message.content, Content::Text(_)));
+    }
+
+    #[test]
+    fn svg_content_type_detection_handles_parameters_and_case() {
+        assert!(is_svg_content_type("image/svg+xml"));
+        assert!(is_svg_content_type("image/svg+xml; charset=utf-8"));
+        assert!(is_svg_content_type("IMAGE/SVG+XML"));
+        assert!(!is_svg_content_type("image/png"));
+        assert!(!is_svg_content_type("text/html"));
     }
 }

@@ -8,6 +8,7 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::routes::comments::QUERY_METHOD;
+use crate::routes::media::MEDIA_MAX_BYTES;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::http::header::{
@@ -50,25 +51,48 @@ pub async fn enforce_site_auth(
         let response = AppError::BadRequest(format!("invalid site id `{site_id}`")).into_response();
         return maybe_disabled_wildcard(response, &state);
     }
+    let path = req.uri().path().to_string();
 
-    let (parts, body) = req.into_parts();
-    let bytes = match to_bytes(body, BODY_LIMIT).await {
-        Ok(bytes) => bytes.to_vec(),
-        Err(_) => {
-            let response =
-                AppError::BadRequest("request body is too large".to_string()).into_response();
-            return maybe_disabled_wildcard(response, &state);
+    // Only secret-mode authorization needs the raw body (the HMAC covers
+    // `sha256(body)`). Origin/disabled modes decide from headers alone, so
+    // those requests pass through untouched and never hit the generic 1MB
+    // cap — media uploads (up to `MEDIA_MAX_BYTES`) keep working.
+    let needs_body = match site_uses_secret_auth(&state, &site_id).await {
+        Ok(secret_auth) => {
+            state.site_auth_policy.verification != SiteVerificationPolicy::Disabled && secret_auth
         }
+        Err(error) => return error.into_response(),
     };
-    let req = Request::from_parts(parts, Body::from(bytes.clone()));
+
+    let mut bytes: Option<Vec<u8>> = None;
+    let req = if needs_body {
+        let limit = if is_media_upload_path(&path) {
+            MEDIA_MAX_BYTES
+        } else {
+            BODY_LIMIT
+        };
+        let (parts, body) = req.into_parts();
+        let body_bytes = match to_bytes(body, limit).await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(_) => {
+                let response =
+                    AppError::BadRequest("request body is too large".to_string()).into_response();
+                return maybe_disabled_wildcard(response, &state);
+            }
+        };
+        bytes = Some(body_bytes.clone());
+        Request::from_parts(parts, Body::from(body_bytes))
+    } else {
+        req
+    };
 
     match authorize_site_write(
         &state,
         &site_id,
         &method,
-        req.uri().path(),
+        &path,
         req.headers(),
-        &bytes,
+        bytes.as_deref().unwrap_or(&[]),
     )
     .await
     {
@@ -91,6 +115,26 @@ pub async fn enforce_site_auth(
         }
         Err(error) => maybe_disabled_wildcard(error.into_response(), &state),
     }
+}
+
+/// Whether the effective auth mode for a site is HMAC-secret based.
+///
+/// Mirrors the mode-resolution order in [`authorize_site_write`]: the
+/// operator-declared config overlay wins over the database value, and both
+/// missing means `origin`. This is a separate lookup so the caller can decide
+/// whether the request body must be buffered before authorization runs.
+async fn site_uses_secret_auth(state: &ApiState, site_id: &str) -> Result<bool, AppError> {
+    let config_entry = state.site_auth_policy.entry(site_id);
+    let db_auth = state
+        .store
+        .get_site_auth(site_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load site auth: {e}")))?;
+    let mode = config_entry
+        .and_then(|entry| entry.auth_mode)
+        .or_else(|| db_auth.as_ref().map(|info| info.auth_mode))
+        .unwrap_or(SiteAuthMode::Origin);
+    Ok(mode == SiteAuthMode::Secret)
 }
 
 /// In `disabled` mode every write response is readable cross-origin, even
@@ -128,6 +172,20 @@ fn site_id_from_path(path: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
     segments.get(3).map(|s| s.to_string())
+}
+
+/// Whether a path is the guest media upload route
+/// (`/api/v1/sites/{site}/posts/{post}/media`). Kept in sync with the route
+/// table in `build_router`; used only to choose the body-buffering limit for
+/// HMAC verification.
+fn is_media_upload_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    segments.len() == 7
+        && segments[0] == "api"
+        && segments[1] == "v1"
+        && segments[2] == "sites"
+        && segments[4] == "posts"
+        && segments[6] == "media"
 }
 
 /// Extracts the single `Origin` header, if any.
@@ -561,5 +619,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn media_upload_path_detection_matches_the_upload_route() {
+        assert!(is_media_upload_path(
+            "/api/v1/sites/my-blog/posts/hello/media"
+        ));
+        assert!(!is_media_upload_path(
+            "/api/v1/sites/my-blog/posts/hello/comments"
+        ));
+        assert!(!is_media_upload_path(
+            "/api/v1/sites/my-blog/posts/hello/media/extra"
+        ));
+        assert!(!is_media_upload_path("/api/v1/sites/my-blog/media"));
+        assert!(!is_media_upload_path("/health"));
     }
 }

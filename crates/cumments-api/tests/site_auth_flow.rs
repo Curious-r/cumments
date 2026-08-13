@@ -87,6 +87,10 @@ fn middleware_router(state: ApiState) -> Router {
             "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
             post(ok_handler).delete(ok_handler).patch(ok_handler),
         )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/media",
+            post(ok_handler).fallback(ok_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             enforce_site_auth,
@@ -270,7 +274,10 @@ async fn disabled_write_errors_include_wildcard_cors() {
     assert_eq!(invalid_site.status(), StatusCode::BAD_REQUEST);
     assert_eq!(response_origin(&invalid_site).as_deref(), Some("*"));
 
-    // Body-limit failures happen before the handler and must also carry CORS.
+    // In `disabled` mode the middleware deliberately does not buffer write
+    // bodies (guest media uploads keep the handler's 20MB cap instead of a
+    // 1MB middleware cap), so a large body passes through to the handler and
+    // the handler response still carries wildcard CORS.
     let oversized = Request::builder()
         .method(Method::POST)
         .uri("/api/v1/sites/test-blog/posts/hello/comments")
@@ -283,7 +290,7 @@ async fn disabled_write_errors_include_wildcard_cors() {
         .oneshot(oversized)
         .await
         .expect("call router");
-    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(oversized.status(), StatusCode::OK);
     assert_eq!(response_origin(&oversized).as_deref(), Some("*"));
 }
 
@@ -460,6 +467,45 @@ async fn secret_mode_requires_a_valid_hmac_signature() {
         .expect("call router");
     assert_eq!(bad.status(), StatusCode::FORBIDDEN);
     assert!(body_text(bad).await.contains("site-signature-invalid"));
+
+    // Secret-mode authorization must read the body for the HMAC, so the
+    // generic 1MB body cap still applies on the comment write path.
+    let oversized = Request::builder()
+        .method(Method::POST)
+        .uri(&uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("x".repeat(1024 * 1024 + 1)))
+        .expect("build oversized request");
+    let oversized = router
+        .clone()
+        .oneshot(oversized)
+        .await
+        .expect("call router");
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+
+    // The media upload route keeps the handler's 20MB cap: a >1MB body with
+    // a valid HMAC must reach the handler instead of being rejected by the
+    // generic 1MB body limit.
+    let media_uri = format!("/api/v1/sites/{site_id}/posts/hello/media");
+    let media_body = "x".repeat(1024 * 1024 + 1);
+    let timestamp = chrono::Utc::now().timestamp().to_string();
+    let signature = site_request_signature(
+        b"super-secret-hmac-key",
+        &timestamp,
+        "POST",
+        &media_uri,
+        media_body.as_bytes(),
+    );
+    let media = Request::builder()
+        .method(Method::POST)
+        .uri(&media_uri)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header("x-cumments-timestamp", timestamp)
+        .header("x-cumments-signature", signature)
+        .body(Body::from(media_body))
+        .expect("build media request");
+    let media = router.clone().oneshot(media).await.expect("call router");
+    assert_eq!(media.status(), StatusCode::OK);
 }
 
 #[tokio::test]

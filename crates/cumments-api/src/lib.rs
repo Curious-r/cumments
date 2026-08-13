@@ -9,7 +9,7 @@ use crate::routes::comments::{
     vote_handler,
 };
 use crate::routes::media::{
-    MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
+    MEDIA_MAX_BYTES, MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::room::room_info_handler;
@@ -21,7 +21,9 @@ use crate::routes::sse::SseReconnectRegistry;
 use crate::routes::sse::sse_handler;
 use crate::site_auth::{enforce_site_auth, public_cors};
 use axum::{
-    Router, middleware,
+    Router,
+    extract::DefaultBodyLimit,
+    middleware,
     routing::{delete, get, post},
 };
 use cumments_core::{
@@ -153,7 +155,12 @@ pub fn build_router(state: ApiState) -> Router {
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/media",
-            post(upload_media_handler).fallback(method_not_allowed_handler),
+            // The upload handler enforces the 20MB cap itself; raise axum's
+            // default 2MB extractor limit accordingly so large uploads reach
+            // it instead of failing at extraction.
+            post(upload_media_handler)
+                .fallback(method_not_allowed_handler)
+                .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
         )
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/location",
