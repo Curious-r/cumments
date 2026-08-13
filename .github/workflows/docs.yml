@@ -1,26 +1,18 @@
 name: Docs
 
-# Build-only documentation check for main and pull requests. The public site
-# is published from `v*` release tags by docs-deploy.yml, so the online docs
-# always match the latest released binary instead of unreleased main.
+# Publishes the documentation site on `v*` release tags only. Pushes to main
+# run the build-only check in ci.yml, so unreleased main never appears on the
+# public site. `workflow_dispatch` is the manual escape hatch for a
+# one-off publish.
 on:
   push:
-    branches: [main]
-    paths:
-      - docs/**
-      - .github/workflows/docs.yml
-  pull_request:
-    paths:
-      - docs/**
-      - .github/workflows/docs.yml
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -36,7 +28,35 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Resolve docs version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=v${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=main" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build docs site
+        env:
+          CUMMENTS_DOCS_VERSION: ${{ steps.version.outputs.version }}
         run: |
           pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
           mkdocs build --strict --config-file docs/mkdocs.yml
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Intentionally no `environment:` here. The `github-pages` environment's
+    # branch policy only allows `main`, and GitHub deployment branch policies
+    # cannot list tag refs. A `v*` tag is itself the publish gate, so the
+    # environment protection is redundant for this workflow.
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -17,8 +17,57 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      audit: ${{ steps.filter.outputs.audit }}
+      toolchain: ${{ steps.filter.outputs.toolchain }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      openapi: ${{ steps.filter.outputs.openapi }}
+      docs: ${{ steps.filter.outputs.docs }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+            audit:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            toolchain:
+              - 'rust-toolchain.toml'
+              - 'misc/docker/Dockerfile'
+              - 'misc/docker/check-toolchain-sync.sh'
+            frontend:
+              - 'misc/demo/**'
+            openapi:
+              - 'docs/openapi.yaml'
+            docs:
+              - 'docs/**'
+            workflow:
+              - '.github/workflows/ci.yml'
+
   fmt:
     name: Format
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.toolchain == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -39,6 +88,8 @@ jobs:
 
   clippy:
     name: Clippy
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -61,6 +112,8 @@ jobs:
 
   test:
     name: Test
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -89,6 +142,8 @@ jobs:
 
   audit:
     name: Security audit
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.audit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -112,6 +167,8 @@ jobs:
 
   frontend:
     name: Frontend syntax
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -125,6 +182,8 @@ jobs:
 
   openapi:
     name: OpenAPI
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.openapi == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -139,3 +198,24 @@ jobs:
 
       - name: Lint OpenAPI contract
         run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
+
+  docs:
+    name: Docs
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build docs site
+        run: |
+          pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
+          mkdocs build --strict --config-file docs/mkdocs.yml
