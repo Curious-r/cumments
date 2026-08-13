@@ -18,3 +18,7 @@ pub const MESSAGE_CONTENT_KEY: &str = "host.curious.cumments.message";
 /// `reason`, kept separate from the message block so each event kind carries
 /// its own schema under the Cumments namespace.
 pub const REDACTION_PROOF_KEY: &str = "host.curious.cumments.redaction";
+
+/// Body prefix of the token-DM message that proves ownership of a Matrix user
+/// ID for a pending governance role.
+pub const CLAIM_MESSAGE_PREFIX: &str = "cumments-claim:";
