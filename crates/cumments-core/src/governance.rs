@@ -7,6 +7,7 @@
 
 use crate::ports::MatrixDriver;
 use chrono::{DateTime, Utc};
+use ruma_common::UserId;
 use serde_json::{Map, Value};
 use std::str::FromStr;
 
@@ -103,6 +104,40 @@ pub struct NewRoleClaim {
     pub level: i64,
     pub token_hash: String,
     pub expires_at: DateTime<Utc>,
+}
+
+/// Why a Matrix user id cannot hold a governance role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceUserIdError {
+    /// The string is not a fully qualified Matrix user id.
+    Invalid,
+    /// The id belongs to a Cumments service account (AS sender or a guest
+    /// virtual user).
+    ServiceAccount,
+}
+
+impl std::fmt::Display for GovernanceUserIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid => f.write_str("invalid Matrix user ID"),
+            Self::ServiceAccount => {
+                f.write_str("Cumments service accounts cannot hold governance roles")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GovernanceUserIdError {}
+
+/// Validates a Matrix user id for a governance role: it must parse as a fully
+/// qualified MXID and must not be a Cumments service account.
+pub fn validate_governance_user_id(raw: &str) -> Result<String, GovernanceUserIdError> {
+    let parsed = UserId::parse(raw).map_err(|_| GovernanceUserIdError::Invalid)?;
+    let user_id = parsed.as_str().to_string();
+    if is_as_managed_user(&user_id) {
+        return Err(GovernanceUserIdError::ServiceAccount);
+    }
+    Ok(user_id)
 }
 
 fn users_map(power_levels: &Value) -> Option<&Map<String, Value>> {

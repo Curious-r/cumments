@@ -18,13 +18,12 @@ use axum::{
 use chrono::{Duration, Utc};
 use cumments_core::{
     governance::{
-        CO_MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, OWNER_LEVEL, RoleEntry,
-        is_as_managed_user, role_entries, set_role_level,
+        CO_MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, OWNER_LEVEL, RoleEntry, role_entries,
+        set_role_level, validate_governance_user_id,
     },
     models::{PostSlug, SiteId},
     site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, generate_token, token_hash},
 };
-use ruma_common::UserId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -111,15 +110,7 @@ async fn verify_claim_token(
 
 /// Validates a Matrix user ID and rejects Cumments service accounts.
 fn parse_user_id(raw: &str) -> Result<String, AppError> {
-    let parsed = UserId::parse(raw)
-        .map_err(|_| AppError::BadRequest("invalid Matrix user ID".to_string()))?;
-    let user_id = parsed.as_str().to_string();
-    if is_as_managed_user(&user_id) {
-        return Err(AppError::BadRequest(
-            "Cumments service accounts cannot hold governance roles".to_string(),
-        ));
-    }
-    Ok(user_id)
+    validate_governance_user_id(raw).map_err(|error| AppError::BadRequest(error.to_string()))
 }
 
 /// Reads the mandatory `user_id` from a DELETE query string with a
