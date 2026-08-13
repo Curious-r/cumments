@@ -103,6 +103,10 @@
                     guest_default: "访客",
                     matrix_user: "Matrix 用户",
                     guest_badge: "Cumments 访客",
+                    role_owner: "站主",
+                    role_co_manager: "协管员",
+                    role_moderator: "版主",
+                    room_roles: "治理",
                     reply: "回复",
                     edit: "编辑",
                     delete: "删除",
@@ -253,6 +257,10 @@
                     guest_default: "Guest",
                     matrix_user: "Matrix user",
                     guest_badge: "Cumments guest",
+                    role_owner: "Owner",
+                    role_co_manager: "Co-manager",
+                    role_moderator: "Moderator",
+                    room_roles: "Governance",
                     reply: "Reply",
                     edit: "Edit",
                     delete: "Delete",
@@ -438,6 +446,9 @@
                 replyingTo: null,
                 pendingComment: null,
                 presenceOnline: new Set(),
+                siteOwners: new Set(),
+                siteCoManagers: new Set(),
+                roomModerators: new Set(),
             };
 
             let identity = null;
@@ -1155,6 +1166,26 @@
                 return author.public_key || author.mxid || comment.event_id;
             }
 
+            function mxidShort(mxid) {
+                return mxid.replace(/^@/, "").split(":")[0];
+            }
+
+            function governanceBadge(comment) {
+                const author = comment.author || {};
+                if (author.type !== "matrix" || !author.mxid) return "";
+                const mxid = author.mxid;
+                if (state.siteOwners.has(mxid)) {
+                    return `<span class="text-[10px] font-medium text-amber-700 bg-amber-50 rounded px-1.5 py-0.5">${t("role_owner")}</span>`;
+                }
+                if (state.siteCoManagers.has(mxid)) {
+                    return `<span class="text-[10px] font-medium text-purple-700 bg-purple-50 rounded px-1.5 py-0.5">${t("role_co_manager")}</span>`;
+                }
+                if (state.roomModerators.has(mxid)) {
+                    return `<span class="text-[10px] font-medium text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5">${t("role_moderator")}</span>`;
+                }
+                return "";
+            }
+
             // ==========================================
             // API
             // ==========================================
@@ -1343,6 +1374,29 @@
                 }
             }
 
+            async function loadRoles() {
+                const cfg = getSettings();
+                try {
+                    const [siteRes, roomRes] = await Promise.all([
+                        fetch(`${cfg.api}/api/v1/sites/${cfg.siteId}/roles`),
+                        fetch(
+                            `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/moderators`,
+                        ),
+                    ]);
+                    if (siteRes.ok) {
+                        const roles = await siteRes.json();
+                        state.siteOwners = new Set(roles.owners || []);
+                        state.siteCoManagers = new Set(roles.co_managers || []);
+                    }
+                    if (roomRes.ok) {
+                        const moderators = await roomRes.json();
+                        state.roomModerators = new Set(moderators.moderators || []);
+                    }
+                } catch {
+                    // Governance badges are decorative; ignore failures.
+                }
+            }
+
             function renderRoomInfo(info) {
                 let header = document.getElementById("roomHeader");
                 if (!header) {
@@ -1362,12 +1416,25 @@
                     .map(renderSystemMessage)
                     .filter(Boolean)
                     .join("");
+                const governanceUsers = [
+                    ...new Set([
+                        ...state.siteOwners,
+                        ...state.siteCoManagers,
+                        ...state.roomModerators,
+                    ]),
+                ]
+                    .map(mxidShort)
+                    .join(", ");
+                const governanceLine = governanceUsers
+                    ? `<div class="text-xs text-slate-400 mt-0.5">${escapeHtml(t("room_roles"))}: ${escapeHtml(governanceUsers)}</div>`
+                    : "";
                 header.innerHTML = `
                     <div class="flex items-center gap-3 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-4">
                         ${avatar}
                         <div class="min-w-0">
                             <div class="font-semibold text-slate-900 text-sm truncate">${name}</div>
                             <div id="roomMemberInfo" class="text-xs text-slate-400">${info.member_count ?? 0} ${t("members")}</div>
+                            ${governanceLine}
                         </div>
                     </div>
                     ${system ? `<div class="space-y-1 mb-4">${system}</div>` : ""}
@@ -1496,6 +1563,7 @@
                                         ${escapeHtml(authorName(comment))}
                                     </span>
                                     ${badge}
+                                    ${governanceBadge(comment)}
                                 </div>
                                 <div class="text-xs text-slate-400 mt-0.5">${time}${edited}</div>
                             </div>
@@ -2502,6 +2570,7 @@
                 state.currentPage = 1;
                 state.meta = null;
                 showLoading();
+                await loadRoles();
                 await loadList();
                 connectSse();
                 await loadStickers();
