@@ -48,6 +48,9 @@ pub struct MediaProxy {
     homeserver_url: String,
     server_name: String,
     as_token: String,
+    /// HMAC key for signed media URLs, independent of `as_token` so AS token
+    /// rotation does not invalidate outstanding proxy URLs.
+    sign_key: String,
     http_client: reqwest::Client,
 }
 
@@ -56,6 +59,7 @@ impl MediaProxy {
         homeserver_url: String,
         server_name: String,
         as_token: String,
+        sign_key: String,
     ) -> anyhow::Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -64,6 +68,7 @@ impl MediaProxy {
             homeserver_url,
             server_name,
             as_token,
+            sign_key,
             http_client,
         })
     }
@@ -161,7 +166,7 @@ impl MediaProxy {
     }
 
     fn sign(&self, server: &str, media_id: &str, expires: i64) -> String {
-        let mut mac = HmacSha256::new_from_slice(self.as_token.as_bytes())
+        let mut mac = HmacSha256::new_from_slice(self.sign_key.as_bytes())
             .expect("hmac accepts any key length");
         mac.update(server.as_bytes());
         mac.update(b"/");
@@ -436,6 +441,7 @@ mod tests {
             "http://hs".to_string(),
             "hs".to_string(),
             "token".to_string(),
+            "sign-key".to_string(),
         )
         .expect("build proxy")
     }

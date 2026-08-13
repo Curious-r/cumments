@@ -39,6 +39,10 @@ site_verification = "optional"
 # homeserver). The API rejects sticker references outside this list; the
 # demo fetches them from GET /api/v1/sites/{site}/posts/{post}/stickers.
 preset_stickers = []
+# Independent HMAC key for signed media-proxy URLs. When unset, the
+# AppService token is used and rotating it invalidates outstanding media
+# URLs; set a stable random value for production.
+# media_sign_key = "change-me"
 
 [sites."my-blog"]
 # "origin" (browser Origin, default) or "secret" (HMAC via edge function)

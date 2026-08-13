@@ -66,6 +66,11 @@ pub struct Security {
     /// reference.
     #[serde(default)]
     pub preset_stickers: Vec<String>,
+    /// Independent HMAC key for signed media-proxy URLs. When unset the
+    /// AppService token is used, so rotating the AS token invalidates
+    /// outstanding media URLs; production deployments should set this.
+    #[serde(default)]
+    pub media_sign_key: Option<String>,
 }
 
 /// Operator-declared trust for one site.

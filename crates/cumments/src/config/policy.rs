@@ -200,6 +200,7 @@ mod tests {
             admin_token: None,
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
+            media_sign_key: None,
         };
 
         let mut sites = HashMap::new();
@@ -244,6 +245,7 @@ mod tests {
             admin_token: None,
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
+            media_sign_key: None,
         };
 
         let mut sites = HashMap::new();
@@ -281,6 +283,7 @@ mod tests {
             admin_token: None,
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
+            media_sign_key: None,
         };
 
         let mut sites = HashMap::new();
@@ -337,6 +340,7 @@ mod tests {
             admin_token: None,
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
+            media_sign_key: None,
         };
         assert!(
             admin_token_hash(&security)

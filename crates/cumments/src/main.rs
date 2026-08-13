@@ -437,11 +437,19 @@ async fn main() -> Result<()> {
         max_sse_connections: 500,
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: appservice.as_ref().map(|runtime| {
+            let media_sign_key = settings.security.media_sign_key.clone().unwrap_or_else(|| {
+                tracing::warn!(
+                    "security.media_sign_key is not set; media proxy URLs are signed \
+                     with the AppService token and will all expire when it rotates"
+                );
+                runtime.as_token.clone()
+            });
             Arc::new(
                 cumments_api::routes::media::MediaProxy::new(
                     runtime.homeserver_url.clone(),
                     runtime.server_name.clone(),
                     runtime.as_token.clone(),
+                    media_sign_key,
                 )
                 .expect("build media proxy"),
             )
