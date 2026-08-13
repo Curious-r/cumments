@@ -1,11 +1,13 @@
 //! Sending, editing, redacting and reading room messages.
 
 use super::*;
-use crate::wire::{build_edit_body, build_message_body, build_redaction_body, percent_encode};
+use crate::wire::{
+    build_edit_body, build_media_body, build_message_body, build_redaction_body, percent_encode,
+};
 use anyhow::{Result, anyhow};
 use cumments_core::{
     identity::derive_guest_id_from_public_key,
-    models::{RoomEventPage, SiteId},
+    models::{CommentMedia, RoomEventPage, SiteId},
 };
 use serde::Deserialize;
 use tracing::{instrument, warn};
@@ -29,6 +31,7 @@ impl AppServiceMatrixDriver {
         &self,
         room_id: &str,
         content: &str,
+        media: Option<&CommentMedia>,
         display_name: &str,
         // Public key and signature are published in the event so ownership
         // stays verifiable from Matrix alone.
@@ -57,18 +60,29 @@ impl AppServiceMatrixDriver {
         }
 
         // 3. Send the message as the virtual user
-        let message_body = build_message_body(
-            content,
-            display_name,
-            author_public_key,
-            author_signature,
-            author_challenge,
-            &guest_id,
-            intent_id,
-            reply_to,
-            reply_to_body,
-            reply_to_sender,
-        );
+        let message_body = match media {
+            Some(media) => build_media_body(
+                media,
+                display_name,
+                author_public_key,
+                author_signature,
+                author_challenge,
+                &guest_id,
+                intent_id,
+            ),
+            None => build_message_body(
+                content,
+                display_name,
+                author_public_key,
+                author_signature,
+                author_challenge,
+                &guest_id,
+                intent_id,
+                reply_to,
+                reply_to_body,
+                reply_to_sender,
+            ),
+        };
 
         let txn_id = self.txn_id("post", intent_id);
         let path = format!(

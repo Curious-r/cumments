@@ -1,6 +1,6 @@
 //! Request and response DTOs for the Cumments API.
 
-use cumments_core::models::Message;
+use cumments_core::models::{CommentMedia, Message};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -41,6 +41,10 @@ pub struct ChallengeResponse {
 pub struct PostCommentRequest {
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
+    /// Optional media attachment; when present the signature covers
+    /// `media.url` and `content` is only the fallback filename.
+    #[serde(default)]
+    pub media: Option<CommentMedia>,
     #[validate(length(min = 1, max = 50))]
     pub display_name: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).

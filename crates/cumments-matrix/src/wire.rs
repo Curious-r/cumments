@@ -4,6 +4,7 @@
 //! Keeping the wire format separate from `appservice.rs` makes it reviewable
 //! and testable on its own.
 
+use cumments_core::models::CommentMedia;
 use cumments_core::protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE};
 use rand::Rng;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -240,6 +241,66 @@ pub(crate) fn build_message_body(
             }
         });
     }
+    message_body
+}
+/// Build the `m.room.message` content for a guest media message
+/// (image/audio/video/file). The structured block carries the media URL as
+/// the canonical signed content.
+pub(crate) fn build_media_body(
+    media: &CommentMedia,
+    display_name: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    guest_id: &str,
+    intent_id: Option<i64>,
+) -> serde_json::Value {
+    let msgtype = match media.mimetype.as_deref() {
+        Some(mime) if mime.starts_with("image/") => "m.image",
+        Some(mime) if mime.starts_with("video/") => "m.video",
+        Some(mime) if mime.starts_with("audio/") => "m.audio",
+        _ => "m.file",
+    };
+    let fallback = media
+        .filename
+        .clone()
+        .unwrap_or_else(|| "media".to_string());
+    let mut message_body = serde_json::json!({
+        "msgtype": msgtype,
+        "body": fallback,
+        "url": media.url,
+    });
+    if let Some(filename) = &media.filename {
+        message_body["filename"] = serde_json::json!(filename);
+    }
+    let mut info = serde_json::Map::new();
+    if let Some(mimetype) = &media.mimetype {
+        info.insert("mimetype".to_string(), serde_json::json!(mimetype));
+    }
+    if let Some(size) = media.size {
+        info.insert("size".to_string(), serde_json::json!(size));
+    }
+    if let Some(width) = media.width {
+        info.insert("width".to_string(), serde_json::json!(width));
+    }
+    if let Some(height) = media.height {
+        info.insert("height".to_string(), serde_json::json!(height));
+    }
+    if !info.is_empty() {
+        message_body["info"] = serde_json::Value::Object(info);
+    }
+    if media.voice {
+        message_body["org.matrix.msc3245.voice"] = serde_json::json!({});
+    }
+    message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "guest_id": guest_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        "content": media.url,
+        "displayname": display_name,
+        "intent_id": intent_id,
+    });
     message_body
 }
 /// Build the `m.room.message` content for an edit (`m.replace`).
@@ -500,6 +561,58 @@ mod tests {
 
         assert!(body.get("cumments_guest_id").is_none());
         assert!(body.get("cumments_intent_id").is_none());
+    }
+
+    #[test]
+    fn media_body_uses_msgtype_and_embed_url_as_content() {
+        let body = build_media_body(
+            &CommentMedia {
+                url: "mxc://hs/abc".to_string(),
+                filename: Some("cat.png".to_string()),
+                mimetype: Some("image/png".to_string()),
+                size: Some(1024),
+                width: Some(100),
+                height: Some(80),
+                voice: false,
+            },
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            Some(7),
+        );
+        assert_eq!(body["msgtype"], "m.image");
+        assert_eq!(body["body"], "cat.png");
+        assert_eq!(body["url"], "mxc://hs/abc");
+        assert_eq!(body["info"]["mimetype"], "image/png");
+        assert_eq!(body["info"]["width"], 100);
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "mxc://hs/abc");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["intent_id"], 7);
+        assert!(body.get("org.matrix.msc3245.voice").is_none());
+    }
+
+    #[test]
+    fn voice_media_uses_audio_msgtype_and_voice_flag() {
+        let body = build_media_body(
+            &CommentMedia {
+                url: "mxc://hs/voice".to_string(),
+                filename: None,
+                mimetype: Some("audio/webm".to_string()),
+                size: None,
+                width: None,
+                height: None,
+                voice: true,
+            },
+            "Alice",
+            "pubkey",
+            "sig",
+            "chal",
+            "abcd",
+            None,
+        );
+        assert_eq!(body["msgtype"], "m.audio");
+        assert!(body.get("org.matrix.msc3245.voice").is_some());
     }
 
     #[test]

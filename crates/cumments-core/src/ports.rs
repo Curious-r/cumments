@@ -3,8 +3,9 @@ use crate::intents::{
     PostCommentIntent, StuckPostIntent, UpdateCommentIntent,
 };
 use crate::models::{
-    Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom, Reaction,
-    RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus, SiteId,
+    CommentMedia, Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom,
+    Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
+    SiteId,
 };
 use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
 use anyhow::Result;
@@ -420,6 +421,7 @@ pub trait MatrixDriver: Send + Sync {
         &self,
         room_id: &str,
         content: &str,
+        media: Option<&CommentMedia>,
         display_name: &str,
         author_public_key: &str,
         author_signature: &str,

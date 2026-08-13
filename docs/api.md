@@ -403,6 +403,17 @@ limited, restricted to the configured homeserver, size-capped, and filtered
 by content type. The optional `thumbnail=1` query serves a 320×320
 thumbnail.
 
+### Guest media upload
+
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/media?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
+
+Uploads raw image/audio bytes as the guest's virtual user and returns
+`{ "url", "filename", "mimetype", "size", "voice" }` with an `mxc://` URL.
+The signature covers `["UPLOAD", site_id, post_slug, mime, size, challenge]`;
+the upload is rate limited and size/type capped. The returned `url` is then
+used in a POST comment request with `media` (the signature covers the media
+URL instead of text content).
+
 ### Room info
 
 `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`

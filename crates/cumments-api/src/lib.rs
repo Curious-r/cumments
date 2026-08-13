@@ -7,7 +7,7 @@ use crate::routes::comments::{
     delete_comment_body_handler, delete_comment_handler, post_comment_handler,
     query_comments_handler, update_comment_body_handler, update_comment_handler,
 };
-use crate::routes::media::{MediaProxy, media_handler};
+use crate::routes::media::{MediaProxy, media_handler, upload_media_handler};
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -23,7 +23,10 @@ use axum::{
 };
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
-    ports::{IntentStore, MessageStore, RegistryStore, RoomStore, SiteAuthStore, SiteStore},
+    ports::{
+        IntentStore, MessageStore, RegistryStore, RoomStore, SiteAuthStore, SiteStore,
+        VirtualUserStore,
+    },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
 };
@@ -45,7 +48,15 @@ pub mod site_auth;
 
 // Define a new trait that combines the store traits for API use.
 pub trait ApiStore:
-    MessageStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + RoomStore + Send + Sync
+    MessageStore
+    + IntentStore
+    + SiteStore
+    + SiteAuthStore
+    + RegistryStore
+    + RoomStore
+    + VirtualUserStore
+    + Send
+    + Sync
 {
 }
 impl<
@@ -55,6 +66,7 @@ impl<
         + SiteAuthStore
         + RegistryStore
         + RoomStore
+        + VirtualUserStore
         + Send
         + Sync,
 > ApiStore for T
@@ -124,6 +136,10 @@ pub fn build_router(state: ApiState) -> Router {
             delete(delete_comment_handler)
                 .patch(update_comment_handler)
                 .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/media",
+            post(upload_media_handler).fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

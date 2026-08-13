@@ -687,6 +687,75 @@ paths:
                           type: object
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/media:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    post:
+      tags: [Comments]
+      summary: Upload guest media (image/voice)
+      description: |
+        Uploads raw bytes as the guest's virtual user. Query parameters carry
+        the PoW challenge response and an Ed25519 signature over
+        `UPLOAD/site/post/mime/size/challenge`.
+      parameters:
+        - name: mime
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: filename
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: author_public_key
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: author_signature
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: challenge_response
+          in: query
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Uploaded media reference
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, filename, mimetype, size, voice]
+                properties:
+                  url:
+                    type: string
+                  filename:
+                    type: string
+                  mimetype:
+                    type: string
+                  size:
+                    type: integer
+                  voice:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:

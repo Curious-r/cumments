@@ -39,7 +39,7 @@ static IDEMPOTENT_REPLAYED: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("idempotent-replayed"));
 
 /// Build the CORS layer from a comma-separated origin list.
-fn challenge_prefix(challenge_response: &str) -> &str {
+pub(crate) fn challenge_prefix(challenge_response: &str) -> &str {
     challenge_response.split('|').next().unwrap_or("")
 }
 
@@ -276,6 +276,20 @@ pub(crate) async fn post_comment_handler(
     {
         return Err(AppError::BadRequest(msg.to_string()));
     }
+    if let Some(media) = &req.media {
+        if !media.url.starts_with("mxc://") || media.url.len() > 512 {
+            return Err(AppError::BadRequest(
+                "media.url must be a valid mxc:// URI.".to_string(),
+            ));
+        }
+        if media.mimetype.as_deref().is_some_and(|m| m.len() > 128)
+            || media.filename.as_deref().is_some_and(|f| f.len() > 255)
+        {
+            return Err(AppError::BadRequest(
+                "media metadata is invalid.".to_string(),
+            ));
+        }
+    }
 
     // 2. Verify the PoW challenge
     if !state.pow.verify(&req.challenge_response) {
@@ -284,10 +298,15 @@ pub(crate) async fn post_comment_handler(
 
     // 2b. Verify the author's Ed25519 signature over the canonical message.
     let challenge = challenge_prefix(&req.challenge_response);
+    let signable_content = req
+        .media
+        .as_ref()
+        .map(|media| media.url.as_str())
+        .unwrap_or(req.content.as_str());
     let message = post_signature_message(
         &site_id,
         &post_slug,
-        &req.content,
+        signable_content,
         &req.display_name,
         req.reply_to.as_deref(),
         challenge,
@@ -327,6 +346,7 @@ pub(crate) async fn post_comment_handler(
         site_id: site_id_val,
         post_slug: post_slug_val,
         content: req.content,
+        media: req.media,
         display_name: req.display_name,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,

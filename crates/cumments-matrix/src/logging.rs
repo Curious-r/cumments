@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
     identity::derive_guest_id_from_public_key,
-    models::{PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
 use tracing::{debug, info};
@@ -40,6 +40,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         &self,
         room_id: &str,
         content: &str,
+        media: Option<&CommentMedia>,
         display_name: &str,
         author_public_key: &str,
         _author_signature: &str,
@@ -61,7 +62,7 @@ impl MatrixDriver for LoggingMatrixDriver {
             reply_to_body,
             reply_to_sender,
             intent_id,
-            content
+            media.as_ref().map(|m| m.url.as_str()).unwrap_or(content)
         );
         Ok(format!(
             "log_event_{}_{}",

@@ -209,10 +209,16 @@
                                 id="composerContent"
                                 rows="3"
                                 maxlength="5000"
-                                placeholder="写下你的评论，支持 Markdown…"
-                                data-i18n-placeholder="placeholder_content"
-                                class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-y focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
-                            ></textarea>
+                    placeholder="写下你的评论，支持 Markdown…"
+                    data-i18n-placeholder="placeholder_content"
+                    class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-y focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                ></textarea>
+                            <div class="flex items-center gap-2 pt-1 flex-wrap">
+                                <button id="imageBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">🖼 <span data-i18n="add_image">图片</span></button>
+                                <button id="voiceBtn" type="button" class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1 rounded-md border border-slate-200">🎤 <span data-i18n="record_voice">语音</span></button>
+                                <span id="mediaPreview" class="text-xs text-slate-500"></span>
+                                <input type="file" id="imageInput" accept="image/*" class="hidden">
+                            </div>
                             <div
                                 class="flex items-center justify-between gap-3 pt-1"
                             >
@@ -671,6 +677,10 @@
                     room_topic_changed: "更新了话题：",
                     room_avatar_changed: "更换了房间头像",
                     typing_now: "正在输入…",
+                    add_image: "图片",
+                    record_voice: "语音",
+                    stop_record: "停止",
+                    upload_media_failed: "媒体上传失败：",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -813,6 +823,10 @@
                     room_topic_changed: "updated the topic: ",
                     room_avatar_changed: "changed the room avatar",
                     typing_now: "is typing…",
+                    add_image: "Image",
+                    record_voice: "Voice",
+                    stop_record: "Stop",
+                    upload_media_failed: "Media upload failed: ",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -1557,9 +1571,7 @@
                         !c.author ||
                         c.author.type !== "guest" ||
                         c.author.public_key !== pending.publicKey ||
-                        (c.content && c.content.type === "text"
-                            ? c.content.body
-                            : null) !== pending.content
+                        signableContent(c.content) !== pending.content
                     ) {
                         return false;
                     }
@@ -2120,6 +2132,119 @@
                 }
             }
 
+            function signableContent(content) {
+                if (!content || typeof content !== "object") return null;
+                if (content.type === "text") return content.body || null;
+                if (content.type === "media") return content.url || null;
+                return null;
+            }
+
+            let mediaRecorder = null;
+            let mediaRecorderChunks = [];
+
+            function pickImage() {
+                document.getElementById("imageInput").click();
+            }
+
+            function toggleVoiceRecord() {
+                if (mediaRecorder && mediaRecorder.state === "recording") {
+                    mediaRecorder.stop();
+                    return;
+                }
+                if (!navigator.mediaDevices || !window.MediaRecorder) {
+                    toast(t("upload_media_failed") + "unsupported", "error");
+                    return;
+                }
+                navigator.mediaDevices
+                    .getUserMedia({ audio: true })
+                    .then((stream) => {
+                        mediaRecorder = new MediaRecorder(stream);
+                        mediaRecorderChunks = [];
+                        mediaRecorder.ondataavailable = (event) => {
+                            if (event.data.size > 0) {
+                                mediaRecorderChunks.push(event.data);
+                            }
+                        };
+                        mediaRecorder.onstop = async () => {
+                            stream.getTracks().forEach((track) => track.stop());
+                            const mime =
+                                mediaRecorder.mimeType ||
+                                "audio/webm";
+                            const blob = new Blob(mediaRecorderChunks, {
+                                type: mime,
+                            });
+                            mediaRecorder = null;
+                            document.getElementById("voiceBtn").querySelector("span").textContent = t("record_voice");
+                            if (blob.size > 0) {
+                                await attachMedia(
+                                    blob,
+                                    `voice-${Date.now()}.webm`,
+                                    mime,
+                                    true,
+                                );
+                            }
+                        };
+                        mediaRecorder.start();
+                        document.getElementById("voiceBtn").querySelector("span").textContent = t("stop_record");
+                    })
+                    .catch((e) =>
+                        toast(t("upload_media_failed") + e.message, "error"),
+                    );
+            }
+
+            async function attachMedia(blob, filename, mime, voice) {
+                try {
+                    const cfg = getSettings();
+                    const chal = await getChallenge(cfg);
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "UPLOAD",
+                        cfg.siteId,
+                        cfg.slug,
+                        mime,
+                        String(blob.size),
+                        chal.prefix,
+                    ]);
+                    const params = new URLSearchParams({
+                        author_public_key: publicKey,
+                        author_signature: signature,
+                        challenge_response: `${chal.prefix}|${nonce}`,
+                        mime,
+                        filename,
+                    });
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/media?${params.toString()}`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": mime },
+                            body: blob,
+                        },
+                    );
+                    if (!res.ok) throw new Error(await apiError(res));
+                    const media = await res.json();
+                    state.draftMedia = { ...media, voice };
+                    renderMediaPreview(state.draftMedia);
+                } catch (e) {
+                    toast(t("upload_media_failed") + e.message, "error");
+                }
+            }
+
+            function renderMediaPreview(media) {
+                const el = document.getElementById("mediaPreview");
+                if (!media) {
+                    el.textContent = "";
+                    return;
+                }
+                const label = media.voice
+                    ? t("record_voice")
+                    : media.filename || media.url;
+                el.innerHTML = `${escapeHtml(label)} <button type="button" class="text-red-500 hover:text-red-700" title="remove">✕</button>`;
+                el.querySelector("button").onclick = () => {
+                    state.draftMedia = null;
+                    renderMediaPreview(null);
+                };
+            }
+
             async function submitComment() {
                 const cfg = getSettings();
                 const displayName =
@@ -2128,10 +2253,13 @@
                 const content = document
                     .getElementById("composerContent")
                     .value.trim();
-                if (!content) {
+                if (!content && !state.draftMedia) {
                     toast(t("err_content_empty"), "error");
                     return;
                 }
+                const signedContent = state.draftMedia
+                    ? state.draftMedia.url
+                    : content;
                 const replyTo = state.replyingTo
                     ? state.replyingTo.event_id
                     : "";
@@ -2154,7 +2282,7 @@
                         "POST",
                         cfg.siteId,
                         cfg.slug,
-                        content,
+                        signedContent,
                         displayName,
                         replyTo,
                         chal.prefix,
@@ -2171,6 +2299,7 @@
                             },
                             body: JSON.stringify({
                                 content,
+                                media: state.draftMedia || null,
                                 display_name: displayName,
                                 author_public_key: publicKey,
                                 author_signature: signature,
@@ -2194,12 +2323,14 @@
                     }
 
                     document.getElementById("composerContent").value = "";
+                    state.draftMedia = null;
+                    renderMediaPreview(null);
                     state.replyingTo = null;
                     updateReplyBanner();
                     state.pendingComment = {
                         intentId,
                         publicKey,
-                        content,
+                        content: signedContent,
                         submittedAt: Date.now(),
                     };
                     status.textContent = t("status_submitted");
@@ -2576,6 +2707,21 @@
                 await loadList();
                 connectSse();
             }
+
+            document.getElementById("imageBtn").addEventListener("click", pickImage);
+            document.getElementById("voiceBtn").addEventListener("click", toggleVoiceRecord);
+            document.getElementById("imageInput").addEventListener("change", (event) => {
+                const file = event.target.files && event.target.files[0];
+                if (file) {
+                    attachMedia(
+                        file,
+                        file.name,
+                        file.type || "application/octet-stream",
+                        false,
+                    );
+                }
+                event.target.value = "";
+            });
         </script>
     </body>
 </html>

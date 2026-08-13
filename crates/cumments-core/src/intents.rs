@@ -3,7 +3,7 @@
 //! for the system to perform an action. It's the primary object written
 //! by the API layer and consumed by the Reconciler layer.
 
-use crate::models::{PostSlug, SiteId};
+use crate::models::{CommentMedia, PostSlug, SiteId};
 use serde::{Deserialize, Serialize};
 
 /// Represents the user's desire to post a comment.
@@ -17,6 +17,10 @@ pub struct PostCommentIntent {
 
     /// The content of the comment, likely in Markdown.
     pub content: String,
+    /// Optional media attachment (image/voice/file); when present, `content`
+    /// carries the fallback filename and the signature covers the media URL.
+    #[serde(default)]
+    pub media: Option<CommentMedia>,
 
     /// Display name of the author. For guests, this is provided by them.
     pub display_name: String,

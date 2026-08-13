@@ -907,6 +907,7 @@ mod tests {
                 ..
             })
         ));
+        assert_eq!(parsed.signable_content(), Some("mxc://hs/sticker"));
     }
 
     #[test]

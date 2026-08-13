@@ -8,7 +8,7 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
-    models::{PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
 
@@ -34,6 +34,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         &self,
         room_id: &str,
         content: &str,
+        media: Option<&CommentMedia>,
         display_name: &str,
         author_public_key: &str,
         author_signature: &str,
@@ -47,6 +48,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.post_message_impl(
             room_id,
             content,
+            media,
             display_name,
             author_public_key,
             author_signature,

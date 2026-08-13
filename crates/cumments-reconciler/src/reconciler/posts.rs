@@ -120,6 +120,7 @@ impl Reconciler {
                     .post_message(
                         &room_id,
                         &intent.content,
+                        intent.media.as_ref(),
                         &intent.display_name,
                         &intent.author_public_key,
                         &intent.author_signature,

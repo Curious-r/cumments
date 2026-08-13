@@ -375,6 +375,26 @@ pub struct PollVote {
     pub origin_server_ts: i64,
 }
 
+/// Media attached to a guest message (image/voice/file).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentMedia {
+    /// MXC URI of the uploaded media.
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mimetype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// MSC3245 voice message marker.
+    #[serde(default)]
+    pub voice: bool,
+}
+
 /// Represents a website that uses Cumments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Site {

@@ -8,13 +8,17 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
+use crate::routes::comments::challenge_prefix;
+use anyhow::{anyhow, bail};
 use axum::{
-    body::Body,
+    Json,
+    body::{Body, Bytes},
     extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use cumments_core::models::{Content, Message};
+use cumments_core::identity::{signature_message, verify_signature};
+use cumments_core::models::{Content, Message, PostSlug, SiteId};
 use cumments_core::site_auth::constant_time_eq;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -26,6 +30,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
 /// How long a signed media URL stays valid.
 const MEDIA_URL_TTL_SECONDS: i64 = 15 * 60;
+/// Mime prefixes allowed for guest uploads (image + audio for step 3).
+const ALLOWED_UPLOAD_MIMES: [&str; 2] = ["image/", "audio/"];
 /// Content types allowed through the proxy (prefix match).
 const ALLOWED_MEDIA_TYPES: [&str; 5] = [
     "image/",
@@ -75,6 +81,10 @@ impl MediaProxy {
         Some(format!(
             "/api/v1/media/{server}/{media_id}?expires={expires}&sig={signature}"
         ))
+    }
+
+    pub fn server_name(&self) -> &str {
+        &self.server_name
     }
 
     /// Rewrites media URLs inside a message for API/SSE delivery.
@@ -147,6 +157,133 @@ impl MediaProxy {
         mac.update(expires.to_string().as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
+
+    /// Uploads bytes to the homeserver as an appservice virtual user and
+    /// returns the `mxc://` content URI.
+    pub async fn upload_media(
+        &self,
+        bytes: Vec<u8>,
+        filename: &str,
+        mimetype: &str,
+        virtual_user_id: &str,
+    ) -> anyhow::Result<String> {
+        let url = format!(
+            "{}/_matrix/media/v3/upload",
+            self.homeserver_url.trim_end_matches('/')
+        );
+        let resp = self
+            .http_client
+            .post(url)
+            .query(&[("user_id", virtual_user_id), ("filename", filename)])
+            .header("Authorization", format!("Bearer {}", self.as_token))
+            .header("Content-Type", mimetype)
+            .body(bytes)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("media upload failed ({status}): {body}");
+        }
+        let json: serde_json::Value = resp.json().await?;
+        json.get("content_uri")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow!("media upload response missing content_uri"))
+    }
+}
+
+/// Guest media upload: verifies PoW + author signature, uploads to the
+/// homeserver as the author's virtual user, and returns the MXC reference.
+pub(crate) async fn upload_media_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path((site_id, post_slug)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let Some(proxy) = &state.media_proxy else {
+        return Err(AppError::NotFound(
+            "Media uploads are not enabled for this deployment.".to_string(),
+        ));
+    };
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests(
+            "media uploads are rate limited; try again later".to_string(),
+        ));
+    }
+    if body.len() > MEDIA_MAX_BYTES {
+        return Err(AppError::BadRequest(
+            "media exceeds the size limit".to_string(),
+        ));
+    }
+    let author_public_key = query
+        .get("author_public_key")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_public_key".to_string()))?;
+    let author_signature = query
+        .get("author_signature")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_signature".to_string()))?;
+    let challenge_response = query
+        .get("challenge_response")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing challenge_response".to_string()))?;
+    let mimetype = query
+        .get("mime")
+        .cloned()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let filename = query
+        .get("filename")
+        .cloned()
+        .unwrap_or_else(|| "upload".to_string());
+
+    if !ALLOWED_UPLOAD_MIMES
+        .iter()
+        .any(|allowed| mimetype.starts_with(allowed))
+    {
+        return Err(AppError::BadRequest(format!(
+            "unsupported upload media type {mimetype}"
+        )));
+    }
+    if !state.pow.verify(&challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&challenge_response);
+    let message = signature_message(&[
+        "UPLOAD",
+        site_id_val.as_str(),
+        post_slug_val.as_str(),
+        &mimetype,
+        &body.len().to_string(),
+        challenge,
+    ]);
+    if !verify_signature(&author_public_key, &message, &author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let virtual_user = state
+        .store
+        .get_or_create_virtual_user(&author_public_key, &site_id_val, proxy.server_name())
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve virtual user: {e}")))?;
+    let url = proxy
+        .upload_media(body.to_vec(), &filename, &mimetype, &virtual_user)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
+
+    Ok(Json(serde_json::json!({
+        "url": url,
+        "filename": filename,
+        "mimetype": mimetype,
+        "size": body.len(),
+        "voice": false,
+    })))
 }
 
 /// Serves one media file to a public reader.

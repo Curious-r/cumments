@@ -45,6 +45,7 @@ impl ParsedRoomMessage {
     pub fn signable_content(&self) -> Option<&str> {
         match &self.content {
             Content::Text(text) => Some(&text.body),
+            Content::Media(media) => Some(&media.url),
             _ => None,
         }
     }
@@ -62,6 +63,7 @@ impl ParsedRelation {
     pub fn signable_content(&self) -> Option<&str> {
         match &self.new_content {
             Content::Text(text) => Some(&text.body),
+            Content::Media(media) => Some(&media.url),
             _ => None,
         }
     }
