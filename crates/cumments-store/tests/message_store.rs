@@ -416,6 +416,65 @@ async fn unknown_content_survives_roundtrip() {
 }
 
 #[tokio::test]
+async fn media_uploads_track_ownership_and_usage() {
+    let store = DbStore::connect(&test_db_url("media-uploads"))
+        .await
+        .expect("connect db");
+
+    store
+        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", "hello")
+        .await
+        .expect("record upload");
+
+    assert!(
+        store
+            .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership check")
+    );
+    assert!(
+        !store
+            .media_upload_owned_by("mxc://hs/cat", "bob-key", "my-blog", "hello")
+            .await
+            .expect("other author rejected")
+    );
+    assert!(
+        !store
+            .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "other")
+            .await
+            .expect("other post rejected")
+    );
+    assert!(
+        !store
+            .media_upload_owned_by("mxc://hs/other", "alice-key", "my-blog", "hello")
+            .await
+            .expect("unknown url rejected")
+    );
+
+    // Re-recording the same URL keeps a single row and re-arms ownership.
+    store
+        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", "hello")
+        .await
+        .expect("re-record upload");
+
+    let unused = store
+        .list_unused_media_before(Utc::now() + chrono::Duration::days(1))
+        .await
+        .expect("list unused");
+    assert_eq!(unused, vec!["mxc://hs/cat".to_string()]);
+
+    store
+        .mark_media_used("mxc://hs/cat")
+        .await
+        .expect("mark used");
+    let unused = store
+        .list_unused_media_before(Utc::now() + chrono::Duration::days(1))
+        .await
+        .expect("list unused after use");
+    assert!(unused.is_empty(), "used media must not be listed as orphan");
+}
+
+#[tokio::test]
 async fn media_content_survives_roundtrip() {
     let store = DbStore::connect(&test_db_url("message-media"))
         .await

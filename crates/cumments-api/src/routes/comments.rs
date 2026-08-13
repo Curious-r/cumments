@@ -308,6 +308,11 @@ pub(crate) async fn post_comment_handler(
 
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
+    if req.content.trim().is_empty() && req.media.is_none() {
+        return Err(AppError::BadRequest(
+            "content must not be empty without a media attachment.".to_string(),
+        ));
+    }
     if req
         .reply_to
         .as_deref()
@@ -338,6 +343,18 @@ pub(crate) async fn post_comment_handler(
         if media.kind == Some(MediaKind::Sticker) && !state.preset_stickers.contains(&media.url) {
             return Err(AppError::BadRequest(
                 "sticker must reference a preset sticker".to_string(),
+            ));
+        }
+        if media.kind != Some(MediaKind::Sticker)
+            && !state
+                .store
+                .media_upload_owned_by(&media.url, &req.author_public_key, &site_id, &post_slug)
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to verify media ownership: {e}")))?
+        {
+            return Err(AppError::BadRequest(
+                "media must reference an upload made by this author for this site and post"
+                    .to_string(),
             ));
         }
     }

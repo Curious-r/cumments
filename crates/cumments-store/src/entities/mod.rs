@@ -9,6 +9,7 @@ pub mod idempotency_keys;
 pub mod intent_queue_delete_comment;
 pub mod intent_queue_post_comment;
 pub mod intent_queue_update_comment;
+pub mod media_uploads;
 pub mod message_revisions;
 pub mod messages;
 pub mod poll_responses;

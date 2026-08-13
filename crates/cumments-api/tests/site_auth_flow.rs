@@ -12,7 +12,7 @@ use axum::{
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
 use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
-use cumments_core::ports::{IntentStore, RegistryStore, SiteAuthStore};
+use cumments_core::ports::{IntentStore, MessageStore, RegistryStore, SiteAuthStore};
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
 };
@@ -1113,4 +1113,79 @@ async fn comment_replay_returns_original_intent_without_consuming_pow() {
         1,
         "replay must not queue a second intent"
     );
+}
+
+#[tokio::test]
+async fn comment_media_must_reference_an_owned_upload() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let (state, store) =
+        test_state("media-ownership", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[13u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let display_name = "Alice";
+    let media_url = "mxc://hs/cat";
+    let message = post_signature_message(
+        "test-blog",
+        "hello",
+        media_url,
+        display_name,
+        None,
+        &challenge.prefix,
+    );
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "content": "",
+        "media": {
+            "url": media_url,
+            "filename": "cat.png",
+            "mimetype": "image/png",
+        },
+        "display_name": display_name,
+        "author_public_key": public_key,
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+
+    // No upload record yet: rejected.
+    let denied = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[("idempotency-key", "media-key-123456".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_text(denied).await.contains("media must reference"),
+        "unowned media must be rejected"
+    );
+
+    // After recording the upload for this author/site/post: accepted.
+    store
+        .record_media_upload(media_url, &public_key, "test-blog", "hello")
+        .await
+        .expect("record upload");
+    let accepted = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[("idempotency-key", "media-key-123456".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
 }

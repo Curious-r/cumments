@@ -244,6 +244,33 @@ pub trait MessageStore: Send + Sync {
         redacted_by: &str,
     ) -> Result<bool>;
 
+    /// Records a guest upload so comment intents can later prove ownership.
+    async fn record_media_upload(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+        post_slug: &str,
+    ) -> Result<()>;
+
+    /// Whether a media URL was uploaded by this author for this site/post.
+    async fn media_upload_owned_by(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+        post_slug: &str,
+    ) -> Result<bool>;
+
+    /// Marks a media URL as referenced by a comment intent.
+    async fn mark_media_used(&self, mxc_url: &str) -> Result<()>;
+
+    /// MXC URLs uploaded before `cutoff` that are still unreferenced.
+    async fn list_unused_media_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>>;
+
     /// Persists a tombstone for a redacted event whose original has not been
     /// projected yet (or may be re-delivered), so the message cannot
     /// resurrect after a capped/resumed backfill or a push retry.

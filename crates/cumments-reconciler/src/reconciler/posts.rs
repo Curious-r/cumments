@@ -166,6 +166,11 @@ impl Reconciler {
                         }
                     }
                 };
+                // The media is now referenced by a real room event; mark it
+                // used so orphan cleanup does not delete it.
+                if let Some(media) = &intent.media {
+                    let _ = self.message_store.mark_media_used(&media.url).await;
+                }
 
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.intent_store

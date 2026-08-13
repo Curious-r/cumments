@@ -39,7 +39,7 @@ pub struct ChallengeResponse {
 /// Request DTO for posting a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct PostCommentRequest {
-    #[validate(length(min = 1, max = 5000))]
+    #[validate(length(max = 5000))]
     pub content: String,
     /// Optional media attachment; when present the signature covers
     /// `media.url` and `content` is only the fallback filename.

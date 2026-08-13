@@ -1,0 +1,23 @@
+use sea_orm::entity::prelude::*;
+
+#[sea_orm::model]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
+#[sea_orm(table_name = "media_uploads")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: i64,
+    /// MXC URI returned by the upload endpoint.
+    #[sea_orm(unique)]
+    pub mxc_url: String,
+    /// Guest public key that uploaded the media.
+    pub author_public_key: String,
+    /// Site/post the upload was authorized for.
+    pub site_id: String,
+    pub post_slug: String,
+    /// When a comment intent referencing this media was queued/sent; used by
+    /// orphan cleanup.
+    pub used_at: Option<DateTimeUtc>,
+    pub created_at: DateTimeUtc,
+}
+
+impl ActiveModelBehavior for ActiveModel {}

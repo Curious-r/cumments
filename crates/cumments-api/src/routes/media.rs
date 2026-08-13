@@ -290,6 +290,16 @@ pub(crate) async fn upload_media_handler(
         .upload_media(body.to_vec(), &filename, &mimetype, &virtual_user)
         .await
         .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
+    state
+        .store
+        .record_media_upload(
+            &url,
+            &author_public_key,
+            site_id_val.as_str(),
+            post_slug_val.as_str(),
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to record media upload: {e}")))?;
 
     // ALLOWED_UPLOAD_MIMES restricts uploads to image/* and audio/*, so the
     // non-image branch is audio by construction.

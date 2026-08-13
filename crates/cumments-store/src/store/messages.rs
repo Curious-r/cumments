@@ -1,6 +1,6 @@
 use super::DbStore;
 use crate::entities::{
-    backfill_tombstones, message_revisions, messages, poll_responses, reactions,
+    backfill_tombstones, media_uploads, message_revisions, messages, poll_responses, reactions,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -483,6 +483,81 @@ impl MessageStore for DbStore {
             .one(&self.db)
             .await?;
         Ok(found.is_some())
+    }
+
+    async fn record_media_upload(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+        post_slug: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let model = media_uploads::ActiveModel {
+            mxc_url: Set(mxc_url.to_owned()),
+            author_public_key: Set(author_public_key.to_owned()),
+            site_id: Set(site_id.to_owned()),
+            post_slug: Set(post_slug.to_owned()),
+            used_at: Set(None),
+            created_at: Set(now),
+            ..Default::default()
+        };
+        media_uploads::Entity::insert(model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(media_uploads::Column::MxcUrl)
+                    .update_columns([
+                        media_uploads::Column::AuthorPublicKey,
+                        media_uploads::Column::SiteId,
+                        media_uploads::Column::PostSlug,
+                        media_uploads::Column::UsedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn media_upload_owned_by(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+        post_slug: &str,
+    ) -> Result<bool> {
+        let found = media_uploads::Entity::find()
+            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+            .filter(media_uploads::Column::AuthorPublicKey.eq(author_public_key))
+            .filter(media_uploads::Column::SiteId.eq(site_id))
+            .filter(media_uploads::Column::PostSlug.eq(post_slug))
+            .one(&self.db)
+            .await?;
+        Ok(found.is_some())
+    }
+
+    async fn mark_media_used(&self, mxc_url: &str) -> Result<()> {
+        media_uploads::Entity::update_many()
+            .col_expr(
+                media_uploads::Column::UsedAt,
+                sea_orm::sea_query::Expr::value(Some(chrono::Utc::now())),
+            )
+            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+            .filter(media_uploads::Column::UsedAt.is_null())
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_unused_media_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>> {
+        let rows = media_uploads::Entity::find()
+            .filter(media_uploads::Column::UsedAt.is_null())
+            .filter(media_uploads::Column::CreatedAt.lt(cutoff))
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.mxc_url).collect())
     }
 }
 
