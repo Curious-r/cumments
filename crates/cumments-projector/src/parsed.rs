@@ -92,6 +92,18 @@ pub struct ParsedPollVote {
     pub room_identity: Option<RoomIdentity>,
 }
 
+/// A parsed room state event (system message / room metadata).
+#[derive(Debug)]
+pub struct ParsedRoomState {
+    pub room_id: String,
+    pub event_id: String,
+    pub sender: String,
+    pub event_type: String,
+    pub state_key: String,
+    pub origin_server_ts: i64,
+    pub content: serde_json::Value,
+}
+
 /// A parsed redaction event.
 #[derive(Debug)]
 pub struct ParsedRoomRedaction {

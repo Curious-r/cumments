@@ -4,7 +4,7 @@ use super::types::PushEvent;
 use crate::event_processor::EventProcessor;
 use crate::parsed::{
     ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction,
-    ParsedSpaceChild,
+    ParsedRoomState, ParsedSpaceChild,
 };
 use cumments_core::models::{
     Content, EncryptedPlaceholder, LocationContent, MediaContent, MediaKind, PollContent,
@@ -36,6 +36,23 @@ pub(crate) async fn process_single_event(
             if let Some(mut parsed) = parse_push_reaction(event) {
                 parsed.room_identity = processor.resolve_room_identity(&parsed.room_id).await?;
                 processor.process_reaction(parsed).await?;
+            }
+        }
+        "m.room.member"
+        | "m.room.name"
+        | "m.room.topic"
+        | "m.room.avatar"
+        | "m.room.canonical_alias"
+        | "m.room.power_levels"
+        | "m.room.tombstone"
+        | "m.room.join_rules"
+        | "m.room.history_visibility"
+        | "m.room.guest_access"
+        | "m.room.encryption"
+        | "m.room.pinned_events"
+        | "m.room.create" => {
+            if let Some(parsed) = parse_push_state(event) {
+                processor.process_room_state(parsed).await?;
             }
         }
         "m.room.redaction" => {
@@ -465,6 +482,22 @@ fn parse_push_poll_vote(event: &PushEvent) -> Option<ParsedPollVote> {
         answer_ids,
         origin_server_ts: event.origin_server_ts.unwrap_or(0),
         room_identity: None,
+    })
+}
+
+/// Parse a room state event (system message / room metadata).
+fn parse_push_state(event: &PushEvent) -> Option<ParsedRoomState> {
+    let room_id = event.room_id.as_ref()?;
+    let event_id = event.event_id.as_ref()?;
+    let sender = event.sender.as_ref()?;
+    Some(ParsedRoomState {
+        room_id: room_id.clone(),
+        event_id: event_id.clone(),
+        sender: sender.clone(),
+        event_type: event.event_type.clone(),
+        state_key: event.state_key.clone().unwrap_or_default(),
+        origin_server_ts: event.origin_server_ts.unwrap_or(0),
+        content: event.content.clone().unwrap_or(serde_json::Value::Null),
     })
 }
 
@@ -1006,5 +1039,32 @@ mod tests {
         );
         let parsed = parse_push_message(&event).expect("parse thread message");
         assert_eq!(parsed.thread_root.as_deref(), Some("$thread:hs"));
+    }
+
+    #[test]
+    fn member_state_event_parses_profile() {
+        let event = event_with_content(
+            "m.room.member",
+            serde_json::json!({
+                "membership": "join",
+                "displayname": "Alice",
+                "avatar_url": "mxc://hs/a",
+            }),
+        );
+        let parsed = parse_push_state(&event).expect("parse member state");
+        assert_eq!(parsed.event_type, "m.room.member");
+        assert_eq!(parsed.state_key, "");
+        assert_eq!(parsed.content["membership"], "join");
+    }
+
+    #[test]
+    fn room_name_state_event_parses() {
+        let event = event_with_content(
+            "m.room.name",
+            serde_json::json!({ "name": "Comments: my-blog/hello" }),
+        );
+        let parsed = parse_push_state(&event).expect("parse name state");
+        assert_eq!(parsed.event_type, "m.room.name");
+        assert_eq!(parsed.content["name"], "Comments: my-blog/hello");
     }
 }

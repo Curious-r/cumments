@@ -29,6 +29,7 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
         store.clone() as Arc<dyn cumments_core::ports::SiteStore>,
         store.clone() as Arc<dyn cumments_core::ports::RegistryStore>,
         store.clone() as Arc<dyn cumments_core::ports::MessageStore>,
+        store.clone() as Arc<dyn cumments_core::ports::RoomStore>,
         store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
         tx,
         None,

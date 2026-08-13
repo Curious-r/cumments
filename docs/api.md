@@ -403,6 +403,15 @@ limited, restricted to the configured homeserver, size-capped, and filtered
 by content type. The optional `thumbnail=1` query serves a 320×320
 thumbnail.
 
+### Room info
+
+`GET /api/v1/sites/{site_id}/posts/{post_slug}/room`
+
+Returns the comment room's current metadata (`name`, `topic`, `avatar_url`,
+`member_count`) and the most recent system messages (member joins/leaves,
+room name/topic/avatar changes). `avatar_url` is a signed media-proxy URL
+when the proxy is enabled.
+
 ## Error responses
 
 All error responses use the RFC 9457 problem details format with

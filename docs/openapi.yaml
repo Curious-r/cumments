@@ -639,6 +639,54 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/room:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    get:
+      tags: [Public]
+      summary: Comment room metadata and system messages
+      responses:
+        "200":
+          description: Room info
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room_id, member_count, system_messages]
+                properties:
+                  room_id:
+                    type: string
+                  name:
+                    type: string
+                    nullable: true
+                  topic:
+                    type: string
+                    nullable: true
+                  avatar_url:
+                    type: string
+                    nullable: true
+                  member_count:
+                    type: integer
+                  system_messages:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        event_id:
+                          type: string
+                        event_type:
+                          type: string
+                        state_key:
+                          type: string
+                        sender:
+                          type: string
+                        origin_server_ts:
+                          type: integer
+                        content_json:
+                          type: object
+        "404":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:

@@ -7,7 +7,8 @@
 //! functions.
 
 use crate::parsed::{
-    ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction, ParsedSpaceChild,
+    ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction, ParsedRoomState,
+    ParsedSpaceChild,
 };
 use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
@@ -15,9 +16,9 @@ use cumments_core::{
     identity::{post_signature_message, signature_message},
     models::{
         AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PollVote,
-        PostSlug, Reaction, RoomIdentity, RoomStatus, SiteId,
+        PostSlug, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId,
     },
-    ports::{IntentStore, MessageStore, RegistryStore, SiteStore},
+    ports::{IntentStore, MessageStore, RegistryStore, RoomStore, SiteStore},
     projector_events::ProjectorEvent,
 };
 use std::sync::Arc;
@@ -31,6 +32,7 @@ pub struct EventProcessor {
     site_store: Arc<dyn SiteStore>,
     registry_store: Arc<dyn RegistryStore>,
     message_store: Arc<dyn MessageStore>,
+    room_store: Arc<dyn RoomStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     server_name: Option<String>,
@@ -41,6 +43,7 @@ impl EventProcessor {
         site_store: Arc<dyn SiteStore>,
         registry_store: Arc<dyn RegistryStore>,
         message_store: Arc<dyn MessageStore>,
+        room_store: Arc<dyn RoomStore>,
         intent_store: Arc<dyn IntentStore>,
         event_bus: broadcast::Sender<ProjectorEvent>,
         server_name: Option<String>,
@@ -49,6 +52,7 @@ impl EventProcessor {
             site_store,
             registry_store,
             message_store,
+            room_store,
             intent_store,
             event_bus,
             server_name,
@@ -436,6 +440,51 @@ impl EventProcessor {
                 sender_mxid: event.sender,
                 option_index: option_index as i64,
                 origin_server_ts: event.origin_server_ts,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Process a room state event (system message / room metadata).
+    #[instrument(skip(self))]
+    pub async fn process_room_state(&self, event: ParsedRoomState) -> Result<()> {
+        if event.event_type == "m.room.member" {
+            let membership = event
+                .content
+                .get("membership")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            self.room_store
+                .save_member(&RoomMember {
+                    room_id: event.room_id.clone(),
+                    // `m.room.member` state key is the member's user ID.
+                    user_id: event.state_key.clone(),
+                    display_name: event
+                        .content
+                        .get("displayname")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    avatar_url: event
+                        .content
+                        .get("avatar_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    membership,
+                    updated_at: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+                        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+                })
+                .await?;
+        }
+        self.room_store
+            .save_state_event(&RoomStateEvent {
+                event_id: event.event_id,
+                room_id: event.room_id,
+                event_type: event.event_type,
+                state_key: event.state_key,
+                sender: event.sender,
+                origin_server_ts: event.origin_server_ts,
+                content_json: event.content,
             })
             .await?;
         Ok(())

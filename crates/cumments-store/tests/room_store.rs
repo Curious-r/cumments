@@ -1,0 +1,138 @@
+use chrono::Utc;
+use cumments_core::models::{RoomMember, RoomStateEvent};
+use cumments_core::ports::RoomStore;
+use cumments_store::DbStore;
+
+fn test_db_url(name: &str) -> String {
+    let path = std::path::Path::new("/tmp").join(format!(
+        "cumments-room-test-{}-{}.db",
+        name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    format!("sqlite://{}", path.display())
+}
+
+#[tokio::test]
+async fn members_upsert_and_lookup() {
+    let store = DbStore::connect(&test_db_url("members"))
+        .await
+        .expect("connect db");
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@alice:hs".to_string(),
+            display_name: Some("Alice".to_string()),
+            avatar_url: None,
+            membership: "join".to_string(),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save member");
+
+    let member = store
+        .get_member("!room:hs", "@alice:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(member.display_name.as_deref(), Some("Alice"));
+    assert_eq!(member.membership, "join");
+
+    // Upsert updates the profile.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@alice:hs".to_string(),
+            display_name: Some("Alice B".to_string()),
+            avatar_url: Some("mxc://hs/a".to_string()),
+            membership: "leave".to_string(),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("update member");
+    let member = store
+        .get_member("!room:hs", "@alice:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(member.display_name.as_deref(), Some("Alice B"));
+    assert_eq!(member.membership, "leave");
+}
+
+#[tokio::test]
+async fn metadata_uses_latest_state_events_and_counts_joined() {
+    let store = DbStore::connect(&test_db_url("metadata"))
+        .await
+        .expect("connect db");
+
+    for (user, membership) in [
+        ("@alice:hs", "join"),
+        ("@bob:hs", "join"),
+        ("@carol:hs", "leave"),
+    ] {
+        store
+            .save_member(&RoomMember {
+                room_id: "!room:hs".to_string(),
+                user_id: user.to_string(),
+                display_name: None,
+                avatar_url: None,
+                membership: membership.to_string(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .expect("save member");
+    }
+
+    store
+        .save_state_event(&RoomStateEvent {
+            event_id: "$name1:hs".to_string(),
+            room_id: "!room:hs".to_string(),
+            event_type: "m.room.name".to_string(),
+            state_key: String::new(),
+            sender: "@alice:hs".to_string(),
+            origin_server_ts: 100,
+            content_json: serde_json::json!({ "name": "old" }),
+        })
+        .await
+        .expect("save old name");
+    store
+        .save_state_event(&RoomStateEvent {
+            event_id: "$name2:hs".to_string(),
+            room_id: "!room:hs".to_string(),
+            event_type: "m.room.name".to_string(),
+            state_key: String::new(),
+            sender: "@alice:hs".to_string(),
+            origin_server_ts: 200,
+            content_json: serde_json::json!({ "name": "new" }),
+        })
+        .await
+        .expect("save new name");
+    store
+        .save_state_event(&RoomStateEvent {
+            event_id: "$topic:hs".to_string(),
+            room_id: "!room:hs".to_string(),
+            event_type: "m.room.topic".to_string(),
+            state_key: String::new(),
+            sender: "@alice:hs".to_string(),
+            origin_server_ts: 150,
+            content_json: serde_json::json!({ "topic": "hello world" }),
+        })
+        .await
+        .expect("save topic");
+
+    let metadata = store
+        .get_room_metadata("!room:hs")
+        .await
+        .expect("get metadata")
+        .expect("metadata exists");
+    assert_eq!(metadata.name.as_deref(), Some("new"));
+    assert_eq!(metadata.topic.as_deref(), Some("hello world"));
+    assert_eq!(metadata.member_count, 2);
+
+    let messages = store
+        .get_room_system_messages("!room:hs", 10)
+        .await
+        .expect("system messages");
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0].event_id, "$name2:hs");
+}

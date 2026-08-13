@@ -4,7 +4,7 @@ use crate::intents::{
 };
 use crate::models::{
     Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom, Reaction,
-    RoomEventPage, RoomIdentity, RoomStatus, SiteId,
+    RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus, SiteId,
 };
 use crate::site_auth::{NewVerificationToken, Origin, SiteAuthInfo, VerificationToken};
 use anyhow::Result;
@@ -231,6 +231,30 @@ pub trait MessageStore: Send + Sync {
 
     /// Whether a tombstone exists for this event in this room.
     async fn has_backfill_tombstone(&self, event_id: &str, room_id: &str) -> Result<bool>;
+}
+
+/// The port for room-level metadata: member profiles and the system-message
+/// (state event) feed. Independent from the message read model.
+#[async_trait]
+pub trait RoomStore: Send + Sync {
+    /// Upserts a room member profile.
+    async fn save_member(&self, member: &RoomMember) -> Result<()>;
+
+    /// Looks up a member profile by room and user.
+    async fn get_member(&self, room_id: &str, user_id: &str) -> Result<Option<RoomMember>>;
+
+    /// Stores one room state event (idempotent by event ID).
+    async fn save_state_event(&self, event: &RoomStateEvent) -> Result<()>;
+
+    /// Derives the current room metadata from the latest state events.
+    async fn get_room_metadata(&self, room_id: &str) -> Result<Option<RoomMetadata>>;
+
+    /// Returns the most recent state events for a room (system-message feed).
+    async fn get_room_system_messages(
+        &self,
+        room_id: &str,
+        limit: i64,
+    ) -> Result<Vec<RoomStateEvent>>;
 }
 
 /// Port for managing the local room registry cache (Mirror of Space relationships).

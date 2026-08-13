@@ -458,6 +458,41 @@ pub struct MessagePage {
     pub total: i64,
 }
 
+/// A room member profile snapshot (from `m.room.member` state events).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomMember {
+    pub room_id: String,
+    pub user_id: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    /// Matrix membership: `join`, `invite`, `leave`, `ban`.
+    pub membership: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A raw room state event kept for the system-message feed and room metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomStateEvent {
+    pub event_id: String,
+    pub room_id: String,
+    pub event_type: String,
+    pub state_key: String,
+    pub sender: String,
+    pub origin_server_ts: i64,
+    pub content_json: serde_json::Value,
+}
+
+/// Current room metadata derived from the latest state events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomMetadata {
+    pub room_id: String,
+    pub name: Option<String>,
+    pub topic: Option<String>,
+    pub avatar_url: Option<String>,
+    /// Number of members with `join` membership.
+    pub member_count: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

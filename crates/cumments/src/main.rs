@@ -149,6 +149,7 @@ async fn main() -> Result<()> {
         db_store.clone(), // SiteStore
         db_store.clone(), // RegistryStore
         db_store.clone(), // MessageStore
+        db_store.clone(), // RoomStore
         db_store.clone(), // IntentStore
         event_bus.clone(),
         settings

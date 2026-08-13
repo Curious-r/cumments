@@ -9,6 +9,7 @@ use crate::routes::comments::{
 };
 use crate::routes::media::{MediaProxy, media_handler};
 use crate::routes::misc::{get_challenge_handler, health_handler};
+use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
     confirm_verification_handler, issue_secret_handler, register_site_handler,
     start_verification_handler,
@@ -21,7 +22,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use cumments_core::{
-    ports::{IntentStore, MessageStore, RegistryStore, SiteAuthStore, SiteStore},
+    ports::{IntentStore, MessageStore, RegistryStore, RoomStore, SiteAuthStore, SiteStore},
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
 };
@@ -43,11 +44,19 @@ pub mod site_auth;
 
 // Define a new trait that combines the store traits for API use.
 pub trait ApiStore:
-    MessageStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync
+    MessageStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + RoomStore + Send + Sync
 {
 }
-impl<T: MessageStore + IntentStore + SiteStore + SiteAuthStore + RegistryStore + Send + Sync>
-    ApiStore for T
+impl<
+    T: MessageStore
+        + IntentStore
+        + SiteStore
+        + SiteAuthStore
+        + RegistryStore
+        + RoomStore
+        + Send
+        + Sync,
+> ApiStore for T
 {
 }
 
@@ -126,6 +135,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/challenge",
             get(get_challenge_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/room",
+            get(room_info_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/media/{server}/{media_id}",

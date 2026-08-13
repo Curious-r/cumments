@@ -11,6 +11,7 @@ pub mod identity;
 pub mod intents;
 pub mod messages;
 pub mod registry;
+pub mod rooms;
 pub mod site_auth;
 
 /// A database-backed implementation of the storage ports.

@@ -664,6 +664,12 @@
                     download: "下载",
                     open_map: "在地图中打开",
                     votes: "票",
+                    members: "成员",
+                    member_joined: "加入了房间",
+                    member_left: "离开了房间",
+                    room_name_changed: "修改了房间名：",
+                    room_topic_changed: "更新了话题：",
+                    room_avatar_changed: "更换了房间头像",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -799,6 +805,12 @@
                     download: "Download",
                     open_map: "Open in map",
                     votes: "votes",
+                    members: "members",
+                    member_joined: "joined the room",
+                    member_left: "left the room",
+                    room_name_changed: "changed the room name to: ",
+                    room_topic_changed: "updated the topic: ",
+                    room_avatar_changed: "changed the room avatar",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -1759,6 +1771,7 @@
                 };
                 renderComments(items);
                 markPendingSynced(items);
+                loadRoomInfo();
                 updateHeader(mineCount);
                 updatePagination(meta);
             }
@@ -1779,6 +1792,83 @@
                 roots.forEach((comment) => {
                     container.appendChild(renderCommentBranch(comment, byParent, 0));
                 });
+            }
+
+            async function loadRoomInfo() {
+                const cfg = getSettings();
+                try {
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/room`,
+                    );
+                    if (!res.ok) return;
+                    const info = await res.json();
+                    renderRoomInfo(info);
+                } catch {
+                    // Room info is decorative; ignore failures.
+                }
+            }
+
+            function renderRoomInfo(info) {
+                let header = document.getElementById("roomHeader");
+                if (!header) {
+                    header = document.createElement("div");
+                    header.id = "roomHeader";
+                    const container = document.getElementById("commentsContainer");
+                    container.parentNode.insertBefore(header, container);
+                }
+                const cfg = getSettings();
+                const avatar = info.avatar_url
+                    ? `<img src="${escapeHtml(info.avatar_url)}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
+                    : `<div class="w-9 h-9 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">💬</div>`;
+                const name = info.name
+                    ? escapeHtml(info.name)
+                    : escapeHtml(cfg.slug);
+                const system = (info.system_messages || [])
+                    .map(renderSystemMessage)
+                    .filter(Boolean)
+                    .join("");
+                header.innerHTML = `
+                    <div class="flex items-center gap-3 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-4">
+                        ${avatar}
+                        <div class="min-w-0">
+                            <div class="font-semibold text-slate-900 text-sm truncate">${name}</div>
+                            <div class="text-xs text-slate-400">${info.member_count ?? 0} ${t("members")}</div>
+                        </div>
+                    </div>
+                    ${system ? `<div class="space-y-1 mb-4">${system}</div>` : ""}
+                `;
+            }
+
+            function renderSystemMessage(event) {
+                const content = event.content_json || {};
+                const time = formatTime(new Date(event.origin_server_ts).toISOString());
+                let text = "";
+                switch (event.event_type) {
+                    case "m.room.member": {
+                        const user = event.state_key || "";
+                        const name = content.displayname || user;
+                        if (content.membership === "join") {
+                            text = `${name} ${t("member_joined")}`;
+                        } else if (content.membership === "leave") {
+                            text = `${name} ${t("member_left")}`;
+                        } else {
+                            return "";
+                        }
+                        break;
+                    }
+                    case "m.room.name":
+                        text = t("room_name_changed") + (content.name || "");
+                        break;
+                    case "m.room.topic":
+                        text = t("room_topic_changed") + (content.topic || "");
+                        break;
+                    case "m.room.avatar":
+                        text = t("room_avatar_changed");
+                        break;
+                    default:
+                        return "";
+                }
+                return `<div class="text-xs text-slate-400 px-1"><span class="text-slate-500">${escapeHtml(text)}</span> · ${time}</div>`;
             }
 
             const MAX_REPLY_DEPTH = 8;
