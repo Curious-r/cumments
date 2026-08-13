@@ -29,6 +29,18 @@ pub struct PaginationMeta {
     pub total_pages: i64,
 }
 
+/// Request DTO for registering a site.
+///
+/// `site_id` is optional: without it the server generates an unguessable
+/// random id; with it the caller picks the id used in Matrix aliases and the
+/// Space display name. Chosen ids are first-come and must match the `site_id`
+/// format (lowercase `[a-z0-9-]`, 1-64 characters).
+#[derive(Debug, Default, Deserialize)]
+pub struct RegisterSiteRequest {
+    #[serde(default)]
+    pub site_id: Option<String>,
+}
+
 /// The response for the `GET /api/challenge` endpoint.
 #[derive(Serialize)]
 pub struct ChallengeResponse {

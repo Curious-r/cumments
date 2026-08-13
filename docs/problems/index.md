@@ -145,6 +145,18 @@ replay the exact original request.
 The site is not verified and the global policy requires verification before
 accepting writes. Complete the verification flow for the site first.
 
+## Site not registered {#site-not-registered}
+
+- `type`: `https://curious-r.github.io/cumments/problems/#site-not-registered`
+- `code`: `site-not-registered`
+- `status`: `404`
+
+The `site_id` does not exist in the registry: it is neither registered
+through the site API/CLI nor declared in the `[sites]` configuration.
+Register it first with `POST /api/v1/sites` (or `cumments sites register`);
+unregistered sites can never create a Matrix Space, regardless of the
+verification policy.
+
 ## Site origin denied {#site-origin-denied}
 
 - `type`: `https://curious-r.github.io/cumments/problems/#site-origin-denied`

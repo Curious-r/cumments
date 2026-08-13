@@ -9,10 +9,25 @@ issuance. The trust model behind these operations is covered in
 
 `POST /api/v1/sites`
 
-Returns a random, unguessable `site_id` and a one-time `claim_token`:
+Registration is the mandatory first step for every site: a `site_id` that is
+neither registered here nor declared in the `[sites]` configuration can never
+accept writes. The request body is optional:
 
 ```json
-{ "site_id": "3f9c...", "claim_token": "..." }
+{ "site_id": "my-blog" }
+```
+
+With a body, the caller picks the id (lowercase `[a-z0-9-]`, 1-64
+characters); ids are first-come, and a conflict returns `409`. Without a
+body, the server generates an unguessable random id (32 hex characters). The
+chosen id is what shows up in Matrix: the Space alias
+`#_cumments_my-blog:server`, each room alias
+`#_cumments_my-blog_<post>:server` and the Space display name.
+
+The response carries the `site_id` and a one-time `claim_token`:
+
+```json
+{ "site_id": "my-blog", "claim_token": "..." }
 ```
 
 The claim token proves ownership of the site and must be sent in the

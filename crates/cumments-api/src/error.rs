@@ -36,13 +36,14 @@ pub enum ProblemType {
     InvalidIdempotencyKey,
     IdempotencyReused,
     SiteVerificationRequired,
+    SiteNotRegistered,
     SiteOriginDenied,
     SiteSignatureInvalid,
     Internal,
 }
 
 impl ProblemType {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::InvalidPoW,
         Self::InvalidSignature,
         Self::Validation,
@@ -57,6 +58,7 @@ impl ProblemType {
         Self::InvalidIdempotencyKey,
         Self::IdempotencyReused,
         Self::SiteVerificationRequired,
+        Self::SiteNotRegistered,
         Self::SiteOriginDenied,
         Self::SiteSignatureInvalid,
         Self::Internal,
@@ -79,6 +81,7 @@ impl ProblemType {
             Self::InvalidIdempotencyKey => "invalid-idempotency-key",
             Self::IdempotencyReused => "idempotency-key-reused",
             Self::SiteVerificationRequired => "site-verification-required",
+            Self::SiteNotRegistered => "site-not-registered",
             Self::SiteOriginDenied => "site-origin-denied",
             Self::SiteSignatureInvalid => "site-signature-invalid",
             Self::Internal => "internal-error",
@@ -107,6 +110,7 @@ impl ProblemType {
             Self::InvalidIdempotencyKey => "Invalid Idempotency-Key",
             Self::IdempotencyReused => "Idempotency-Key reused",
             Self::SiteVerificationRequired => "Site verification required",
+            Self::SiteNotRegistered => "Site not registered",
             Self::SiteOriginDenied => "Site origin denied",
             Self::SiteSignatureInvalid => "Site signature invalid",
             Self::Internal => "Internal server error",
@@ -150,6 +154,7 @@ pub enum AppError {
     InvalidIdempotencyKey(String),
     IdempotencyReused,
     SiteVerificationRequired(String),
+    SiteNotRegistered(String),
     SiteOriginDenied(String),
     SiteSignatureInvalid(String),
     Internal(String),
@@ -228,6 +233,12 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 msg,
                 ProblemType::SiteVerificationRequired,
+                None,
+            ),
+            AppError::SiteNotRegistered(msg) => (
+                StatusCode::NOT_FOUND,
+                msg,
+                ProblemType::SiteNotRegistered,
                 None,
             ),
             AppError::SiteOriginDenied(msg) => (

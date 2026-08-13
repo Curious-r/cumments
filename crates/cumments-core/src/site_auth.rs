@@ -623,12 +623,23 @@ pub fn well_known_proofs_match(proofs: &[SiteProof], site_id: &str, token: &str)
 /// Registers a new site and returns its random id and one-time claim token.
 pub async fn register_site(store: &dyn SiteAuthStore) -> Result<RegisteredSite, SiteServiceError> {
     let site_id = generate_site_id();
+    register_site_with_id(store, site_id.as_str()).await
+}
+
+/// Registers a site under a caller-chosen id and returns its one-time claim
+/// token. The id is first-come: a conflicting registration fails with
+/// `SiteAlreadyExists`. Callers must validate the id shape first
+/// (`SiteId::new`).
+pub async fn register_site_with_id(
+    store: &dyn SiteAuthStore,
+    site_id: &str,
+) -> Result<RegisteredSite, SiteServiceError> {
     let claim_token = generate_token();
     store
-        .register_site(&site_id, &token_hash(&claim_token))
+        .register_site(site_id, &token_hash(&claim_token))
         .await?;
     Ok(RegisteredSite {
-        site_id,
+        site_id: site_id.to_string(),
         claim_token,
     })
 }

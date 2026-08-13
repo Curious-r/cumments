@@ -176,7 +176,11 @@ async fn body_text(response: axum::response::Response) -> String {
 #[tokio::test]
 async fn write_enforcement_follows_policy_and_origin() {
     // disabled: any origin passes, response echoes it
-    let (state, _) = test_state("disabled", SiteVerificationPolicy::Disabled, None).await;
+    let (state, store) = test_state("disabled", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = middleware_router(state);
     let response = router
         .clone()
@@ -210,7 +214,11 @@ async fn write_enforcement_follows_policy_and_origin() {
     assert_eq!(response_origin(&null_origin).as_deref(), Some("*"));
 
     // optional: unverified sites keep working
-    let (state, _) = test_state("optional", SiteVerificationPolicy::Optional, None).await;
+    let (state, store) = test_state("optional", SiteVerificationPolicy::Optional, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = middleware_router(state);
     let response = router
         .clone()
@@ -243,7 +251,11 @@ async fn write_enforcement_follows_policy_and_origin() {
     );
 
     // required: unknown sites are rejected with verification guidance
-    let (state, _) = test_state("required", SiteVerificationPolicy::Required, None).await;
+    let (state, store) = test_state("required", SiteVerificationPolicy::Required, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = middleware_router(state);
     let response = router
         .clone()
@@ -265,7 +277,12 @@ async fn write_enforcement_follows_policy_and_origin() {
 
 #[tokio::test]
 async fn disabled_write_errors_include_wildcard_cors() {
-    let (state, _) = test_state("disabled-errors", SiteVerificationPolicy::Disabled, None).await;
+    let (state, store) =
+        test_state("disabled-errors", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = middleware_router(state);
 
     // Early validation failures must still be readable by the browser.
@@ -304,7 +321,11 @@ async fn disabled_write_errors_include_wildcard_cors() {
 
 #[tokio::test]
 async fn comment_body_endpoints_require_comment_id() {
-    let (state, _) = test_state("comment-body", SiteVerificationPolicy::Disabled, None).await;
+    let (state, store) = test_state("comment-body", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = cumments_api::build_router(state);
 
     let delete = router
@@ -1021,6 +1042,10 @@ async fn location_posts_are_queued_and_idempotent() {
     let site = SiteId::from("test-blog");
     let slug = PostSlug::from("hello");
     store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
+    store
         .register_room("!room:hs", &site, &slug)
         .await
         .expect("register room");
@@ -1109,6 +1134,10 @@ async fn comment_replay_returns_original_intent_without_consuming_pow() {
     use ed25519_dalek::{Signer, SigningKey};
 
     let (state, store) = test_state("comment-replay", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = cumments_api::build_router(state.clone());
 
     let signing_key = SigningKey::from_bytes(&[9u8; 32]);
@@ -1180,6 +1209,10 @@ async fn comment_media_must_reference_an_owned_upload() {
 
     let (state, store) =
         test_state("media-ownership", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"))
+        .await
+        .expect("register site");
     let router = cumments_api::build_router(state.clone());
 
     let signing_key = SigningKey::from_bytes(&[13u8; 32]);
@@ -1418,4 +1451,120 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         serde_json::from_str(&body_text(listed).await).expect("parse response");
     assert_eq!(listed_json["owners"], serde_json::json!(["@owner:hs"]));
     assert_eq!(listed_json["co_managers"], serde_json::json!(["@co:hs"]));
+}
+
+#[tokio::test]
+async fn registration_supports_chosen_ids() {
+    let (state, store) = test_state("register-id", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state);
+
+    // A chosen id round-trips and the claim token is returned once.
+    let named = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites",
+            None,
+            &[],
+            r#"{"site_id":"my-blog"}"#,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(named.status(), StatusCode::CREATED);
+    let named_json: serde_json::Value =
+        serde_json::from_str(&body_text(named).await).expect("parse response");
+    assert_eq!(named_json["site_id"], "my-blog");
+    assert!(
+        named_json["claim_token"].as_str().unwrap_or_default().len() >= 32,
+        "claim token must be returned"
+    );
+
+    // Chosen ids are first-come: a duplicate conflicts.
+    let duplicate = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites",
+            None,
+            &[],
+            r#"{"site_id":"my-blog"}"#,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    // Invalid ids fail validation before touching the registry.
+    let invalid = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites",
+            None,
+            &[],
+            r#"{"site_id":"Bad_ID"}"#,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    // An omitted id still gets a random 32-character id.
+    let random = router
+        .clone()
+        .oneshot(request(Method::POST, "/api/v1/sites", None, &[]))
+        .await
+        .expect("call router");
+    assert_eq!(random.status(), StatusCode::CREATED);
+    let random_json: serde_json::Value =
+        serde_json::from_str(&body_text(random).await).expect("parse response");
+    assert_eq!(
+        random_json["site_id"].as_str().unwrap_or_default().len(),
+        32
+    );
+}
+
+#[tokio::test]
+async fn unregistered_sites_cannot_write() {
+    let (state, store) = test_state("register-gate", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state);
+
+    // Registered sites pass the middleware and reach the handler.
+    store
+        .register_site("reg-site", &token_hash("claim"))
+        .await
+        .expect("register site");
+    let allowed = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/reg-site/posts/p1/comments",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(allowed.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_text(allowed)
+            .await
+            .contains("idempotency-key-required"),
+        "registered site must pass the middleware to the handler"
+    );
+
+    // Unknown ids are rejected even in the "disabled" policy, so no Matrix
+    // Space is ever auto-created for them.
+    let unknown = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/ghost-site/posts/p1/comments",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert!(
+        body_text(unknown).await.contains("site-not-registered"),
+        "unknown sites must be rejected with the stable problem code"
+    );
 }

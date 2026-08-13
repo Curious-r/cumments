@@ -119,9 +119,13 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
 
 `security.site_verification` controls the instance-wide policy:
 
+Regardless of the policy, the `site_id` must be registered through the
+API/CLI or declared in `[sites]` before it can be written to; unknown ids
+return `404 code=site-not-registered`.
+
 | Value | Unverified sites | Verified / configured sites |
 |---|---|---|
-| `disabled` | writes allowed, no checks (local development) | no checks |
+| `disabled` | writes allowed, no trust checks (local development) | no checks |
 | `optional` (default) | writes allowed, WARN log (migration) | enforced |
 | `required` | writes rejected | enforced |
 
@@ -132,10 +136,12 @@ Per-site trust comes from two sources whose union is the effective rule set:
   origins and `https://*.example.com` subdomain wildcards; `auth_mode =
   "secret"` requires a `secret` (HMAC key, at least 32 chars) that is best
   injected through `CUMMENTS__SITES__<site_id>__SECRET`.
-- **Self-service registration** through `POST /api/v1/sites`: returns a
-  random `site_id` and a one-time claim token. The owner proves domain
-  control via `/.well-known/cumments.json` or a DNS TXT record, then switches
-  to secret auth via the secret endpoint. See [API](api/index.md).
+- **Self-service registration** through `POST /api/v1/sites`: takes an
+  optional, first-come `site_id` (a random id is generated when omitted) and
+  returns a one-time claim token. The owner proves domain control via
+  `/.well-known/cumments.json` or a DNS TXT record, then switches to secret
+  auth via the secret endpoint. The CLI equivalent is
+  `cumments sites register [--site-id ID]`. See [API](api/index.md).
 
 Origin-mode requests are accepted only when the browser `Origin` matches the
 effective allowlist; `Origin: null` and missing `Origin` are rejected. The

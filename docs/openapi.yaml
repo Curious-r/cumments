@@ -84,6 +84,8 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
         "429":
@@ -116,6 +118,8 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
@@ -150,6 +154,8 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
@@ -258,6 +264,12 @@ paths:
       tags: [Sites]
       summary: Register a site
       operationId: registerSite
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterSiteRequest"
       responses:
         "201":
           description: Site registered
@@ -265,6 +277,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RegisterSiteResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/verifications:
@@ -679,6 +695,8 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
@@ -1569,6 +1587,15 @@ components:
           type: string
         challenge_response:
           type: string
+    RegisterSiteRequest:
+      type: object
+      properties:
+        site_id:
+          type: string
+          pattern: "^[a-z0-9-]{1,64}$"
+          description: |
+            Optional first-come site id used in Matrix aliases and the Space
+            display name. Omitted (or an empty body) generates a random id.
     RegisterSiteResponse:
       type: object
       required: [site_id, claim_token]

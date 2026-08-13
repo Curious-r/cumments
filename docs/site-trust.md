@@ -41,9 +41,14 @@ auth mode.
 
 ### Instance-wide policy: `security.site_verification`
 
+All three values share one prerequisite: the `site_id` must exist in the
+registry (registered through the API/CLI or declared in `[sites]`). An
+unknown id is rejected with `404 code=site-not-registered` before any trust
+decision, so an unregistered site can never provision a Matrix Space.
+
 | Value | Unverified sites | Verified or operator-configured sites |
 |---|---|---|
-| `disabled` | Writes allowed, no checks (local development) | No checks either |
+| `disabled` | Writes allowed, no trust checks (local development) | No checks either |
 | `optional` | Writes allowed, with a WARN log (migration default) | Enforced |
 | `required` | Writes rejected with verification guidance | Enforced |
 
@@ -71,14 +76,14 @@ The effective trust rule set for a site is the **union** of two sources:
 
 Configuration is never written back to by the API or the admin tooling.
 
-Self-chosen `site_id`s are a first-come namespace, so API-registered sites
-get a **server-generated random `site_id`** and a one-time **claim token**.
-Only the claim-token holder may start verification for that site, which
-prevents a squatter from claiming a victim's id and verifying it with a
-domain they control. Operator-configured sites skip the claim step. In
-`required` mode, legacy auto-creation of sites is disabled entirely: a site
-must be operator-configured or registered through the API before it can be
-written to.
+The public registration endpoint accepts an **optional, first-come
+`site_id`**; without one the server generates an unguessable random id. Every
+registration returns a one-time **claim token**, and only its holder may
+start verification for that site — which prevents a squatter from claiming a
+victim's id and verifying it with a domain they control. Operator-configured
+sites skip the claim step. Registration is mandatory in every policy: a site
+must be operator-configured or registered through the API/CLI before it can
+be written to, and legacy auto-creation of sites on first comment is gone.
 
 See [Site verification and strict mode](site-verification.md) for the full
 registration, verification and key-issuance walkthrough.
@@ -147,8 +152,8 @@ signing and forwards the request, so the frontend talks to its own origin.
 
 | Policy | `origin` mode | `secret` mode |
 |---|---|---|
-| `disabled` | Any write accepted, `Access-Control-Allow-Origin: *` | Any write accepted (no HMAC check) |
-| `optional` | Unverified sites: accepted with WARN; verified/config sites: origin must match | HMAC required whenever the site has a secret; sites without one follow the origin/unverified fallback |
+| `disabled` | Any *registered* site: origin accepted, `Access-Control-Allow-Origin: *` | Any *registered* site accepted (no HMAC check) |
+| `optional` | Registered unverified sites: accepted with WARN; verified/config sites: origin must match | HMAC required whenever the site has a secret; sites without one follow the origin/unverified fallback |
 | `required` | Origin must match a verified/config origin | HMAC required for any site configured with a secret; sites without a secret are rejected |
 
 Read methods (`GET`, `QUERY`, SSE) are unaffected by this matrix and remain

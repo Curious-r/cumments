@@ -179,6 +179,13 @@ semantics undefined, and some proxies/CDNs strip or reject body-bearing
 DELETEs. DELETE targets therefore travel as query parameters
 (`comment_id`, `user_id`), never in the body.
 
+**Registration before writes.** A `site_id` must be registered through the
+site API/CLI or declared in `[sites]` before it can receive comments, in
+every verification policy. This keeps an unknown id from provisioning a
+Matrix Space on its first comment — the old lazy auto-creation amplified an
+open registration endpoint into unbounded homeserver resource use. See
+[Site trust](../site-trust.md).
+
 **403 for authentication failures.** Missing or invalid claim tokens, origin
 mismatches, and unauthorized writes return `403` with a stable problem
 `code`, not `401`. Site authentication is origin/HMAC based rather than HTTP

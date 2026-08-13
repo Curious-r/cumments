@@ -101,9 +101,12 @@ The response contains the `user_id` (e.g. `@alice:localhost:8008`). Register
 the site through the Cumments API and bind that account as its owner:
 
 ```bash
-# Save the one-time claim token from the registration response.
-curl -sS -X POST http://localhost:7931/api/v1/sites > site.json
-SITE_ID=$(jq -r .site_id site.json)
+# Registration is mandatory before the site can receive comments. Pick an id
+# (it becomes the Space/room aliases), or omit the body for a random id.
+curl -sS -X POST http://localhost:7931/api/v1/sites \
+  -H "Content-Type: application/json" \
+  -d '{"site_id":"my-blog"}' > site.json
+SITE_ID=my-blog
 CLAIM=$(jq -r .claim_token site.json)
 
 curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/owners" \

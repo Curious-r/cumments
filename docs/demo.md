@@ -16,6 +16,9 @@ The demo posts directly to the API, so it works with `origin`-mode sites
 (including unverified sites under the `optional` policy). In strict
 (`secret`) mode the frontend must call its own backend instead — see
 [site-verification.md](site-verification.md) for the edge-function pattern.
+The target site must be registered first (every policy rejects unknown
+`site_id`s): run `cumments sites register --site-id <id>` or
+`POST /api/v1/sites`, then enter the same id in the demo settings.
 
 ## Running the demo
 

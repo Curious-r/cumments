@@ -242,16 +242,27 @@ pub async fn authorize_site_write(
     let allow_null = policy.verification == SiteVerificationPolicy::Disabled;
     let origin = request_origin(headers, allow_null)?;
 
-    if policy.verification == SiteVerificationPolicy::Disabled {
-        return Ok(origin);
-    }
-
     let config_entry = policy.entry(site_id);
     let db_auth = state
         .store
         .get_site_auth(site_id)
         .await
         .map_err(|e| AppError::Internal(format!("failed to load site auth: {e}")))?;
+
+    // A site must exist before it can be written to, in every verification
+    // policy. This is what keeps an unknown `site_id` from provisioning a
+    // Matrix Space on its first comment: only registered (API/CLI) or
+    // operator-declared (`[sites]`) sites reach the intent queue.
+    if config_entry.is_none() && db_auth.is_none() {
+        return Err(AppError::SiteNotRegistered(format!(
+            "site `{site_id}` is not registered; create it with POST /api/v1/sites \
+             or `cumments sites register`"
+        )));
+    }
+
+    if policy.verification == SiteVerificationPolicy::Disabled {
+        return Ok(origin);
+    }
 
     let auth_mode = config_entry
         .and_then(|entry| entry.auth_mode)

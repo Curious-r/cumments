@@ -3,6 +3,7 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
+use crate::request::RegisterSiteRequest;
 use axum::{
     Json,
     extract::{ConnectInfo, Path, State},
@@ -14,8 +15,8 @@ use cumments_core::models::SiteId;
 use cumments_core::site_auth::{
     CLAIM_TOKEN_HEADER, Origin, SiteServiceError, SiteVerificationStatus, VerificationChallenge,
     VerificationMethod, VerificationToken, dns_proofs_match, is_private_ip_addr, issue_site_secret,
-    parse_well_known_proofs, register_site, start_site_verification, token_hash,
-    well_known_proofs_match,
+    parse_well_known_proofs, register_site, register_site_with_id, start_site_verification,
+    token_hash, well_known_proofs_match,
 };
 use hickory_resolver::proto::rr::RData;
 use serde::{Deserialize, Serialize};
@@ -166,6 +167,7 @@ pub(crate) async fn register_site_handler(
     State(state): State<ApiState>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    body: String,
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
     if !state.registration_limiter.allow(&key) {
@@ -174,9 +176,23 @@ pub(crate) async fn register_site_handler(
             retry_after_seconds: state.registration_limiter.window().as_secs(),
         });
     }
-    let registered = register_site(&*state.store)
-        .await
-        .map_err(map_site_service_error)?;
+    let request = if body.is_empty() {
+        RegisterSiteRequest::default()
+    } else {
+        serde_json::from_str(&body)
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?
+    };
+    let registered = match request.site_id {
+        Some(site_id) => {
+            let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+            register_site_with_id(&*state.store, site_id.as_str())
+                .await
+                .map_err(map_site_service_error)?
+        }
+        None => register_site(&*state.store)
+            .await
+            .map_err(map_site_service_error)?,
+    };
     Ok((
         StatusCode::CREATED,
         Json(RegisterSiteResponse {

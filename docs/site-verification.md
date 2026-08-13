@@ -15,26 +15,34 @@ Both still require the visitor PoW + Ed25519 signature for comment authorship.
 
 ## 1. Register the site
 
+Registration is mandatory before the site can receive any comment: the
+write path rejects unknown `site_id`s. You may either pick the id (first-come)
+or let the server generate a random one.
+
 ```bash
-curl -sS -X POST http://localhost:7931/api/v1/sites
+curl -sS -X POST http://localhost:7931/api/v1/sites \
+  -H "Content-Type: application/json" \
+  -d '{"site_id":"my-blog"}'
 ```
 
-The response contains a random `site_id` and a one-time `claim_token`:
+The response contains the `site_id` and a one-time `claim_token`:
 
 ```json
 {
-  "site_id": "3f9c...",
+  "site_id": "my-blog",
   "claim_token": "..."
 }
 ```
 
 Keep the claim token private: it proves ownership of this site. It is sent in
 the `X-Cumments-Claim-Token` header for verification and secret issuance.
+The chosen id is what appears in Matrix aliases
+(`#_cumments_my-blog:server`) and the Space display name.
 
 You can also register from a terminal with the CLI:
 
 ```bash
-cumments sites register
+cumments sites register --site-id my-blog
 ```
 
 ## 2. Start verification
