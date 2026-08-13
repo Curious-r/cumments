@@ -17,7 +17,7 @@ theme:
     - navigation.top
 
 extra:
-  # Injected by docs-deploy.yml (the release version on tags, `main` for a
+  # Injected by docs.yml (the release version on tags, `main` for a
   # manual one-off publish). Empty for local builds and the build-only main
   # check, which keeps the announcement bar hidden there.
   version: !ENV [CUMMENTS_DOCS_VERSION, '']
