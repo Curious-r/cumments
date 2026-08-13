@@ -269,24 +269,37 @@ impl EventProcessor {
                 &event.display_name,
             ) {
                 (Some(pk), Some(sig), Some(chal), Some(nick)) => {
-                    event.signable_content().is_some_and(|content| {
-                        let message = post_signature_message(
+                    let message = match &event.content {
+                        // Locations use the standalone LOCATE signature;
+                        // text/media use the POST signature (which binds the
+                        // display name and reply relation).
+                        Content::Location(location) => signature_message(&[
+                            "LOCATE",
                             &site_id,
                             &post_slug,
-                            content,
-                            nick,
-                            event.reply_to.as_deref(),
+                            &location.geo_uri,
                             chal,
-                        );
-                        verify_guest_event(
-                            self.server_name.as_deref(),
-                            &event.sender,
-                            &site_id,
-                            pk,
-                            sig,
-                            &message,
-                        )
-                    })
+                        ]),
+                        _ => match event.signable_content() {
+                            Some(content) => post_signature_message(
+                                &site_id,
+                                &post_slug,
+                                content,
+                                nick,
+                                event.reply_to.as_deref(),
+                                chal,
+                            ),
+                            None => return Ok(()),
+                        },
+                    };
+                    verify_guest_event(
+                        self.server_name.as_deref(),
+                        &event.sender,
+                        &site_id,
+                        pk,
+                        sig,
+                        &message,
+                    )
                 }
                 _ => false,
             };

@@ -1,5 +1,7 @@
+use cumments_core::identity::{derive_guest_id_from_public_key, signature_message};
 use cumments_core::models::{
-    Content, PollContent, PollOption, PostSlug, RoomIdentity, SiteId, TextContent, TextStyle,
+    Content, LocationContent, PollContent, PollOption, PostSlug, RoomIdentity, SiteId, TextContent,
+    TextStyle,
 };
 use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_projector::event_processor::EventProcessor;
@@ -28,6 +30,10 @@ fn identity() -> RoomIdentity {
 }
 
 async fn processor(store: Arc<DbStore>) -> EventProcessor {
+    processor_named(store, None).await
+}
+
+async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
     EventProcessor::new(
         store.clone() as Arc<dyn cumments_core::ports::SiteStore>,
@@ -36,7 +42,7 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
         store.clone() as Arc<dyn cumments_core::ports::RoomStore>,
         store.clone() as Arc<dyn cumments_core::ports::IntentStore>,
         tx,
-        None,
+        server_name.map(|s| s.to_string()),
     )
 }
 
@@ -63,6 +69,90 @@ fn message(event_id: &str) -> ParsedRoomMessage {
         room_identity: Some(identity()),
         raw_content: serde_json::Value::Null,
     }
+}
+
+#[tokio::test]
+async fn guest_location_verifies_with_locate_signature() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("guest-location"))
+            .await
+            .expect("connect db"),
+    );
+    let site = SiteId::from("my-blog");
+    let slug = PostSlug::from("hello");
+    store
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+    let processor = processor_named(store.clone(), Some("example.com")).await;
+
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
+    let sender = format!("@_cumments_my-blog_{}:example.com", guest_id);
+    let challenge = "challenge";
+    let geo_uri = "geo:31.2,121.5";
+    let signed_message = signature_message(&["LOCATE", "my-blog", "hello", geo_uri, challenge]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
+
+    let mut location = message("$loc:hs");
+    location.content = Content::Location(LocationContent {
+        geo_uri: geo_uri.to_string(),
+        description: Some("here".to_string()),
+        thumbnail_url: None,
+    });
+    location.sender = sender.clone();
+    location.display_name = Some(String::new());
+    location.author_public_key = Some(public_key);
+    location.author_signature = Some(signature);
+    location.author_challenge = Some(challenge.to_string());
+    location.is_virtual_user_sender = true;
+    processor
+        .process_room_message(location)
+        .await
+        .expect("process location");
+
+    assert!(
+        store
+            .get_message("$loc:hs")
+            .await
+            .expect("query location")
+            .is_some(),
+        "guest location with a valid LOCATE signature must project"
+    );
+
+    // A POST-format signature (what text/media use) must be rejected for
+    // locations; this locks the LOCATE-specific verification path.
+    let mut wrong = message("$loc-bad:hs");
+    wrong.content = Content::Location(LocationContent {
+        geo_uri: geo_uri.to_string(),
+        description: None,
+        thumbnail_url: None,
+    });
+    wrong.sender = sender.clone();
+    wrong.display_name = Some(String::new());
+    wrong.author_public_key = Some(URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()));
+    let wrong_message =
+        signature_message(&["POST", "my-blog", "hello", geo_uri, "", "", challenge]);
+    wrong.author_signature =
+        Some(URL_SAFE_NO_PAD.encode(signing_key.sign(wrong_message.as_bytes()).to_bytes()));
+    wrong.author_challenge = Some(challenge.to_string());
+    wrong.is_virtual_user_sender = true;
+    processor
+        .process_room_message(wrong)
+        .await
+        .expect("process wrong location");
+    assert!(
+        store
+            .get_message("$loc-bad:hs")
+            .await
+            .expect("query wrong location")
+            .is_none(),
+        "guest location signed with the POST format must be rejected"
+    );
 }
 
 #[tokio::test]
