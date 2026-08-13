@@ -343,69 +343,96 @@ impl MessageStore for DbStore {
 
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()> {
         let txn = self.db.begin().await?;
-        let existing = poll_responses::Entity::find()
+        let mut existing = poll_responses::Entity::find()
             .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
             .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
             .one(&txn)
             .await?;
         let now = chrono::Utc::now();
 
-        if let Some(existing) = existing {
-            // Re-delivering the same vote event (push retry / backfill) must
-            // not resurrect a redacted vote; any other event supersedes it
-            // and clears the redaction state.
-            if existing.event_id.as_deref() == Some(vote.event_id.as_str())
-                && existing.redacted_at.is_some()
-            {
-                txn.commit().await?;
-                return Ok(());
-            }
-            poll_responses::Entity::update_many()
-                .col_expr(
-                    poll_responses::Column::EventId,
-                    sea_orm::sea_query::Expr::value(Some(vote.event_id.clone())),
+        if existing.is_none() {
+            // Insert if no row exists yet; on a concurrent race the unique
+            // `(poll_message_id, sender_mxid)` index makes the loser a no-op
+            // and the re-read below picks up the winner's row.
+            let active_model = poll_responses::ActiveModel {
+                event_id: Set(Some(vote.event_id.clone())),
+                poll_message_id: Set(vote.poll_message_id.clone()),
+                sender_mxid: Set(vote.sender_mxid.clone()),
+                option_index: Set(vote.option_index),
+                origin_server_ts: Set(vote.origin_server_ts),
+                redacted_at: Set(None),
+                redacted_by: Set(None),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            };
+            poll_responses::Entity::insert(active_model)
+                .on_conflict(
+                    sea_orm::sea_query::OnConflict::columns([
+                        poll_responses::Column::PollMessageId,
+                        poll_responses::Column::SenderMxid,
+                    ])
+                    .do_nothing()
+                    .to_owned(),
                 )
-                .col_expr(
-                    poll_responses::Column::OptionIndex,
-                    sea_orm::sea_query::Expr::value(vote.option_index),
-                )
-                .col_expr(
-                    poll_responses::Column::OriginServerTs,
-                    sea_orm::sea_query::Expr::value(vote.origin_server_ts),
-                )
-                .col_expr(
-                    poll_responses::Column::RedactedAt,
-                    sea_orm::sea_query::Expr::value(None::<chrono::DateTime<chrono::Utc>>),
-                )
-                .col_expr(
-                    poll_responses::Column::RedactedBy,
-                    sea_orm::sea_query::Expr::value(None::<String>),
-                )
-                .col_expr(
-                    poll_responses::Column::UpdatedAt,
-                    sea_orm::sea_query::Expr::value(now),
-                )
-                .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
-                .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
                 .exec(&txn)
                 .await?;
+            existing = poll_responses::Entity::find()
+                .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
+                .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
+                .one(&txn)
+                .await?;
+        }
+
+        let Some(existing) = existing else {
+            txn.commit().await?;
+            return Ok(());
+        };
+
+        // Re-delivering the same vote event (push retry / backfill) must not
+        // resurrect a redacted vote.
+        if existing.event_id.as_deref() == Some(vote.event_id.as_str())
+            && existing.redacted_at.is_some()
+        {
+            txn.commit().await?;
+            return Ok(());
+        }
+        // Stale re-deliveries must not overwrite a newer vote ("the latest
+        // vote wins").
+        if vote.origin_server_ts < existing.origin_server_ts {
             txn.commit().await?;
             return Ok(());
         }
 
-        let active_model = poll_responses::ActiveModel {
-            event_id: Set(Some(vote.event_id.clone())),
-            poll_message_id: Set(vote.poll_message_id.clone()),
-            sender_mxid: Set(vote.sender_mxid.clone()),
-            option_index: Set(vote.option_index),
-            origin_server_ts: Set(vote.origin_server_ts),
-            redacted_at: Set(None),
-            redacted_by: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-            ..Default::default()
-        };
-        poll_responses::Entity::insert(active_model)
+        // Any other (newer or equal-timestamp) event supersedes the stored
+        // vote and clears its redaction state.
+        poll_responses::Entity::update_many()
+            .col_expr(
+                poll_responses::Column::EventId,
+                sea_orm::sea_query::Expr::value(Some(vote.event_id.clone())),
+            )
+            .col_expr(
+                poll_responses::Column::OptionIndex,
+                sea_orm::sea_query::Expr::value(vote.option_index),
+            )
+            .col_expr(
+                poll_responses::Column::OriginServerTs,
+                sea_orm::sea_query::Expr::value(vote.origin_server_ts),
+            )
+            .col_expr(
+                poll_responses::Column::RedactedAt,
+                sea_orm::sea_query::Expr::value(None::<chrono::DateTime<chrono::Utc>>),
+            )
+            .col_expr(
+                poll_responses::Column::RedactedBy,
+                sea_orm::sea_query::Expr::value(None::<String>),
+            )
+            .col_expr(
+                poll_responses::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
+            .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
             .exec(&txn)
             .await?;
         txn.commit().await?;

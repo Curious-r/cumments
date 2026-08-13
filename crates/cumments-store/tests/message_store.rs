@@ -396,6 +396,69 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
 }
 
 #[tokio::test]
+async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
+    let store = DbStore::connect(&test_db_url("message-poll-stale"))
+        .await
+        .expect("connect db");
+    let mut message = guest_message("$poll:hs", "poll placeholder");
+    message.content = Content::Poll(PollContent {
+        question: "best? ".to_string(),
+        options: vec![
+            PollOption {
+                id: "a".to_string(),
+                text: "A".to_string(),
+            },
+            PollOption {
+                id: "b".to_string(),
+                text: "B".to_string(),
+            },
+        ],
+        responses: Vec::new(),
+    });
+    store
+        .save_message(&message)
+        .await
+        .expect("save poll message");
+
+    store
+        .save_poll_vote(&PollVote {
+            event_id: "$vote-1:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            option_index: 1,
+            origin_server_ts: 3,
+        })
+        .await
+        .expect("newer vote");
+
+    // A stale re-delivery of an older vote must not clobber the newer one.
+    store
+        .save_poll_vote(&PollVote {
+            event_id: "$vote-0:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            option_index: 0,
+            origin_server_ts: 1,
+        })
+        .await
+        .expect("stale vote");
+
+    let stored = store
+        .get_message("$poll:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    match stored.content {
+        Content::Poll(poll) => {
+            assert_eq!(poll.responses.len(), 1);
+            assert_eq!(poll.responses[0].option_index, 1);
+            assert_eq!(poll.responses[0].count, 1);
+        }
+        other => panic!("expected poll content, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn unknown_content_survives_roundtrip() {
     let store = DbStore::connect(&test_db_url("message-unknown"))
         .await
