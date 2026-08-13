@@ -936,7 +936,14 @@ pub(crate) async fn location_handler(
         return Err(AppError::InvalidPoW);
     }
     let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&["LOCATE", &site_id, &post_slug, &req.geo_uri, challenge]);
+    let message = signature_message(&[
+        "LOCATE",
+        &site_id,
+        &post_slug,
+        &req.geo_uri,
+        &req.display_name,
+        challenge,
+    ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
     }
@@ -952,7 +959,7 @@ pub(crate) async fn location_handler(
             geo_uri: req.geo_uri,
             description: req.description,
         }),
-        display_name: String::new(),
+        display_name: req.display_name,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
         author_challenge: challenge.to_string(),

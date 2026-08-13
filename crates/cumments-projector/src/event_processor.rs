@@ -278,6 +278,7 @@ impl EventProcessor {
                             &site_id,
                             &post_slug,
                             &location.geo_uri,
+                            nick,
                             chal,
                         ]),
                         _ => match event.signable_content() {

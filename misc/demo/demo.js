@@ -1940,6 +1940,9 @@
                     async (position) => {
                         const geoUri = `geo:${position.coords.latitude},${position.coords.longitude}`;
                         const cfg = getSettings();
+                        const displayName =
+                            document.getElementById("composerDisplayName").value.trim() ||
+                            t("guest_default");
                         try {
                             const chal = await getChallenge(cfg);
                             const nonce = await solvePow(chal.prefix, chal.difficulty);
@@ -1948,6 +1951,7 @@
                                 cfg.siteId,
                                 cfg.slug,
                                 geoUri,
+                                displayName,
                                 chal.prefix,
                             ]);
                             const res = await fetch(
@@ -1961,6 +1965,7 @@
                                     body: JSON.stringify({
                                         geo_uri: geoUri,
                                         description: t("location"),
+                                        display_name: displayName,
                                         author_public_key: publicKey,
                                         author_signature: signature,
                                         challenge_response: `${chal.prefix}|${nonce}`,

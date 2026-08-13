@@ -366,9 +366,11 @@ pub(crate) fn build_poll_vote_body(
 }
 
 /// Build the `m.room.message` content for a guest location (MSC3488).
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_location_body(
     geo_uri: &str,
     description: Option<&str>,
+    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
@@ -384,7 +386,7 @@ pub(crate) fn build_location_body(
             "signature": author_signature,
             "challenge": author_challenge,
             "content": geo_uri,
-            "displayname": "",
+            "displayname": display_name,
             "intent_id": intent_id,
         }
     });
@@ -731,6 +733,7 @@ mod tests {
         let body = build_location_body(
             "geo:31.2,121.5",
             Some("here"),
+            "Alice",
             "pk",
             "sig",
             "chal",
@@ -741,6 +744,7 @@ mod tests {
         assert_eq!(body["geo_uri"], "geo:31.2,121.5");
         assert_eq!(body["body"], "here");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "geo:31.2,121.5");
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["displayname"], "Alice");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["intent_id"], 9);
     }
 

@@ -122,6 +122,7 @@ impl Reconciler {
                                 &room_id,
                                 &location.geo_uri,
                                 location.description.as_deref(),
+                                &intent.display_name,
                                 &intent.site_id,
                                 &intent.author_public_key,
                                 &intent.author_signature,

@@ -972,17 +972,20 @@ async fn location_posts_are_queued_and_idempotent() {
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
+    let display_name = "Alice";
     let message = signature_message(&[
         "LOCATE",
         "test-blog",
         "hello",
         "geo:31.2,121.5",
+        display_name,
         &challenge.prefix,
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "geo_uri": "geo:31.2,121.5",
         "description": "here",
+        "display_name": display_name,
         "author_public_key": public_key,
         "author_signature": signature,
         "challenge_response": challenge_response,

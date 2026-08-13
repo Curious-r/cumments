@@ -221,6 +221,7 @@ impl AppServiceMatrixDriver {
         room_id: &str,
         geo_uri: &str,
         description: Option<&str>,
+        display_name: &str,
         site_id: &SiteId,
         author_public_key: &str,
         author_signature: &str,
@@ -233,9 +234,14 @@ impl AppServiceMatrixDriver {
         self.ensure_joined(room_id, &virtual_user).await?;
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .ok_or_else(|| anyhow!("invalid author public key"))?;
+        // Keep the display name in sync (best-effort), like text posts.
+        if let Err(e) = self.ensure_display_name(&virtual_user, display_name).await {
+            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
+        }
         let body = build_location_body(
             geo_uri,
             description,
+            display_name,
             author_public_key,
             author_signature,
             author_challenge,

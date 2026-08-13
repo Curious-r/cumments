@@ -104,6 +104,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         room_id: &str,
         geo_uri: &str,
         description: Option<&str>,
+        display_name: &str,
         _site_id: &SiteId,
         _author_public_key: &str,
         _author_signature: &str,
@@ -111,8 +112,9 @@ impl MatrixDriver for LoggingMatrixDriver {
         intent_id: Option<i64>,
     ) -> Result<String> {
         info!(
-            "LOGGING: Post location {geo_uri} in {room_id} ({}) intent {}",
+            "LOGGING: Post location {geo_uri} in {room_id} ({}) as {} intent {}",
             description.unwrap_or(""),
+            display_name,
             intent_id.map_or_else(|| "-".to_string(), |id| id.to_string())
         );
         Ok(format!("$logging-location-{geo_uri}"))

@@ -95,7 +95,15 @@ async fn guest_location_verifies_with_locate_signature() {
     let sender = format!("@_cumments_my-blog_{}:example.com", guest_id);
     let challenge = "challenge";
     let geo_uri = "geo:31.2,121.5";
-    let signed_message = signature_message(&["LOCATE", "my-blog", "hello", geo_uri, challenge]);
+    let display_name = "Alice";
+    let signed_message = signature_message(&[
+        "LOCATE",
+        "my-blog",
+        "hello",
+        geo_uri,
+        display_name,
+        challenge,
+    ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
 
     let mut location = message("$loc:hs");
@@ -105,7 +113,7 @@ async fn guest_location_verifies_with_locate_signature() {
         thumbnail_url: None,
     });
     location.sender = sender.clone();
-    location.display_name = Some(String::new());
+    location.display_name = Some(display_name.to_string());
     location.author_public_key = Some(public_key);
     location.author_signature = Some(signature);
     location.author_challenge = Some(challenge.to_string());
@@ -133,7 +141,7 @@ async fn guest_location_verifies_with_locate_signature() {
         thumbnail_url: None,
     });
     wrong.sender = sender.clone();
-    wrong.display_name = Some(String::new());
+    wrong.display_name = Some(display_name.to_string());
     wrong.author_public_key = Some(URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()));
     let wrong_message =
         signature_message(&["POST", "my-blog", "hello", geo_uri, "", "", challenge]);

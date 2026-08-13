@@ -485,6 +485,7 @@ pub trait MatrixDriver: Send + Sync {
         room_id: &str,
         geo_uri: &str,
         description: Option<&str>,
+        display_name: &str,
         site_id: &SiteId,
         author_public_key: &str,
         author_signature: &str,

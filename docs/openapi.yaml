@@ -876,13 +876,22 @@ paths:
           application/json:
             schema:
               type: object
-              required: [geo_uri, author_public_key, author_signature, challenge_response]
+              required:
+                - geo_uri
+                - display_name
+                - author_public_key
+                - author_signature
+                - challenge_response
               properties:
                 geo_uri:
                   type: string
                 description:
                   type: string
                   nullable: true
+                display_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
                 author_public_key:
                   type: string
                 author_signature:

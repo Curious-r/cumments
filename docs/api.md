@@ -495,8 +495,9 @@ and aggregated into the poll's response counts.
 
 `POST /api/v1/sites/{site_id}/posts/{post_slug}/location`
 
-Body: `{ "geo_uri", "description?", "author_public_key", "author_signature", "challenge_response" }`.
-The signature covers `["LOCATE", site_id, post_slug, geo_uri, challenge]`;
+Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author_signature", "challenge_response" }`.
+The signature covers
+`["LOCATE", site_id, post_slug, geo_uri, display_name, challenge]`;
 the message is queued like a comment (same `Idempotency-Key` and `202
 { "intent_id" }` contract) and sent as `m.location` (MSC3488) with the signed
 proof block, closing the loop through the same projection path.

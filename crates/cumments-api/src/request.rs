@@ -124,6 +124,8 @@ pub struct LocationRequest {
     #[validate(length(min = 0, max = 255))]
     #[serde(default)]
     pub description: Option<String>,
+    #[validate(length(min = 1, max = 50))]
+    pub display_name: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]
