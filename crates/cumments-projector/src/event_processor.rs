@@ -25,7 +25,7 @@ use cumments_core::{
     projector_events::ProjectorEvent,
 };
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tracing::{debug, info, instrument, warn};
 
 // ── Core processing functions ─────────────────────────────────────
@@ -39,6 +39,10 @@ pub struct EventProcessor {
     governance_store: Arc<dyn GovernanceStore>,
     intent_store: Arc<dyn IntentStore>,
     event_bus: broadcast::Sender<ProjectorEvent>,
+    /// Wakes the reconciler after a site Space's power levels are projected,
+    /// so client-side governance edits propagate to rooms without waiting for
+    /// the periodic reconcile tick.
+    moderation_notify: Arc<Notify>,
     server_name: Option<String>,
 }
 
@@ -52,6 +56,7 @@ pub struct EventProcessorDeps {
     pub governance_store: Arc<dyn GovernanceStore>,
     pub intent_store: Arc<dyn IntentStore>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
+    pub moderation_notify: Arc<Notify>,
     pub server_name: Option<String>,
 }
 
@@ -65,6 +70,7 @@ impl EventProcessor {
             governance_store: deps.governance_store,
             intent_store: deps.intent_store,
             event_bus: deps.event_bus,
+            moderation_notify: deps.moderation_notify,
             server_name: deps.server_name,
         }
     }
@@ -655,6 +661,7 @@ impl EventProcessor {
                 self.governance_store
                     .replace_site_roles(&site.id, &roles)
                     .await?;
+                self.moderation_notify.notify_one();
             } else if matches!(
                 self.registry_store.get_room_status(&event.room_id).await?,
                 Some(RoomStatus::Active)

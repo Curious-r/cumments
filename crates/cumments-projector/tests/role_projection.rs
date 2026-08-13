@@ -5,7 +5,7 @@ use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
 use cumments_store::DbStore;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 
 fn test_db_url(name: &str) -> String {
     let path = std::path::Path::new("/tmp").join(format!(
@@ -50,6 +50,7 @@ async fn power_levels_project_site_and_room_roles() {
         .expect("room");
 
     let (tx, _rx) = broadcast::channel(16);
+    let moderation_notify = Arc::new(Notify::new());
     let processor = EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
         registry_store: store.clone(),
@@ -58,6 +59,7 @@ async fn power_levels_project_site_and_room_roles() {
         governance_store: store.clone(),
         intent_store: store.clone(),
         event_bus: tx,
+        moderation_notify: moderation_notify.clone(),
         server_name: Some("hs".to_string()),
     });
 
@@ -88,6 +90,16 @@ async fn power_levels_project_site_and_room_roles() {
                 level: 100
             },
         ]
+    );
+    // Projecting a Space's power levels must wake the moderation sync.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            moderation_notify.notified()
+        )
+        .await
+        .is_ok(),
+        "space power-levels projection must notify the reconciler"
     );
 
     // A comment room projects its own (independent) moderator roster.

@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
     // 4. Initialize Event Bus for real-time updates (SSE)
     // ─────────────────────────────────────────────────────────────
     let (event_bus, _) = broadcast::channel(100);
+    let reconciler_notify = Arc::new(tokio::sync::Notify::new());
 
     // ─────────────────────────────────────────────────────────────
     // 5. Initialize EventProcessor (shared across all modes)
@@ -154,6 +155,7 @@ async fn main() -> Result<()> {
             governance_store: db_store.clone(),
             intent_store: db_store.clone(),
             event_bus: event_bus.clone(),
+            moderation_notify: reconciler_notify.clone(),
             server_name: settings
                 .matrix
                 .homeserver
@@ -259,11 +261,6 @@ async fn main() -> Result<()> {
             cli::Commands::Completions(_) => unreachable!("handled earlier"),
         }
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // 8. Initialize Shared Coordination Signals
-    // ─────────────────────────────────────────────────────────────
-    let reconciler_notify = Arc::new(tokio::sync::Notify::new());
 
     // ─────────────────────────────────────────────────────────────
     // 9. Initialize and run Reconciler (Orchestrator)
