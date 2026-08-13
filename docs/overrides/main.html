@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block announce -%}
+  {%- if config.extra.version -%}
+    {%- if config.extra.version == "main" -%}
+      Unreleased development documentation (main branch).
+    {%- else -%}
+      Documentation for <strong>Cumments {{ config.extra.version }}</strong>.
+    {%- endif -%}
+  {%- endif -%}
+{%- endblock %}
