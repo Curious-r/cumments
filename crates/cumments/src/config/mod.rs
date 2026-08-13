@@ -12,6 +12,6 @@ pub use policy::{
 };
 pub(crate) use registration::regex_escape;
 pub use settings::{
-    AppService, AppServiceRuntime, Database, Homeserver, Matrix, Mode, Moderation, Security,
-    Server, Settings, SiteConfig,
+    AppService, AppServiceRuntime, Database, Homeserver, Matrix, Mode, Security, Server, Settings,
+    SiteConfig,
 };

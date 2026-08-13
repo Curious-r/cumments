@@ -43,7 +43,6 @@ pub(crate) fn test_driver(server: &MockServer) -> AppServiceMatrixDriver {
         "test-token".to_string(),
         "example.com".to_string(),
         "_cumments_bot".to_string(),
-        "@admin:example.com".to_string(),
         Arc::new(StubVirtualUserStore),
         None,
     )

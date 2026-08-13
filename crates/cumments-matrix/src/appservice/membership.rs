@@ -95,6 +95,39 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Invites a real Matrix user to a room as the AS sender. Users who are
+    /// already joined (including a join racing the invite) are a successful
+    /// no-op.
+    pub(super) async fn invite_user_impl(&self, room_id: &str, user_id: &str) -> Result<()> {
+        if self.is_joined(room_id, user_id).await {
+            return Ok(());
+        }
+
+        let path = format!("_matrix/client/v3/rooms/{}/invite", percent_encode(room_id));
+        let resp = self
+            .request(reqwest::Method::POST, &path, None)
+            .json(&serde_json::json!({ "user_id": user_id }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("Invite request failed: {}", e))?;
+
+        if resp.status().is_success() {
+            return Ok(());
+        }
+
+        // A user may have joined between the membership check and the invite;
+        // the homeserver then reports M_FORBIDDEN. Confirm the join before
+        // surfacing an error.
+        if self.is_joined(room_id, user_id).await {
+            return Ok(());
+        }
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        Err(anyhow!(
+            "Invite {user_id} to {room_id} failed ({status}): {error_body}"
+        ))
+    }
+
     /// Whether the virtual user has `join` membership in the room, queried as
     /// the AS sender. Errors are logged and treated as "not joined" so the
     /// subsequent `/join` (or the final send) remains the authority.

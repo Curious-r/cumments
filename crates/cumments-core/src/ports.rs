@@ -610,10 +610,21 @@ pub trait MatrixDriver: Send + Sync {
     /// timed-out `waiting_for_sync` intent can be safely resent.
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
 
-    /// Best-effort: ensure the configured human admin has admin power (100)
-    /// in the room. Failures are logged by the driver and never fail the
-    /// caller.
-    async fn ensure_admin(&self, room_id: &str);
+    /// The AppService sender user ID, or `None` when this driver has no
+    /// Matrix sender account (e.g. logging mode).
+    fn sender_user_id(&self) -> Option<String>;
+
+    /// Read a room's current `m.room.power_levels` content, if the state
+    /// event exists.
+    async fn get_room_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
+
+    /// Replace a room's `m.room.power_levels` state event.
+    async fn set_room_power_levels(&self, room_id: &str, content: &serde_json::Value)
+    -> Result<()>;
+
+    /// Invites a user to a room as the AS sender. Already-joined users are a
+    /// successful no-op.
+    async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()>;
 }
 
 /// Persistence for backfill cursors (per-room pagination tokens).

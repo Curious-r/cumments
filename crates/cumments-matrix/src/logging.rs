@@ -199,7 +199,33 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(None)
     }
 
-    async fn ensure_admin(&self, room_id: &str) {
-        info!("LOGGING: Ensure admin for room {} (no-op)", room_id);
+    fn sender_user_id(&self) -> Option<String> {
+        None
+    }
+
+    async fn get_room_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+        info!(
+            "LOGGING: Read power levels for {} (no real homeserver)",
+            room_id
+        );
+        Ok(None)
+    }
+
+    async fn set_room_power_levels(
+        &self,
+        room_id: &str,
+        content: &serde_json::Value,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Set power levels for {}: {}",
+            room_id,
+            serde_json::to_string(content).unwrap_or_default()
+        );
+        Ok(())
+    }
+
+    async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
+        info!("LOGGING: Invite {user_id} to {room_id} (no-op)");
+        Ok(())
     }
 }

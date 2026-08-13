@@ -194,7 +194,23 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.event_exists_impl(room_id, event_id).await
     }
 
-    async fn ensure_admin(&self, room_id: &str) {
-        self.ensure_admin_impl(room_id).await;
+    fn sender_user_id(&self) -> Option<String> {
+        Some(self.sender_user_id())
+    }
+
+    async fn get_room_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+        self.get_power_levels(room_id).await
+    }
+
+    async fn set_room_power_levels(
+        &self,
+        room_id: &str,
+        content: &serde_json::Value,
+    ) -> Result<()> {
+        self.write_power_levels(room_id, content).await
+    }
+
+    async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
+        self.invite_user_impl(room_id, user_id).await
     }
 }

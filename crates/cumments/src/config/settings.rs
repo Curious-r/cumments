@@ -102,7 +102,6 @@ pub struct Matrix {
     pub mode: Mode,
     pub homeserver: Option<Homeserver>,
     pub appservice: Option<AppService>,
-    pub moderation: Option<Moderation>,
 }
 
 #[derive(Deserialize)]
@@ -156,13 +155,6 @@ impl Default for AppService {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Moderation {
-    /// Matrix account invited to comment rooms with admin power.
-    pub admin_id: Option<String>,
-}
-
 /// Fully validated AppService settings, ready to wire up the driver.
 #[derive(Clone, Debug)]
 pub struct AppServiceRuntime {
@@ -172,7 +164,6 @@ pub struct AppServiceRuntime {
     pub as_token: String,
     pub hs_token: String,
     pub sender_localpart: String,
-    pub admin_id: String,
     pub listen_host: String,
     pub listen_port: u16,
     pub room_version: Option<String>,
@@ -210,10 +201,6 @@ impl Matrix {
             require_non_empty(appservice.as_token.as_deref(), "matrix.appservice.as_token")?;
         let hs_token =
             require_non_empty(appservice.hs_token.as_deref(), "matrix.appservice.hs_token")?;
-        let admin_id = require_non_empty(
-            self.moderation.as_ref().and_then(|m| m.admin_id.as_deref()),
-            "matrix.moderation.admin_id",
-        )?;
         let id = require_non_empty(Some(&appservice.id), "matrix.appservice.id")?;
         let sender_localpart = require_non_empty(
             Some(&appservice.sender_localpart),
@@ -271,7 +258,6 @@ impl Matrix {
             as_token: as_token.to_string(),
             hs_token: hs_token.to_string(),
             sender_localpart: sender_localpart.to_string(),
-            admin_id: admin_id.to_string(),
             listen_host: listen_host.to_string(),
             listen_port: appservice.listen_port,
             room_version,
@@ -320,9 +306,6 @@ listen_port = 3001
 sender_localpart = "_cumments_bot"
 as_token = "as"
 hs_token = "hs"
-
-[matrix.moderation]
-admin_id = "@admin:example.com"
 "#,
         )
         .expect("config should parse");
@@ -384,7 +367,6 @@ homeserver_url = "http://localhost:8008"
 server_name = "example.com"
 as_token = "as"
 hs_token = "hs"
-admin_id = "@admin:example.com"
 "#,
         );
 
@@ -449,9 +431,6 @@ listen_port = 3001
 sender_localpart = "_cumments_bot"
 as_token = "as"
 hs_token = "hs"
-
-[matrix.moderation]
-admin_id = "@admin:example.com"
 "#,
         )
         .expect("parse settings");
@@ -468,14 +447,6 @@ admin_id = "@admin:example.com"
             .appservice_runtime()
             .expect_err("empty as_token");
         assert!(err.to_string().contains("matrix.appservice.as_token"));
-
-        settings.matrix.appservice.as_mut().unwrap().as_token = Some("as".to_string());
-        settings.matrix.moderation.as_mut().unwrap().admin_id = Some(String::new());
-        let err = settings
-            .matrix
-            .appservice_runtime()
-            .expect_err("empty admin_id");
-        assert!(err.to_string().contains("matrix.moderation.admin_id"));
     }
 
     #[test]

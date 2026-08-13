@@ -43,7 +43,6 @@ pub struct AppServiceMatrixDriver {
     as_token: String,
     server_name: String,
     sender_localpart: String,
-    admin_id: String,
     virtual_user_store: Arc<dyn VirtualUserStore>,
     joined_cache: Mutex<HashSet<(String, String)>>,
     display_name_cache: Mutex<HashMap<String, String>>,
@@ -64,7 +63,6 @@ impl AppServiceMatrixDriver {
         as_token: String,
         server_name: String,
         sender_localpart: String,
-        admin_id: String,
         virtual_user_store: Arc<dyn VirtualUserStore>,
         room_version: Option<String>,
     ) -> Result<Self> {
@@ -78,7 +76,6 @@ impl AppServiceMatrixDriver {
             as_token,
             server_name,
             sender_localpart,
-            admin_id,
             virtual_user_store,
             joined_cache: Mutex::new(HashSet::new()),
             display_name_cache: Mutex::new(HashMap::new()),

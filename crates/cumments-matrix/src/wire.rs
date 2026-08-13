@@ -79,57 +79,6 @@ pub(crate) fn is_implicit_creator(
                 .is_some_and(|creators| creators.iter().any(|creator| creator.as_str() == user_id)))
 }
 
-/// Build the `m.room.power_levels` content used when creating a Cumments room.
-/// Omitted fields take the room-version defaults; the admin always receives
-/// admin power, and the AS sender is only listed when the room version needs
-/// an explicit creator entry.
-pub(crate) fn initial_power_levels(
-    sender_user_id: &str,
-    admin_id: &str,
-    include_sender: bool,
-) -> serde_json::Value {
-    let mut users = serde_json::Map::new();
-    if include_sender {
-        users.insert(sender_user_id.to_string(), 100.into());
-    }
-    users.insert(admin_id.to_string(), 100.into());
-    serde_json::json!({ "users": users })
-}
-/// Returns a copy of a room's `m.room.power_levels` content with the admin
-/// raised to admin (100), preserving every other field. Returns `None` when
-/// the admin already has at least admin power.
-pub(crate) fn power_levels_with_admin(
-    content: &serde_json::Value,
-    admin_id: &str,
-) -> Option<serde_json::Value> {
-    let level = content
-        .get("users")
-        .and_then(|u| u.get(admin_id))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    if level >= 100 {
-        return None;
-    }
-
-    let mut updated = content.clone();
-    match updated
-        .as_object_mut()
-        .and_then(|obj| obj.get_mut("users"))
-        .and_then(|u| u.as_object_mut())
-    {
-        Some(users) => {
-            users.insert(admin_id.to_string(), 100.into());
-        }
-        None => {
-            let obj = updated.as_object_mut()?;
-            let mut users = serde_json::Map::new();
-            users.insert(admin_id.to_string(), 100.into());
-            obj.insert("users".to_string(), serde_json::Value::Object(users));
-        }
-    }
-    Some(updated)
-}
-
 /// Whether `sender_user_id` can send state events in a room, according to its
 /// `m.room.power_levels` content: the sender's explicit `users` entry (or
 /// `users_default`) against the event-specific requirement for our metadata
@@ -506,48 +455,6 @@ mod tests {
     }
 
     #[test]
-    fn power_levels_existing_admin_is_unchanged() {
-        let content = json!({
-            "ban": 50,
-            "users": { "@admin:example.com": 100, "@other:example.com": 0 }
-        });
-        assert!(power_levels_with_admin(&content, "@admin:example.com").is_none());
-    }
-
-    #[test]
-    fn power_levels_raises_admin_to_admin_and_preserves_rest() {
-        let content = json!({
-            "ban": 50,
-            "state_default": 50,
-            "users": { "@admin:example.com": 50, "@other:example.com": 0 }
-        });
-        let updated = power_levels_with_admin(&content, "@admin:example.com")
-            .expect("admin should be raised to admin");
-        assert_eq!(updated["users"]["@admin:example.com"], 100);
-        assert_eq!(updated["users"]["@other:example.com"], 0);
-        assert_eq!(updated["ban"], 50);
-        assert_eq!(updated["state_default"], 50);
-    }
-
-    #[test]
-    fn power_levels_adds_missing_admin_entry() {
-        let content = json!({ "users": { "@other:example.com": 0 } });
-        let updated =
-            power_levels_with_admin(&content, "@admin:example.com").expect("admin should be added");
-        assert_eq!(updated["users"]["@admin:example.com"], 100);
-        assert_eq!(updated["users"]["@other:example.com"], 0);
-    }
-
-    #[test]
-    fn power_levels_creates_users_map_when_missing() {
-        let content = json!({ "ban": 50 });
-        let updated = power_levels_with_admin(&content, "@admin:example.com")
-            .expect("users map should be created");
-        assert_eq!(updated["users"]["@admin:example.com"], 100);
-        assert_eq!(updated["ban"], 50);
-    }
-
-    #[test]
     fn state_power_explicit_admin_can_write_state() {
         let pl = json!({
             "users": { "@_cumments_bot:example.com": 100 },
@@ -895,23 +802,6 @@ mod tests {
         assert!(!room_requires_explicit_creator(Some("12")));
         assert!(!room_requires_explicit_creator(Some("13")));
         assert!(!room_requires_explicit_creator(Some("12.1")));
-    }
-
-    #[test]
-    fn initial_power_levels_omits_sender_for_implicit_creator_versions() {
-        let explicit =
-            initial_power_levels("@_cumments_bot:example.com", "@admin:example.com", true);
-        assert_eq!(explicit["users"]["@_cumments_bot:example.com"], 100);
-        assert_eq!(explicit["users"]["@admin:example.com"], 100);
-
-        let implicit =
-            initial_power_levels("@_cumments_bot:example.com", "@admin:example.com", false);
-        assert!(
-            implicit["users"]
-                .get("@_cumments_bot:example.com")
-                .is_none()
-        );
-        assert_eq!(implicit["users"]["@admin:example.com"], 100);
     }
 
     #[test]

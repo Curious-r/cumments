@@ -220,7 +220,6 @@ async fn main() -> Result<()> {
             as_conf.as_token.clone(),
             as_conf.server_name.clone(),
             as_conf.sender_localpart.clone(),
-            as_conf.admin_id.clone(),
             virtual_user_store,
             as_conf.room_version.clone(),
         )?)
@@ -278,64 +277,6 @@ async fn main() -> Result<()> {
         reconciler.run().await;
     });
     tracing::info!("Reconciler started in background.");
-
-    // ─────────────────────────────────────────────────────────────
-    // 9b. Ensure the human admin keeps admin power in every known
-    //     Cumments room (appservice mode, best-effort)
-    // ─────────────────────────────────────────────────────────────
-    if appservice.is_some() {
-        let sweep_driver = driver.clone();
-        tokio::spawn(async move {
-            // The homeserver may not be ready when this task starts (compose
-            // `depends_on` only waits for container start, not readiness).
-            // Try immediately and retry at a fixed interval until it answers
-            // or the retry budget runs out; no artificial startup delay is
-            // needed because the interval only applies between attempts.
-            const SWEEP_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-            const SWEEP_MAX_RETRIES: usize = 10;
-
-            let mut retries = 0;
-            let rooms = loop {
-                match sweep_driver.get_joined_rooms().await {
-                    Ok(rooms) => break rooms,
-                    Err(e) => {
-                        retries += 1;
-                        if retries > SWEEP_MAX_RETRIES {
-                            tracing::warn!(
-                                "Admin sweep: giving up after {} retries: {:?}",
-                                retries - 1,
-                                e
-                            );
-                            return;
-                        }
-                        tracing::warn!(
-                            "Admin sweep: failed to list joined rooms (retry {}/{}): {:?}",
-                            retries,
-                            SWEEP_MAX_RETRIES,
-                            e
-                        );
-                        tokio::time::sleep(SWEEP_RETRY_INTERVAL).await;
-                    }
-                }
-            };
-            for room_id in rooms {
-                match sweep_driver.get_room_metadata(&room_id).await {
-                    Ok(Some(meta)) if meta.get("site_id").and_then(|v| v.as_str()).is_some() => {
-                        sweep_driver.ensure_admin(&room_id).await;
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            "Admin sweep: failed to read metadata for {}: {:?}",
-                            room_id,
-                            e
-                        );
-                    }
-                }
-            }
-        });
-        tracing::info!("Owner admin sweep started in background.");
-    }
 
     // ─────────────────────────────────────────────────────────────
     // 10. Start Event Receiver based on mode

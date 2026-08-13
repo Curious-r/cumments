@@ -4,12 +4,15 @@
 use super::*;
 use crate::wire::{
     comment_room_alias, comment_room_alias_localpart, has_redact_power, has_state_power,
-    initial_power_levels, is_implicit_creator, metadata_matches, percent_encode,
-    power_levels_with_admin, room_requires_explicit_creator, site_space_alias,
-    site_space_alias_localpart,
+    is_implicit_creator, metadata_matches, percent_encode, room_requires_explicit_creator,
+    site_space_alias, site_space_alias_localpart,
 };
 use anyhow::{Result, anyhow};
 use cumments_core::{
+    governance::{
+        SITE_ROLE_MIN_LEVEL, initial_comment_room_power_levels, initial_space_power_levels,
+        role_entries,
+    },
     models::{PostSlug, SiteId},
     protocol::ROOM_METADATA_EVENT_TYPE,
 };
@@ -207,7 +210,10 @@ impl AppServiceMatrixDriver {
     }
 
     /// Read a room's current `m.room.power_levels` content, if any.
-    async fn get_power_levels(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
+    pub(super) async fn get_power_levels(
+        &self,
+        room_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.power_levels",
             percent_encode(room_id)
@@ -234,7 +240,11 @@ impl AppServiceMatrixDriver {
     }
 
     /// Write a room's `m.room.power_levels` content (full state replacement).
-    async fn write_power_levels(&self, room_id: &str, content: &serde_json::Value) -> Result<()> {
+    pub(super) async fn write_power_levels(
+        &self,
+        room_id: &str,
+        content: &serde_json::Value,
+    ) -> Result<()> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/m.room.power_levels",
             percent_encode(room_id)
@@ -375,7 +385,6 @@ impl AppServiceMatrixDriver {
         {
             self.set_room_metadata(room_id, site_id, post_slug).await?;
         }
-        self.ensure_admin_strict(room_id).await?;
         Ok(())
     }
 
@@ -499,32 +508,6 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
-    /// Grant the operator admin power in a room, propagating failures so
-    /// adoption cannot silently proceed with an unmoderated room.
-    #[instrument(skip(self))]
-    async fn ensure_admin_strict(&self, room_id: &str) -> Result<()> {
-        let updated = match self.get_power_levels(room_id).await {
-            Ok(Some(content)) => match power_levels_with_admin(&content, &self.admin_id) {
-                Some(updated) => updated,
-                None => return Ok(()), // admin already has admin power
-            },
-            // No power-levels event: room defaults apply, so create one that
-            // grants the admin power.
-            Ok(None) => serde_json::json!({ "users": { self.admin_id.clone(): 100 } }),
-            Err(e) => {
-                return Err(anyhow!(
-                    "Failed to read power levels for room {}: {:#}",
-                    room_id,
-                    e
-                ));
-            }
-        };
-
-        self.write_power_levels(room_id, &updated).await?;
-        info!("Granted admin power in room {}", room_id);
-        Ok(())
-    }
-
     #[instrument(skip(self), fields(site_id = %site_id.as_str()))]
     pub(super) async fn create_site_space_impl(&self, site_id: &SiteId) -> Result<String> {
         self.validate_room_version_override().await?;
@@ -545,8 +528,7 @@ impl AppServiceMatrixDriver {
         let mut last_error: Option<anyhow::Error> = None;
 
         for include_sender in creator_policies {
-            let power_levels =
-                initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
+            let power_levels = initial_space_power_levels(&self.sender_user_id(), include_sender);
             let mut body = serde_json::json!({
                 "name": format!("Comments: {}", site_id_str),
                 "room_alias_name": alias_localpart,
@@ -568,7 +550,6 @@ impl AppServiceMatrixDriver {
                         "content": power_levels
                     }
                 ],
-                "invite": [self.admin_id.clone()],
                 "preset": "public_chat",
             });
             if let Some(version) = &self.room_version_override {
@@ -660,6 +641,18 @@ impl AppServiceMatrixDriver {
             info!("No matching room found. Creating new comment room via AppService.");
             let alias_localpart =
                 comment_room_alias_localpart(site_id.as_str(), post_slug.as_str());
+            // Site-managed roles are seeded from the Space so a new room opens
+            // with the same owner/co-manager roster (per-room moderators start
+            // empty and are appointed later).
+            let space_power_levels = self
+                .get_power_levels(space_id)
+                .await?
+                .unwrap_or_else(|| serde_json::json!({}));
+            let site_roles: Vec<String> = role_entries(&space_power_levels, SITE_ROLE_MIN_LEVEL)
+                .into_iter()
+                .map(|role| role.user_id)
+                .filter(|user_id| user_id != &self.sender_user_id())
+                .collect();
 
             // Same conservative-then-opposite retry as create_site_space:
             // when the homeserver default is unknown, a failed createRoom is
@@ -673,8 +666,11 @@ impl AppServiceMatrixDriver {
             let mut created_room_id: Option<String> = None;
 
             for include_sender in creator_policies {
-                let power_levels =
-                    initial_power_levels(&self.sender_user_id(), &self.admin_id, include_sender);
+                let power_levels = initial_comment_room_power_levels(
+                    &space_power_levels,
+                    &self.sender_user_id(),
+                    include_sender,
+                );
                 let mut body = serde_json::json!({
                     "name": format!("Comments: {}/{}", site_id.as_str(), post_slug.as_str()),
                     "room_alias_name": alias_localpart,
@@ -693,7 +689,7 @@ impl AppServiceMatrixDriver {
                             "content": power_levels
                         }
                     ],
-                    "invite": [self.admin_id.clone()],
+                    "invite": site_roles.clone(),
                     "preset": "public_chat",
                 });
                 if let Some(version) = &self.room_version_override {
@@ -800,12 +796,6 @@ impl AppServiceMatrixDriver {
                 status,
                 error_body
             ))
-        }
-    }
-
-    pub(super) async fn ensure_admin_impl(&self, room_id: &str) {
-        if let Err(e) = self.ensure_admin_strict(room_id).await {
-            warn!("Failed to ensure admin power in room {}: {:#}", room_id, e);
         }
     }
 }
