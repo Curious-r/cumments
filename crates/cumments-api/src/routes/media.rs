@@ -416,6 +416,10 @@ pub(crate) async fn media_handler(
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"{}\"", media_id),
+        )
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(Body::from(bytes))
         .expect("static response builds"))
