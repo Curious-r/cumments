@@ -61,13 +61,30 @@ Response:
       "author": {
         "type": "guest",
         "display_name": "Alice",
+        "avatar_url": null,
         "public_key": "...",
         "mxid": null
       },
-      "content": "...",
+      "content": {
+        "type": "text",
+        "body": "hello **world**",
+        "formatted_body": "<p>hello <strong>world</strong></p>",
+        "style": "normal"
+      },
       "timestamp": "2026-08-08T00:00:00Z",
+      "room_id": "!room:server",
+      "sender_mxid": "@_cumments_my-blog_3282f2a21b4a1e6b:server",
       "edited_at": null,
-      "intent_id": 42
+      "reply_to": null,
+      "thread_root": null,
+      "intent_id": 42,
+      "status": "active",
+      "redacted_at": null,
+      "redacted_by": null,
+      "reactions": [
+        { "key": "👍", "count": 2 }
+      ],
+      "raw_content": {}
     }
   ],
   "meta": {
@@ -78,6 +95,17 @@ Response:
   }
 }
 ```
+
+`content` is a typed object; the other variants look like:
+
+- `media`: `{ "type": "media", "kind": "image|video|audio|file|sticker", "url": "mxc://… or /api/v1/media/…", "filename": …, "mimetype": …, "size": …, "width": …, "height": …, "thumbnail_url": …, "alt_text": …, "voice": false }`
+- `location`: `{ "type": "location", "geo_uri": "geo:30.2,120.1", "description": …, "thumbnail_url": … }`
+- `poll`: `{ "type": "poll", "question": …, "options": [{ "id": …, "text": … }], "responses": [{ "option_index": 0, "count": 3 }] }`
+- `encrypted`: `{ "type": "encrypted", "algorithm": "m.megolm.v1.aes-sha2", "sender_key": … }`
+- `unknown`: `{ "type": "unknown", "fallback": …, "raw": { … } }`
+
+Media URLs are rewritten to signed proxy URLs when the media proxy is
+enabled; see [Media proxy](#media-proxy) below.
 
 ### Post a comment
 
@@ -98,12 +126,19 @@ Body:
 ```json
 {
   "content": "...",
+  "media": null,
   "display_name": "Alice",
   "author_public_key": "...",
   "author_signature": "...",
+  "reply_to": null,
   "challenge_response": "challenge|nonce"
 }
 ```
+
+When `media` is present (an object returned by
+[Guest media upload](#guest-media-upload), or a preset sticker reference
+with `"kind": "sticker"`), the signature covers `media.url` instead of
+`content`; `content` then only serves as the fallback filename/text.
 
 Successful writes are asynchronous and return `202` with the queue row ID:
 
@@ -111,7 +146,7 @@ Successful writes are asynchronous and return `202` with the queue row ID:
 { "intent_id": 42 }
 ```
 
-The projected comment (list/SSE `comment_created`) carries the same
+The projected comment (list/SSE `message_created`) carries the same
 `intent_id` when it was submitted through the Cumments API, so clients can
 correlate the accepted request with the final comment. Matrix-native comments
 omit `intent_id`.
@@ -217,13 +252,25 @@ form (path-based or body-based) for all retries of a key.
 Server-sent events use the shape `{ "type": "...", "payload": { ... } }`:
 
 ```text
-type: comment_created
-type: comment_updated
-type: comment_deleted
+type: message_created
+type: message_updated
+type: message_deleted
+type: ephemeral
 ```
 
-The `comment_created` and `comment_updated` payloads contain the full `Comment`
-object; `comment_deleted` contains the deleted `event_id`.
+The `message_created` and `message_updated` payloads contain the full
+`Message` object (same shape as the list response); `message_deleted`
+contains the deleted `event_id` and, when the deletion went through the
+Cumments API, the `intent_id`. `ephemeral` carries live room state such as
+typing indicators:
+
+```json
+{ "type": "typing", "room_id": "!room:server", "user_id": "@alice:server", "typing": true, "display_name": "Alice" }
+```
+
+Typing events also arrive as an initial snapshot on connect. Read receipts
+and presence are forwarded when the homeserver exposes them, but the demo
+only renders typing.
 
 ## Site registration and verification
 
@@ -397,7 +444,8 @@ for one release.
 
 Public read-only proxy for Matrix media referenced by messages. Message
 payloads carry signed proxy URLs (instead of raw `mxc://` URIs) in
-`content.media.url` / `thumbnail_url`; the signature is an HMAC over
+`content.url` (media) and `content.thumbnail_url` (media/location); the
+signature is an HMAC over
 `server/media_id/expires` and expires after 15 minutes. Requests are rate
 limited, restricted to the configured homeserver, size-capped, and filtered
 by content type. The optional `thumbnail=1` query serves a 320×320

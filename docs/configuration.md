@@ -35,6 +35,10 @@ site_verification = "optional"
 # Operator token for the admin API (optional, at least 32 chars); unset
 # disables the admin routes. Prefer the environment variable:
 # CUMMENTS__SECURITY__ADMIN_TOKEN=...
+# Preset stickers guests may attach (list of mxc:// URIs served by your
+# homeserver). The API rejects sticker references outside this list; the
+# demo fetches them from GET /api/v1/sites/{site}/posts/{post}/stickers.
+preset_stickers = []
 
 [sites."my-blog"]
 # "origin" (browser Origin, default) or "secret" (HMAC via edge function)
