@@ -140,7 +140,10 @@ requires an AppService configuration connected to a reachable homeserver:
 `cumments backfill --max-pages N` caps how much history is fetched per room
 (~100 events each). Fetched events are buffered in memory so the chronological
 replay can apply edits/redactions after their targets; the cursor is saved so
-a later run resumes where it stopped. `0` disables the cap (default: 500).
+a later run resumes where it stopped. `0` disables the cap (default: 500). A
+hard in-memory buffer bound also applies per room: hitting it fails that room
+with a clear error instead of exhausting memory, and the room is rerun with a
+smaller `--max-pages`.
 
 ### Backup
 

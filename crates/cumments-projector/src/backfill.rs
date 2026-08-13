@@ -23,6 +23,14 @@ use crate::push_receiver::{PushEvent, process_single_event};
 
 const PAGE_SIZE: u32 = 100;
 const PAGE_DELAY: Duration = Duration::from_millis(50);
+/// Hard upper bound on events buffered per room before chronological replay.
+///
+/// Replay must see edits/redactions after their targets, so fetched events are
+/// buffered and sorted. Without a cap an unlimited `--max-pages 0` run on a
+/// very large room could exhaust memory; when the cap is hit the room fails
+/// loudly instead and the operator reruns with a smaller `--max-pages`. The
+/// cursor is not advanced on this failure, so nothing is skipped.
+const MAX_BUFFERED_EVENTS: usize = 20_000;
 
 pub struct Backfiller {
     driver: Arc<dyn MatrixDriver>,
@@ -249,6 +257,13 @@ impl Backfiller {
                 .await?;
             pages += 1;
             collected.extend(page.events);
+            if collected.len() > MAX_BUFFERED_EVENTS {
+                anyhow::bail!(
+                    "backfill of room {room_id} exceeds the in-memory buffer cap \
+                     ({MAX_BUFFERED_EVENTS} events); rerun with --max-pages to process it \
+                     in bounded batches"
+                );
+            }
             done = !page.has_more;
             match page.next_token {
                 Some(next) => {
