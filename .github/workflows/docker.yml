@@ -13,7 +13,9 @@
 #
 # Docker Hub publishing is opt-in: set the `DOCKERHUB_NAMESPACE` repository
 # variable (the Docker Hub account that owns the `cumments` repository) and
-# the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets.
+# the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets. The overview sync
+# additionally needs `DOCKERHUB_PASSWORD` (the account password), because
+# the Hub Web API does not accept the registry PAT for description updates.
 name: Docker
 
 on:
@@ -61,6 +63,7 @@ env:
   DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
 
 jobs:
   build:
@@ -257,33 +260,36 @@ jobs:
         env:
           DOCKERHUB_NAMESPACE: ${{ env.DOCKERHUB_NAMESPACE }}
           DOCKERHUB_USERNAME: ${{ env.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ env.DOCKERHUB_TOKEN }}
+          DOCKERHUB_PASSWORD: ${{ env.DOCKERHUB_PASSWORD }}
         run: |
-          # Repository-description updates use the Hub API, which needs an
-          # account JWT rather than the registry PAT used by buildx. The sync
-          # is best-effort: a failure here must not turn a successful publish
-          # red.
-          login_json="$(
-            jq -n --arg u "${DOCKERHUB_USERNAME}" --arg p "${DOCKERHUB_TOKEN}" \
-              '{username: $u, password: $p}' \
-              | curl -fsS -X POST \
-                -H "Content-Type: application/json" \
-                -d @- \
-                "https://hub.docker.com/v2/users/login/"
-          )" || {
-            echo "Docker Hub login failed; skipping overview sync"
+          # Repository-description updates use the Hub Web API, which needs a
+          # JWT obtained with the account password; the registry PAT used by
+          # buildx does not carry the metadata scope. The sync is best-effort:
+          # failures warn but must not turn a successful publish red.
+          if [ -z "${DOCKERHUB_PASSWORD}" ]; then
+            echo "::warning::DOCKERHUB_PASSWORD is not set; skipping Docker Hub overview sync"
+            exit 0
+          fi
+          login_json="$(curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_PASSWORD}\"}" \
+            "https://hub.docker.com/v2/users/login/")" || {
+            echo "::warning::Docker Hub Web API login failed; skipping overview sync"
             exit 0
           }
           jwt="$(printf '%s' "${login_json}" | jq -r '.token')"
           if [ -z "${jwt}" ] || [ "${jwt}" = "null" ]; then
-            echo "Docker Hub login returned no token; skipping overview sync"
+            echo "::warning::Docker Hub login returned no token; skipping overview sync"
             exit 0
           fi
-          jq -n --rawfile readme misc/docker/dockerhub-overview.md \
-            '{full_description: $readme}' \
+          # Keep the short description aligned with the overview's opening.
+          jq -n \
+            --arg description "Cumments is a Matrix-native comment system backend" \
+            --rawfile readme misc/docker/dockerhub-overview.md \
+            '{description: $description, full_description: $readme}' \
             | curl -fsS -X PATCH \
               -H "Authorization: JWT ${jwt}" \
               -H "Content-Type: application/json" \
               -d @- \
               "https://hub.docker.com/v2/repositories/${DOCKERHUB_NAMESPACE}/cumments/" \
-            || echo "Docker Hub overview sync failed; continuing (non-fatal)"
+            || echo "::warning::Docker Hub overview sync failed (non-fatal)"
