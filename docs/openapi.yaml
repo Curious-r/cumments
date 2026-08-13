@@ -695,7 +695,7 @@ paths:
       - $ref: "#/components/parameters/PostSlug"
     post:
       tags: [Comments]
-      summary: Upload guest media (image/voice)
+      summary: Upload guest media (image/video/audio/file, voice)
       operationId: uploadMedia
       description: |
         Uploads raw bytes as the guest's virtual user. Query parameters carry

@@ -30,8 +30,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
 /// How long a signed media URL stays valid.
 const MEDIA_URL_TTL_SECONDS: i64 = 15 * 60;
-/// Mime prefixes allowed for guest uploads (image + audio for step 3).
-const ALLOWED_UPLOAD_MIMES: [&str; 2] = ["image/", "audio/"];
+/// Mime prefixes allowed for guest uploads (image, video, audio, files).
+const ALLOWED_UPLOAD_MIMES: [&str; 4] = ["image/", "video/", "audio/", "application/"];
 /// Content types allowed through the proxy (prefix match).
 const ALLOWED_MEDIA_TYPES: [&str; 5] = [
     "image/",
@@ -332,12 +332,14 @@ pub(crate) async fn upload_media_handler(
         .await
         .map_err(|e| AppError::Internal(format!("failed to record media upload: {e}")))?;
 
-    // ALLOWED_UPLOAD_MIMES restricts uploads to image/* and audio/*, so the
-    // non-image branch is audio by construction.
     let kind = if mimetype.starts_with("image/") {
         "image"
-    } else {
+    } else if mimetype.starts_with("video/") {
+        "video"
+    } else if mimetype.starts_with("audio/") {
         "audio"
+    } else {
+        "file"
     };
     Ok(Json(serde_json::json!({
         "url": url,

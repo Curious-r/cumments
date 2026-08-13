@@ -455,7 +455,7 @@ thumbnail.
 
 `POST /api/v1/sites/{site_id}/posts/{post_slug}/media?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
 
-Uploads raw image/audio bytes as the guest's virtual user and returns
+Uploads raw image/video/audio/file bytes as the guest's virtual user and returns
 `{ "url", "filename", "mimetype", "size", "voice" }` with an `mxc://` URL.
 The signature covers
 `["UPLOAD", site_id, post_slug, mime, filename, size, challenge]`;

@@ -184,6 +184,7 @@
                     stop_record: "停止",
                     upload_media_failed: "媒体上传失败：",
                     stickers: "贴纸",
+                    attach_file: "文件",
                     no_stickers: "暂无预置贴纸",
                     reaction_submitted: "已发送回应",
                     vote_submitted: "投票已提交",
@@ -337,6 +338,7 @@
                     stop_record: "Stop",
                     upload_media_failed: "Media upload failed: ",
                     stickers: "Stickers",
+                    attach_file: "File",
                     no_stickers: "No preset stickers",
                     reaction_submitted: "Reaction sent",
                     vote_submitted: "Vote submitted",
@@ -2588,10 +2590,29 @@
                     .getElementById("stickerBtn")
                     .addEventListener("click", pickSticker);
                 document
+                    .getElementById("fileBtn")
+                    .addEventListener("click", () =>
+                        document.getElementById("fileInput").click(),
+                    );
+                document
                     .getElementById("locationBtn")
                     .addEventListener("click", sendLocation);
                 document
                     .getElementById("imageInput")
+                    .addEventListener("change", (event) => {
+                        const file = event.target.files && event.target.files[0];
+                        if (file) {
+                            attachMedia(
+                                file,
+                                file.name,
+                                file.type || "application/octet-stream",
+                                false,
+                            );
+                        }
+                        event.target.value = "";
+                    });
+                document
+                    .getElementById("fileInput")
                     .addEventListener("change", (event) => {
                         const file = event.target.files && event.target.files[0];
                         if (file) {
