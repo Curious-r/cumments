@@ -5,6 +5,9 @@ protocol**. Matrix is the **source of truth**: every comment, edit and
 deletion is an immutable Matrix event. SQLite is a disposable local read model
 that can be rebuilt from Matrix history with `cumments backfill`.
 
+How Matrix events are shaped into the typed comment model is documented in
+[Data model](data-model.md).
+
 ## System overview
 
 ```
@@ -121,6 +124,16 @@ Useful for exercising the API and the intent queue without Matrix side
 effects. Comments are **not** projected into the read model because there is
 no homeserver pushing events back.
 
+### Ephemeral events
+
+Comments arrive over AppService push transactions, but typing indicators,
+read receipts and presence are not part of room history. Cumments keeps a
+resident `/sync` connection (AppService token + bot identity) that filters
+for ephemeral/presence only, holds per-room in-memory state, and feeds
+incremental `ephemeral` events — plus an initial snapshot — into the same SSE
+stream as comment updates. See
+[Ephemeral events](data-model.md#ephemeral-events).
+
 ## Crates
 
 | Crate | Responsibility |
@@ -130,7 +143,7 @@ no homeserver pushing events back.
 | `cumments-store` | SQLite persistence (SeaORM), migrations, backup |
 | `cumments-reconciler` | Background writer — reads intents, calls MatrixDriver, waits for projection to close the loop, reconciles site roles |
 | `cumments-matrix` | MatrixDriver implementations (AppService, Logging) |
-| `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver, backfill) |
+| `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver, claim-DM matching, ephemeral sync, backfill) |
 | `cumments` | CLI entry point, configuration, assembly |
 
 ## Recovery

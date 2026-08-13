@@ -22,15 +22,21 @@ markdown_extensions:
       permalink: true
 
 nav:
-  - Home: index.md
-  - API: api.md
-  - Architecture: architecture.md
-  - Configuration: configuration.md
-  - Demo: demo.md
-  - CLI: cli.md
-  - Development: development.md
-  - Installation: installation.md
-  - Site authentication: site-authentication.md
-  - Site governance: site-governance.md
-  - Site verification: site-verification.md
-  - Problem types: problems/index.md
+  - Getting started:
+      - Home: index.md
+      - Quick start: installation.md
+  - Concepts:
+      - Architecture: architecture.md
+      - Data model: data-model.md
+      - Site trust:
+          - Overview: site-authentication.md
+          - Verification walkthrough: site-verification.md
+      - Site governance: site-governance.md
+  - Reference:
+      - API: api.md
+      - Configuration: configuration.md
+      - CLI: cli.md
+      - Problem types: problems/index.md
+  - Development:
+      - Development: development.md
+      - Demo frontend: demo.md
