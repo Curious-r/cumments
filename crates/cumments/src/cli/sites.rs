@@ -28,23 +28,17 @@ pub async fn handle_sites_command(
                     store
                         .register_site(site_id.as_str(), &token_hash(&claim_token))
                         .await?;
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "site_id": site_id.as_str(),
-                            "claim_token": claim_token,
-                        })
-                    );
+                    print_json(&serde_json::json!({
+                        "site_id": site_id.as_str(),
+                        "claim_token": claim_token,
+                    }))?;
                 }
                 None => {
                     let registered = register_site(store).await?;
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "site_id": registered.site_id,
-                            "claim_token": registered.claim_token,
-                        })
-                    );
+                    print_json(&serde_json::json!({
+                        "site_id": registered.site_id,
+                        "claim_token": registered.claim_token,
+                    }))?;
                 }
             }
             eprintln!("Keep the claim token private: it proves ownership of this site.");
@@ -108,10 +102,10 @@ pub async fn handle_sites_command(
             }
             let secret = generate_token();
             store.store_site_secret(site_id.as_str(), &secret).await?;
-            println!(
-                "{}",
-                serde_json::json!({ "site_id": site_id.as_str(), "secret": secret })
-            );
+            print_json(&serde_json::json!({
+                "site_id": site_id.as_str(),
+                "secret": secret,
+            }))?;
             eprintln!("Store the secret in the site backend; it will not be shown again.");
             Ok(())
         }
@@ -163,10 +157,10 @@ pub async fn handle_sites_command(
             if !rotated {
                 bail!("site not found");
             }
-            println!(
-                "{}",
-                serde_json::json!({ "site_id": site_id.as_str(), "claim_token": claim_token })
-            );
+            print_json(&serde_json::json!({
+                "site_id": site_id.as_str(),
+                "claim_token": claim_token,
+            }))?;
             eprintln!("Keep the new claim token private; it proves ownership of this site.");
             Ok(())
         }
