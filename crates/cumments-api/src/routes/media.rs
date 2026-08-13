@@ -277,12 +277,12 @@ pub(crate) async fn upload_media_handler(
         .await
         .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
 
+    // ALLOWED_UPLOAD_MIMES restricts uploads to image/* and audio/*, so the
+    // non-image branch is audio by construction.
     let kind = if mimetype.starts_with("image/") {
         "image"
-    } else if mimetype.starts_with("audio/") {
-        "audio"
     } else {
-        "file"
+        "audio"
     };
     Ok(Json(serde_json::json!({
         "url": url,

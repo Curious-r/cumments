@@ -40,8 +40,8 @@ pub struct ParsedRoomMessage {
 }
 
 impl ParsedRoomMessage {
-    /// The canonical text used to verify guest signatures. Only text messages
-    /// are signable today; rich guest messages are future work.
+    /// The canonical value used to verify guest signatures: the text body for
+    /// text messages, the MXC URL for media, and the geo URI for locations.
     pub fn signable_content(&self) -> Option<&str> {
         match &self.content {
             Content::Text(text) => Some(&text.body),
@@ -60,7 +60,8 @@ pub struct ParsedRelation {
 }
 
 impl ParsedRelation {
-    /// The canonical text of the replacement, when it is a text edit.
+    /// The canonical value of the replacement (text edits today; media edits
+    /// would sign the replacement media URL).
     pub fn signable_content(&self) -> Option<&str> {
         match &self.new_content {
             Content::Text(text) => Some(&text.body),

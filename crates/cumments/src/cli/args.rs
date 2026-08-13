@@ -204,7 +204,7 @@ pub enum Commands {
     /// Manage sites registered through the API
     #[command(name = "sites")]
     Sites(SitesArgs),
-    /// Manage blocked comment rooms
+    /// Manage quarantined comment rooms
     #[command(name = "rooms")]
     Rooms(RoomsArgs),
     /// Generate a shell completion script
