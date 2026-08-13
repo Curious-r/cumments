@@ -401,8 +401,9 @@ Both refuse to touch sites whose secret is declared in the config file.
 
 `GET /api/v1/admin/sites/{site_id}/config-snippet`
 
-Returns a TOML block to paste into `[sites]` when the operator wants to move a
-database-tracked site into declarative config.
+Returns `{ "site_id": "...", "toml": "..." }`; `toml` is the block to paste
+into `[sites]` when the operator wants to move a database-tracked site into
+declarative config.
 
 ### Rotate the claim token
 
@@ -616,3 +617,46 @@ token allows at most 5 confirm attempts before a new challenge is required.
 
 `site_id` and `post_slug` accept lowercase `[a-z0-9-]`, 1–64 characters.
 Invalid values return `400 code=validation-error`.
+
+## Design trade-offs
+
+These are deliberate choices, kept here so callers understand why the API
+looks the way it does.
+
+**QUERY instead of GET with a body.** List endpoints take pagination in a
+JSON request body, so they use the `QUERY` method (RFC 10008) rather than
+`GET`. GET bodies are dropped by some intermediaries and discouraged by the
+HTTP spec; QUERY carries the payload while staying safe and cacheable. The
+API advertises `Accept-Query: application/json` and returns
+`405 code=method-not-allowed` for GET.
+
+**No request bodies on DELETE.** RFC 9110 leaves DELETE request-body
+semantics undefined, and some proxies/CDNs strip or reject body-bearing
+DELETEs. DELETE targets therefore travel as query parameters
+(`comment_id`, `user_id`), never in the body.
+
+**403 for authentication failures.** Missing or invalid claim tokens, origin
+mismatches, and unauthorized writes return `403` with a stable problem
+`code`, not `401`. Site authentication is origin/HMAC based rather than HTTP
+authentication, so there is no `WWW-Authenticate` challenge to advertise and
+clients must not prompt for credentials. Admin token failures use `403` the
+same way, so the API never emits `401`.
+
+**Constant `Retry-After` windows.** Rate limiters are in-memory, per-client
+sliding windows (keyed by peer IP, with trusted-proxy-aware `X-Forwarded-For`
+parsing). A `429` advertises the endpoint's fixed window as `Retry-After`
+rather than the exact remaining time for that client: it is conservative,
+simple, and does not leak per-key limiter state. Multi-instance deployments
+would need a shared limiter store — a documented platform limitation.
+
+**Asynchronous write intents.** `POST`/`PATCH`/`DELETE` enqueue an intent
+and return `202 { "intent_id" }` before the comment lands in Matrix. This
+keeps request latency bounded by the queue write, decouples clients from
+homeserver timing, and pairs with `Idempotency-Key` (scoped to the author's
+public key, 24-hour retention) to make retries safe.
+
+**Mutations return the affected resource.** Write endpoints return the
+affected resource as JSON (the updated site, the pending role claim, the
+revoked role). `DELETE /api/v1/admin/rooms/quarantined/{room_id}` is the
+single exception and returns `204`: the quarantine row is gone, so there is
+no surviving resource to serialize.
