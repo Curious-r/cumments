@@ -178,7 +178,7 @@ async fn write_enforcement_follows_policy_and_origin() {
     // disabled: any origin passes, response echoes it
     let (state, store) = test_state("disabled", SiteVerificationPolicy::Disabled, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = middleware_router(state);
@@ -216,7 +216,7 @@ async fn write_enforcement_follows_policy_and_origin() {
     // optional: unverified sites keep working
     let (state, store) = test_state("optional", SiteVerificationPolicy::Optional, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = middleware_router(state);
@@ -253,7 +253,7 @@ async fn write_enforcement_follows_policy_and_origin() {
     // required: unknown sites are rejected with verification guidance
     let (state, store) = test_state("required", SiteVerificationPolicy::Required, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = middleware_router(state);
@@ -280,7 +280,7 @@ async fn disabled_write_errors_include_wildcard_cors() {
     let (state, store) =
         test_state("disabled-errors", SiteVerificationPolicy::Disabled, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = middleware_router(state);
@@ -323,7 +323,7 @@ async fn disabled_write_errors_include_wildcard_cors() {
 async fn comment_body_endpoints_require_comment_id() {
     let (state, store) = test_state("comment-body", SiteVerificationPolicy::Disabled, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = cumments_api::build_router(state);
@@ -388,7 +388,11 @@ async fn comment_body_endpoints_require_comment_id() {
 async fn verified_site_enforces_exact_origins_and_rejects_null() {
     let (state, store) = test_state("verified", SiteVerificationPolicy::Required, None).await;
     store
-        .register_site("a1b2c3d4e5f60718a1b2c3d4e5f60718", &token_hash("claim"))
+        .register_site(
+            "a1b2c3d4e5f60718a1b2c3d4e5f60718",
+            &token_hash("claim"),
+            false,
+        )
         .await
         .expect("register site");
     store
@@ -460,7 +464,7 @@ async fn secret_mode_requires_a_valid_hmac_signature() {
     let (state, store) = test_state("secret", SiteVerificationPolicy::Required, None).await;
     let site_id = "b2c3d4e5f60718a1b2c3d4e5f60718a1";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("register site");
     store
@@ -1042,7 +1046,7 @@ async fn location_posts_are_queued_and_idempotent() {
     let site = SiteId::from("test-blog");
     let slug = PostSlug::from("hello");
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     store
@@ -1135,7 +1139,7 @@ async fn comment_replay_returns_original_intent_without_consuming_pow() {
 
     let (state, store) = test_state("comment-replay", SiteVerificationPolicy::Disabled, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = cumments_api::build_router(state.clone());
@@ -1210,7 +1214,7 @@ async fn comment_media_must_reference_an_owned_upload() {
     let (state, store) =
         test_state("media-ownership", SiteVerificationPolicy::Disabled, None).await;
     store
-        .register_site("test-blog", &token_hash("claim"))
+        .register_site("test-blog", &token_hash("claim"), false)
         .await
         .expect("register site");
     let router = cumments_api::build_router(state.clone());
@@ -1291,7 +1295,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     .await;
     let site_id = "gov-flow-123";
     store
-        .register_site(site_id, &token_hash("claim-token"))
+        .register_site(site_id, &token_hash("claim-token"), false)
         .await
         .expect("register site");
     let router = cumments_api::build_router(state);
@@ -1455,7 +1459,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
 
 #[tokio::test]
 async fn registration_supports_chosen_ids() {
-    let (state, store) = test_state("register-id", SiteVerificationPolicy::Disabled, None).await;
+    let (state, _) = test_state("register-id", SiteVerificationPolicy::Disabled, None).await;
     let router = cumments_api::build_router(state);
 
     // A chosen id round-trips and the claim token is returned once.
@@ -1529,7 +1533,7 @@ async fn unregistered_sites_cannot_write() {
 
     // Registered sites pass the middleware and reach the handler.
     store
-        .register_site("reg-site", &token_hash("claim"))
+        .register_site("reg-site", &token_hash("claim"), false)
         .await
         .expect("register site");
     let allowed = router
@@ -1566,5 +1570,87 @@ async fn unregistered_sites_cannot_write() {
     assert!(
         body_text(unknown).await.contains("site-not-registered"),
         "unknown sites must be rejected with the stable problem code"
+    );
+}
+
+#[tokio::test]
+async fn custom_named_sites_require_verification_in_optional_mode() {
+    let (state, store) = test_state("custom-name", SiteVerificationPolicy::Optional, None).await;
+    let router = cumments_api::build_router(state);
+
+    // A caller-chosen id is unverified: writes are rejected until an origin
+    // is proven, even though `optional` relaxes random-id sites.
+    store
+        .register_site("custom-blog", &token_hash("claim"), true)
+        .await
+        .expect("register custom site");
+    let denied = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/custom-blog/posts/p1/comments",
+            Some("https://blog.example.com"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert!(
+        body_text(denied)
+            .await
+            .contains("site-verification-required")
+    );
+
+    // A server-generated id keeps the relaxed `optional` behavior.
+    store
+        .register_site(
+            "a1b2c3d4e5f60718a1b2c3d4e5f60718",
+            &token_hash("claim"),
+            false,
+        )
+        .await
+        .expect("register random site");
+    let random_ok = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/p1/comments",
+            Some("https://blog.example.com"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(random_ok.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_text(random_ok)
+            .await
+            .contains("idempotency-key-required"),
+        "random-id unverified sites must reach the handler in optional mode"
+    );
+
+    // Verifying an origin activates the chosen id.
+    store
+        .add_verified_origin(
+            "custom-blog",
+            &Origin::parse("https://blog.example.com").expect("valid origin"),
+        )
+        .await
+        .expect("verify origin");
+    let allowed = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/custom-blog/posts/p1/comments",
+            Some("https://blog.example.com"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(allowed.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_text(allowed)
+            .await
+            .contains("idempotency-key-required"),
+        "verified custom-named sites must reach the handler"
     );
 }

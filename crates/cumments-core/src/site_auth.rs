@@ -449,6 +449,10 @@ impl SiteAuthPolicy {
 #[derive(Debug, Clone)]
 pub struct SiteAuthInfo {
     pub site_id: String,
+    /// Whether the id was caller-chosen (rather than server-generated).
+    /// Chosen ids are a privilege: `optional` mode requires origin
+    /// verification before they can accept writes.
+    pub is_custom_id: bool,
     pub auth_mode: SiteAuthMode,
     pub verification_status: SiteVerificationStatus,
     pub verified_origins: Vec<Origin>,
@@ -623,7 +627,14 @@ pub fn well_known_proofs_match(proofs: &[SiteProof], site_id: &str, token: &str)
 /// Registers a new site and returns its random id and one-time claim token.
 pub async fn register_site(store: &dyn SiteAuthStore) -> Result<RegisteredSite, SiteServiceError> {
     let site_id = generate_site_id();
-    register_site_with_id(store, site_id.as_str()).await
+    let claim_token = generate_token();
+    store
+        .register_site(&site_id, &token_hash(&claim_token), false)
+        .await?;
+    Ok(RegisteredSite {
+        site_id,
+        claim_token,
+    })
 }
 
 /// Registers a site under a caller-chosen id and returns its one-time claim
@@ -636,7 +647,7 @@ pub async fn register_site_with_id(
 ) -> Result<RegisteredSite, SiteServiceError> {
     let claim_token = generate_token();
     store
-        .register_site(site_id, &token_hash(&claim_token))
+        .register_site(site_id, &token_hash(&claim_token), true)
         .await?;
     Ok(RegisteredSite {
         site_id: site_id.to_string(),

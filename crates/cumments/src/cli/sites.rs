@@ -33,7 +33,7 @@ pub async fn handle_sites_command(
                     let site_id = SiteId::new(site_id.clone())
                         .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
                     store
-                        .register_site(site_id.as_str(), &token_hash(&claim_token))
+                        .register_site(site_id.as_str(), &token_hash(&claim_token), true)
                         .await?;
                     print_json(&serde_json::json!({
                         "site_id": site_id.as_str(),
@@ -335,7 +335,7 @@ mod tests {
             .expect("connect db");
         let policy = test_policy();
         store
-            .register_site("my-blog", &token_hash("old-token"))
+            .register_site("my-blog", &token_hash("old-token"), true)
             .await
             .expect("register site");
 
@@ -411,7 +411,7 @@ mod tests {
             .expect("connect db");
         let policy = test_policy();
         store
-            .register_site("my-blog", &token_hash("token"))
+            .register_site("my-blog", &token_hash("token"), true)
             .await
             .expect("register site");
         let origin = Origin::parse("https://blog.example.com").expect("parse origin");
@@ -454,7 +454,7 @@ mod tests {
             .expect("connect db");
         let policy = test_policy();
         store
-            .register_site("my-blog", &token_hash("token"))
+            .register_site("my-blog", &token_hash("token"), true)
             .await
             .expect("register site");
 

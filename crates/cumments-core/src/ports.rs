@@ -461,6 +461,7 @@ pub trait SiteAuthStore: Send + Sync {
         &self,
         site_id: &str,
         claim_token_hash: &str,
+        custom_id: bool,
     ) -> Result<(), SiteServiceError>;
 
     /// Full authentication state of a site, if a row exists.

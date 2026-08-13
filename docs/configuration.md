@@ -121,7 +121,9 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
 
 Regardless of the policy, the `site_id` must be registered through the
 API/CLI or declared in `[sites]` before it can be written to; unknown ids
-return `404 code=site-not-registered`.
+return `404 code=site-not-registered`. Sites registered under a
+caller-chosen id additionally need an origin verified before writes in
+`optional` mode (random ids keep the relaxed behavior).
 
 | Value | Unverified sites | Verified / configured sites |
 |---|---|---|

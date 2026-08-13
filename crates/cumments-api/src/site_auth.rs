@@ -313,6 +313,15 @@ fn decide_origin_write_access(
 
     if allowed.is_empty() {
         return match policy {
+            // A caller-chosen id is a privilege: even in `optional` mode the
+            // owner must prove a domain before writes are accepted. Random
+            // server-generated ids keep the relaxed migration behavior.
+            SiteVerificationPolicy::Optional if db_auth.is_some_and(|info| info.is_custom_id) => {
+                Err(AppError::SiteVerificationRequired(format!(
+                    "site `{site_id}` uses a caller-chosen id; verify its origin or add it \
+                     to the `[sites]` configuration before writing comments"
+                )))
+            }
             SiteVerificationPolicy::Optional => {
                 tracing::warn!(
                     site_id,
@@ -488,6 +497,7 @@ mod tests {
     fn db_auth(origins: &[&str]) -> Option<SiteAuthInfo> {
         Some(SiteAuthInfo {
             site_id: "test-site".to_string(),
+            is_custom_id: false,
             auth_mode: SiteAuthMode::Origin,
             verification_status: SiteVerificationStatus::Verified,
             verified_origins: origins.iter().map(|raw| origin(raw)).collect(),
@@ -508,6 +518,20 @@ mod tests {
             Some(origin("https://anywhere.example.com")),
         );
         assert!(matches!(result, Ok(Some(_))));
+    }
+
+    #[test]
+    fn optional_policy_rejects_unverified_custom_named_sites() {
+        let mut info = db_auth(&[]).expect("db auth");
+        info.is_custom_id = true;
+        let result = decide_origin_write_access(
+            SiteVerificationPolicy::Optional,
+            None,
+            Some(&info),
+            "test-site",
+            Some(origin("https://anywhere.example.com")),
+        );
+        assert!(matches!(result, Err(AppError::SiteVerificationRequired(_))));
     }
 
     #[test]

@@ -56,6 +56,13 @@ decision, so an unregistered site can never provision a Matrix Space.
 `file://` demo pages. `optional` and `required` reject it, together with
 missing or multiple `Origin` headers (see [Origin mode](#origin-mode)).
 
+There is one extra rule for caller-chosen ids: in `optional` mode a site
+registered with a custom `site_id` is **not** covered by the "unverified
+sites keep working" relaxation — it must verify at least one origin before
+writes are accepted (`403 code=site-verification-required`), while
+server-generated ids keep the migration behavior. The chosen name stays
+reserved while unverified.
+
 ### Per-site auth mode: `sites.<id>.auth_mode`
 
 | Value | Trust anchor | Requires |
@@ -84,6 +91,9 @@ victim's id and verifying it with a domain they control. Operator-configured
 sites skip the claim step. Registration is mandatory in every policy: a site
 must be operator-configured or registered through the API/CLI before it can
 be written to, and legacy auto-creation of sites on first comment is gone.
+Chosen ids carry a further obligation: they only become writable after an
+origin is verified (see above), so a "pretty name" must be backed by a real
+domain.
 
 See [Site verification and strict mode](site-verification.md) for the full
 registration, verification and key-issuance walkthrough.

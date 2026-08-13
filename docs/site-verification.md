@@ -38,6 +38,8 @@ Keep the claim token private: it proves ownership of this site. It is sent in
 the `X-Cumments-Claim-Token` header for verification and secret issuance.
 The chosen id is what appears in Matrix aliases
 (`#_cumments_my-blog:server`) and the Space display name.
+Note that a chosen id cannot accept writes until an origin is verified (in
+the default `optional` policy); the steps below complete that.
 
 You can also register from a terminal with the CLI:
 

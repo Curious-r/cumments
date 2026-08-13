@@ -22,6 +22,7 @@ impl SiteAuthStore for DbStore {
         &self,
         site_id: &str,
         claim_token_hash: &str,
+        custom_id: bool,
     ) -> Result<(), SiteServiceError> {
         let now = Utc::now();
         let model = sites::ActiveModel {
@@ -31,6 +32,7 @@ impl SiteAuthStore for DbStore {
             auth_mode: Set(DbAuthMode::Origin),
             verification_status: Set(DbVerificationStatus::Unverified),
             claim_token_hash: Set(Some(claim_token_hash.to_owned())),
+            is_custom_id: Set(custom_id),
             secret: Set(None),
             verified_at: Set(None),
             created_at: Set(now),
@@ -64,6 +66,7 @@ impl SiteAuthStore for DbStore {
 
         Ok(Some(SiteAuthInfo {
             site_id: site.id,
+            is_custom_id: site.is_custom_id,
             auth_mode: core_auth_mode(site.auth_mode),
             verification_status: core_verification_status(site.verification_status),
             verified_origins: origins,
@@ -332,6 +335,7 @@ impl SiteAuthStore for DbStore {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(SiteAuthInfo {
                     site_id: site.id,
+                    is_custom_id: site.is_custom_id,
                     auth_mode: core_auth_mode(site.auth_mode),
                     verification_status: core_verification_status(site.verification_status),
                     verified_origins,

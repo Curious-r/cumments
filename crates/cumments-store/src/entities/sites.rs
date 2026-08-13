@@ -14,6 +14,9 @@ pub struct Model {
     pub verification_status: super::active_enums::SiteVerificationStatus,
     /// SHA-256 hash of the claim token that proves ownership of this site.
     pub claim_token_hash: Option<String>,
+    /// Whether the site id was caller-chosen at registration. Chosen ids
+    /// require origin verification before writes in `optional` mode.
+    pub is_custom_id: bool,
     /// HMAC key used to verify site requests, when the site uses secret auth.
     pub secret: Option<String>,
     /// When the site was last verified.

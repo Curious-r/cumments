@@ -184,7 +184,9 @@ site API/CLI or declared in `[sites]` before it can receive comments, in
 every verification policy. This keeps an unknown id from provisioning a
 Matrix Space on its first comment — the old lazy auto-creation amplified an
 open registration endpoint into unbounded homeserver resource use. See
-[Site trust](../site-trust.md).
+[Site trust](../site-trust.md). Caller-chosen ids add one more requirement:
+in `optional` mode they must verify an origin before writes, so a readable
+alias has to be backed by a real domain.
 
 **403 for authentication failures.** Missing or invalid claim tokens, origin
 mismatches, and unauthorized writes return `403` with a stable problem

@@ -41,6 +41,7 @@ pub mod m20260813_000035_media_uploads;
 pub mod m20260813_000036_poll_votes_unique_sender;
 pub mod m20260813_000037_site_governance_roles;
 pub mod m20260813_000038_role_claims;
+pub mod m20260814_000039_sites_custom_id;
 
 pub struct Migrator;
 
@@ -114,6 +115,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260813_000036_poll_votes_unique_sender::Migration),
             Box::new(m20260813_000037_site_governance_roles::Migration),
             Box::new(m20260813_000038_role_claims::Migration),
+            Box::new(m20260814_000039_sites_custom_id::Migration),
         ]
     }
 }

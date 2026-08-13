@@ -23,6 +23,10 @@ body, the server generates an unguessable random id (32 hex characters). The
 chosen id is what shows up in Matrix: the Space alias
 `#_cumments_my-blog:server`, each room alias
 `#_cumments_my-blog_<post>:server` and the Space display name.
+Chosen ids are a privilege: under the `optional` verification policy they
+must verify at least one origin before they accept writes, while random ids
+keep the relaxed migration behavior. The name stays reserved while
+unverified (see [Site trust](../site-trust.md)).
 
 The response carries the `site_id` and a one-time `claim_token`:
 

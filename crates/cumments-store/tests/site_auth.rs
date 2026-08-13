@@ -24,7 +24,7 @@ async fn site_lifecycle_register_verify_secret() {
     let claim_token = "claim-token-value";
 
     store
-        .register_site(site_id, &token_hash(claim_token))
+        .register_site(site_id, &token_hash(claim_token), false)
         .await
         .expect("register site");
 
@@ -35,6 +35,7 @@ async fn site_lifecycle_register_verify_secret() {
         .expect("site exists");
     assert_eq!(auth.auth_mode, SiteAuthMode::Origin);
     assert_eq!(auth.verification_status, SiteVerificationStatus::Unverified);
+    assert!(!auth.is_custom_id, "server-generated ids are not custom");
     assert!(auth.verified_origins.is_empty());
     assert_eq!(
         store
@@ -103,18 +104,35 @@ async fn site_lifecycle_register_verify_secret() {
 }
 
 #[tokio::test]
+async fn custom_id_flag_persists() {
+    let store = DbStore::connect(&test_db_url("site-custom-id"))
+        .await
+        .expect("connect db");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register custom site");
+    let auth = store
+        .get_site_auth("my-blog")
+        .await
+        .expect("query auth")
+        .expect("site exists");
+    assert!(auth.is_custom_id, "chosen ids must be marked custom");
+}
+
+#[tokio::test]
 async fn duplicate_site_registration_is_a_clean_conflict() {
     let store = DbStore::connect(&test_db_url("site-auth-duplicate"))
         .await
         .expect("connect db");
     let site_id = "a1b2c3d4e5f60718a1b2c3d4e5f60718";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("first registration");
 
     let err = store
-        .register_site(site_id, &token_hash("other"))
+        .register_site(site_id, &token_hash("other"), false)
         .await
         .expect_err("duplicate registration must fail");
     assert!(err.to_string().contains("already exists"));
@@ -127,7 +145,7 @@ async fn admin_operations_list_revoke_and_clear_secret() {
         .expect("connect db");
     let site_id = "c3d4e5f60718a1b2c3d4e5f60718a1b2";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("register site");
 
@@ -195,7 +213,7 @@ async fn expired_verification_tokens_are_not_found() {
         .expect("connect db");
     let site_id = "b2c3d4e5f60718a1b2c3d4e5f60718a1";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("register site");
 
@@ -227,7 +245,7 @@ async fn one_challenge_with_multiple_origins_inserts_distinct_tokens() {
         .expect("connect db");
     let site_id = "d4e5f60718a1b2c3d4e5f60718a1b2c3";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("register site");
 
@@ -284,7 +302,7 @@ async fn verification_attempts_increment_and_are_persisted() {
         .expect("connect db");
     let site_id = "a1b2c3d4e5f60718a1b2c3d4e5f60718";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("register site");
 
@@ -337,7 +355,7 @@ async fn claim_token_can_be_rotated() {
         .expect("connect db");
     let site_id = "f60718a1b2c3d4e5f60718a1b2c3d4e5";
     store
-        .register_site(site_id, &token_hash("old-claim"))
+        .register_site(site_id, &token_hash("old-claim"), false)
         .await
         .expect("register site");
 
@@ -370,7 +388,7 @@ async fn complete_verification_is_atomic_and_idempotent() {
         .expect("connect db");
     let site_id = "e5f60718a1b2c3d4e5f60718a1b2c3d4";
     store
-        .register_site(site_id, &token_hash("claim"))
+        .register_site(site_id, &token_hash("claim"), false)
         .await
         .expect("register site");
 
