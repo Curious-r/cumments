@@ -700,7 +700,7 @@ paths:
       description: |
         Uploads raw bytes as the guest's virtual user. Query parameters carry
         the PoW challenge response and an Ed25519 signature over
-        `UPLOAD/site/post/mime/size/challenge`.
+        `UPLOAD/site/post/mime/filename/size/challenge`.
       parameters:
         - name: mime
           in: query

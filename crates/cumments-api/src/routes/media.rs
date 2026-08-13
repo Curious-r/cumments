@@ -273,6 +273,7 @@ pub(crate) async fn upload_media_handler(
         site_id_val.as_str(),
         post_slug_val.as_str(),
         &mimetype,
+        &filename,
         &body.len().to_string(),
         challenge,
     ]);

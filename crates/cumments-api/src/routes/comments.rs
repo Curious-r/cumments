@@ -49,6 +49,26 @@ const REPLY_TO_FORMAT_ERROR: &str =
 const COMMENT_ID_FORMAT_ERROR: &str =
     "comment_id must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
 
+/// Loose MSC3488 / RFC 5870 shape check: `geo:lat,lon` with optional
+/// `;key=value` parameters, where the coordinates are decimal numbers in
+/// range.
+fn is_valid_geo_uri(geo_uri: &str) -> bool {
+    let Some(rest) = geo_uri.strip_prefix("geo:") else {
+        return false;
+    };
+    let coords = rest.split_once(';').map_or(rest, |(coords, _)| coords);
+    let Some((lat, lon)) = coords.split_once(',') else {
+        return false;
+    };
+    let Ok(lat) = lat.parse::<f64>() else {
+        return false;
+    };
+    let Ok(lon) = lon.parse::<f64>() else {
+        return false;
+    };
+    (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)
+}
+
 /// Basic shape check for a Matrix event ID used as a reply target.
 ///
 /// Event IDs are opaque by spec, but their shape depends on the room version:
@@ -900,9 +920,9 @@ pub(crate) async fn location_handler(
     let req: LocationRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     req.validate().map_err(AppError::Validation)?;
-    if !req.geo_uri.starts_with("geo:") {
+    if !is_valid_geo_uri(&req.geo_uri) {
         return Err(AppError::BadRequest(
-            "geo_uri must be a geo: URI".to_string(),
+            "geo_uri must be a geo: URI with decimal lat,lon coordinates".to_string(),
         ));
     }
     if !state.pow.verify(&req.challenge_response) {
