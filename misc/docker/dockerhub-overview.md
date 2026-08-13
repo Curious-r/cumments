@@ -9,16 +9,26 @@ history with `cumments backfill`.
 
 - **Matrix as the event log** — comments are `m.room.message`, edits are
   `m.replace`, deletions are `m.redaction`.
-- **Guest comments without accounts** — Ed25519 identity, signed Proof-of-Work
-  anti-spam, optional reply trees.
-- **Real-time SSE** — `comment_created` / `comment_updated` /
-  `comment_deleted` events.
+- **Two kinds of authors** — guest comments without accounts carry an
+  Ed25519 identity, signature and signed Proof-of-Work challenge; Matrix
+  users comment natively and are governed by room power levels.
+- **Rich content** — guest uploads (image / video / audio / file / voice)
+  served through a signed public media proxy, MSC3488 locations, reactions
+  and MSC3381 polls.
+- **Reply trees and real-time SSE** — `comment_created` /
+  `comment_updated` / `comment_deleted`, plus typing, read receipts and
+  presence events.
 - **AppService-first** — registers as a Matrix Application Service, uses
   virtual users, receives events over HTTP push.
 - **Flexible site trust** — operator-declared `[sites]` or self-service
   verification via `/.well-known` / DNS TXT; origin mode or HMAC secret mode.
-- **Admin API + local CLI** — sites, secrets, quarantined rooms, backups and
-  shell completions.
+- **Site governance** — owner (100), co-manager (75) and per-room moderator
+  (50) roles encoded in Matrix power levels; owners manage everything from a
+  Matrix client, the API writes to the same state.
+- **Admin API + local CLI** — sites, secrets, roles, quarantined rooms,
+  backups and shell completions.
+- **Rebuildable read model** — `cumments backfill` reconstructs SQLite from
+  Matrix history.
 
 ## Supported platforms
 
@@ -28,8 +38,8 @@ history with `cumments backfill`.
 ## Tags
 
 - `latest` — latest build from `main`
-- `0.20.1` — versioned multi-arch release (plus `0.20.1-amd64` /
-  `0.20.1-arm64` for pinning a single architecture)
+- `0.21.0` — versioned multi-arch release (plus `0.21.0-amd64` /
+  `0.21.0-arm64` for pinning a single architecture)
 - `sha-<commit>` — manual publish builds
 
 ## Quick start
@@ -83,6 +93,22 @@ volumes:
 
 The full tuwunel + Cumments stack lives in the repository at
 `misc/docker/compose.yaml`.
+
+After the first start, register a site and bind the site owner's Matrix
+account once:
+
+```bash
+curl -sS -X POST http://localhost:7931/api/v1/sites > site.json
+curl -sS -X POST "http://localhost:7931/api/v1/sites/$(jq -r .site_id site.json)/owners" \
+  -H "Content-Type: application/json" \
+  -H "X-Cumments-Claim-Token: $(jq -r .claim_token site.json)" \
+  -d '{"user_id":"@you:your-server.example.com"}'
+```
+
+Everything else — appointing co-managers, moderating rooms — happens from a
+Matrix client. See the [site governance
+guide](https://curious-r.github.io/cumments/site-governance/) and the
+[installation guide](https://curious-r.github.io/cumments/installation/).
 
 ## Configuration
 
