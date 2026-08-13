@@ -101,3 +101,17 @@ mode = "logging"
 # hs_token = "<hs_token from registration.yaml>"
 # # Optional: verify at startup that this config matches registration.yaml.
 # registration_file = "registration.yaml"
+
+# ── Rate limits (optional; defaults shown) ─────────────────────
+# Each bucket limits requests per client key over a fixed window and is
+# applied at startup. `window` accepts human durations like "30s" / "1h".
+#
+# [rate_limit]
+# registration = { requests = 10,  window = "1h" }
+# verification  = { requests = 20,  window = "1h" }
+# confirm       = { requests = 30,  window = "1h" }
+# admin         = { requests = 60,  window = "1m" }
+# write         = { requests = 120, window = "1h" }
+# sse           = { requests = 20,  window = "1h" }
+# media         = { requests = 120, window = "1h" }
+# moderation    = { requests = 60,  window = "1h" }

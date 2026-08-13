@@ -153,3 +153,29 @@ including `Origin: null` from `file://` demo pages, and answers with
 `X-Cumments-Timestamp` and `X-Cumments-Signature` (HMAC-SHA256 over
 `timestamp\nMETHOD\npath\nsha256(body)`), with the timestamp within ±5
 minutes.
+
+## Rate limits
+
+Every endpoint family's rate-limit budget is configurable under
+`[rate_limit]`. Values are applied at startup (a restart is required) and
+default to the historical hardcoded budgets:
+
+```toml
+[rate_limit]
+registration = { requests = 10,  window = "1h" }
+verification  = { requests = 20,  window = "1h" }
+confirm       = { requests = 30,  window = "1h" }
+admin         = { requests = 60,  window = "1m" }
+write         = { requests = 120, window = "1h" }
+sse           = { requests = 20,  window = "1h" }
+media         = { requests = 120, window = "1h" }
+moderation    = { requests = 60,  window = "1h" }
+```
+
+- `requests` is the maximum per window, per client key; it must be at least 1.
+- `window` accepts human durations (`"500ms"`, `"30s"`, `"1h"`) and must be
+  at least one second.
+- Environment variables follow the usual mapping, e.g.
+  `CUMMENTS__RATE_LIMIT__WRITE__REQUESTS`.
+- The 429 `Retry-After` value derives from each endpoint's configured
+  `window`.

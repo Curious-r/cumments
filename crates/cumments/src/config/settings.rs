@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use cumments_core::site_auth::{SiteAuthMode, SiteVerificationPolicy};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +17,9 @@ pub struct Settings {
     /// Operator-declared trust for individual sites (the config overlay).
     #[serde(default)]
     pub sites: HashMap<String, SiteConfig>,
+    /// Per-endpoint rate-limit budgets, applied at startup.
+    #[serde(default)]
+    pub rate_limit: RateLimits,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +48,109 @@ impl Default for Server {
 #[serde(deny_unknown_fields)]
 pub struct Database {
     pub url: String,
+}
+
+/// Per-endpoint rate-limit budgets. The defaults match the historical
+/// hardcoded values; changing any of them takes effect on restart.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RateLimits {
+    pub registration: RateLimitBucket,
+    pub verification: RateLimitBucket,
+    pub confirm: RateLimitBucket,
+    pub admin: RateLimitBucket,
+    pub write: RateLimitBucket,
+    pub sse: RateLimitBucket,
+    pub media: RateLimitBucket,
+    pub moderation: RateLimitBucket,
+}
+
+impl Default for RateLimits {
+    fn default() -> Self {
+        Self {
+            registration: RateLimitBucket::new(10, "1h"),
+            verification: RateLimitBucket::new(20, "1h"),
+            confirm: RateLimitBucket::new(30, "1h"),
+            admin: RateLimitBucket::new(60, "1m"),
+            write: RateLimitBucket::new(120, "1h"),
+            sse: RateLimitBucket::new(20, "1h"),
+            media: RateLimitBucket::new(120, "1h"),
+            moderation: RateLimitBucket::new(60, "1h"),
+        }
+    }
+}
+
+/// One rate-limit bucket: how many requests per fixed window.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitBucket {
+    /// Maximum requests per window, per client key.
+    pub requests: usize,
+    /// Human-readable window (`"30s"`, `"1h"`), parsed with humantime.
+    pub window: String,
+}
+
+impl RateLimitBucket {
+    fn new(requests: usize, window: &str) -> Self {
+        Self {
+            requests,
+            window: window.to_string(),
+        }
+    }
+}
+
+/// Rate-limit budgets after validation, ready for limiter construction.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedRateLimits {
+    pub registration: ResolvedRateLimit,
+    pub verification: ResolvedRateLimit,
+    pub confirm: ResolvedRateLimit,
+    pub admin: ResolvedRateLimit,
+    pub write: ResolvedRateLimit,
+    pub sse: ResolvedRateLimit,
+    pub media: ResolvedRateLimit,
+    pub moderation: ResolvedRateLimit,
+}
+
+/// One validated rate-limit bucket.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedRateLimit {
+    pub requests: usize,
+    pub window: Duration,
+}
+
+impl RateLimits {
+    /// Validates every bucket and resolves the window strings into
+    /// `Duration`s. Fails fast on non-positive requests or invalid windows.
+    pub fn resolved(&self) -> Result<ResolvedRateLimits> {
+        Ok(ResolvedRateLimits {
+            registration: self.registration.resolved("rate_limit.registration")?,
+            verification: self.verification.resolved("rate_limit.verification")?,
+            confirm: self.confirm.resolved("rate_limit.confirm")?,
+            admin: self.admin.resolved("rate_limit.admin")?,
+            write: self.write.resolved("rate_limit.write")?,
+            sse: self.sse.resolved("rate_limit.sse")?,
+            media: self.media.resolved("rate_limit.media")?,
+            moderation: self.moderation.resolved("rate_limit.moderation")?,
+        })
+    }
+}
+
+impl RateLimitBucket {
+    fn resolved(&self, field: &str) -> Result<ResolvedRateLimit> {
+        if self.requests == 0 {
+            bail!("`{field}.requests` must be at least 1");
+        }
+        let window = humantime::parse_duration(&self.window)
+            .map_err(|error| anyhow!("`{field}.window` is not a valid duration: {error}"))?;
+        if window < Duration::from_secs(1) {
+            bail!("`{field}.window` must be at least 1 second");
+        }
+        Ok(ResolvedRateLimit {
+            requests: self.requests,
+            window,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -479,5 +586,94 @@ mode = "logging"
             settings.security.site_verification,
             cumments_core::site_auth::SiteVerificationPolicy::Optional
         );
+    }
+
+    #[test]
+    fn rate_limits_default_to_historical_values() {
+        let settings = parse(
+            r#"
+[server]
+host = "localhost"
+port = 7931
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "logging"
+"#,
+        )
+        .expect("parse settings");
+        let resolved = settings.rate_limit.resolved().expect("resolved limits");
+        assert_eq!(resolved.registration.requests, 10);
+        assert_eq!(resolved.registration.window, Duration::from_secs(3600));
+        assert_eq!(resolved.admin.requests, 60);
+        assert_eq!(resolved.admin.window, Duration::from_secs(60));
+        assert_eq!(resolved.write.requests, 120);
+    }
+
+    #[test]
+    fn rate_limits_parse_custom_windows() {
+        let settings = parse(
+            r#"
+[server]
+host = "localhost"
+port = 7931
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "logging"
+
+[rate_limit.registration]
+requests = 3
+window = "30s"
+"#,
+        )
+        .expect("parse settings");
+        let resolved = settings.rate_limit.resolved().expect("resolved limits");
+        assert_eq!(resolved.registration.requests, 3);
+        assert_eq!(resolved.registration.window, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn rate_limits_reject_invalid_values() {
+        let mut settings = parse(
+            r#"
+[server]
+host = "localhost"
+port = 7931
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "logging"
+"#,
+        )
+        .expect("parse settings");
+
+        settings.rate_limit.write.requests = 0;
+        assert!(settings.rate_limit.resolved().is_err(), "zero requests");
+
+        settings.rate_limit.write.requests = 120;
+        settings.rate_limit.write.window = "nonsense".to_string();
+        assert!(settings.rate_limit.resolved().is_err(), "bad window");
+
+        settings.rate_limit.write.window = "500ms".to_string();
+        assert!(settings.rate_limit.resolved().is_err(), "sub-second window");
     }
 }

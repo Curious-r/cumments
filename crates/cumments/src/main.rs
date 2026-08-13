@@ -410,6 +410,7 @@ async fn main() -> Result<()> {
             }
         });
     }
+    let rate_limits = settings.rate_limit.resolved()?;
     let api_state = cumments_api::ApiState {
         store: db_store,
         driver: driver.clone(),
@@ -420,30 +421,30 @@ async fn main() -> Result<()> {
         site_auth_policy,
         admin_token_hash,
         registration_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            10,
-            std::time::Duration::from_secs(3600),
+            rate_limits.registration.requests,
+            rate_limits.registration.window,
         )),
         verification_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            20,
-            std::time::Duration::from_secs(3600),
+            rate_limits.verification.requests,
+            rate_limits.verification.window,
         )),
         admin_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            60,
-            std::time::Duration::from_secs(60),
+            rate_limits.admin.requests,
+            rate_limits.admin.window,
         )),
         confirm_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            30,
-            std::time::Duration::from_secs(3600),
+            rate_limits.confirm.requests,
+            rate_limits.confirm.window,
         )),
         trusted_proxies: Arc::new(trusted_proxies),
         allow_private_verification_origins: settings.security.allow_private_verification_origins,
         write_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            120,
-            std::time::Duration::from_secs(3600),
+            rate_limits.write.requests,
+            rate_limits.write.window,
         )),
         sse_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            20,
-            std::time::Duration::from_secs(3600),
+            rate_limits.sse.requests,
+            rate_limits.sse.window,
         )),
         sse_reconnect: Arc::new(std::sync::Mutex::new(
             cumments_api::routes::sse::SseReconnectRegistry::default(),
@@ -452,12 +453,12 @@ async fn main() -> Result<()> {
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy,
         media_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            120,
-            std::time::Duration::from_secs(3600),
+            rate_limits.media.requests,
+            rate_limits.media.window,
         )),
         moderation_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            60,
-            std::time::Duration::from_secs(3600),
+            rate_limits.moderation.requests,
+            rate_limits.moderation.window,
         )),
         ephemeral_bus: ephemeral_bus.clone(),
         ephemeral_state: Some(ephemeral_state),

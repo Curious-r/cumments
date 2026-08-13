@@ -133,11 +133,13 @@ registry is documented in [Problem types](../problems/index.md).
 ## Rate limiting
 
 `POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are
-rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
-`429 code=rate-limited`. Verification `confirm` is limited to 30/hour, comment
-writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE connections to
-20/hour with a global cap of 500 concurrent streams. Site governance writes
-are limited to 60/hour.
+rate limited per client IP (10/hour and 20/hour by default). Limit exceeded
+returns `429 code=rate-limited`. Verification `confirm` is limited to
+30/hour, comment writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE
+connections to 20/hour with a global cap of 500 concurrent streams. Site
+governance writes are limited to 60/hour. Every budget is configurable under
+`[rate_limit]` and applied at startup; see
+[Configuration](../configuration.md#rate-limits).
 Every `429` response carries a `Retry-After` header set to the endpoint's
 fixed limit window (3600 seconds for hourly limits, 60 seconds for the admin
 API). It is a conservative constant, not the exact remaining time for the
