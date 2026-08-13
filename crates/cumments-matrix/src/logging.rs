@@ -35,6 +35,29 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(format!("log_space_{}", site_id.as_str()))
     }
 
+    async fn set_room_name(&self, room_id: &str, name: &str) -> Result<()> {
+        info!("LOGGING: Set name of {room_id} to {name:?} (no-op)");
+        Ok(())
+    }
+
+    async fn leave_room(&self, room_id: &str) -> Result<()> {
+        info!("LOGGING: Leave room {room_id} (no-op)");
+        Ok(())
+    }
+
+    async fn remove_room_alias(
+        &self,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Remove alias for site={} post={:?} (no-op)",
+            site_id.as_str(),
+            post_slug.map(|slug| slug.as_str())
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn post_message(
         &self,

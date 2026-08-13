@@ -1654,3 +1654,92 @@ async fn custom_named_sites_require_verification_in_optional_mode() {
         "verified custom-named sites must reach the handler"
     );
 }
+
+#[tokio::test]
+async fn retiring_a_site_stops_writes_and_requires_auth() {
+    let (state, store) = test_state(
+        "retire-site",
+        SiteVerificationPolicy::Disabled,
+        Some("test-admin-token"),
+    )
+    .await;
+    store
+        .register_site("retire-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+
+    // Missing claim token is rejected.
+    let denied = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/sites/retire-blog",
+            None,
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    // The owner retires through the claim-token path.
+    let retired = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/sites/retire-blog",
+            None,
+            &[("x-cumments-claim-token", "claim".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(retired.status(), StatusCode::OK);
+    let retired_json: serde_json::Value =
+        serde_json::from_str(&body_text(retired).await).expect("parse response");
+    assert_eq!(retired_json["status"], "retiring");
+
+    // Writes now fail with 410 site-retired, even in the disabled policy.
+    let write = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/sites/retire-blog/posts/p1/comments",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(write.status(), StatusCode::GONE);
+    assert!(body_text(write).await.contains("site-retired"));
+
+    // The claim token was cleared, so a second owner attempt is unauthenticated.
+    let again = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/sites/retire-blog",
+            None,
+            &[("x-cumments-claim-token", "claim".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(again.status(), StatusCode::FORBIDDEN);
+
+    // The admin mirror works for another site.
+    store
+        .register_site("admin-retire", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let admin = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/admin/sites/admin-retire",
+            None,
+            &[("authorization", "Bearer test-admin-token".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(admin.status(), StatusCode::OK);
+    assert!(body_text(admin).await.contains("retiring"));
+}

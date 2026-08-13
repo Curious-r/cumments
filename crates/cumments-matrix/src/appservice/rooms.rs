@@ -93,6 +93,66 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Renames a room through the `m.room.name` state event.
+    pub(super) async fn set_room_name_impl(&self, room_id: &str, name: &str) -> Result<()> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/m.room.name",
+            percent_encode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, None)
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to set room name: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Setting name for room {} failed ({}): {}",
+                room_id,
+                status,
+                error_body
+            ));
+        }
+        Ok(())
+    }
+
+    /// Deletes the Space alias or one comment-room alias from the room
+    /// directory. A missing alias is treated as success.
+    pub(super) async fn remove_room_alias_impl(
+        &self,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+    ) -> Result<()> {
+        let alias = match post_slug {
+            Some(post_slug) => {
+                comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str())
+            }
+            None => site_space_alias(&self.server_name, site_id.as_str()),
+        };
+        let path = format!(
+            "_matrix/client/v3/directory/room/{}",
+            percent_encode(&alias)
+        );
+        let resp = self
+            .request(reqwest::Method::DELETE, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to remove room alias: {}", e))?;
+
+        match resp.status().as_u16() {
+            200 | 404 => Ok(()),
+            status => {
+                let error_body = resp.text().await.unwrap_or_default();
+                Err(anyhow!(
+                    "Removing alias {alias} failed ({status}): {error_body}"
+                ))
+            }
+        }
+    }
+
     /// Query a room's metadata state event.
     async fn fetch_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         let path = format!(

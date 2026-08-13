@@ -37,13 +37,14 @@ pub enum ProblemType {
     IdempotencyReused,
     SiteVerificationRequired,
     SiteNotRegistered,
+    SiteRetired,
     SiteOriginDenied,
     SiteSignatureInvalid,
     Internal,
 }
 
 impl ProblemType {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::InvalidPoW,
         Self::InvalidSignature,
         Self::Validation,
@@ -59,6 +60,7 @@ impl ProblemType {
         Self::IdempotencyReused,
         Self::SiteVerificationRequired,
         Self::SiteNotRegistered,
+        Self::SiteRetired,
         Self::SiteOriginDenied,
         Self::SiteSignatureInvalid,
         Self::Internal,
@@ -82,6 +84,7 @@ impl ProblemType {
             Self::IdempotencyReused => "idempotency-key-reused",
             Self::SiteVerificationRequired => "site-verification-required",
             Self::SiteNotRegistered => "site-not-registered",
+            Self::SiteRetired => "site-retired",
             Self::SiteOriginDenied => "site-origin-denied",
             Self::SiteSignatureInvalid => "site-signature-invalid",
             Self::Internal => "internal-error",
@@ -111,6 +114,7 @@ impl ProblemType {
             Self::IdempotencyReused => "Idempotency-Key reused",
             Self::SiteVerificationRequired => "Site verification required",
             Self::SiteNotRegistered => "Site not registered",
+            Self::SiteRetired => "Site retired",
             Self::SiteOriginDenied => "Site origin denied",
             Self::SiteSignatureInvalid => "Site signature invalid",
             Self::Internal => "Internal server error",
@@ -155,6 +159,7 @@ pub enum AppError {
     IdempotencyReused,
     SiteVerificationRequired(String),
     SiteNotRegistered(String),
+    SiteRetired(String),
     SiteOriginDenied(String),
     SiteSignatureInvalid(String),
     Internal(String),
@@ -241,6 +246,7 @@ impl IntoResponse for AppError {
                 ProblemType::SiteNotRegistered,
                 None,
             ),
+            AppError::SiteRetired(msg) => (StatusCode::GONE, msg, ProblemType::SiteRetired, None),
             AppError::SiteOriginDenied(msg) => (
                 StatusCode::FORBIDDEN,
                 msg,

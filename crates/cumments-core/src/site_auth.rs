@@ -449,6 +449,9 @@ impl SiteAuthPolicy {
 #[derive(Debug, Clone)]
 pub struct SiteAuthInfo {
     pub site_id: String,
+    /// Where the site is in its lifecycle. Writes are only accepted while
+    /// `active`.
+    pub lifecycle: SiteLifecycle,
     /// Whether the id was caller-chosen (rather than server-generated).
     /// Chosen ids are a privilege: `optional` mode requires origin
     /// verification before they can accept writes.
@@ -470,6 +473,42 @@ pub struct SiteAuthInfo {
 pub struct RegisteredSite {
     pub site_id: String,
     pub claim_token: String,
+}
+
+/// Lifecycle of a registered site.
+///
+/// `Retiring` means writes are rejected and a background pass is
+/// decommissioning the Matrix Space/rooms and clearing the projections.
+/// `Retired` is transient: once local cleanup finishes the row is deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SiteLifecycle {
+    Active,
+    Retiring,
+    Retired,
+}
+
+impl SiteLifecycle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Retiring => "retiring",
+            Self::Retired => "retired",
+        }
+    }
+}
+
+impl std::str::FromStr for SiteLifecycle {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(Self::Active),
+            "retiring" => Ok(Self::Retiring),
+            "retired" => Ok(Self::Retired),
+            other => Err(format!("unknown site lifecycle `{other}`")),
+        }
+    }
 }
 
 /// The proof locations accepted for one verification challenge.

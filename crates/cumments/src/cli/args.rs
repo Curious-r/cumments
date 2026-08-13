@@ -81,6 +81,9 @@ pub enum SitesCommand {
     /// Rotate the claim token; the new token is printed exactly once
     #[command(name = "rotate-claim-token")]
     RotateClaimToken(SiteIdArg),
+    /// Stop writes and decommission the site's Matrix Space and rooms
+    #[command(name = "retire")]
+    Retire(RetireSiteArgs),
     /// Start a pending owner claim and print its one-time verify token
     #[command(name = "add-owner")]
     AddOwner(SiteUserIdArg),
@@ -147,6 +150,18 @@ pub struct RevokeSecretArgs {
     /// Confirm the destructive operation
     #[arg(long)]
     pub yes: bool,
+}
+
+/// Arguments for retiring a site.
+#[derive(clap::Args, Debug)]
+pub struct RetireSiteArgs {
+    pub site_id: String,
+    /// Confirm the destructive operation
+    #[arg(long)]
+    pub yes: bool,
+    /// Poll until the background decommission finishes
+    #[arg(long)]
+    pub wait: bool,
 }
 
 /// Arguments for revoking a verified origin.

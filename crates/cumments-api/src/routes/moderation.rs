@@ -64,6 +64,12 @@ pub struct RevokedRoleResponse {
     pub level: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RetireSiteResponse {
+    pub site_id: String,
+    pub status: &'static str,
+}
+
 /// Authenticates governance writes with the site's claim token.
 pub async fn require_claim_token(
     State(state): State<ApiState>,
@@ -416,5 +422,29 @@ pub(crate) async fn list_room_moderators_handler(
     Ok(Json(RoomModeratorsResponse {
         room_id,
         moderators,
+    }))
+}
+
+/// Starts site decommission: writes are rejected immediately, then the
+/// reconciler retires the Matrix Space/rooms and clears local projections.
+pub(crate) async fn retire_site_handler(
+    State(state): State<ApiState>,
+    Path(site_id): Path<String>,
+) -> Result<Json<RetireSiteResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let marked = state
+        .store
+        .mark_site_retiring(site_id.as_str())
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to retire site: {e}")))?;
+    if !marked {
+        return Err(AppError::NotFound(
+            "site not found or already decommissioned".to_string(),
+        ));
+    }
+    state.reconciler_notify.notify_one();
+    Ok(Json(RetireSiteResponse {
+        site_id: site_id.as_str().to_string(),
+        status: "retiring",
     }))
 }

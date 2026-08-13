@@ -1,6 +1,7 @@
 use super::DbStore;
 use crate::entities::active_enums::{
-    SiteAuthMode as DbAuthMode, SiteVerificationStatus as DbVerificationStatus,
+    SiteAuthMode as DbAuthMode, SiteLifecycleStatus as DbLifecycle,
+    SiteVerificationStatus as DbVerificationStatus,
 };
 use crate::entities::{site_verified_origins, sites, verification_tokens};
 use anyhow::Result;
@@ -8,7 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cumments_core::ports::SiteAuthStore;
 use cumments_core::site_auth::{
-    NewVerificationToken, Origin, SiteAuthInfo, SiteAuthMode, SiteServiceError,
+    NewVerificationToken, Origin, SiteAuthInfo, SiteAuthMode, SiteLifecycle, SiteServiceError,
     SiteVerificationStatus, VerificationToken,
 };
 use sea_orm::{
@@ -33,6 +34,7 @@ impl SiteAuthStore for DbStore {
             verification_status: Set(DbVerificationStatus::Unverified),
             claim_token_hash: Set(Some(claim_token_hash.to_owned())),
             is_custom_id: Set(custom_id),
+            lifecycle_status: Set(DbLifecycle::Active),
             secret: Set(None),
             verified_at: Set(None),
             created_at: Set(now),
@@ -66,6 +68,7 @@ impl SiteAuthStore for DbStore {
 
         Ok(Some(SiteAuthInfo {
             site_id: site.id,
+            lifecycle: core_lifecycle(site.lifecycle_status),
             is_custom_id: site.is_custom_id,
             auth_mode: core_auth_mode(site.auth_mode),
             verification_status: core_verification_status(site.verification_status),
@@ -82,6 +85,39 @@ impl SiteAuthStore for DbStore {
             .one(&self.db)
             .await?
             .and_then(|site| site.claim_token_hash))
+    }
+
+    async fn mark_site_retiring(&self, site_id: &str) -> Result<bool> {
+        let result = sites::Entity::update_many()
+            .col_expr(
+                sites::Column::LifecycleStatus,
+                sea_orm::sea_query::Expr::value(lifecycle_value(DbLifecycle::Retiring)),
+            )
+            .col_expr(
+                sites::Column::ClaimTokenHash,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                sites::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(Some(Utc::now())),
+            )
+            .filter(sites::Column::Id.eq(site_id))
+            .filter(sites::Column::LifecycleStatus.eq(lifecycle_value(DbLifecycle::Active)))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn list_retiring_sites(&self) -> Result<Vec<String>> {
+        let rows = sites::Entity::find()
+            .filter(sites::Column::LifecycleStatus.eq(lifecycle_value(DbLifecycle::Retiring)))
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|site| site.id).collect())
+    }
+
+    async fn delete_site(&self, site_id: &str) -> Result<()> {
+        crate::store::decommission::delete_site(&self.db, site_id).await
     }
 
     async fn rotate_claim_token(&self, site_id: &str, new_hash: &str) -> Result<bool> {
@@ -335,6 +371,7 @@ impl SiteAuthStore for DbStore {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(SiteAuthInfo {
                     site_id: site.id,
+                    lifecycle: core_lifecycle(site.lifecycle_status),
                     is_custom_id: site.is_custom_id,
                     auth_mode: core_auth_mode(site.auth_mode),
                     verification_status: core_verification_status(site.verification_status),
@@ -405,6 +442,22 @@ impl SiteAuthStore for DbStore {
             .exec(&self.db)
             .await?;
         Ok(result.rows_affected == 1)
+    }
+}
+
+fn core_lifecycle(status: DbLifecycle) -> SiteLifecycle {
+    match status {
+        DbLifecycle::Active => SiteLifecycle::Active,
+        DbLifecycle::Retiring => SiteLifecycle::Retiring,
+        DbLifecycle::Retired => SiteLifecycle::Retired,
+    }
+}
+
+fn lifecycle_value(status: DbLifecycle) -> &'static str {
+    match status {
+        DbLifecycle::Active => "active",
+        DbLifecycle::Retiring => "retiring",
+        DbLifecycle::Retired => "retired",
     }
 }
 

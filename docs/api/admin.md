@@ -53,6 +53,16 @@ declarative config.
 Returns a new `claim_token` exactly once and invalidates the previous token.
 Use this when a claim token may have leaked.
 
+## Retire a site
+
+`DELETE /api/v1/admin/sites/{site_id}`
+
+Operator mirror of the claim-token retire endpoint: marks the site
+`retiring` immediately (writes get `410 code=site-retired`) and lets the
+background pass decommission the Matrix Space/rooms and clear local
+projections. See [Sites](sites.md#retire-a-site) for the full flow. Sites
+declared in `[sites]` cannot be retired this way.
+
 ## List quarantined rooms
 
 `QUERY /api/v1/admin/rooms/quarantined`

@@ -105,3 +105,23 @@ The site must be verified first. The secret is returned exactly once:
 It is used as the HMAC key in edge-function deployments (see
 [Site trust](../site-trust.md)); the same value must be set on the site
 backend and used to sign every write request.
+
+## Retire a site
+
+`DELETE /api/v1/sites/{site_id}`
+
+Headers: `X-Cumments-Claim-Token: <claim_token>`
+
+Decommissioning is two-phase. The request marks the site `retiring`
+**synchronously**: writes are rejected from that moment with
+`410 code=site-retired`, the claim token is invalidated, and the response is
+`{ "site_id": "...", "status": "retiring" }`. A background pass then retires
+the Matrix Space and every comment room one by one — renaming them
+`[retired] ...`, removing their aliases and leaving them as the AppService
+sender — before clearing the local projections and the site row.
+
+The operator mirror is
+`DELETE /api/v1/admin/sites/{site_id}` (admin token). Sites declared in the
+`[sites]` configuration cannot be retired through the API; remove them from
+the config file instead. The CLI equivalent is
+`cumments sites retire <id> --yes [--wait]`.

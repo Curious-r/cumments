@@ -467,6 +467,19 @@ pub trait SiteAuthStore: Send + Sync {
     /// Full authentication state of a site, if a row exists.
     async fn get_site_auth(&self, site_id: &str) -> Result<Option<SiteAuthInfo>>;
 
+    /// Transitions an `active` site to `retiring`, clearing its claim token
+    /// so ownership proofs stop working. Returns `false` when the site does
+    /// not exist or is not `active`.
+    async fn mark_site_retiring(&self, site_id: &str) -> Result<bool>;
+
+    /// Site ids whose decommission has been requested but not finished.
+    async fn list_retiring_sites(&self) -> Result<Vec<String>>;
+
+    /// Removes every local trace of a decommissioned site (auth row,
+    /// projections, rooms, intents). Callers must have already retired the
+    /// Matrix side; this is the final, idempotent cleanup.
+    async fn delete_site(&self, site_id: &str) -> Result<()>;
+
     /// Stored SHA-256 hash of the site's claim token, if any.
     async fn get_claim_token_hash(&self, site_id: &str) -> Result<Option<String>>;
 
@@ -543,6 +556,18 @@ pub trait MatrixDriver: Send + Sync {
     /// Creates a new Space for a site.
     /// Returns the new Space's room ID.
     async fn create_site_space(&self, site_id: &SiteId) -> Result<String>;
+
+    /// Renames a room via the `m.room.name` state event.
+    async fn set_room_name(&self, room_id: &str, name: &str) -> Result<()>;
+
+    /// Removes the AS sender from a room. Rooms already left (or unknown to
+    /// the homeserver) are treated as success.
+    async fn leave_room(&self, room_id: &str) -> Result<()>;
+
+    /// Deletes the site's Space alias (`post_slug: None`) or one comment
+    /// room's alias from the room directory. Missing aliases are a no-op.
+    async fn remove_room_alias(&self, site_id: &SiteId, post_slug: Option<&PostSlug>)
+    -> Result<()>;
 
     /// Posts a message to a specific room.
     async fn post_message(

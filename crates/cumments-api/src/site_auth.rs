@@ -22,8 +22,8 @@ use chrono::Utc;
 use cumments_core::models::ID_REGEX;
 use cumments_core::site_auth::{
     Origin, OriginPattern, SITE_SIGNATURE_HEADER, SITE_SIGNATURE_MAX_SKEW_SECONDS,
-    SITE_TIMESTAMP_HEADER, SiteAuthInfo, SiteAuthMode, SitePolicyEntry, SiteVerificationPolicy,
-    is_timestamp_fresh, verify_site_request_signature,
+    SITE_TIMESTAMP_HEADER, SiteAuthInfo, SiteAuthMode, SiteLifecycle, SitePolicyEntry,
+    SiteVerificationPolicy, is_timestamp_fresh, verify_site_request_signature,
 };
 
 const BODY_LIMIT: usize = 1024 * 1024;
@@ -257,6 +257,14 @@ pub async fn authorize_site_write(
         return Err(AppError::SiteNotRegistered(format!(
             "site `{site_id}` is not registered; create it with POST /api/v1/sites \
              or `cumments sites register`"
+        )));
+    }
+    if db_auth
+        .as_ref()
+        .is_some_and(|info| info.lifecycle != SiteLifecycle::Active)
+    {
+        return Err(AppError::SiteRetired(format!(
+            "site `{site_id}` is being decommissioned and no longer accepts writes"
         )));
     }
 
@@ -497,6 +505,7 @@ mod tests {
     fn db_auth(origins: &[&str]) -> Option<SiteAuthInfo> {
         Some(SiteAuthInfo {
             site_id: "test-site".to_string(),
+            lifecycle: SiteLifecycle::Active,
             is_custom_id: false,
             auth_mode: SiteAuthMode::Origin,
             verification_status: SiteVerificationStatus::Verified,

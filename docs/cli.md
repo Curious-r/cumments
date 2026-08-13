@@ -40,7 +40,8 @@ cumments
 │   ├── add-owner SITE_ID USER_ID
 │   ├── remove-owner SITE_ID USER_ID
 │   ├── add-co-manager SITE_ID USER_ID
-│   └── remove-co-manager SITE_ID USER_ID
+│   ├── remove-co-manager SITE_ID USER_ID
+│   └── retire SITE_ID --yes [--wait]
 ├── rooms
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
 │   └── reinstate ROOM_ID
@@ -108,6 +109,19 @@ cumments sites add-co-manager my-blog '@bob:example.com'
 `remove-*` cancels a pending claim. A role that has already been applied is
 Matrix state, so remove it from the Space power levels in a Matrix client (or
 through the admin API) instead.
+
+Retire a site (destructive, needs `--yes`). The command marks the site
+`retiring` — writes stop immediately — and the **running server's**
+background reconciler decommissions its Matrix Space and rooms, then clears
+the local data. Without `--wait` the command returns once the site is marked;
+with `--wait` it polls until the decommission finishes (or times out after
+five minutes). Config-declared sites cannot be retired; remove them from the
+config file instead.
+
+```bash
+cumments sites retire my-blog --yes
+cumments sites retire my-blog --yes --wait
+```
 
 ## Shell completions
 

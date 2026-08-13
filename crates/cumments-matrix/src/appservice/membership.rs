@@ -95,6 +95,42 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Makes the AS sender leave a room. A room the sender is not in (or
+    /// that no longer exists) counts as already left.
+    pub(super) async fn leave_room_impl(&self, room_id: &str) -> Result<()> {
+        let path = format!("_matrix/client/v3/rooms/{}/leave", percent_encode(room_id));
+        let resp = self
+            .request(reqwest::Method::POST, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Leave request failed: {}", e))?;
+
+        match resp.status().as_u16() {
+            200 | 404 => Ok(()),
+            403 => {
+                let body = resp.text().await.unwrap_or_default();
+                let errcode = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("errcode")
+                            .and_then(|e| e.as_str())
+                            .map(str::to_owned)
+                    });
+                if errcode.as_deref() == Some("M_FORBIDDEN") {
+                    // Already left / never joined.
+                    Ok(())
+                } else {
+                    Err(anyhow!("Leaving room {room_id} was forbidden: {body}"))
+                }
+            }
+            status => {
+                let body = resp.text().await.unwrap_or_default();
+                Err(anyhow!("Leaving room {room_id} failed ({status}): {body}"))
+            }
+        }
+    }
+
     /// Invites a real Matrix user to a room as the AS sender. Users who are
     /// already joined (including a join racing the invite) are a successful
     /// no-op.

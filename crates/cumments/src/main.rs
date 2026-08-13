@@ -272,6 +272,7 @@ async fn main() -> Result<()> {
         site_store: db_store.clone(),
         role_claim_store: db_store.clone(),
         message_store: db_store.clone(),
+        site_auth_store: db_store.clone(),
         driver: driver.clone(),
         site_service: site_service.clone(),
         notify: reconciler_notify.clone(),

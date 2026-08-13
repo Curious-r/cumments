@@ -14,7 +14,7 @@ use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::moderation::{
     add_co_manager_handler, add_owner_handler, add_room_moderator_handler,
     list_room_moderators_handler, list_site_roles_handler, remove_co_manager_handler,
-    remove_owner_handler, remove_room_moderator_handler, require_claim_token,
+    remove_owner_handler, remove_room_moderator_handler, require_claim_token, retire_site_handler,
 };
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -248,6 +248,10 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/v1/sites/{site_id}/posts/{post_slug}/moderators",
             post(add_room_moderator_handler).delete(remove_room_moderator_handler),
         )
+        .route(
+            "/api/v1/sites/{site_id}",
+            axum::routing::delete(retire_site_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_claim_token,
@@ -278,6 +282,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/admin/sites/{site_id}/claim-token/rotate",
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/admin/sites/{site_id}",
+            axum::routing::delete(retire_site_handler).fallback(method_not_allowed_handler),
         )
         // Operator fallback for site ownership takeover.
         .route(

@@ -157,6 +157,16 @@ Register it first with `POST /api/v1/sites` (or `cumments sites register`);
 unregistered sites can never create a Matrix Space, regardless of the
 verification policy.
 
+## Site retired {#site-retired}
+
+- `type`: `https://curious-r.github.io/cumments/problems/#site-retired`
+- `code`: `site-retired`
+- `status`: `410`
+
+The site is being decommissioned and no longer accepts writes. A background
+pass is retiring its Matrix Space and rooms and clearing the local
+projections; reads keep working until the local data is gone.
+
 ## Site origin denied {#site-origin-denied}
 
 - `type`: `https://curious-r.github.io/cumments/problems/#site-origin-denied`

@@ -18,6 +18,22 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.create_site_space_impl(site_id).await
     }
 
+    async fn set_room_name(&self, room_id: &str, name: &str) -> Result<()> {
+        self.set_room_name_impl(room_id, name).await
+    }
+
+    async fn leave_room(&self, room_id: &str) -> Result<()> {
+        self.leave_room_impl(room_id).await
+    }
+
+    async fn remove_room_alias(
+        &self,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+    ) -> Result<()> {
+        self.remove_room_alias_impl(site_id, post_slug).await
+    }
+
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,

@@ -20,8 +20,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use cumments_core::models::SiteId;
 use cumments_core::site_auth::{
-    SiteAuthInfo, SiteAuthMode, SitePolicyEntry, SiteVerificationStatus, constant_time_eq,
-    generate_token, token_hash,
+    SiteAuthInfo, SiteAuthMode, SiteLifecycle, SitePolicyEntry, SiteVerificationStatus,
+    constant_time_eq, generate_token, token_hash,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -50,6 +50,7 @@ pub struct AdminQuarantinedRoom {
 #[derive(Debug, Serialize)]
 pub struct AdminSite {
     pub site_id: String,
+    pub lifecycle: SiteLifecycle,
     pub auth_mode: SiteAuthMode,
     pub verification_status: SiteVerificationStatus,
     pub origins: Vec<AdminOrigin>,
@@ -525,6 +526,7 @@ pub fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> Admi
 
     AdminSite {
         site_id: info.site_id.clone(),
+        lifecycle: info.lifecycle,
         auth_mode: config
             .and_then(|entry| entry.auth_mode)
             .unwrap_or(info.auth_mode),
@@ -544,6 +546,7 @@ pub fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> Admi
 pub fn admin_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> AdminSite {
     AdminSite {
         site_id: site_id.to_string(),
+        lifecycle: SiteLifecycle::Active,
         auth_mode: entry.auth_mode.unwrap_or(SiteAuthMode::Origin),
         verification_status: SiteVerificationStatus::Verified,
         origins: entry

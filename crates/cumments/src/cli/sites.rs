@@ -1,6 +1,6 @@
 //! `cumments sites ...` command handling.
 
-use super::args::{ExportConfigArgs, SiteUserIdArg, SitesArgs, SitesCommand};
+use super::args::{ExportConfigArgs, RetireSiteArgs, SiteUserIdArg, SitesArgs, SitesCommand};
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
@@ -165,6 +165,7 @@ pub async fn handle_sites_command(
         SitesCommand::RemoveCoManager(args) => {
             remove_role_claim(store, args, CO_MANAGER_LEVEL).await
         }
+        SitesCommand::Retire(args) => retire_site(store, policy, args).await,
     }
 }
 
@@ -278,6 +279,54 @@ async fn require_api_registered_site(store: &cumments_store::DbStore, site_id: &
     Ok(())
 }
 
+/// Marks a site `retiring` (writes stop immediately). The running server's
+/// reconciler performs the Matrix decommission and local cleanup.
+async fn retire_site(
+    store: &cumments_store::DbStore,
+    policy: &SiteAuthPolicy,
+    args: &RetireSiteArgs,
+) -> Result<()> {
+    if !args.yes {
+        bail!("refusing to retire the site without `--yes`");
+    }
+    let site_id =
+        SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+    if policy.entry(site_id.as_str()).is_some() {
+        bail!(
+            "site is declared in the `[sites]` configuration; remove it from \
+             the config file instead"
+        );
+    }
+    let marked = store.mark_site_retiring(site_id.as_str()).await?;
+    if !marked {
+        bail!("site not found or already decommissioned");
+    }
+
+    if args.wait {
+        for _ in 0..300 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if store.get_site_auth(site_id.as_str()).await?.is_none() {
+                print_json(&serde_json::json!({
+                    "site_id": site_id.as_str(),
+                    "status": "retired",
+                }))?;
+                return Ok(());
+            }
+        }
+        bail!("timed out waiting for the decommission to finish");
+    }
+
+    print_json(&serde_json::json!({
+        "site_id": site_id.as_str(),
+        "status": "retiring",
+    }))?;
+    eprintln!(
+        "The running server decommissions the Matrix Space/rooms in the background; \
+         re-run with `--wait` to block until it finishes."
+    );
+    Ok(())
+}
+
 /// Lists managed sites, merging database rows with the `[sites]` overlay —
 /// the same view the admin API returns.
 async fn list_admin_sites(
@@ -320,12 +369,13 @@ async fn list_admin_sites(
 #[cfg(test)]
 mod tests {
     use super::super::args::{
-        ExportConfigArgs, RevokeOriginArgs, RevokeSecretArgs, SiteIdArg, SiteListArgs,
-        SiteUserIdArg,
+        ExportConfigArgs, RetireSiteArgs, RevokeOriginArgs, RevokeSecretArgs, SiteIdArg,
+        SiteListArgs, SiteUserIdArg,
     };
     use super::super::test_support::*;
     use super::*;
     use cumments_core::site_auth::OriginPattern;
+    use cumments_core::site_auth::SiteLifecycle;
     use cumments_store::DbStore;
 
     #[tokio::test]
@@ -535,5 +585,57 @@ mod tests {
         handle_sites_command(&store, &policy, &list)
             .await
             .expect("list sites with config overlay");
+    }
+
+    #[tokio::test]
+    async fn retire_requires_confirmation_and_marks_site_retiring() {
+        let store = DbStore::connect(&test_db_url("retire"))
+            .await
+            .expect("connect db");
+        let policy = test_policy();
+        store
+            .register_site("my-blog", &token_hash("token"), true)
+            .await
+            .expect("register site");
+
+        let unconfirmed = SitesArgs {
+            command: SitesCommand::Retire(RetireSiteArgs {
+                site_id: "my-blog".to_string(),
+                yes: false,
+                wait: false,
+            }),
+        };
+        assert!(
+            handle_sites_command(&store, &policy, &unconfirmed)
+                .await
+                .is_err(),
+            "retire must require --yes"
+        );
+
+        let retire = SitesArgs {
+            command: SitesCommand::Retire(RetireSiteArgs {
+                site_id: "my-blog".to_string(),
+                yes: true,
+                wait: false,
+            }),
+        };
+        handle_sites_command(&store, &policy, &retire)
+            .await
+            .expect("retire site");
+
+        let auth = store
+            .get_site_auth("my-blog")
+            .await
+            .expect("load site")
+            .expect("site exists");
+        assert_eq!(auth.lifecycle, SiteLifecycle::Retiring);
+        assert!(auth.claim_token_hash.is_none());
+        assert!(
+            store
+                .list_retiring_sites()
+                .await
+                .expect("retiring sites")
+                .contains(&"my-blog".to_string())
+        );
     }
 }

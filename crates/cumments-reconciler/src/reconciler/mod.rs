@@ -1,3 +1,4 @@
+mod decommission;
 mod deletions;
 mod moderation;
 mod posts;
@@ -8,7 +9,10 @@ use anyhow::Result;
 use cumments_core::{
     matrix_error::MatrixError,
     models::{PostSlug, QuarantinedRoom, SiteId},
-    ports::{IntentStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteStore},
+    ports::{
+        IntentStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
+        SiteStore,
+    },
     site_service::SiteService,
 };
 use std::sync::Arc;
@@ -109,6 +113,7 @@ pub struct Reconciler {
     site_store: Arc<dyn SiteStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     message_store: Arc<dyn MessageStore>,
+    site_auth_store: Arc<dyn SiteAuthStore>,
     driver: Arc<dyn MatrixDriver>,
     site_service: Arc<SiteService>,
     notify: Arc<Notify>,
@@ -122,6 +127,7 @@ pub struct ReconcilerDeps {
     pub site_store: Arc<dyn SiteStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub message_store: Arc<dyn MessageStore>,
+    pub site_auth_store: Arc<dyn SiteAuthStore>,
     pub driver: Arc<dyn MatrixDriver>,
     pub site_service: Arc<SiteService>,
     pub notify: Arc<Notify>,
@@ -135,6 +141,7 @@ impl Reconciler {
             site_store: deps.site_store,
             role_claim_store: deps.role_claim_store,
             message_store: deps.message_store,
+            site_auth_store: deps.site_auth_store,
             driver: deps.driver,
             site_service: deps.site_service,
             notify: deps.notify,
@@ -270,12 +277,20 @@ impl Reconciler {
                 0
             }
         };
+        let decommission_count = match self.reconcile_decommissions().await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Reconcile decommission phase failed: {:#}", e);
+                0
+            }
+        };
         Ok(post_count
             + delete_count
             + update_count
             + timeout_count
             + claim_count
-            + moderation_count)
+            + moderation_count
+            + decommission_count)
     }
 }
 

@@ -283,6 +283,28 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    delete:
+      tags: [Sites]
+      summary: Retire a site
+      operationId: retireSite
+      security:
+        - claimToken: []
+      responses:
+        "200":
+          description: Site marked retiring; background decommission scheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetireSiteResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/v1/sites/{site_id}/verifications:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -383,6 +405,28 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    delete:
+      tags: [Admin]
+      summary: Retire a site (operator)
+      operationId: adminRetireSite
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: Site marked retiring; background decommission scheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetireSiteResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /api/v1/admin/sites/{site_id}/origins/revoke:
     parameters:
@@ -1604,6 +1648,15 @@ components:
           type: string
         claim_token:
           type: string
+    RetireSiteResponse:
+      type: object
+      required: [site_id, status]
+      properties:
+        site_id:
+          type: string
+        status:
+          type: string
+          enum: [retiring]
     StartVerificationRequest:
       type: object
       required: [origins, methods]
@@ -1687,10 +1740,13 @@ components:
           enum: [config, verified]
     AdminSite:
       type: object
-      required: [site_id, auth_mode, verification_status, origins]
+      required: [site_id, lifecycle, auth_mode, verification_status, origins]
       properties:
         site_id:
           type: string
+        lifecycle:
+          type: string
+          enum: [active, retiring, retired]
         auth_mode:
           type: string
           enum: [origin, secret]

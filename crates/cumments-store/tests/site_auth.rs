@@ -1,7 +1,7 @@
 use cumments_core::ports::SiteAuthStore;
 use cumments_core::site_auth::{
-    NewVerificationToken, Origin, SiteAuthMode, SiteVerificationStatus, VerificationMethod,
-    token_hash,
+    NewVerificationToken, Origin, SiteAuthMode, SiteLifecycle, SiteVerificationStatus,
+    VerificationMethod, token_hash,
 };
 use cumments_store::DbStore;
 
@@ -118,6 +118,54 @@ async fn custom_id_flag_persists() {
         .expect("query auth")
         .expect("site exists");
     assert!(auth.is_custom_id, "chosen ids must be marked custom");
+}
+
+#[tokio::test]
+async fn site_retirement_lifecycle() {
+    let store = DbStore::connect(&test_db_url("site-retire"))
+        .await
+        .expect("connect db");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+
+    assert!(
+        store
+            .mark_site_retiring("my-blog")
+            .await
+            .expect("mark retiring")
+    );
+    let auth = store
+        .get_site_auth("my-blog")
+        .await
+        .expect("query auth")
+        .expect("site exists");
+    assert_eq!(auth.lifecycle, SiteLifecycle::Retiring);
+    assert!(auth.claim_token_hash.is_none());
+    assert!(
+        !store
+            .mark_site_retiring("my-blog")
+            .await
+            .expect("second mark is a no-op")
+    );
+    assert!(
+        store
+            .list_retiring_sites()
+            .await
+            .expect("retiring sites")
+            .contains(&"my-blog".to_string())
+    );
+
+    store.delete_site("my-blog").await.expect("delete site");
+    assert!(
+        store
+            .get_site_auth("my-blog")
+            .await
+            .expect("query auth")
+            .is_none(),
+        "deleted sites must be gone"
+    );
 }
 
 #[tokio::test]
