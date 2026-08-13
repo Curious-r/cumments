@@ -120,15 +120,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check inline scripts
-        run: |
-          set -euo pipefail
-          awk '/<script type="module">/{flag=1; next} /<\/script>/{flag=0} flag' \
-            misc/demo/index.html > /tmp/cumments-module.mjs
-          awk '/<script>/{flag=1; next} /<\/script>/{flag=0} flag' \
-            misc/demo/index.html > /tmp/cumments-main.js
-          node --check /tmp/cumments-module.mjs
-          node --check /tmp/cumments-main.js
+      - name: Check demo script
+        run: node --check misc/demo/demo.js
 
   openapi:
     name: OpenAPI

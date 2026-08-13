@@ -6,11 +6,11 @@ production frontend. Website and SSG-template developers are expected to write
 their own comment section for their own pages, using the
 [HTTP API](api.md) (challenge, PoW, signing, comments, SSE).
 
-`misc/demo/index.html` is a standalone demo that exercises the full API: it
-connects to a real backend and supports posting, editing and deleting your own
-comments, pagination, nested replies, SSE live updates, and a "My comments"
-management view. Use it as a reference implementation, not as a reusable
-component.
+`misc/demo/` is a standalone demo (no build step: `index.html` +
+`demo.css` + `demo.js`) that exercises the full API: it connects to a real
+backend and supports posting, editing and deleting your own comments,
+pagination, nested replies, SSE live updates, and a "My comments" management
+view. Use it as a reference implementation, not as a reusable component.
 
 The demo posts directly to the API, so it works with `origin`-mode sites
 (including unverified sites under the `optional` policy). In strict
@@ -19,9 +19,11 @@ The demo posts directly to the API, so it works with `origin`-mode sites
 
 ## Running the demo
 
-The demo is a single HTML file with no build step. Open it in a browser and
-set the API URL in the settings drawer (default `http://localhost:7931`). It
-loads Tailwind, Markdown, DOMPurify and BIP39 from CDNs.
+The demo has no build step. Open `misc/demo/index.html` in a browser and set
+the API URL in the settings drawer (default `http://localhost:7931`). It loads
+Tailwind, Markdown, DOMPurify and BIP39 from CDNs; BIP39 is fetched via
+dynamic `import()` because static ES modules are blocked under `file://`. If
+the CDN is unreachable the demo falls back to a random identity (see below).
 
 If you open the file directly (`file://`), the browser sends `Origin: null`.
 Cumments accepts that only under the dev-only
@@ -32,6 +34,12 @@ The demo also needs a secure context for WebCrypto Ed25519: `file://` and
 `http://localhost` work, but a LAN page served over plain `http://192.168.x.x`
 or another non-localhost address will fail at identity creation. Serve the
 demo over HTTPS unless you are testing on localhost.
+
+One `file://` limitation remains: media URLs are returned as absolute
+`/api/v1/media/...` paths, which resolve against the `file://` origin and
+therefore do not load. Image/sticker/video/audio attachments are only visible
+when the demo is served over HTTP(S). Everything else (API calls, SSE,
+signatures, identity) works from a directly opened file.
 
 The demo has a built-in language switcher (中文 / EN) in the top bar; the
 choice is remembered in `localStorage` (`cumments_demo_lang`).
