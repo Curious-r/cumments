@@ -42,7 +42,7 @@ docker run --rm --entrypoint cumments \
 docker compose up -d
 ```
 
-The full walkthrough — registration, the admin account, verification and
+The full walkthrough — registration, the site owner, verification and
 troubleshooting — is in the [installation guide](docs/installation.md).
 
 ## Documentation

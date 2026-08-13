@@ -27,5 +27,6 @@ nav:
   - Development: development.md
   - Installation: installation.md
   - Site authentication: site-authentication.md
+  - Site governance: site-governance.md
   - Site verification: site-verification.md
   - Problem types: problems/index.md

@@ -438,6 +438,51 @@ returns `404`.
 The old `/api/v1/admin/rooms/blocked` paths are kept as deprecated aliases
 for one release.
 
+## Site governance
+
+Site-owner operations authenticate with the claim token returned at site
+registration (`X-Cumments-Claim-Token`). Operator fallbacks with the same
+handlers live under `/api/v1/admin/sites/{site_id}/owners` and
+`/api/v1/admin/sites/{site_id}/co-managers` (admin token).
+
+### Site owners
+
+`POST /api/v1/sites/{site_id}/owners` / `DELETE /api/v1/sites/{site_id}/owners`
+
+Body: `{ "user_id": "@alice:example.com" }`. Adds or removes an owner
+(level 100 in the Space and every comment room). Returns
+`{ "owners": [...], "co_managers": [...] }`. Registering the owner is the
+one-time bootstrap step; after it the owner manages everything from a Matrix
+client.
+
+### Site co-managers
+
+`POST /api/v1/sites/{site_id}/co-managers` /
+`DELETE /api/v1/sites/{site_id}/co-managers`
+
+Body: `{ "user_id": "..." }`. Co-managers hold 75 in the Space and are
+replicated into every comment room by the moderation sync pass. Returns the
+updated `{ "owners", "co_managers" }` roster.
+
+### Room moderators
+
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/moderators` /
+`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/moderators`
+
+Body: `{ "user_id": "..." }`. Appoints or removes a moderator (level 50) in
+the room registered for that post only. Returns `{ "room_id", "moderators" }`.
+
+### Read the projected rosters
+
+`GET /api/v1/sites/{site_id}/roles` → `{ "owners": [...], "co_managers": [...] }`
+
+`GET /api/v1/sites/{site_id}/posts/{post_slug}/moderators` →
+`{ "room_id": "...", "moderators": [...] }`
+
+Reads come from the projected read model and are eventually consistent with
+Matrix power levels. See [site-governance.md](site-governance.md) for the full
+role model.
+
 ### Media proxy
 
 `GET /api/v1/media/{server}/{media_id}?expires=...&sig=...`
@@ -536,14 +581,16 @@ registry is documented in [Problem types](problems/index.md).
 rate limited per client IP (10/hour and 20/hour). Limit exceeded returns
 `429 code=rate-limited`. Verification `confirm` is limited to 30/hour, comment
 writes (`POST`/`PATCH`/`DELETE`) to 120/hour, and new SSE connections to
-20/hour with a global cap of 500 concurrent streams.
+20/hour with a global cap of 500 concurrent streams. Site governance writes
+are limited to 60/hour.
 SSE reconnects within 30 seconds of a disconnect do not consume the hourly
 new-connection budget (bounded to 20 free reconnects per client per 5-minute
 window), so EventSource auto-reconnect and normal page refreshes do not
 silently exhaust the quota.
 
 Client keys are the peer IP by default. `X-Forwarded-For` is honored only
-when the peer is listed in `server.trusted_proxies`; the first value is then
+when the peer is listed in `server.trusted_proxies`; the list is then walked
+right-to-left, skipping trusted proxies, and the nearest untrusted address is
 used as the client key.
 
 Verification origins must be public by default: loopback/private/link-local

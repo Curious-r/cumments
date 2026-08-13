@@ -85,32 +85,45 @@ initialized.`, and `Server listening on 0.0.0.0:7931`.
 > `TUWUNEL_YES_I_AM_VERY_VERY_SURE_I_WANT_AN_OPEN_REGISTRATION_SERVER_PRONE_TO_ABUSE`
 > before exposing the homeserver beyond your machine.
 
-## 5. Create the admin account
+## 5. Create an account and register the site owner
 
-The first account registered on tuwunel is granted admin privileges. The
-compose file expects it to be `admin`:
+The first account registered on tuwunel is granted homeserver admin
+privileges, but Cumments no longer reads a fixed "admin" account from
+configuration. Create an account for whoever will run the site:
 
 ```bash
 curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"your-admin-password","auth":{"type":"m.login.dummy"}}'
+  -d '{"username":"alice","password":"your-password","auth":{"type":"m.login.dummy"}}'
 ```
 
-The response contains `user_id`, `device_id`, and `access_token`. If you pick a
-different username, update
-`CUMMENTS__MATRIX__MODERATION__ADMIN_ID` (default
-`@admin:localhost:8008`) in the compose file and restart Cumments:
+The response contains the `user_id` (e.g. `@alice:localhost:8008`). Register
+the site through the Cumments API and bind that account as its owner:
 
 ```bash
-docker compose up -d --force-recreate cumments
+# Save the one-time claim token from the registration response.
+curl -sS -X POST http://localhost:7931/api/v1/sites > site.json
+SITE_ID=$(jq -r .site_id site.json)
+CLAIM=$(jq -r .claim_token site.json)
+
+curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/owners" \
+  -H "Content-Type: application/json" \
+  -H "X-Cumments-Claim-Token: $CLAIM" \
+  -d '{"user_id":"@alice:localhost:8008"}'
 ```
+
+After this one-time step the owner manages everything from a Matrix client:
+they hold power 100 in the site Space and every comment room, and can appoint
+co-managers and per-room moderators (see
+[site governance](site-governance.md)).
 
 ## 6. Verify
 
 1. Open the [demo frontend](demo.md) (`misc/demo/index.html`) against
    `http://localhost:7931` and post a comment.
 2. In Matrix, check that a Space (`Comments: <site>`), a comment room
-   (`Comments: <site>/<post>`), and the virtual user were created.
+   (`Comments: <site>/<post>`), and the virtual user were created, and that
+   the owner account appears with power 100 in both.
 3. The comment should appear in the frontend in real time via SSE.
 
 If comments exist in Matrix but not in the API, rebuild the read model from

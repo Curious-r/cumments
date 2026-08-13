@@ -38,7 +38,7 @@ docker run --rm --entrypoint cumments \
 docker compose up -d
 ```
 
-注册文件的生成、管理员账号的创建、验证与排障的完整流程见
+注册文件的生成、站点所有者的登记、验证与排障的完整流程见
 [安装指南](docs/installation.md)。
 
 ## 文档

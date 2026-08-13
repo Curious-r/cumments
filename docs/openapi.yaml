@@ -921,11 +921,328 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/owners:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Governance]
+      summary: Register or add a site owner
+      operationId: addSiteOwner
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Governance]
+      summary: Remove a site owner
+      operationId: removeSiteOwner
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/co-managers:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Governance]
+      summary: Add a site co-manager
+      operationId: addSiteCoManager
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Governance]
+      summary: Remove a site co-manager
+      operationId: removeSiteCoManager
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}/moderators:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    get:
+      tags: [Governance]
+      summary: List projected room moderators
+      operationId: listRoomModerators
+      responses:
+        "200":
+          description: Projected room moderators
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomModeratorsResponse"
+        "404":
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [Governance]
+      summary: Appoint a room moderator
+      operationId: addRoomModerator
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated room moderators
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomModeratorsResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Governance]
+      summary: Remove a room moderator
+      operationId: removeRoomModerator
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated room moderators
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomModeratorsResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/roles:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    get:
+      tags: [Governance]
+      summary: List projected site roles
+      operationId: listSiteRoles
+      responses:
+        "200":
+          description: Projected site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+  /api/v1/admin/sites/{site_id}/owners:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Admin]
+      summary: Register or add a site owner (operator)
+      operationId: adminAddSiteOwner
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Admin]
+      summary: Remove a site owner (operator)
+      operationId: adminRemoveSiteOwner
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/v1/admin/sites/{site_id}/co-managers:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Admin]
+      summary: Add a site co-manager (operator)
+      operationId: adminAddSiteCoManager
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Admin]
+      summary: Remove a site co-manager (operator)
+      operationId: adminRemoveSiteCoManager
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Updated site roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     adminToken:
       type: http
       scheme: bearer
+    claimToken:
+      type: apiKey
+      in: header
+      name: X-Cumments-Claim-Token
   parameters:
     SiteId:
       name: site_id
@@ -1540,3 +1857,32 @@ components:
           type: string
         toml:
           type: string
+    UserIdRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: string
+          description: Fully qualified Matrix user ID.
+    SiteRolesResponse:
+      type: object
+      required: [owners, co_managers]
+      properties:
+        owners:
+          type: array
+          items:
+            type: string
+        co_managers:
+          type: array
+          items:
+            type: string
+    RoomModeratorsResponse:
+      type: object
+      required: [room_id, moderators]
+      properties:
+        room_id:
+          type: string
+        moderators:
+          type: array
+          items:
+            type: string

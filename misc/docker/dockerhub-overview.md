@@ -76,7 +76,6 @@ services:
       CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN: "<as_token>"
       CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN: "<hs_token>"
       CUMMENTS__MATRIX__APPSERVICE__REGISTRATION_FILE: /etc/cumments/registration.yaml
-      CUMMENTS__MATRIX__MODERATION__ADMIN_ID: "@admin:your-server.example.com"
 
 volumes:
   cumments-data:

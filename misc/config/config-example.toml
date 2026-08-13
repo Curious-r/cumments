@@ -101,7 +101,3 @@ mode = "logging"
 # hs_token = "<hs_token from registration.yaml>"
 # # Optional: verify at startup that this config matches registration.yaml.
 # registration_file = "registration.yaml"
-#
-# [matrix.moderation]
-# # Your personal Matrix account ID, granted Admin in comment rooms.
-# admin_id = "@admin:example.com"

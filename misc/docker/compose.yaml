@@ -14,9 +14,10 @@
 #   2. Start the stack:
 #        docker compose up -d
 #
-#   3. Create the first (admin) account, then post a comment from
-#      misc/demo/index.html. The full walkthrough, including the exact
-#      registration request, is in docs/installation.md.
+#   3. Create a Matrix account for the site owner, register the owner with
+#      Cumments, then post a comment from misc/demo/index.html. The full
+#      walkthrough, including the exact registration request, is in
+#      docs/installation.md.
 #
 # Set MATRIX_DOMAIN to your Matrix server name (the part after ':' in user
 # IDs) when this is not a local test, e.g. in a .env file next to this file:
@@ -76,7 +77,6 @@ services:
       CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN: "<as_token>"
       CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN: "<hs_token>"
       CUMMENTS__MATRIX__APPSERVICE__REGISTRATION_FILE: /etc/cumments/registration.yaml
-      CUMMENTS__MATRIX__MODERATION__ADMIN_ID: "@admin:${MATRIX_DOMAIN:-localhost:8008}"
       RUST_LOG: info
     depends_on:
       - tuwunel

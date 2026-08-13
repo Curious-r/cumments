@@ -100,6 +100,20 @@ Custom Matrix identifiers use the reverse-DNS namespace
 The homeserver pushes events to `PUT /_matrix/app/v1/transactions/{txnId}`,
 authenticated with `hs_token` (Bearer header, legacy query fallback).
 
+### Site governance
+
+Governance follows the same source-of-truth principle: a site is a Matrix
+Space, and the Space's `m.room.power_levels` plus each comment room's own
+`m.room.power_levels` define who manages the site and moderates its rooms.
+The level ladder is 100 (owner), 75 (co-manager, replicated from the Space
+into every room) and 50 (per-room moderator). The power-levels event itself
+is locked to 100 so only owners and the AppService sender can change
+governance. Push projection stores the rosters in disposable `site_roles` /
+`room_roles` tables, a reconciler pass keeps room-level site roles aligned
+with the Space, and `backfill` replays Space state events so the rosters
+rebuild after a database reset. See
+[site governance](site-governance.md) for the full model.
+
 ### Logging mode (local development)
 
 The `LoggingMatrixDriver` logs actions instead of talking to a homeserver.
@@ -111,10 +125,10 @@ no homeserver pushing events back.
 
 | Crate | Responsibility |
 |---|---|
-| `cumments-core` | Domain models, ports (traits), intents, events |
+| `cumments-core` | Domain models, ports (traits), intents, events, governance helpers |
 | `cumments-api` | HTTP API, PoW verification, validation, SSE |
 | `cumments-store` | SQLite persistence (SeaORM), migrations, backup |
-| `cumments-reconciler` | Background writer — reads intents, calls MatrixDriver, waits for projection to close the loop |
+| `cumments-reconciler` | Background writer — reads intents, calls MatrixDriver, waits for projection to close the loop, reconciles site roles |
 | `cumments-matrix` | MatrixDriver implementations (AppService, Logging) |
 | `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver, backfill) |
 | `cumments` | CLI entry point, configuration, assembly |
@@ -131,9 +145,10 @@ cumments backfill
 requires an AppService configuration connected to a reachable homeserver:
 
 1. discovers Cumments rooms via `get_joined_rooms` and
-   `host.curious.cumments.metadata` (restores sites and the room registry
-   after a local DB reset);
-2. paginates each comment room's history via the CS API `/messages`;
+   `host.curious.cumments.metadata` (restores sites, their Spaces and the
+   room registry after a local DB reset);
+2. paginates each comment room's and Space's history via the CS API
+   `/messages`;
 3. replays events in `(origin_server_ts, event_id)` order through the same
    idempotent projection used for live pushes.
 

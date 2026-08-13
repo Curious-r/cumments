@@ -79,13 +79,10 @@ sender_localpart = "_cumments_bot"
 # Support is checked best-effort before creating a room; if the homeserver
 # cannot confirm (or rejects the check), the homeserver itself decides.
 # room_version = "12"
-
-[matrix.moderation]
-admin_id = "@admin:your_server.tld"
 ```
 
-For local development, set `mode = "logging"`; no `matrix.homeserver`,
-`matrix.appservice`, or `matrix.moderation` sections are needed.
+For local development, set `mode = "logging"`; no `matrix.homeserver` or
+`matrix.appservice` section is needed.
 
 ## Notes
 
