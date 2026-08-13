@@ -150,11 +150,16 @@ pub(crate) async fn sse_handler(
             && let Some(state) = &ephemeral_state
         {
             for user_id in state.typing_snapshot(room_id) {
+                let display_name = match store.get_member(room_id, &user_id).await {
+                    Ok(Some(member)) => member.display_name,
+                    _ => None,
+                };
                 let snapshot = serde_json::json!({
                     "type": "typing",
                     "room_id": room_id,
                     "user_id": user_id,
                     "typing": true,
+                    "display_name": display_name,
                 });
                 yield Ok::<Event, Infallible>(Event::default().event("ephemeral").data(snapshot.to_string()));
             }
