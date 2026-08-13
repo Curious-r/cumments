@@ -22,6 +22,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use cumments_core::{
+    ephemeral::{EphemeralEvent, EphemeralState},
     ports::{IntentStore, MessageStore, RegistryStore, RoomStore, SiteAuthStore, SiteStore},
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -99,6 +100,10 @@ pub struct ApiState {
     pub media_proxy: Option<Arc<MediaProxy>>,
     /// Per-client-key limiter for media proxy requests.
     pub media_limiter: Arc<rate_limit::RateLimiter>,
+    /// Live ephemeral events (typing/receipts/presence) for SSE.
+    pub ephemeral_bus: broadcast::Sender<EphemeralEvent>,
+    /// Shared typing state for SSE snapshots, when ephemeral sync is enabled.
+    pub ephemeral_state: Option<Arc<EphemeralState>>,
 }
 
 /// Builds the Axum router for the API.

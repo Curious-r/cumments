@@ -6,6 +6,7 @@
 //! homeserver via HTTP and [`backfill`] rebuilds the read model from history.
 
 pub mod backfill;
+pub mod ephemeral;
 pub mod event_processor;
 pub mod parsed;
 pub mod push_receiver;

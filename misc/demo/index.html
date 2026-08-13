@@ -670,6 +670,7 @@
                     room_name_changed: "修改了房间名：",
                     room_topic_changed: "更新了话题：",
                     room_avatar_changed: "更换了房间头像",
+                    typing_now: "正在输入…",
                     sse_new_comment: "新评论：",
                     sse_comment_updated: "评论已更新：",
                     sse_comment_deleted: "有评论被删除",
@@ -811,6 +812,7 @@
                     room_name_changed: "changed the room name to: ",
                     room_topic_changed: "updated the topic: ",
                     room_avatar_changed: "changed the room avatar",
+                    typing_now: "is typing…",
                     sse_new_comment: "New comment: ",
                     sse_comment_updated: "Comment updated: ",
                     sse_comment_deleted: "A comment was deleted",
@@ -2338,6 +2340,33 @@
                     toast(t("sse_comment_deleted"), "info");
                     loadList();
                 });
+
+                const typingUsers = new Map();
+                sse.addEventListener("ephemeral", (event) => {
+                    const ev = JSON.parse(event.data);
+                    if (ev.type !== "typing") return;
+                    if (ev.typing) {
+                        typingUsers.set(ev.user_id, ev.display_name || ev.user_id);
+                    } else {
+                        typingUsers.delete(ev.user_id);
+                    }
+                    renderTyping(typingUsers);
+                });
+            }
+
+            function renderTyping(typingUsers) {
+                let el = document.getElementById("typingIndicator");
+                if (!el) {
+                    el = document.createElement("div");
+                    el.id = "typingIndicator";
+                    el.className = "text-xs text-slate-400 pl-1 mb-2 min-h-[1rem]";
+                    const container = document.getElementById("commentsContainer");
+                    container.parentNode.insertBefore(el, container);
+                }
+                const names = [...typingUsers.values()].slice(0, 3);
+                el.textContent = names.length
+                    ? `${names.join("、")} ${t("typing_now")}`
+                    : "";
             }
 
             function closeSse() {

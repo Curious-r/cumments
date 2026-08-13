@@ -9,6 +9,8 @@ use axum::{
     response::IntoResponse,
     response::sse::{Event, KeepAlive, Sse},
 };
+use cumments_core::ephemeral::EphemeralEvent;
+use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::projector_events::ProjectorEvent;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -121,45 +123,107 @@ pub(crate) async fn sse_handler(
         ));
     }
     state.active_sse_connections.fetch_add(1, Ordering::Relaxed);
+    let site_id_val = SiteId::new(site_id.clone()).map_err(AppError::Validation)?;
+    let post_slug_val = PostSlug::new(post_slug.clone()).map_err(AppError::Validation)?;
+    let ephemeral_room_id = state
+        .store
+        .get_registered_room(&site_id_val, &post_slug_val)
+        .await
+        .ok()
+        .flatten();
     let guard = SseConnectionGuard {
         active: state.active_sse_connections.clone(),
         reconnect: state.sse_reconnect.clone(),
         key,
     };
     let media_proxy = state.media_proxy.clone();
+    let ephemeral_state = state.ephemeral_state.clone();
 
     let mut rx = state.event_bus.subscribe();
+    let mut ephemeral_rx = state.ephemeral_bus.subscribe();
 
     let stream = async_stream::stream! {
         let _guard = guard;
-        while let Ok(event) = rx.recv().await {
-            // Filter events by site_id and post_slug
-            let matches = match &event {
-                ProjectorEvent::MessageCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                ProjectorEvent::MessageUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                ProjectorEvent::MessageDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+        // Initial typing snapshot for this room.
+        if let Some(room_id) = &ephemeral_room_id
+            && let Some(state) = &ephemeral_state
+        {
+            for user_id in state.typing_snapshot(room_id) {
+                let snapshot = serde_json::json!({
+                    "type": "typing",
+                    "room_id": room_id,
+                    "user_id": user_id,
+                    "typing": true,
+                });
+                yield Ok::<Event, Infallible>(Event::default().event("ephemeral").data(snapshot.to_string()));
+            }
+        }
+
+        enum Incoming {
+            Projector(Box<ProjectorEvent>),
+            Ephemeral(EphemeralEvent),
+        }
+
+        loop {
+            let incoming = tokio::select! {
+                res = rx.recv() => match res {
+                    Ok(event) => Incoming::Projector(Box::new(event)),
+                    Err(_) => break,
+                },
+                res = ephemeral_rx.recv() => match res {
+                    Ok(event) => Incoming::Ephemeral(event),
+                    Err(_) => break,
+                },
             };
 
-            if matches {
-                let mut payload = event.clone();
-                if let Some(proxy) = &media_proxy {
-                    match &mut payload {
-                        ProjectorEvent::MessageCreated { message, .. }
-                        | ProjectorEvent::MessageUpdated { message, .. } => {
-                            proxy.proxify_message(message);
+            match incoming {
+                Incoming::Projector(event) => {
+                    let event = *event;
+                    // Filter events by site_id and post_slug
+                    let matches = match &event {
+                        ProjectorEvent::MessageCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                        ProjectorEvent::MessageUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                        ProjectorEvent::MessageDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                    };
+
+                    if matches {
+                        let mut payload = event.clone();
+                        if let Some(proxy) = &media_proxy {
+                            match &mut payload {
+                                ProjectorEvent::MessageCreated { message, .. }
+                                | ProjectorEvent::MessageUpdated { message, .. } => {
+                                    proxy.proxify_message(message);
+                                }
+                                ProjectorEvent::MessageDeleted { .. } => {}
+                            }
                         }
-                        ProjectorEvent::MessageDeleted { .. } => {}
+                        let Ok(json) = serde_json::to_string(&payload) else {
+                            continue;
+                        };
+                        let event_name = match &event {
+                            ProjectorEvent::MessageCreated { .. } => "message_created",
+                            ProjectorEvent::MessageUpdated { .. } => "message_updated",
+                            ProjectorEvent::MessageDeleted { .. } => "message_deleted",
+                        };
+                        yield Ok::<Event, Infallible>(Event::default().event(event_name).data(json));
                     }
                 }
-                let Ok(json) = serde_json::to_string(&payload) else {
-                    continue;
-                };
-                let event_name = match &event {
-                    ProjectorEvent::MessageCreated { .. } => "message_created",
-                    ProjectorEvent::MessageUpdated { .. } => "message_updated",
-                    ProjectorEvent::MessageDeleted { .. } => "message_deleted",
-                };
-                yield Ok::<Event, Infallible>(Event::default().event(event_name).data(json));
+                Incoming::Ephemeral(event) => {
+                    let room_id = match &event {
+                        EphemeralEvent::Typing { room_id, .. }
+                        | EphemeralEvent::ReadReceipt { room_id, .. } => Some(room_id.as_str()),
+                        EphemeralEvent::Presence { .. } => None,
+                    };
+                    if let Some(room_id) = room_id
+                        && ephemeral_room_id.as_deref() != Some(room_id)
+                    {
+                        continue;
+                    }
+                    let Ok(json) = serde_json::to_string(&event) else {
+                        continue;
+                    };
+                    yield Ok::<Event, Infallible>(Event::default().event("ephemeral").data(json));
+                }
             }
         }
     };

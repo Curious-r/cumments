@@ -188,6 +188,23 @@ async fn main() -> Result<()> {
     };
     tracing::info!("Matrix mode: {:?}", settings.matrix.mode);
 
+    // Ephemeral event channel (typing/receipts/presence) for SSE.
+    let (ephemeral_bus, _) = tokio::sync::broadcast::channel(256);
+    let ephemeral_state = cumments_core::ephemeral::EphemeralState::new();
+    if let Some(runtime) = &appservice {
+        let ephemeral_sync = cumments_projector::ephemeral::EphemeralSync::new(
+            runtime.homeserver_url.clone(),
+            runtime.as_token.clone(),
+            format!("@{}:{}", runtime.sender_localpart, runtime.server_name),
+            db_store.clone(),
+            db_store.clone(),
+            ephemeral_state.clone(),
+            ephemeral_bus.clone(),
+        )
+        .expect("build ephemeral sync");
+        tokio::spawn(async move { ephemeral_sync.run().await });
+    }
+
     // ─────────────────────────────────────────────────────────────
     // 7. Initialize Matrix Driver (Hands) based on mode
     // ─────────────────────────────────────────────────────────────
@@ -432,6 +449,8 @@ async fn main() -> Result<()> {
             120,
             std::time::Duration::from_secs(3600),
         )),
+        ephemeral_bus: ephemeral_bus.clone(),
+        ephemeral_state: Some(ephemeral_state),
     };
     let api_router = cumments_api::build_router(api_state);
 

@@ -270,6 +270,9 @@ pub trait RegistryStore: Send + Sync {
     /// Returns the lifecycle status of a room, if it is in the registry.
     async fn get_room_status(&self, room_id: &str) -> Result<Option<RoomStatus>>;
 
+    /// Lists all rooms currently registered as active (canonical).
+    async fn list_active_rooms(&self) -> Result<Vec<String>>;
+
     /// Looks up the Cumments identity registered for a room.
     ///
     /// Unlike [`Self::get_registered_room`] this is a reverse lookup by room ID,

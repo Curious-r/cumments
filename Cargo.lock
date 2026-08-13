@@ -984,6 +984,7 @@ dependencies = [
  "cumments-core",
  "cumments-store",
  "ed25519-dalek",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

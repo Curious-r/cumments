@@ -65,6 +65,8 @@ async fn test_state(
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        ephemeral_bus: tokio::sync::broadcast::channel(16).0,
+        ephemeral_state: None,
     };
     (state, store)
 }

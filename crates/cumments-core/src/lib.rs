@@ -1,5 +1,6 @@
 // This lib.rs file will declare the modules of our core crate.
 
+pub mod ephemeral;
 pub mod identity;
 pub mod intents;
 pub mod matrix_error;
