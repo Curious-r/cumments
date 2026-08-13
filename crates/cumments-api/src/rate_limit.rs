@@ -15,23 +15,45 @@ use std::time::{Duration, Instant};
 /// growing memory without limit (keys are client-controlled via XFF).
 const MAX_KEYS: usize = 10_000;
 
-/// Best-effort client key: the first `X-Forwarded-For` value is honored only
-/// when the peer is one of the configured trusted proxies; otherwise the
-/// peer address is used so direct clients cannot spoof their rate-limit key.
+/// Best-effort client key.
+///
+/// `X-Forwarded-For` is honored only when the immediate peer is one of the
+/// configured trusted proxies; otherwise the peer address is used so direct
+/// clients cannot spoof their rate-limit key. When the peer *is* trusted, the
+/// list is walked right-to-left skipping trusted proxy addresses, so a client
+/// cannot prepend arbitrary entries: the rightmost untrusted address is the
+/// client as seen by the first trusted proxy.
 pub fn client_key(
     headers: &axum::http::HeaderMap,
     addr: Option<SocketAddr>,
     trusted_proxies: &HashSet<IpAddr>,
 ) -> String {
-    if addr.is_some_and(|peer| trusted_proxies.contains(&peer.ip()))
-        && let Some(forwarded) = headers
+    if addr.is_some_and(|peer| trusted_proxies.contains(&peer.ip())) {
+        if let Some(forwarded) = headers
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(',').next())
-            .map(str::trim)
-            .filter(|ip| !ip.is_empty())
-    {
-        return forwarded.to_string();
+        {
+            for entry in forwarded.split(',').rev() {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                if entry
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| trusted_proxies.contains(&ip))
+                {
+                    // This hop is another trusted proxy; keep walking toward
+                    // the client.
+                    continue;
+                }
+                return entry.to_string();
+            }
+        }
+        // Every entry was a trusted proxy (or the header was empty): fall
+        // back to the peer we received the request from.
+        if let Some(addr) = addr {
+            return addr.ip().to_string();
+        }
     }
     addr.map(|addr| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
@@ -135,5 +157,39 @@ mod tests {
 
         let key = client_key(&headers, Some(peer), &trusted);
         assert_eq!(key, "10.0.0.5");
+    }
+
+    #[test]
+    fn trusted_proxy_uses_rightmost_untrusted_xff_entry() {
+        let mut headers = axum::http::HeaderMap::new();
+        // A malicious client can prepend entries, but cannot change the
+        // entry appended by the first trusted proxy.
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.9, 203.0.113.7"),
+        );
+        let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
+        let trusted: HashSet<IpAddr> = [IpAddr::V4(Ipv4Addr::LOCALHOST)].into();
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "203.0.113.7");
+    }
+
+    #[test]
+    fn trusted_proxy_chain_skips_intermediate_proxies() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.9, 10.0.0.2"),
+        );
+        let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
+        let trusted: HashSet<IpAddr> = [
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ]
+        .into();
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "203.0.113.9");
     }
 }

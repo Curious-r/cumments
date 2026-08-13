@@ -112,40 +112,35 @@ pub async fn require_admin(
     req: Request,
     next: Next,
 ) -> Response {
-    // Key the limiter by the presented token when one exists so an
-    // unauthenticated IP flood cannot starve the real operator's quota, while
-    // requests without a token still share an IP-scoped bucket that bounds
-    // brute-force traffic.
-    let key = match req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-    {
-        Some(token) => format!("admin-token:{}", token_hash(token)),
-        None => client_key(req.headers(), Some(addr), &state.trusted_proxies),
-    };
-    if !state.admin_limiter.allow(&key) {
-        return AppError::TooManyRequests("admin API is rate limited; try again later".to_string())
-            .into_response();
-    }
-    let Some(expected) = &state.admin_token_hash else {
-        return AppError::Unauthorized(
-            "admin API is not enabled; set `security.admin_token`".to_string(),
-        )
-        .into_response();
-    };
     let presented = req
         .headers()
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    match presented {
-        Some(token) if constant_time_eq(expected.as_bytes(), token_hash(token).as_bytes()) => {
-            next.run(req).await
-        }
-        _ => AppError::Unauthorized("invalid admin token".to_string()).into_response(),
+
+    // A valid operator token bypasses the limiter entirely, so flood traffic
+    // can never starve the real operator's access.
+    if let (Some(expected), Some(token)) = (&state.admin_token_hash, presented)
+        && constant_time_eq(expected.as_bytes(), token_hash(token).as_bytes())
+    {
+        return next.run(req).await;
     }
+
+    // Missing, wrong or not-enabled requests all share an IP-scoped bucket.
+    // Keying by the presented token here would let an attacker mint a fresh
+    // quota by simply rotating the token on every attempt.
+    let key = client_key(req.headers(), Some(addr), &state.trusted_proxies);
+    if !state.admin_limiter.allow(&key) {
+        return AppError::TooManyRequests("admin API is rate limited; try again later".to_string())
+            .into_response();
+    }
+    if state.admin_token_hash.is_none() {
+        return AppError::Unauthorized(
+            "admin API is not enabled; set `security.admin_token`".to_string(),
+        )
+        .into_response();
+    }
+    AppError::Unauthorized("invalid admin token".to_string()).into_response()
 }
 
 // ---------------------------------------------------------------------------
