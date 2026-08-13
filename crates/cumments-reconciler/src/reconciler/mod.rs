@@ -1,5 +1,6 @@
 mod decommission;
 mod deletions;
+mod media;
 mod moderation;
 mod pass;
 mod posts;
@@ -54,6 +55,9 @@ const QUARANTINE_ESCALATION: u32 = 4;
 const INTENT_PASS_INTERVAL: Duration = Duration::from_secs(5);
 /// Resync interval for governance passes.
 const GOVERNANCE_PASS_INTERVAL: Duration = Duration::from_secs(60);
+/// Interval for the orphan-media sweep; it has no event source, so the
+/// interval alone drives it.
+const MEDIA_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Run one intent's processing future with a hard time budget.
 async fn run_intent<F>(future: F) -> Result<()>
@@ -163,6 +167,16 @@ impl Reconciler {
             Arc::new(decommission::DecommissionPass::new(
                 deps.clone(),
                 schedule.decommission,
+            )),
+            Arc::new(media::MediaCleanupPass::new(
+                deps.clone(),
+                PassConfig {
+                    name: "media-cleanup",
+                    interval: MEDIA_CLEANUP_INTERVAL,
+                    // No producer ever signals this channel; the interval is
+                    // the pass's only driver.
+                    wakeup: Arc::new(Notify::new()),
+                },
             )),
         ];
         Self { passes }

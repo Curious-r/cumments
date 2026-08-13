@@ -34,6 +34,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.remove_room_alias_impl(site_id, post_slug).await
     }
 
+    async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool> {
+        self.delete_media_impl(server, media_id).await
+    }
+
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,

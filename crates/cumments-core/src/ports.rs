@@ -569,6 +569,12 @@ pub trait MatrixDriver: Send + Sync {
     async fn remove_room_alias(&self, site_id: &SiteId, post_slug: Option<&PostSlug>)
     -> Result<()>;
 
+    /// Best-effort deletion of one media item on the homeserver. Returns
+    /// `true` when the homeserver confirmed the deletion (or the item was
+    /// already gone), so the caller can forget the local upload record;
+    /// `false` and errors mean the record should be kept for a later sweep.
+    async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool>;
+
     /// Posts a message to a specific room.
     async fn post_message(
         &self,

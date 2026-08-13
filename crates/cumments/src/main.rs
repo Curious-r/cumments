@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
-use cumments_core::ports::{MatrixDriver, MessageStore};
+use cumments_core::ports::MatrixDriver;
 use cumments_core::site_service::SiteService;
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -368,57 +368,6 @@ async fn main() -> Result<()> {
             .expect("build media proxy"),
         )
     });
-    // Orphan media cleanup: periodically forget uploads that were never
-    // referenced by a comment, deleting the homeserver copy best-effort.
-    if let Some(proxy) = media_proxy.clone() {
-        let cleanup_store = db_store.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
-            loop {
-                interval.tick().await;
-                let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
-                match cleanup_store.list_unused_media_before(cutoff).await {
-                    Ok(orphans) => {
-                        for url in orphans {
-                            let Some(rest) = url.strip_prefix("mxc://") else {
-                                continue;
-                            };
-                            let Some((server, media_id)) = rest.split_once('/') else {
-                                continue;
-                            };
-                            match proxy.delete_media(server, media_id).await {
-                                Ok(true) => {
-                                    if let Err(e) = cleanup_store.delete_media_upload(&url).await {
-                                        tracing::warn!(
-                                            "Orphan cleanup: failed to forget {}: {e:#}",
-                                            url
-                                        );
-                                    } else {
-                                        tracing::info!("Orphan cleanup: deleted {}", url);
-                                    }
-                                }
-                                Ok(false) => {
-                                    tracing::warn!(
-                                        "Orphan cleanup: homeserver refused deletion of {}; keeping record",
-                                        url
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Orphan cleanup: deletion of {} failed: {e:#}",
-                                        url
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Orphan cleanup scan failed: {e:#}");
-                    }
-                }
-            }
-        });
-    }
     let rate_limits = settings.rate_limit.resolved()?;
     let api_state = cumments_api::ApiState {
         store: db_store,
