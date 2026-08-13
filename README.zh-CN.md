@@ -19,7 +19,7 @@ Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Ma
   通过 HTTP push 接收事件。
 - **PoW 反垃圾** —— 访客评论需要解决带签名的 proof-of-work 挑战，无需注册账号。
 - **回复树与实时 SSE** —— 回复使用 Matrix 富回复，更新通过
-  `comment_created` / `comment_updated` / `comment_deleted` 实时推送。
+  `message_created` / `message_updated` / `message_deleted` 实时推送。
 
 ## 快速开始（Docker）
 
@@ -43,17 +43,34 @@ docker compose up -d
 
 ## 文档
 
-| 指南 | 说明 |
-|---|---|
-| [在线文档](https://curious-r.github.io/cumments/) | 渲染站点：API、配置、错误码 |
-| [安装](docs/installation.md) | 使用官方镜像与 homeserver 的快速开始 |
-| [配置](docs/configuration.md) | 配置发现顺序、环境变量、完整示例 |
-| [架构](docs/architecture.md) | 系统设计、运行模式、恢复、crate 结构 |
-| [API](docs/api.md) | 挑战、评论、签名、SSE |
-| [站点验证](docs/site-verification.md) | 绑定 SSG 站点、well-known/DNS 证明、严格 HMAC 模式 |
-| [CLI](docs/cli.md) | 本地管理：站点、房间、备份、补全 |
-| [演示页](docs/demo.md) | 后端定位说明、演示页、身份、proof of work |
-| [开发](docs/development.md) | 工具链、CLI、从 main 构建镜像 |
+完整文档渲染在 <https://curious-r.github.io/cumments/>。
+
+**快速开始**
+
+- [安装](docs/installation.md) —— 使用官方镜像与 homeserver 的快速开始。
+- [配置](docs/configuration.md) —— 配置发现顺序、环境变量、完整 AppService
+  示例。
+
+**概念**
+
+- [架构](docs/architecture.md) —— 系统设计、运行模式、恢复、crate 结构。
+- [数据模型](docs/data-model.md) —— Matrix 事件到评论模型的映射与存储布局。
+- [站点认证](docs/site-authentication.md) —— origin 与 HMAC 两种写入信任模型。
+- [站点验证](docs/site-verification.md) —— 绑定 SSG 站点、well-known/DNS
+  证明、严格 HMAC 模式。
+- [站点治理](docs/site-governance.md) —— 站主、协管员与逐房间版主的 Matrix
+  权限模型。
+
+**参考**
+
+- [API](docs/api.md) —— 挑战、评论、签名、SSE 与设计取舍。
+- [CLI](docs/cli.md) —— 本地管理：站点、房间、角色、备份。
+- [错误码](docs/problems/index.md) —— RFC 9457 问题类型注册表。
+
+**开发**
+
+- [开发](docs/development.md) —— 工具链、检查、从 main 构建镜像。
+- [演示页](docs/demo.md) —— 后端定位说明、演示页、身份、proof of work。
 
 ## License
 

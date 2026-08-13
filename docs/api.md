@@ -72,8 +72,6 @@ Response:
         "style": "normal"
       },
       "timestamp": "2026-08-08T00:00:00Z",
-      "room_id": "!room:server",
-      "sender_mxid": "@_cumments_my-blog_3282f2a21b4a1e6b:server",
       "edited_at": null,
       "reply_to": null,
       "thread_root": null,
@@ -83,8 +81,7 @@ Response:
       "redacted_by": null,
       "reactions": [
         { "key": "👍", "count": 2 }
-      ],
-      "raw_content": {}
+      ]
     }
   ],
   "meta": {
@@ -256,13 +253,15 @@ Server-sent events use the shape `{ "type": "...", "payload": { ... } }`:
 type: message_created
 type: message_updated
 type: message_deleted
+type: message_annotations_changed
 type: ephemeral
 ```
 
 The `message_created` and `message_updated` payloads contain the full
 `Message` object (same shape as the list response); `message_deleted`
 contains the deleted `event_id` and, when the deletion went through the
-Cumments API, the `intent_id`. `ephemeral` carries live room state such as
+Cumments API, the `intent_id`. `message_annotations_changed` signals that
+reaction or poll counts changed; `ephemeral` carries live room state such as
 typing indicators:
 
 ```json

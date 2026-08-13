@@ -15,8 +15,8 @@ history with `cumments backfill`.
 - **Rich content** — guest uploads (image / video / audio / file / voice)
   served through a signed public media proxy, MSC3488 locations, reactions
   and MSC3381 polls.
-- **Reply trees and real-time SSE** — `comment_created` /
-  `comment_updated` / `comment_deleted`, plus typing, read receipts and
+- **Reply trees and real-time SSE** — `message_created` /
+  `message_updated` / `message_deleted`, plus typing, read receipts and
   presence events.
 - **AppService-first** — registers as a Matrix Application Service, uses
   virtual users, receives events over HTTP push.

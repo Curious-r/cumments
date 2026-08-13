@@ -23,7 +23,7 @@ that can be rebuilt from Matrix history with `cumments backfill`.
 - **PoW anti-spam** — guest comments require a signed proof-of-work challenge;
   no login or account system.
 - **Reply trees and real-time SSE** — replies use Matrix rich replies, and
-  updates stream via `comment_created` / `comment_updated` / `comment_deleted`.
+  updates stream via `message_created` / `message_updated` / `message_deleted`.
 
 ## Quick start (Docker)
 
@@ -47,17 +47,41 @@ troubleshooting — is in the [installation guide](docs/installation.md).
 
 ## Documentation
 
-| Guide | Description |
-|---|---|
-| [Online documentation](https://curious-r.github.io/cumments/) | Rendered site: API, configuration, problem types |
-| [Installation](docs/installation.md) | Quick start with the official image and a homeserver |
-| [Configuration](docs/configuration.md) | Config discovery, environment variables, full example |
-| [Architecture](docs/architecture.md) | System design, operation modes, recovery, crates |
-| [API](docs/api.md) | Challenge, comments, signatures, SSE |
-| [Site verification](docs/site-verification.md) | Bind an SSG site, well-known/DNS proofs, strict HMAC mode |
-| [CLI](docs/cli.md) | Local administration: sites, rooms, backup, completions |
-| [Demo](docs/demo.md) | Backend-only positioning, demo page, identity, proof of work |
-| [Development](docs/development.md) | Toolchain, CLI, building the image from main |
+The full documentation is rendered at <https://curious-r.github.io/cumments/>.
+
+**Getting started**
+
+- [Installation](docs/installation.md) — quick start with the official image
+  and a homeserver.
+- [Configuration](docs/configuration.md) — config discovery, environment
+  variables, full AppService example.
+
+**Concepts**
+
+- [Architecture](docs/architecture.md) — system design, operation modes,
+  recovery, crates.
+- [Data model](docs/data-model.md) — the Matrix-to-comment mapping and
+  storage layout.
+- [Site authentication](docs/site-authentication.md) — origin and HMAC
+  write-path trust models.
+- [Site verification](docs/site-verification.md) — bind an SSG site,
+  well-known/DNS proofs, strict HMAC mode.
+- [Site governance](docs/site-governance.md) — owners, co-managers and
+  per-room moderators in Matrix power levels.
+
+**Reference**
+
+- [API](docs/api.md) — challenge, comments, signatures, SSE, design
+  trade-offs.
+- [CLI](docs/cli.md) — local administration: sites, rooms, roles, backups.
+- [Problem types](docs/problems/index.md) — the RFC 9457 error registry.
+
+**Development**
+
+- [Development](docs/development.md) — toolchain, checks, building the image
+  from main.
+- [Demo](docs/demo.md) — backend-only positioning, demo page, identity,
+  proof of work.
 
 ## License
 
