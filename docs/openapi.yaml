@@ -192,7 +192,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Comment"
+                      $ref: "#/components/schemas/Message"
                   meta:
                     $ref: "#/components/schemas/PaginationMeta"
         "400":
@@ -605,6 +605,7 @@ paths:
     get:
       tags: [Public]
       summary: Proxy a Matrix media file (signed URL)
+      operationId: proxyMedia
       description: |
         Public read-only proxy for MXC media. URLs are HMAC-signed with a
         short TTL; requests are rate limited, restricted to the configured
@@ -646,6 +647,7 @@ paths:
     get:
       tags: [Public]
       summary: Comment room metadata and system messages
+      operationId: getRoomInfo
       responses:
         "200":
           description: Room info
@@ -694,6 +696,7 @@ paths:
     post:
       tags: [Comments]
       summary: Upload guest media (image/voice)
+      operationId: uploadMedia
       description: |
         Uploads raw bytes as the guest's virtual user. Query parameters carry
         the PoW challenge response and an Ed25519 signature over
@@ -763,6 +766,7 @@ paths:
     get:
       tags: [Public]
       summary: List preset stickers
+      operationId: listStickers
       responses:
         "200":
           description: Preset stickers
@@ -778,7 +782,7 @@ paths:
                       type: string
                     proxy_url:
                       type: string
-                  alt:
+                    alt:
                       type: string
   /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions:
     parameters:
@@ -788,6 +792,7 @@ paths:
     post:
       tags: [Comments]
       summary: React to a comment
+      operationId: reactToComment
       requestBody:
         required: true
         content:
@@ -827,6 +832,7 @@ paths:
     post:
       tags: [Comments]
       summary: Vote on a poll
+      operationId: votePoll
       requestBody:
         required: true
         content:
@@ -861,6 +867,7 @@ paths:
     post:
       tags: [Comments]
       summary: Post a location message
+      operationId: postLocation
       requestBody:
         required: true
         content:
@@ -1025,15 +1032,29 @@ components:
         display_name:
           type: string
           nullable: true
+        avatar_url:
+          type: string
+          nullable: true
         public_key:
           type: string
           nullable: true
         mxid:
           type: string
           nullable: true
-    Comment:
+    Message:
       type: object
-      required: [event_id, site_id, post_slug, author, content, timestamp]
+      required:
+        - event_id
+        - site_id
+        - post_slug
+        - room_id
+        - sender_mxid
+        - author
+        - content
+        - timestamp
+        - status
+        - reactions
+        - raw_content
       properties:
         event_id:
           type: string
@@ -1041,10 +1062,14 @@ components:
           type: string
         post_slug:
           type: string
+        room_id:
+          type: string
+        sender_mxid:
+          type: string
         author:
           $ref: "#/components/schemas/CommentAuthor"
         content:
-          type: string
+          $ref: "#/components/schemas/Content"
         timestamp:
           type: string
           format: date-time
@@ -1056,7 +1081,138 @@ components:
         reply_to:
           type: string
           nullable: true
+        thread_root:
+          type: string
+          nullable: true
         intent_id:
+          type: integer
+          format: int64
+          nullable: true
+        status:
+          type: string
+          enum: [active, redacted]
+        redacted_at:
+          type: string
+          format: date-time
+          nullable: true
+        redacted_by:
+          type: string
+          nullable: true
+        reactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReactionSummary"
+        raw_content:
+          type: object
+          description: Raw Matrix event content (forward-compatibility escape hatch)
+    Content:
+      type: object
+      description: |
+        Typed displayable content. Fields are grouped by `type`; only the
+        fields of the selected variant are present (plus `type` itself).
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [text, media, location, poll, encrypted, unknown]
+        # text
+        body:
+          type: string
+        formatted_body:
+          type: string
+          nullable: true
+          description: HTML body; renderers MUST sanitize it
+        style:
+          type: string
+          enum: [normal, emote, notice]
+        # media
+        kind:
+          type: string
+          enum: [image, video, audio, file, sticker]
+        url:
+          type: string
+          description: MXC URI or signed media-proxy URL after proxying
+        filename:
+          type: string
+          nullable: true
+        mimetype:
+          type: string
+          nullable: true
+        size:
+          type: integer
+          format: int64
+          nullable: true
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+        thumbnail_url:
+          type: string
+          nullable: true
+        alt_text:
+          type: string
+          nullable: true
+        voice:
+          type: boolean
+          description: MSC3245 voice message marker (media only)
+        # location
+        geo_uri:
+          type: string
+        description:
+          type: string
+          nullable: true
+        # poll
+        question:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/PollOption"
+        responses:
+          type: array
+          items:
+            $ref: "#/components/schemas/PollResponseSummary"
+        # encrypted
+        algorithm:
+          type: string
+        sender_key:
+          type: string
+          nullable: true
+        # unknown
+        fallback:
+          type: string
+          nullable: true
+        raw:
+          type: object
+          description: Raw content of an unknown message type
+    PollOption:
+      type: object
+      required: [id, text]
+      properties:
+        id:
+          type: string
+          description: Matrix answer ID used when voting
+        text:
+          type: string
+    PollResponseSummary:
+      type: object
+      required: [option_index, count]
+      properties:
+        option_index:
+          type: integer
+          format: int64
+        count:
+          type: integer
+          format: int64
+    ReactionSummary:
+      type: object
+      required: [key, count]
+      properties:
+        key:
+          type: string
+        count:
           type: integer
           format: int64
     PostCommentRequest:
@@ -1067,6 +1223,39 @@ components:
           type: string
           minLength: 1
           maxLength: 5000
+        media:
+          description: |
+            Optional media attachment; when present the signature covers
+            `media.url` instead of `content`.
+          type: object
+          required: [url]
+          properties:
+            kind:
+              type: string
+              enum: [image, video, audio, file, sticker]
+              nullable: true
+            url:
+              type: string
+              description: MXC URI returned by the media upload endpoint
+            filename:
+              type: string
+              nullable: true
+            mimetype:
+              type: string
+              nullable: true
+            size:
+              type: integer
+              format: int64
+              nullable: true
+            width:
+              type: integer
+              nullable: true
+            height:
+              type: integer
+              nullable: true
+            voice:
+              type: boolean
+              default: false
         display_name:
           type: string
           minLength: 1
