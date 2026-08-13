@@ -1725,6 +1725,7 @@
                         cfg.siteId,
                         cfg.slug,
                         mime,
+                        filename,
                         String(blob.size),
                         chal.prefix,
                     ]);
@@ -2192,6 +2193,12 @@
                         t("sse_comment_updated") + authorName(payload.message),
                         "success",
                     );
+                    loadList();
+                });
+
+                sse.addEventListener("message_annotations_changed", () => {
+                    // Reactions and poll responses change without the message
+                    // content being edited; refresh quietly.
                     loadList();
                 });
 

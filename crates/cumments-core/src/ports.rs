@@ -210,6 +210,9 @@ pub trait MessageStore: Send + Sync {
     /// Saves or updates a reaction event (upsert by its own event ID).
     async fn save_reaction(&self, reaction: &Reaction) -> Result<()>;
 
+    /// Looks up a stored reaction by its Matrix event ID.
+    async fn get_reaction(&self, event_id: &str) -> Result<Option<Reaction>>;
+
     /// Marks a reaction event as redacted.
     async fn redact_reaction(
         &self,
@@ -219,6 +222,17 @@ pub trait MessageStore: Send + Sync {
 
     /// Records a poll vote (upsert per voter; the latest vote wins).
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()>;
+
+    /// Looks up a stored poll vote by its Matrix event ID.
+    async fn get_poll_vote_by_event(&self, event_id: &str) -> Result<Option<PollVote>>;
+
+    /// Marks a poll vote as redacted (removed from the aggregate).
+    async fn redact_poll_vote(
+        &self,
+        event_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+    ) -> Result<bool>;
 
     /// Persists a tombstone for a redacted event whose original has not been
     /// projected yet (or may be re-delivered), so the message cannot

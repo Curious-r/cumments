@@ -15,6 +15,13 @@ pub enum ProjectorEvent {
         post_slug: String,
         message: Message,
     },
+    /// A message's annotations (reactions, poll responses) changed without
+    /// the message content itself being edited.
+    MessageAnnotationsChanged {
+        site_id: String,
+        post_slug: String,
+        message: Message,
+    },
     MessageDeleted {
         site_id: String,
         post_slug: String,

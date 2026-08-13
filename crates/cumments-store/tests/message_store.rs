@@ -273,6 +273,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
 
     store
         .save_poll_vote(&PollVote {
+            event_id: "$vote-alice-1:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
             option_index: 0,
@@ -282,6 +283,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
         .expect("alice votes");
     store
         .save_poll_vote(&PollVote {
+            event_id: "$vote-bob:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@bob:hs".to_string(),
             option_index: 1,
@@ -292,6 +294,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
     // Alice changes her vote; the latest vote wins.
     store
         .save_poll_vote(&PollVote {
+            event_id: "$vote-alice-2:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
             option_index: 1,
@@ -310,6 +313,83 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
             assert_eq!(poll.responses.len(), 1);
             assert_eq!(poll.responses[0].option_index, 1);
             assert_eq!(poll.responses[0].count, 2);
+        }
+        other => panic!("expected poll content, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
+    let store = DbStore::connect(&test_db_url("message-poll-redact"))
+        .await
+        .expect("connect db");
+    let mut message = guest_message("$poll:hs", "poll placeholder");
+    message.content = Content::Poll(PollContent {
+        question: "best? ".to_string(),
+        options: vec![PollOption {
+            id: "a".to_string(),
+            text: "A".to_string(),
+        }],
+        responses: Vec::new(),
+    });
+    store
+        .save_message(&message)
+        .await
+        .expect("save poll message");
+
+    let bob_vote = PollVote {
+        event_id: "$vote-bob:hs".to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        sender_mxid: "@bob:hs".to_string(),
+        option_index: 0,
+        origin_server_ts: 2,
+    };
+    store.save_poll_vote(&bob_vote).await.expect("bob votes");
+    store
+        .save_poll_vote(&PollVote {
+            event_id: "$vote-alice:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            option_index: 0,
+            origin_server_ts: 1,
+        })
+        .await
+        .expect("alice votes");
+
+    assert!(
+        store
+            .redact_poll_vote("$vote-bob:hs", Utc::now(), "@admin:hs")
+            .await
+            .expect("redact bob vote")
+    );
+    let stored = store
+        .get_message("$poll:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    match stored.content {
+        Content::Poll(poll) => {
+            assert_eq!(poll.responses.len(), 1);
+            assert_eq!(poll.responses[0].count, 1);
+        }
+        other => panic!("expected poll content, got {other:?}"),
+    }
+
+    // Re-delivering the original vote event (push retry / backfill) must not
+    // resurrect the redacted vote.
+    store
+        .save_poll_vote(&bob_vote)
+        .await
+        .expect("bob vote redelivered");
+    let stored = store
+        .get_message("$poll:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    match stored.content {
+        Content::Poll(poll) => {
+            assert_eq!(poll.responses.len(), 1);
+            assert_eq!(poll.responses[0].count, 1);
         }
         other => panic!("expected poll content, got {other:?}"),
     }

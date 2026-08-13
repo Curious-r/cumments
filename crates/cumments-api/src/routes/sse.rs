@@ -136,6 +136,7 @@ pub(crate) async fn sse_handler(
         reconnect: state.sse_reconnect.clone(),
         key,
     };
+    let store = state.store.clone();
     let media_proxy = state.media_proxy.clone();
     let ephemeral_state = state.ephemeral_state.clone();
 
@@ -183,6 +184,7 @@ pub(crate) async fn sse_handler(
                     let matches = match &event {
                         ProjectorEvent::MessageCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
                         ProjectorEvent::MessageUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                        ProjectorEvent::MessageAnnotationsChanged { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
                         ProjectorEvent::MessageDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
                     };
 
@@ -191,7 +193,8 @@ pub(crate) async fn sse_handler(
                         if let Some(proxy) = &media_proxy {
                             match &mut payload {
                                 ProjectorEvent::MessageCreated { message, .. }
-                                | ProjectorEvent::MessageUpdated { message, .. } => {
+                                | ProjectorEvent::MessageUpdated { message, .. }
+                                | ProjectorEvent::MessageAnnotationsChanged { message, .. } => {
                                     proxy.proxify_message(message);
                                 }
                                 ProjectorEvent::MessageDeleted { .. } => {}
@@ -203,21 +206,36 @@ pub(crate) async fn sse_handler(
                         let event_name = match &event {
                             ProjectorEvent::MessageCreated { .. } => "message_created",
                             ProjectorEvent::MessageUpdated { .. } => "message_updated",
+                            ProjectorEvent::MessageAnnotationsChanged { .. } => {
+                                "message_annotations_changed"
+                            }
                             ProjectorEvent::MessageDeleted { .. } => "message_deleted",
                         };
                         yield Ok::<Event, Infallible>(Event::default().event(event_name).data(json));
                     }
                 }
                 Incoming::Ephemeral(event) => {
-                    let room_id = match &event {
+                    match &event {
                         EphemeralEvent::Typing { room_id, .. }
-                        | EphemeralEvent::ReadReceipt { room_id, .. } => Some(room_id.as_str()),
-                        EphemeralEvent::Presence { .. } => None,
-                    };
-                    if let Some(room_id) = room_id
-                        && ephemeral_room_id.as_deref() != Some(room_id)
-                    {
-                        continue;
+                        | EphemeralEvent::ReadReceipt { room_id, .. } => {
+                            if ephemeral_room_id.as_deref() != Some(room_id.as_str()) {
+                                continue;
+                            }
+                        }
+                        EphemeralEvent::Presence { user_id, .. } => {
+                            // Presence is user-scoped and has no room_id, so
+                            // only forward it when the user is a known member
+                            // of the subscribed room. Unknown members are
+                            // skipped conservatively (membership is projected
+                            // from live pushes or backfill).
+                            let Some(room_id) = ephemeral_room_id.as_deref() else {
+                                continue;
+                            };
+                            match store.get_member(room_id, user_id).await {
+                                Ok(Some(member)) if member.membership == "join" => {}
+                                _ => continue,
+                            }
+                        }
                     }
                     let Ok(json) = serde_json::to_string(&event) else {
                         continue;

@@ -376,6 +376,16 @@ impl EventProcessor {
                 return Ok(());
             }
         }
+        // A redaction may have been seen before its target (capped/resumed
+        // backfill, push retry); never re-project a tombstoned reaction.
+        if self
+            .message_store
+            .has_backfill_tombstone(&event.event_id, &event.room_id)
+            .await?
+        {
+            debug!("Ignoring tombstoned reaction {}", event.event_id);
+            return Ok(());
+        }
         // Guest reactions carry a signed proof block that must verify.
         if event.is_virtual_user_sender {
             let (Some(pk), Some(sig), Some(chal)) = (
@@ -416,16 +426,45 @@ impl EventProcessor {
                 return Ok(());
             }
         }
+        // The reaction must target a projected message in the same room.
+        let Some(target) = self
+            .message_store
+            .get_message(&event.message_event_id)
+            .await?
+        else {
+            debug!(
+                "Ignoring reaction {} for unknown message {}",
+                event.event_id, event.message_event_id
+            );
+            return Ok(());
+        };
+        if target.room_id != event.room_id {
+            warn!(
+                "Ignoring reaction {} for {}: message lives in {}",
+                event.event_id, event.message_event_id, target.room_id
+            );
+            return Ok(());
+        }
+        let message_event_id = event.message_event_id.clone();
         self.message_store
             .save_reaction(&Reaction {
                 event_id: event.event_id,
-                message_event_id: event.message_event_id,
+                message_event_id: message_event_id.clone(),
                 sender_mxid: event.sender,
                 key: event.key,
                 origin_server_ts: event.origin_server_ts,
                 redacted_at: None,
             })
             .await?;
+        if let Some(updated) = self.message_store.get_message(&message_event_id).await? {
+            let _ = self
+                .event_bus
+                .send(ProjectorEvent::MessageAnnotationsChanged {
+                    site_id: updated.site_id.clone(),
+                    post_slug: updated.post_slug.clone(),
+                    message: updated,
+                });
+        }
         Ok(())
     }
 
@@ -446,6 +485,16 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
+        }
+        // Same tombstone gate as messages/reactions: a redaction seen before
+        // the original vote must prevent resurrection on re-delivery.
+        if self
+            .message_store
+            .has_backfill_tombstone(&event.event_id, &event.room_id)
+            .await?
+        {
+            debug!("Ignoring tombstoned poll vote {}", event.event_id);
+            return Ok(());
         }
 
         let Some(answer_id) = event.answer_ids.first() else {
@@ -520,12 +569,22 @@ impl EventProcessor {
         };
         self.message_store
             .save_poll_vote(&PollVote {
+                event_id: event.event_id,
                 poll_message_id: event.poll_message_id,
                 sender_mxid: event.sender,
                 option_index: option_index as i64,
                 origin_server_ts: event.origin_server_ts,
             })
             .await?;
+        if let Some(updated) = self.message_store.get_message(&message.event_id).await? {
+            let _ = self
+                .event_bus
+                .send(ProjectorEvent::MessageAnnotationsChanged {
+                    site_id: updated.site_id.clone(),
+                    post_slug: updated.post_slug.clone(),
+                    message: updated,
+                });
+        }
         Ok(())
     }
 
@@ -608,12 +667,18 @@ impl EventProcessor {
             target_event_id, event.room_id
         );
 
-        // Integrity: only redact a message that actually lives in the room the
+        // Integrity: only redact a target that actually lives in the room the
         // redaction arrived from. Fetch before redacting so the check uses
         // the same snapshot the deletion will operate on.
-        let message = self.message_store.get_message(&target_event_id).await?;
+        let redacted_at = chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+        let redacted_by = event
+            .sender
+            .clone()
+            .unwrap_or_else(|| event.event_id.clone());
 
-        if let Some(c) = &message {
+        // 1. Comment message targets.
+        if let Some(c) = self.message_store.get_message(&target_event_id).await? {
             if c.room_id != event.room_id {
                 warn!(
                     "Ignoring redaction for {} in {}: message lives in {}",
@@ -651,51 +716,150 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
-        }
 
-        let redacted_at = chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
-            .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
-        let redacted_by = event
-            .sender
-            .clone()
-            .unwrap_or_else(|| event.event_id.clone());
-        if self
-            .message_store
-            .redact_message(&target_event_id, &event.room_id, redacted_at, &redacted_by)
-            .await?
-        {
-            // Keep a persistent tombstone so a later re-delivery of the
-            // original event (push retry, resumed backfill) cannot insert it
-            // again.
-            self.message_store
-                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
-                .await?;
-            info!("Successfully redacted message {}", target_event_id);
-            // Closed-loop only after the projection succeeded; a failed
-            // delete leaves the intent open for the timeout safety net.
-            self.intent_store
-                .mark_delete_intent_completed(&target_event_id)
-                .await?;
-            if let Some(c) = message {
+            if self
+                .message_store
+                .redact_message(&target_event_id, &event.room_id, redacted_at, &redacted_by)
+                .await?
+            {
+                // Keep a persistent tombstone so a later re-delivery of the
+                // original event (push retry, resumed backfill) cannot insert
+                // it again.
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                info!("Successfully redacted message {}", target_event_id);
+                // Closed-loop only after the projection succeeded; a failed
+                // delete leaves the intent open for the timeout safety net.
+                self.intent_store
+                    .mark_delete_intent_completed(&target_event_id)
+                    .await?;
                 let _ = self.event_bus.send(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
                     post_slug: c.post_slug,
                     event_id: target_event_id,
                     intent_id: event.intent_id,
                 });
+            } else {
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
             }
-        } else {
-            // The target is unknown (not yet projected, or already deleted).
-            // Persist the tombstone so the target cannot resurrect when it is
-            // fetched by a later backfill run.
-            self.message_store
-                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
-                .await?;
-            debug!(
-                "Redaction tombstoned for unknown target {}",
-                target_event_id
-            );
+            return Ok(());
         }
+
+        // 2. Reaction targets: verify the annotated message lives in this
+        // room, then redact the reaction row so it leaves the aggregate.
+        if let Some(reaction) = self.message_store.get_reaction(&target_event_id).await? {
+            let Some(target) = self
+                .message_store
+                .get_message(&reaction.message_event_id)
+                .await?
+            else {
+                debug!(
+                    "Redaction tombstoned for reaction {}: target message unknown",
+                    target_event_id
+                );
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                return Ok(());
+            };
+            if target.room_id != event.room_id {
+                warn!(
+                    "Ignoring redaction for {} in {}: reaction lives in {}",
+                    target_event_id, event.room_id, target.room_id
+                );
+                return Ok(());
+            }
+            if self
+                .message_store
+                .redact_reaction(&target_event_id, redacted_at)
+                .await?
+            {
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                info!("Successfully redacted reaction {}", target_event_id);
+                if let Some(updated) = self
+                    .message_store
+                    .get_message(&reaction.message_event_id)
+                    .await?
+                {
+                    let _ = self
+                        .event_bus
+                        .send(ProjectorEvent::MessageAnnotationsChanged {
+                            site_id: updated.site_id.clone(),
+                            post_slug: updated.post_slug.clone(),
+                            message: updated,
+                        });
+                }
+            }
+            return Ok(());
+        }
+
+        // 3. Poll-vote targets (same room check through the poll message).
+        if let Some(vote) = self
+            .message_store
+            .get_poll_vote_by_event(&target_event_id)
+            .await?
+        {
+            let Some(target) = self
+                .message_store
+                .get_message(&vote.poll_message_id)
+                .await?
+            else {
+                debug!(
+                    "Redaction tombstoned for poll vote {}: poll message unknown",
+                    target_event_id
+                );
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                return Ok(());
+            };
+            if target.room_id != event.room_id {
+                warn!(
+                    "Ignoring redaction for {} in {}: vote lives in {}",
+                    target_event_id, event.room_id, target.room_id
+                );
+                return Ok(());
+            }
+            if self
+                .message_store
+                .redact_poll_vote(&target_event_id, redacted_at, &redacted_by)
+                .await?
+            {
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                info!("Successfully redacted poll vote {}", target_event_id);
+                if let Some(updated) = self
+                    .message_store
+                    .get_message(&vote.poll_message_id)
+                    .await?
+                {
+                    let _ = self
+                        .event_bus
+                        .send(ProjectorEvent::MessageAnnotationsChanged {
+                            site_id: updated.site_id.clone(),
+                            post_slug: updated.post_slug.clone(),
+                            message: updated,
+                        });
+                }
+            }
+            return Ok(());
+        }
+
+        // 4. Unknown target: persist the tombstone so the target cannot
+        // resurrect when it is fetched by a later backfill run.
+        self.message_store
+            .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+            .await?;
+        debug!(
+            "Redaction tombstoned for unknown target {}",
+            target_event_id
+        );
         Ok(())
     }
 

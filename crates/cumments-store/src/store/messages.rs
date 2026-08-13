@@ -302,13 +302,27 @@ impl MessageStore for DbStore {
                         reactions::Column::SenderMxid,
                         reactions::Column::Key,
                         reactions::Column::OriginServerTs,
-                        reactions::Column::RedactedAt,
                     ])
                     .to_owned(),
             )
             .exec(&self.db)
             .await?;
         Ok(())
+    }
+
+    async fn get_reaction(&self, event_id: &str) -> Result<Option<Reaction>> {
+        let model = reactions::Entity::find()
+            .filter(reactions::Column::EventId.eq(event_id))
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| Reaction {
+            event_id: m.event_id,
+            message_event_id: m.message_event_id,
+            sender_mxid: m.sender_mxid,
+            key: m.key,
+            origin_server_ts: m.origin_server_ts,
+            redacted_at: m.redacted_at,
+        }))
     }
 
     async fn redact_reaction(
@@ -328,31 +342,113 @@ impl MessageStore for DbStore {
     }
 
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()> {
+        let txn = self.db.begin().await?;
+        let existing = poll_responses::Entity::find()
+            .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
+            .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
+            .one(&txn)
+            .await?;
+        let now = chrono::Utc::now();
+
+        if let Some(existing) = existing {
+            // Re-delivering the same vote event (push retry / backfill) must
+            // not resurrect a redacted vote; any other event supersedes it
+            // and clears the redaction state.
+            if existing.event_id.as_deref() == Some(vote.event_id.as_str())
+                && existing.redacted_at.is_some()
+            {
+                txn.commit().await?;
+                return Ok(());
+            }
+            poll_responses::Entity::update_many()
+                .col_expr(
+                    poll_responses::Column::EventId,
+                    sea_orm::sea_query::Expr::value(Some(vote.event_id.clone())),
+                )
+                .col_expr(
+                    poll_responses::Column::OptionIndex,
+                    sea_orm::sea_query::Expr::value(vote.option_index),
+                )
+                .col_expr(
+                    poll_responses::Column::OriginServerTs,
+                    sea_orm::sea_query::Expr::value(vote.origin_server_ts),
+                )
+                .col_expr(
+                    poll_responses::Column::RedactedAt,
+                    sea_orm::sea_query::Expr::value(None::<chrono::DateTime<chrono::Utc>>),
+                )
+                .col_expr(
+                    poll_responses::Column::RedactedBy,
+                    sea_orm::sea_query::Expr::value(None::<String>),
+                )
+                .col_expr(
+                    poll_responses::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::value(now),
+                )
+                .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
+                .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
+                .exec(&txn)
+                .await?;
+            txn.commit().await?;
+            return Ok(());
+        }
+
         let active_model = poll_responses::ActiveModel {
+            event_id: Set(Some(vote.event_id.clone())),
             poll_message_id: Set(vote.poll_message_id.clone()),
             sender_mxid: Set(vote.sender_mxid.clone()),
             option_index: Set(vote.option_index),
             origin_server_ts: Set(vote.origin_server_ts),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
+            redacted_at: Set(None),
+            redacted_by: Set(None),
+            created_at: Set(now),
+            updated_at: Set(now),
             ..Default::default()
         };
         poll_responses::Entity::insert(active_model)
-            .on_conflict(
-                sea_orm::sea_query::OnConflict::columns([
-                    poll_responses::Column::PollMessageId,
-                    poll_responses::Column::SenderMxid,
-                ])
-                .update_columns([
-                    poll_responses::Column::OptionIndex,
-                    poll_responses::Column::OriginServerTs,
-                    poll_responses::Column::UpdatedAt,
-                ])
-                .to_owned(),
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    async fn get_poll_vote_by_event(&self, event_id: &str) -> Result<Option<PollVote>> {
+        let model = poll_responses::Entity::find()
+            .filter(poll_responses::Column::EventId.eq(event_id))
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| PollVote {
+            event_id: m.event_id.unwrap_or_default(),
+            poll_message_id: m.poll_message_id,
+            sender_mxid: m.sender_mxid,
+            option_index: m.option_index,
+            origin_server_ts: m.origin_server_ts,
+        }))
+    }
+
+    async fn redact_poll_vote(
+        &self,
+        event_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+    ) -> Result<bool> {
+        let result = poll_responses::Entity::update_many()
+            .col_expr(
+                poll_responses::Column::RedactedAt,
+                sea_orm::sea_query::Expr::value(Some(redacted_at)),
             )
+            .col_expr(
+                poll_responses::Column::RedactedBy,
+                sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
+            )
+            .col_expr(
+                poll_responses::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(poll_responses::Column::EventId.eq(event_id))
             .exec(&self.db)
             .await?;
-        Ok(())
+        Ok(result.rows_affected > 0)
     }
 
     async fn record_backfill_tombstone(
@@ -431,6 +527,7 @@ impl DbStore {
     ) -> Result<Vec<PollResponseSummary>> {
         let rows = poll_responses::Entity::find()
             .filter(poll_responses::Column::PollMessageId.eq(poll_message_id))
+            .filter(poll_responses::Column::RedactedAt.is_null())
             .all(&self.db)
             .await?;
 

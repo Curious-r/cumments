@@ -36,6 +36,7 @@ pub mod m20260813_000030_room_quarantine_state;
 pub mod m20260813_000031_message_read_model;
 pub mod m20260813_000032_room_metadata;
 pub mod m20260813_000033_drop_room_registry_blocked_reason;
+pub mod m20260813_000034_poll_response_redaction;
 
 pub struct Migrator;
 
@@ -104,6 +105,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260813_000031_message_read_model::Migration),
             Box::new(m20260813_000032_room_metadata::Migration),
             Box::new(m20260813_000033_drop_room_registry_blocked_reason::Migration),
+            Box::new(m20260813_000034_poll_response_redaction::Migration),
         ]
     }
 }

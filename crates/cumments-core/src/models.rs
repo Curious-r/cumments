@@ -369,6 +369,8 @@ pub struct MessageRevision {
 /// A poll vote record (one row per voter; the latest vote wins).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PollVote {
+    /// Matrix event ID of the `m.poll.response` event, used to redact votes.
+    pub event_id: String,
     pub poll_message_id: String,
     pub sender_mxid: String,
     pub option_index: i64,
