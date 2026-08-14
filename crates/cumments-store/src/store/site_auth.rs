@@ -1,4 +1,5 @@
 use super::DbStore;
+use super::is_unique_violation;
 use crate::entities::active_enums::{
     SiteAuthMode as DbAuthMode, SiteLifecycleStatus as DbLifecycle,
     SiteVerificationStatus as DbVerificationStatus,
@@ -459,20 +460,6 @@ fn lifecycle_value(status: DbLifecycle) -> &'static str {
         DbLifecycle::Retiring => "retiring",
         DbLifecycle::Retired => "retired",
     }
-}
-
-/// Whether a SeaORM error is a SQLite unique/primary-key constraint
-/// violation. Matching the error code keeps this independent of SQLite's
-/// human-readable message text.
-fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
-    let sqlx = match err {
-        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
-        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
-        _ => return false,
-    };
-    sqlx.as_database_error()
-        .and_then(|db| db.code())
-        .is_some_and(|code| code == "2067" || code == "1555")
 }
 
 fn core_auth_mode(mode: DbAuthMode) -> SiteAuthMode {

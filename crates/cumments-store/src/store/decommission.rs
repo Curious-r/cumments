@@ -68,6 +68,16 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
     .await?;
     delete_by_values(db, "room_registry", "site_id", &[site_id.to_string()]).await?;
 
+    // Media idempotency rows are keyed by author, not site; join through the
+    // ownership row so a decommissioned site does not leave stale keys.
+    exec(
+        db,
+        "DELETE FROM media_upload_idempotency WHERE mxc_url IN \
+         (SELECT mxc_url FROM media_uploads WHERE site_id = ?)",
+        vec![site_id.into()],
+    )
+    .await?;
+
     // Site-level rows, ending with the sites row itself.
     for table in [
         "role_claims",

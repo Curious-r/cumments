@@ -17,6 +17,20 @@ pub mod rooms;
 pub mod site_auth;
 pub mod submissions;
 
+/// Whether a SeaORM error is a SQLite unique/primary-key constraint
+/// violation. Matching the error code keeps this independent of SQLite's
+/// human-readable message text.
+pub(crate) fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
+    let sqlx = match err {
+        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
+        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
+        _ => return false,
+    };
+    sqlx.as_database_error()
+        .and_then(|db| db.code())
+        .is_some_and(|code| code == "2067" || code == "1555")
+}
+
 /// A database-backed implementation of the storage ports.
 #[derive(Clone)]
 pub struct DbStore {

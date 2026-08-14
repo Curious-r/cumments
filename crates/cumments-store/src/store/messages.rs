@@ -1,9 +1,15 @@
 use super::DbStore;
+use super::is_unique_violation;
 use crate::entities::{
-    backfill_tombstones, media_uploads, message_revisions, messages, poll_responses, reactions,
+    backfill_tombstones, media_upload_idempotency, media_uploads, message_revisions, messages,
+    poll_responses, reactions,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use cumments_core::media_upload::{
+    MEDIA_UPLOAD_IDEMPOTENCY_RETENTION, MediaUploadIdempotency, MediaUploadIdempotencyInput,
+    MediaUploadIdempotencyOutcome,
+};
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, Message, MessagePage, MessageRevision, MessageStatus,
     PollResponseSummary, PollVote, PostSlug, Reaction, ReactionSummary, SiteId, UnknownContent,
@@ -591,7 +597,136 @@ impl MessageStore for DbStore {
             .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
             .exec(&self.db)
             .await?;
+        media_upload_idempotency::Entity::delete_many()
+            .filter(media_upload_idempotency::Column::MxcUrl.eq(mxc_url))
+            .exec(&self.db)
+            .await?;
         Ok(())
+    }
+
+    async fn find_media_upload_idempotency(
+        &self,
+        author_public_key: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<MediaUploadIdempotency>> {
+        let cutoff = chrono::Utc::now() - MEDIA_UPLOAD_IDEMPOTENCY_RETENTION;
+        let row = media_upload_idempotency::Entity::find()
+            .filter(media_upload_idempotency::Column::AuthorPublicKey.eq(author_public_key))
+            .filter(media_upload_idempotency::Column::IdempotencyKey.eq(idempotency_key))
+            .filter(media_upload_idempotency::Column::CreatedAt.gte(cutoff))
+            .one(&self.db)
+            .await?;
+        Ok(row.map(|row| MediaUploadIdempotency {
+            request_fingerprint: row.request_fingerprint,
+            mxc_url: row.mxc_url,
+            created_at: row.created_at,
+        }))
+    }
+
+    async fn save_media_upload_idempotent(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+        post_slug: &str,
+        idempotency: &MediaUploadIdempotencyInput,
+    ) -> Result<MediaUploadIdempotencyOutcome> {
+        let now = chrono::Utc::now();
+        let cutoff = now - MEDIA_UPLOAD_IDEMPOTENCY_RETENTION;
+        let txn = self.db.begin().await?;
+
+        // Expired rows for this key are purged first so the key can be reused.
+        media_upload_idempotency::Entity::delete_many()
+            .filter(media_upload_idempotency::Column::AuthorPublicKey.eq(author_public_key))
+            .filter(media_upload_idempotency::Column::IdempotencyKey.eq(&idempotency.key))
+            .filter(media_upload_idempotency::Column::CreatedAt.lt(cutoff))
+            .exec(&txn)
+            .await?;
+
+        if let Some(existing) = media_upload_idempotency::Entity::find()
+            .filter(media_upload_idempotency::Column::AuthorPublicKey.eq(author_public_key))
+            .filter(media_upload_idempotency::Column::IdempotencyKey.eq(&idempotency.key))
+            .filter(media_upload_idempotency::Column::CreatedAt.gte(cutoff))
+            .one(&txn)
+            .await?
+        {
+            txn.rollback().await?;
+            if existing.request_fingerprint == idempotency.request_fingerprint {
+                return Ok(MediaUploadIdempotencyOutcome::Replayed {
+                    mxc_url: existing.mxc_url,
+                });
+            }
+            return Ok(MediaUploadIdempotencyOutcome::Reused);
+        }
+
+        let upload_model = media_uploads::ActiveModel {
+            mxc_url: Set(mxc_url.to_owned()),
+            author_public_key: Set(author_public_key.to_owned()),
+            site_id: Set(site_id.to_owned()),
+            post_slug: Set(post_slug.to_owned()),
+            used_at: Set(None),
+            created_at: Set(now),
+            ..Default::default()
+        };
+        media_uploads::Entity::insert(upload_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(media_uploads::Column::MxcUrl)
+                    .update_columns([
+                        media_uploads::Column::AuthorPublicKey,
+                        media_uploads::Column::SiteId,
+                        media_uploads::Column::PostSlug,
+                        media_uploads::Column::UsedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&txn)
+            .await?;
+
+        let idempotency_model = media_upload_idempotency::ActiveModel {
+            author_public_key: Set(author_public_key.to_owned()),
+            idempotency_key: Set(idempotency.key.clone()),
+            request_fingerprint: Set(idempotency.request_fingerprint.clone()),
+            mxc_url: Set(mxc_url.to_owned()),
+            created_at: Set(now),
+            ..Default::default()
+        };
+        match media_upload_idempotency::Entity::insert(idempotency_model)
+            .exec(&txn)
+            .await
+        {
+            Ok(_) => {
+                txn.commit().await?;
+                Ok(MediaUploadIdempotencyOutcome::Created {
+                    mxc_url: mxc_url.to_owned(),
+                })
+            }
+            Err(e) if is_unique_violation(&e) => {
+                txn.rollback().await?;
+                let winner = media_upload_idempotency::Entity::find()
+                    .filter(media_upload_idempotency::Column::AuthorPublicKey.eq(author_public_key))
+                    .filter(media_upload_idempotency::Column::IdempotencyKey.eq(&idempotency.key))
+                    .filter(media_upload_idempotency::Column::CreatedAt.gte(cutoff))
+                    .one(&self.db)
+                    .await?;
+                match winner {
+                    Some(winner)
+                        if winner.request_fingerprint == idempotency.request_fingerprint =>
+                    {
+                        Ok(MediaUploadIdempotencyOutcome::Replayed {
+                            mxc_url: winner.mxc_url,
+                        })
+                    }
+                    Some(_) => Ok(MediaUploadIdempotencyOutcome::Reused),
+                    None => Err(anyhow!(
+                        "media upload idempotency conflict without a winner row"
+                    )),
+                }
+            }
+            Err(e) => {
+                txn.rollback().await?;
+                Err(e.into())
+            }
+        }
     }
 }
 

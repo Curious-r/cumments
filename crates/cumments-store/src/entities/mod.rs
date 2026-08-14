@@ -7,6 +7,7 @@ pub mod backfill_tombstones;
 pub mod comments;
 pub mod delete_submissions;
 pub mod idempotency_keys;
+pub mod media_upload_idempotency;
 pub mod media_uploads;
 pub mod message_revisions;
 pub mod messages;

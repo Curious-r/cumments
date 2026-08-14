@@ -45,6 +45,7 @@ pub mod m20260814_000039_sites_custom_id;
 pub mod m20260814_000040_sites_lifecycle;
 pub mod m20260814_000041_submissions_rename;
 pub mod m20260814_000042_submission_leases;
+pub mod m20260814_000043_media_upload_idempotency;
 
 pub struct Migrator;
 
@@ -138,6 +139,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260814_000040_sites_lifecycle::Migration),
             Box::new(m20260814_000041_submissions_rename::Migration),
             Box::new(m20260814_000042_submission_leases::Migration),
+            Box::new(m20260814_000043_media_upload_idempotency::Migration),
         ]
     }
 }

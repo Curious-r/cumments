@@ -1,4 +1,5 @@
 use chrono::Utc;
+use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageRevision,
     MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction, SiteId, TextContent,
@@ -547,6 +548,104 @@ async fn media_uploads_track_ownership_and_usage() {
             .await
             .expect("ownership after delete"),
         "deleted upload must no longer prove ownership"
+    );
+}
+
+#[tokio::test]
+async fn media_upload_idempotency_replays_the_same_request() {
+    let store = DbStore::connect(&test_db_url("media-upload-idempotency-replay"))
+        .await
+        .expect("connect db");
+    let input = MediaUploadIdempotencyInput {
+        key: "upload-key-123456".to_string(),
+        request_fingerprint: "fp-1".to_string(),
+    };
+
+    let created = store
+        .save_media_upload_idempotent("mxc://hs/first", "alice-key", "my-blog", "hello", &input)
+        .await
+        .expect("record first upload");
+    assert!(matches!(
+        created,
+        MediaUploadIdempotencyOutcome::Created { mxc_url } if mxc_url == "mxc://hs/first"
+    ));
+
+    let replay = store
+        .save_media_upload_idempotent("mxc://hs/second", "alice-key", "my-blog", "hello", &input)
+        .await
+        .expect("replay upload");
+    assert!(matches!(
+        replay,
+        MediaUploadIdempotencyOutcome::Replayed { mxc_url } if mxc_url == "mxc://hs/first"
+    ));
+    assert!(
+        !store
+            .media_upload_owned_by("mxc://hs/second", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership check"),
+        "losing upload must be rolled back"
+    );
+    let found = store
+        .find_media_upload_idempotency("alice-key", "upload-key-123456")
+        .await
+        .expect("find idempotency")
+        .expect("record exists");
+    assert_eq!(found.mxc_url, "mxc://hs/first");
+
+    store
+        .delete_media_upload("mxc://hs/first")
+        .await
+        .expect("delete upload record");
+    assert!(
+        store
+            .find_media_upload_idempotency("alice-key", "upload-key-123456")
+            .await
+            .expect("find after delete")
+            .is_none(),
+        "deleting the upload must also drop its idempotency record"
+    );
+}
+
+#[tokio::test]
+async fn media_upload_idempotency_rejects_key_reuse_with_different_request() {
+    let store = DbStore::connect(&test_db_url("media-upload-idempotency-reused"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_media_upload_idempotent(
+            "mxc://hs/first",
+            "alice-key",
+            "my-blog",
+            "hello",
+            &MediaUploadIdempotencyInput {
+                key: "upload-key-123456".to_string(),
+                request_fingerprint: "fp-1".to_string(),
+            },
+        )
+        .await
+        .expect("record first upload");
+
+    let reused = store
+        .save_media_upload_idempotent(
+            "mxc://hs/second",
+            "alice-key",
+            "my-blog",
+            "hello",
+            &MediaUploadIdempotencyInput {
+                key: "upload-key-123456".to_string(),
+                request_fingerprint: "fp-2".to_string(),
+            },
+        )
+        .await
+        .expect("reuse check");
+    assert_eq!(reused, MediaUploadIdempotencyOutcome::Reused);
+    assert!(
+        !store
+            .media_upload_owned_by("mxc://hs/second", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership check"),
+        "reused request must not record a second upload"
     );
 }
 

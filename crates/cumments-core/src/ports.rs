@@ -1,5 +1,8 @@
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
+use crate::media_upload::{
+    MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
+};
 use crate::models::{
     CommentMedia, Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom,
     Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
@@ -276,6 +279,25 @@ pub trait MessageStore: Send + Sync {
     /// Removes the local upload record (after the homeserver copy was
     /// deleted or is unreachable).
     async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
+
+    /// Returns an unexpired upload idempotency record, if one exists.
+    async fn find_media_upload_idempotency(
+        &self,
+        author_public_key: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<MediaUploadIdempotency>>;
+
+    /// Atomically records the upload ownership row and its idempotency key.
+    /// On a concurrent key race the loser's upload is rolled back and the
+    /// winner's URL is returned.
+    async fn save_media_upload_idempotent(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+        post_slug: &str,
+        idempotency: &MediaUploadIdempotencyInput,
+    ) -> Result<MediaUploadIdempotencyOutcome>;
 
     /// Persists a tombstone for a redacted event whose original has not been
     /// projected yet (or may be re-delivered), so the message cannot
