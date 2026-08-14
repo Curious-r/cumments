@@ -5,25 +5,20 @@
 //! idempotency contract.
 
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
-use rand::Rng;
-use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 /// Generate a fresh, namespaced transaction ID for a submission-driven
 /// homeserver request.
 ///
-/// All submission queues use random transaction IDs: some homeservers
-/// (notably tuwunel) have been observed returning an event ID for
-/// deterministic `cumments_<kind>_<id>` transactions without ever making the
-/// event queryable. The ID is persisted on the submission row so retries
-/// reuse it; only a confirmed-absent event clears it and allocates a new one.
+/// All submission queues use UUID v4 transaction IDs, as recommended by the
+/// Matrix spec: the homeserver must be able to tell a new request apart from
+/// a retransmission of the same request. Some homeservers (notably tuwunel)
+/// have been observed returning an event ID for deterministic
+/// `cumments_<kind>_<id>` transactions without ever making the event
+/// queryable. The ID is persisted on the submission row so retries reuse it;
+/// only a confirmed-absent event clears it and allocates a new one.
 pub fn fresh_transaction_id(kind: &str) -> String {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let mut random_bytes = [0u8; 16];
-    rand::rng().fill_bytes(&mut random_bytes);
-    format!("cumments_{}_{}_{}", kind, ts, hex::encode(random_bytes))
+    format!("cumments_{}_{}", kind, Uuid::new_v4())
 }
 
 /// Idempotency metadata attached to one write request.
@@ -106,6 +101,7 @@ pub struct StuckUpdateSubmission {
 #[cfg(test)]
 mod tests {
     use super::fresh_transaction_id;
+    use uuid::Uuid;
 
     #[test]
     fn fresh_transaction_ids_are_namespaced_and_unique() {
@@ -114,5 +110,11 @@ mod tests {
         assert!(a.starts_with("cumments_post_"));
         assert!(b.starts_with("cumments_post_"));
         assert_ne!(a, b);
+
+        for txn in [a, b] {
+            let tail = txn.strip_prefix("cumments_post_").expect("prefix");
+            let uuid = Uuid::parse_str(tail).expect("v4 uuid tail");
+            assert_eq!(uuid.get_version(), Some(uuid::Version::Random));
+        }
     }
 }
