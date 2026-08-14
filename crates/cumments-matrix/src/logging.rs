@@ -63,6 +63,23 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(true)
     }
 
+    async fn upload_media(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mimetype: &str,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<String> {
+        info!(
+            "LOGGING: Upload media {filename} ({mimetype}, {} bytes) as \
+             {author_public_key} for site={} (no-op)",
+            bytes.len(),
+            site_id.as_str()
+        );
+        Ok(format!("mxc://logging/{}/{}", site_id.as_str(), filename))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn post_message(
         &self,

@@ -594,6 +594,17 @@ pub trait MatrixDriver: Send + Sync {
     /// `false` and errors mean the record should be kept for a later sweep.
     async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool>;
 
+    /// Uploads media to the homeserver as the author's virtual user and
+    /// returns the `mxc://` content URI.
+    async fn upload_media(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mimetype: &str,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<String>;
+
     /// Posts a message to a specific room.
     async fn post_message(
         &self,

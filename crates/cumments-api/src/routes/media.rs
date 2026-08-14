@@ -9,7 +9,6 @@ use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::routes::comments::challenge_prefix;
-use anyhow::{anyhow, bail};
 use axum::{
     Json,
     body::{Body, Bytes},
@@ -184,44 +183,11 @@ impl MediaProxy {
         mac.update(expires.to_string().as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
-
-    /// Uploads bytes to the homeserver as an appservice virtual user and
-    /// returns the `mxc://` content URI.
-    pub async fn upload_media(
-        &self,
-        bytes: Vec<u8>,
-        filename: &str,
-        mimetype: &str,
-        virtual_user_id: &str,
-    ) -> anyhow::Result<String> {
-        let url = format!(
-            "{}/_matrix/media/v3/upload",
-            self.homeserver_url.trim_end_matches('/')
-        );
-        let resp = self
-            .http_client
-            .post(url)
-            .query(&[("user_id", virtual_user_id), ("filename", filename)])
-            .header("Authorization", format!("Bearer {}", self.as_token))
-            .header("Content-Type", mimetype)
-            .body(bytes)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("media upload failed ({status}): {body}");
-        }
-        let json: serde_json::Value = resp.json().await?;
-        json.get("content_uri")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow!("media upload response missing content_uri"))
-    }
 }
 
-/// Guest media upload: verifies PoW + author signature, uploads to the
-/// homeserver as the author's virtual user, and returns the MXC reference.
+/// Guest media upload: verifies PoW + author signature, then asks the
+/// `MatrixDriver` to upload as the author's virtual user. The driver is the
+/// only homeserver write seam.
 pub(crate) async fn upload_media_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -230,11 +196,11 @@ pub(crate) async fn upload_media_handler(
     Query(query): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let Some(proxy) = &state.media_proxy else {
+    if state.media_proxy.is_none() {
         return Err(AppError::NotFound(
             "Media uploads are not enabled for this deployment.".to_string(),
         ));
-    };
+    }
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
 
@@ -296,13 +262,15 @@ pub(crate) async fn upload_media_handler(
         return Err(AppError::InvalidSignature);
     }
 
-    let virtual_user = state
-        .store
-        .get_or_create_virtual_user(&author_public_key, &site_id_val, proxy.server_name())
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to resolve virtual user: {e}")))?;
-    let url = proxy
-        .upload_media(body.to_vec(), &filename, &mimetype, &virtual_user)
+    let url = state
+        .driver
+        .upload_media(
+            &body,
+            &filename,
+            &mimetype,
+            &author_public_key,
+            &site_id_val,
+        )
         .await
         .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
     state

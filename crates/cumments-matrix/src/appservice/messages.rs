@@ -46,6 +46,47 @@ impl AppServiceMatrixDriver {
         }
     }
 
+    /// Uploads media as the author's virtual user, using the same AppService
+    /// identity seam as every other Cumments-initiated write.
+    #[instrument(skip(self, bytes))]
+    pub(super) async fn upload_media_impl(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mimetype: &str,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<String> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        let resp = self
+            .request(
+                reqwest::Method::POST,
+                "_matrix/media/v3/upload",
+                Some(&virtual_user),
+            )
+            .query(&[("filename", filename)])
+            .header("Content-Type", mimetype)
+            .body(bytes.to_vec())
+            .send()
+            .await
+            .map_err(|e| anyhow!("media upload request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("media upload failed ({status}): {error_body}"));
+        }
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("failed to parse media upload response: {e}"))?;
+        data.get("content_uri")
+            .and_then(|uri| uri.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("media upload response missing content_uri"))
+    }
+
     #[instrument(skip(self))]
     #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
     pub(super) async fn post_message_impl(
@@ -489,5 +530,47 @@ impl AppServiceMatrixDriver {
             next_token: Some(data.end.clone()),
             has_more: data.start != data.end,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::test_driver;
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn upload_media_sends_as_the_authors_virtual_user() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/_matrix/media/v3/upload"))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .and(query_param("filename", "cat.png"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "content_uri": "mxc://example.com/abc" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let url = driver
+            .upload_media_impl(
+                b"image-bytes",
+                "cat.png",
+                "image/png",
+                "pubkey",
+                &SiteId::from("my-blog"),
+            )
+            .await
+            .expect("upload should succeed");
+        assert_eq!(url, "mxc://example.com/abc");
+        server.verify().await;
     }
 }

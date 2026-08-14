@@ -38,6 +38,18 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.delete_media_impl(server, media_id).await
     }
 
+    async fn upload_media(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mimetype: &str,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<String> {
+        self.upload_media_impl(bytes, filename, mimetype, author_public_key, site_id)
+            .await
+    }
+
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,
