@@ -35,6 +35,10 @@ impl VirtualUserStore for StubVirtualUserStore {
             server_name
         ))
     }
+
+    async fn list_virtual_users_for_site(&self, _site_id: &SiteId) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 pub(crate) fn test_driver(server: &MockServer) -> AppServiceMatrixDriver {

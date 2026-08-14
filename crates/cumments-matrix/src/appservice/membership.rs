@@ -131,6 +131,45 @@ impl AppServiceMatrixDriver {
         }
     }
 
+    /// Makes a specific AS-managed user (e.g. a guest virtual user) leave a
+    /// room. A user who is not in the room counts as already left.
+    pub(super) async fn leave_room_as_impl(&self, room_id: &str, user_id: &str) -> Result<()> {
+        let path = format!("_matrix/client/v3/rooms/{}/leave", percent_encode(room_id));
+        let resp = self
+            .request(reqwest::Method::POST, &path, Some(user_id))
+            .send()
+            .await
+            .map_err(|e| anyhow!("Leave request failed: {}", e))?;
+
+        match resp.status().as_u16() {
+            200 | 404 => Ok(()),
+            403 => {
+                let body = resp.text().await.unwrap_or_default();
+                let errcode = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("errcode")
+                            .and_then(|e| e.as_str())
+                            .map(str::to_owned)
+                    });
+                if errcode.as_deref() == Some("M_FORBIDDEN") {
+                    Ok(())
+                } else {
+                    Err(anyhow!(
+                        "Leaving room {room_id} as {user_id} was forbidden: {body}"
+                    ))
+                }
+            }
+            status => {
+                let body = resp.text().await.unwrap_or_default();
+                Err(anyhow!(
+                    "Leaving room {room_id} as {user_id} failed ({status}): {body}"
+                ))
+            }
+        }
+    }
+
     /// Makes the AS sender join a room, typically to accept a claim-DM
     /// invite after the conditional auto-join gate passes. A room the sender
     /// is already in counts as joined.

@@ -521,6 +521,19 @@ async fn media_uploads_track_ownership_and_usage() {
         .await
         .expect("re-record upload");
 
+    let site_urls = store
+        .list_media_urls_for_site("my-blog")
+        .await
+        .expect("list site media");
+    assert_eq!(site_urls, vec!["mxc://hs/cat".to_string()]);
+    assert!(
+        store
+            .list_media_urls_for_site("other-blog")
+            .await
+            .expect("other site media")
+            .is_empty()
+    );
+
     let unused = store
         .list_unused_media_before(Utc::now() + chrono::Duration::days(1))
         .await

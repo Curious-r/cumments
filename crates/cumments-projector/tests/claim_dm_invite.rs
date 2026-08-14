@@ -86,6 +86,9 @@ impl MatrixDriver for TestDriver {
     async fn leave_room(&self, _room_id: &str) -> anyhow::Result<()> {
         unimplemented!("not used in this test")
     }
+    async fn leave_room_as(&self, _room_id: &str, _user_id: &str) -> anyhow::Result<()> {
+        unimplemented!("not used in this test")
+    }
     async fn join_room(&self, room_id: &str) -> anyhow::Result<()> {
         self.joined.lock().await.push(room_id.to_string());
         Ok(())

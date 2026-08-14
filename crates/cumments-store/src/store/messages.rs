@@ -604,6 +604,14 @@ impl MessageStore for DbStore {
         Ok(())
     }
 
+    async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>> {
+        let rows = media_uploads::Entity::find()
+            .filter(media_uploads::Column::SiteId.eq(site_id))
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.mxc_url).collect())
+    }
+
     async fn find_media_upload_idempotency(
         &self,
         author_public_key: &str,

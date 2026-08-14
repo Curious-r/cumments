@@ -65,4 +65,12 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
         Some(RoomStatus::Superseded),
         "backfill must not resurrect a superseded room"
     );
+
+    // Decommission enumeration must see every lifecycle state.
+    let mut all = store
+        .list_rooms_for_site(&site_id)
+        .await
+        .expect("list all rooms for site");
+    all.sort();
+    assert_eq!(all, vec!["!new-room:hs", "!room:hs"]);
 }

@@ -71,4 +71,12 @@ impl VirtualUserStore for DbStore {
 
         Ok(virtual_user_id)
     }
+
+    async fn list_virtual_users_for_site(&self, site_id: &SiteId) -> Result<Vec<String>> {
+        let rows = virtual_users::Entity::find()
+            .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.virtual_user_id).collect())
+    }
 }

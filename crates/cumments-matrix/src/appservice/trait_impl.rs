@@ -26,6 +26,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.leave_room_impl(room_id).await
     }
 
+    async fn leave_room_as(&self, room_id: &str, user_id: &str) -> Result<()> {
+        self.leave_room_as_impl(room_id, user_id).await
+    }
+
     async fn join_room(&self, room_id: &str) -> Result<()> {
         self.join_room_impl(room_id).await
     }

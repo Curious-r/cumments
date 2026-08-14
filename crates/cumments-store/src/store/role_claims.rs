@@ -241,6 +241,23 @@ impl RoleClaimStore for DbStore {
         Ok(count > 0)
     }
 
+    async fn claim_dm_rooms_for_site(&self, site_id: &str) -> Result<Vec<(String, String)>> {
+        let rows: Vec<(String, Option<String>)> = role_claims::Entity::find()
+            .select_only()
+            .column(role_claims::Column::UserId)
+            .column(role_claims::Column::DmRoomId)
+            .distinct()
+            .filter(role_claims::Column::SiteId.eq(site_id))
+            .filter(role_claims::Column::DmRoomId.is_not_null())
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(user_id, room_id)| room_id.map(|room_id| (user_id, room_id)))
+            .collect())
+    }
+
     async fn purge_expired_claims(&self) -> Result<u64> {
         let result = role_claims::Entity::delete_many()
             .filter(role_claims::Column::ExpiresAt.lt(Utc::now()))

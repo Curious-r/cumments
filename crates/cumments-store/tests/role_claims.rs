@@ -134,3 +134,36 @@ async fn expired_claims_do_not_keep_the_bot_in_a_dm() {
     assert_eq!(store.purge_expired_claims().await.unwrap(), 1);
     assert!(!store.claim_dm_room_exists("!dm:hs").await.unwrap());
 }
+
+#[tokio::test]
+async fn claim_dm_rooms_are_listed_per_site_for_decommission() {
+    let store = DbStore::connect(&test_db_url("dm-by-site"))
+        .await
+        .expect("connect db");
+    for (site, user, room) in [
+        ("site-a", "@u1:hs", "!dm-a:hs"),
+        ("site-a", "@u2:hs", "!dm-b:hs"),
+        ("site-b", "@u3:hs", "!dm-c:hs"),
+    ] {
+        let mut claim = new_claim(user, Duration::hours(1));
+        claim.site_id = site.to_string();
+        store.upsert_role_claim(&claim).await.expect("upsert");
+        store
+            .set_claim_dm_room_for_user(user, room)
+            .await
+            .expect("set dm room");
+    }
+
+    let mut pairs = store
+        .claim_dm_rooms_for_site("site-a")
+        .await
+        .expect("claim dms for site");
+    pairs.sort();
+    assert_eq!(
+        pairs,
+        vec![
+            ("@u1:hs".to_string(), "!dm-a:hs".to_string()),
+            ("@u2:hs".to_string(), "!dm-b:hs".to_string()),
+        ]
+    );
+}

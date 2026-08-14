@@ -38,33 +38,65 @@ impl DecommissionPass {
         let site_id = SiteId::new(raw_site_id.to_string())
             .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
 
-        // Retire every comment room first, then the Space. Every operation
-        // is idempotent, so a failed pass can simply be retried.
-        for room_id in self
+        // Collect everything the Matrix/leave steps depend on before the
+        // local rows are deleted: all rooms (not just active ones), every
+        // virtual user that must leave with the site, claim-DM rooms and
+        // media URLs.
+        let rooms = self
             .deps
             .registry_store
-            .list_active_rooms_for_site(&site_id)
-            .await?
-        {
+            .list_rooms_for_site(&site_id)
+            .await?;
+        let virtual_users = self
+            .deps
+            .virtual_user_store
+            .list_virtual_users_for_site(&site_id)
+            .await?;
+        let media_urls = self
+            .deps
+            .message_store
+            .list_media_urls_for_site(raw_site_id)
+            .await?;
+        let claim_dms = self
+            .deps
+            .role_claim_store
+            .claim_dm_rooms_for_site(raw_site_id)
+            .await?;
+
+        // Retire every comment room first, then the Space. Every operation
+        // is idempotent, so a failed pass can simply be retried.
+        for room_id in &rooms {
             let identity = self
                 .deps
                 .registry_store
-                .get_registered_room_identity(&room_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("room {room_id} has no registry identity"))?;
-            let post_slug = PostSlug::from(identity.post_slug.clone());
-            self.deps
-                .driver
-                .set_room_name(
-                    &room_id,
-                    &format!("[retired] {}/{}", raw_site_id, post_slug.as_str()),
-                )
+                .get_registered_room_identity(room_id)
                 .await?;
-            self.deps
-                .driver
-                .remove_room_alias(&site_id, Some(&post_slug))
-                .await?;
-            self.deps.driver.leave_room(&room_id).await?;
+            if let Some(identity) = identity {
+                let post_slug = PostSlug::from(identity.post_slug.clone());
+                self.deps
+                    .driver
+                    .set_room_name(
+                        room_id,
+                        &format!("[retired] {}/{}", raw_site_id, post_slug.as_str()),
+                    )
+                    .await?;
+                self.deps
+                    .driver
+                    .remove_room_alias(&site_id, Some(&post_slug))
+                    .await?;
+            } else {
+                warn!(
+                    room_id,
+                    "decommission: room has no registry identity; retiring membership only"
+                );
+            }
+            // The AS sender leaving is not enough: guest virtual users match
+            // the appservice namespace, so they must leave too or the
+            // homeserver keeps pushing the room's events to us.
+            self.deps.driver.leave_room(room_id).await?;
+            for user_id in &virtual_users {
+                self.deps.driver.leave_room_as(room_id, user_id).await?;
+            }
         }
 
         let space_id = self
@@ -86,6 +118,36 @@ impl DecommissionPass {
         // Matrix side is fully retired: now clearing local rows cannot be
         // undone by a later backfill.
         self.deps.site_auth_store.delete_site(raw_site_id).await?;
+
+        // Best-effort cleanup that depends on rows we just deleted: media
+        // copies on the homeserver and claim-DM memberships.
+        for url in media_urls {
+            let Some(rest) = url.strip_prefix("mxc://") else {
+                continue;
+            };
+            let Some((server, media_id)) = rest.split_once('/') else {
+                continue;
+            };
+            if let Err(error) = self.deps.driver.delete_media(server, media_id).await {
+                warn!(url, "decommission: media deletion failed: {:#}", error);
+            }
+        }
+        for (user_id, dm_room_id) in claim_dms {
+            if self
+                .deps
+                .role_claim_store
+                .active_claims_in_dm_room(&user_id, &dm_room_id)
+                .await?
+            {
+                continue;
+            }
+            if let Err(error) = self.deps.driver.leave_room(&dm_room_id).await {
+                warn!(
+                    user_id,
+                    dm_room_id, "decommission: failed to leave claim DM: {:#}", error
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -98,5 +160,377 @@ impl ReconcilePass for DecommissionPass {
 
     async fn run(&self) -> Result<u64> {
         self.reconcile().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cumments_core::{
+        governance::{NewRoleClaim, OWNER_LEVEL},
+        models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
+        ports::{
+            MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
+            VirtualUserStore,
+        },
+        site_auth::token_hash,
+        site_service::SiteService,
+    };
+    use cumments_store::DbStore;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, Notify};
+
+    fn test_db_url(name: &str) -> String {
+        let path = std::path::Path::new("/tmp").join(format!(
+            "cumments-decommission-test-{}-{}.db",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::fs::File::create(&path).expect("create db file");
+        format!("sqlite://{}", path.display())
+    }
+
+    /// Records the calls the decommission pass must make.
+    struct TestDriver {
+        left: Mutex<Vec<String>>,
+        left_as: Mutex<Vec<(String, String)>>,
+        deleted: Mutex<Vec<(String, String)>>,
+    }
+
+    impl TestDriver {
+        fn new() -> Self {
+            Self {
+                left: Mutex::new(Vec::new()),
+                left_as: Mutex::new(Vec::new()),
+                deleted: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MatrixDriver for TestDriver {
+        async fn ensure_comment_room(
+            &self,
+            _site_id: &SiteId,
+            _post_slug: &PostSlug,
+            _space_id: &str,
+            _candidate_room_id: Option<&str>,
+        ) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        async fn create_site_space(&self, _site_id: &SiteId) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        async fn set_room_name(&self, _room_id: &str, _name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn leave_room(&self, room_id: &str) -> anyhow::Result<()> {
+            self.left.lock().await.push(room_id.to_string());
+            Ok(())
+        }
+        async fn leave_room_as(&self, room_id: &str, user_id: &str) -> anyhow::Result<()> {
+            self.left_as
+                .lock()
+                .await
+                .push((room_id.to_string(), user_id.to_string()));
+            Ok(())
+        }
+        async fn join_room(&self, _room_id: &str) -> anyhow::Result<()> {
+            unimplemented!("not used in this test")
+        }
+        async fn remove_room_alias(
+            &self,
+            _site_id: &SiteId,
+            _post_slug: Option<&PostSlug>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn delete_media(&self, server: &str, media_id: &str) -> anyhow::Result<bool> {
+            self.deleted
+                .lock()
+                .await
+                .push((server.to_string(), media_id.to_string()));
+            Ok(true)
+        }
+        async fn upload_media(
+            &self,
+            _bytes: bytes::Bytes,
+            _filename: &str,
+            _mimetype: &str,
+            _author_public_key: &str,
+            _site_id: &SiteId,
+        ) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn post_message(
+            &self,
+            _room_id: &str,
+            _content: &str,
+            _media: Option<&CommentMedia>,
+            _display_name: &str,
+            _author_public_key: &str,
+            _author_signature: &str,
+            _author_challenge: &str,
+            _site_id: &SiteId,
+            _reply_to: Option<&str>,
+            _reply_to_body: Option<&str>,
+            _reply_to_sender: Option<&str>,
+            _submission_id: Option<i64>,
+            _txn_id: &str,
+        ) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        async fn react_message(
+            &self,
+            _room_id: &str,
+            _target_event_id: &str,
+            _key: &str,
+            _site_id: &SiteId,
+            _author_public_key: &str,
+            _author_signature: &str,
+            _author_challenge: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!("not used in this test")
+        }
+        async fn vote_poll(
+            &self,
+            _room_id: &str,
+            _poll_event_id: &str,
+            _answer_id: &str,
+            _site_id: &SiteId,
+            _author_public_key: &str,
+            _author_signature: &str,
+            _author_challenge: &str,
+        ) -> anyhow::Result<()> {
+            unimplemented!("not used in this test")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn post_location(
+            &self,
+            _room_id: &str,
+            _geo_uri: &str,
+            _description: Option<&str>,
+            _display_name: &str,
+            _site_id: &SiteId,
+            _author_public_key: &str,
+            _author_signature: &str,
+            _author_challenge: &str,
+            _submission_id: Option<i64>,
+            _txn_id: &str,
+        ) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn update_message(
+            &self,
+            _room_id: &str,
+            _event_id: &str,
+            _new_content: &str,
+            _display_name: &str,
+            _author_public_key: &str,
+            _author_signature: &str,
+            _author_challenge: &str,
+            _site_id: &SiteId,
+            _submission_id: Option<i64>,
+            _txn_id: &str,
+        ) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn redact_message(
+            &self,
+            _room_id: &str,
+            _event_id: &str,
+            _submission_id: Option<i64>,
+            _proof: Option<&serde_json::Value>,
+            _txn_id: &str,
+        ) -> anyhow::Result<String> {
+            unimplemented!("not used in this test")
+        }
+        async fn get_room_events(
+            &self,
+            _room_id: &str,
+            _from: Option<&str>,
+            _limit: u32,
+        ) -> anyhow::Result<RoomEventPage> {
+            unimplemented!("not used in this test")
+        }
+        async fn get_joined_rooms(&self) -> anyhow::Result<Vec<String>> {
+            unimplemented!("not used in this test")
+        }
+        async fn get_room_metadata(
+            &self,
+            _room_id: &str,
+        ) -> anyhow::Result<Option<serde_json::Value>> {
+            unimplemented!("not used in this test")
+        }
+        async fn get_room_canonical_alias(&self, _room_id: &str) -> anyhow::Result<Option<String>> {
+            unimplemented!("not used in this test")
+        }
+        async fn event_exists(&self, _room_id: &str, _event_id: &str) -> anyhow::Result<bool> {
+            unimplemented!("not used in this test")
+        }
+        fn sender_user_id(&self) -> Option<String> {
+            Some("@_cumments_bot:hs".to_string())
+        }
+        async fn get_room_power_levels(
+            &self,
+            _room_id: &str,
+        ) -> anyhow::Result<Option<serde_json::Value>> {
+            unimplemented!("not used in this test")
+        }
+        async fn set_room_power_levels(
+            &self,
+            _room_id: &str,
+            _content: &serde_json::Value,
+        ) -> anyhow::Result<()> {
+            unimplemented!("not used in this test")
+        }
+        async fn invite_user(&self, _room_id: &str, _user_id: &str) -> anyhow::Result<()> {
+            unimplemented!("not used in this test")
+        }
+    }
+
+    #[tokio::test]
+    async fn decommission_retires_all_rooms_users_media_and_claim_dms() {
+        let store = Arc::new(
+            DbStore::connect(&test_db_url("decommission"))
+                .await
+                .expect("connect db"),
+        );
+        let site = "retiring-site";
+        store
+            .register_site(site, &token_hash("claim"), false)
+            .await
+            .expect("register site");
+        store
+            .ensure_site_exists(site, "!space:hs")
+            .await
+            .expect("map space");
+        assert!(store.mark_site_retiring(site).await.unwrap());
+
+        let site_id = SiteId::new(site.to_string()).expect("site id");
+        let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+        store
+            .register_room("!active:hs", &site_id, &post_slug)
+            .await
+            .expect("active room");
+        store
+            .register_room("!quar:hs", &site_id, &post_slug)
+            .await
+            .expect("quarantined room");
+        store
+            .quarantine_room("!quar:hs", "adoption failed", 1, None)
+            .await
+            .expect("quarantine");
+        store
+            .register_room("!old:hs", &site_id, &post_slug)
+            .await
+            .expect("superseded room");
+        store.retire_room("!old:hs").await.expect("retire room");
+
+        let vu1 = store
+            .get_or_create_virtual_user(
+                "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+                &site_id,
+                "hs",
+            )
+            .await
+            .expect("virtual user 1");
+        let vu2 = store
+            .get_or_create_virtual_user(&"A".repeat(43), &site_id, "hs")
+            .await
+            .expect("virtual user 2");
+        store
+            .record_media_upload(
+                "mxc://hs/abc",
+                "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+                site,
+                "hello",
+            )
+            .await
+            .expect("media upload");
+        store
+            .upsert_role_claim(&NewRoleClaim {
+                site_id: site.to_string(),
+                room_id: String::new(),
+                user_id: "@u:hs".to_string(),
+                level: OWNER_LEVEL,
+                token_hash: "hash".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            })
+            .await
+            .expect("role claim");
+        store
+            .set_claim_dm_room_for_user("@u:hs", "!dm:hs")
+            .await
+            .expect("claim dm");
+
+        let driver = Arc::new(TestDriver::new());
+        let deps = Arc::new(ReconcilerDeps {
+            submission_store: store.clone(),
+            registry_store: store.clone(),
+            site_store: store.clone(),
+            role_claim_store: store.clone(),
+            governance_store: store.clone(),
+            message_store: store.clone(),
+            virtual_user_store: store.clone(),
+            site_auth_store: store.clone(),
+            driver: driver.clone(),
+            site_service: Arc::new(SiteService::new(
+                store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+            )),
+        });
+        let pass = DecommissionPass::new(
+            deps,
+            PassConfig {
+                name: "decommission-test",
+                interval: std::time::Duration::from_secs(60),
+                wakeup: Arc::new(Notify::new()),
+            },
+        );
+        assert_eq!(pass.run().await.expect("decommission pass"), 1);
+
+        let mut left = driver.left.lock().await.clone();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "!active:hs".to_string(),
+                "!dm:hs".to_string(),
+                "!old:hs".to_string(),
+                "!quar:hs".to_string(),
+                "!space:hs".to_string(),
+            ]
+        );
+
+        let mut left_as = driver.left_as.lock().await.clone();
+        left_as.sort();
+        assert_eq!(
+            left_as,
+            vec![
+                ("!active:hs".to_string(), vu1.clone()),
+                ("!active:hs".to_string(), vu2.clone()),
+                ("!old:hs".to_string(), vu1.clone()),
+                ("!old:hs".to_string(), vu2.clone()),
+                ("!quar:hs".to_string(), vu1.clone()),
+                ("!quar:hs".to_string(), vu2.clone()),
+            ]
+        );
+
+        assert_eq!(
+            *driver.deleted.lock().await,
+            vec![("hs".to_string(), "abc".to_string())]
+        );
+        assert!(store.get_site_auth(site).await.unwrap().is_none());
+        assert!(
+            store
+                .pending_claims_for_user("@u:hs")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

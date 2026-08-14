@@ -317,6 +317,10 @@ pub trait MessageStore: Send + Sync {
     /// deleted or is unreachable).
     async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
 
+    /// Lists every recorded media MXC URL for one site, used by decommission
+    /// to delete the homeserver copies before the rows are dropped.
+    async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>>;
+
     /// Returns an unexpired upload idempotency record, if one exists.
     async fn find_media_upload_idempotency(
         &self,
@@ -392,6 +396,11 @@ pub trait RegistryStore: Send + Sync {
 
     /// Lists the active room IDs registered for one site.
     async fn list_active_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
+
+    /// Lists every room registered for one site, regardless of lifecycle
+    /// status. Used by decommission so quarantined/superseded rooms are
+    /// retired too.
+    async fn list_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
 
     /// Looks up the Cumments identity registered for a room.
     ///
@@ -541,6 +550,11 @@ pub trait RoleClaimStore: Send + Sync {
     /// this DM room. Used to decide when the bot may leave.
     async fn active_claims_in_dm_room(&self, user_id: &str, room_id: &str) -> Result<bool>;
 
+    /// Distinct `(user_id, dm_room_id)` pairs recorded for one site's claims.
+    /// Used by decommission so the bot leaves verification DMs after the
+    /// site's claims are deleted.
+    async fn claim_dm_rooms_for_site(&self, site_id: &str) -> Result<Vec<(String, String)>>;
+
     /// Deletes expired claims that never reached `applied`. Applied claims
     /// are kept for audit purposes.
     async fn purge_expired_claims(&self) -> Result<u64>;
@@ -664,6 +678,10 @@ pub trait MatrixDriver: Send + Sync {
     /// Removes the AS sender from a room. Rooms already left (or unknown to
     /// the homeserver) are treated as success.
     async fn leave_room(&self, room_id: &str) -> Result<()>;
+
+    /// Removes a specific AS-managed user (e.g. a guest virtual user) from a
+    /// room. Rooms the user is not in are treated as success.
+    async fn leave_room_as(&self, room_id: &str, user_id: &str) -> Result<()>;
 
     /// Joins a room as the AS sender. Used to accept claim-DM invites after
     /// the conditional auto-join gate passes. Already-joined rooms are a
@@ -860,4 +878,7 @@ pub trait VirtualUserStore: Send + Sync {
         site_id: &SiteId,
         server_name: &str,
     ) -> Result<String>;
+
+    /// Lists every virtual Matrix user ID recorded for one site.
+    async fn list_virtual_users_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
 }

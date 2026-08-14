@@ -46,6 +46,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
+    async fn leave_room_as(&self, room_id: &str, user_id: &str) -> Result<()> {
+        info!("LOGGING: Leave room {room_id} as {user_id} (no-op)");
+        Ok(())
+    }
+
     async fn join_room(&self, room_id: &str) -> Result<()> {
         info!("LOGGING: Join room {room_id} (no-op)");
         Ok(())

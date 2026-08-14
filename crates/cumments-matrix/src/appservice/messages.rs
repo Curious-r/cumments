@@ -568,6 +568,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn leave_room_as_sends_the_target_user() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/_matrix/client/v3/rooms/%21room%3Ahs/leave"))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        driver
+            .leave_room_as("!room:hs", "@_cumments_my-blog_pubkey:example.com")
+            .await
+            .expect("leave should succeed");
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn room_events_parse_final_empty_page_without_end() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
