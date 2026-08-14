@@ -558,6 +558,12 @@ pub trait SiteAuthStore: Send + Sync {
 
 /// Defines the atomic actions that can be performed on the Matrix network.
 /// This is the "Hands" of the system.
+///
+/// This trait is the only seam through which Cumments-initiated homeserver
+/// writes may pass. Write methods perform the wire operation only; callers
+/// own the application policy (PoW, signatures, authorization, size/MIME
+/// checks, rate limits, validation). Read methods are also part of this
+/// trait but are not covered by the write-seam invariant.
 #[async_trait]
 #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
 pub trait MatrixDriver: Send + Sync {
@@ -596,6 +602,10 @@ pub trait MatrixDriver: Send + Sync {
 
     /// Uploads media to the homeserver as the author's virtual user and
     /// returns the `mxc://` content URI.
+    ///
+    /// Callers must verify the PoW challenge and author signature before
+    /// calling this; the driver resolves the virtual user and performs the
+    /// upload.
     async fn upload_media(
         &self,
         bytes: &[u8],
