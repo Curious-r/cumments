@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cumments_core::models::{PostSlug, QuarantinedRoom, RoomIdentity, RoomStatus, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteStore};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 
 #[async_trait]
 impl RegistryStore for DbStore {
@@ -44,8 +44,6 @@ impl RegistryStore for DbStore {
     async fn list_active_rooms(&self) -> Result<Vec<String>> {
         let rows = room_registry::Entity::find()
             .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
-            .select_only()
-            .column(room_registry::Column::RoomId)
             .all(&self.db)
             .await?;
         Ok(rows.into_iter().map(|row| row.room_id).collect())
@@ -55,8 +53,6 @@ impl RegistryStore for DbStore {
         let rows = room_registry::Entity::find()
             .filter(room_registry::COLUMN.site_id.eq(site_id.as_str()))
             .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
-            .select_only()
-            .column(room_registry::Column::RoomId)
             .all(&self.db)
             .await?;
         Ok(rows.into_iter().map(|row| row.room_id).collect())

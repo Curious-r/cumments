@@ -1,6 +1,6 @@
 use chrono::Utc;
-use cumments_core::models::{RoomMember, RoomStateEvent};
-use cumments_core::ports::RoomStore;
+use cumments_core::models::{PostSlug, RoomMember, RoomStateEvent, SiteId};
+use cumments_core::ports::{RegistryStore, RoomStore};
 use cumments_store::DbStore;
 
 fn test_db_url(name: &str) -> String {
@@ -135,4 +135,28 @@ async fn metadata_uses_latest_state_events_and_counts_joined() {
         .expect("system messages");
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0].event_id, "$name2:hs");
+}
+
+#[tokio::test]
+async fn list_active_rooms_returns_room_ids() {
+    let store = DbStore::connect(&test_db_url("active-rooms"))
+        .await
+        .expect("connect db");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("my-blog"),
+            &PostSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+
+    let rooms = store.list_active_rooms().await.expect("list active rooms");
+    assert_eq!(rooms, vec!["!room:hs"]);
+
+    let site_rooms = store
+        .list_active_rooms_for_site(&SiteId::from("my-blog"))
+        .await
+        .expect("list active rooms for site");
+    assert_eq!(site_rooms, vec!["!room:hs"]);
 }
