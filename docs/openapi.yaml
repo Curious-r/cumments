@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Cumments API
-  version: 0.23.2
+  version: 0.23.3
   description: |
     Backend-only comment API backed by Matrix. Writes are asynchronous:
     POST/PATCH/DELETE accept a submission and return `202 { "submission_id" }`;
