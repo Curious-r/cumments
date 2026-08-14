@@ -17,8 +17,9 @@ host = "0.0.0.0"
 port = 7931
 
 # Reverse proxies trusted to set X-Forwarded-For. Rate limiting uses the peer
-# IP unless it appears here (e.g. ["127.0.0.1", "::1"] behind a local proxy).
-# trusted_proxies = ["127.0.0.1"]
+# IP unless it appears here. Entries are named presets (loopback / private /
+# linklocal) or CIDR networks; bare IPs must use /32 or /128.
+# trusted_proxies = ["loopback", "private", "10.42.0.0/16"]
 
 [database]
 # Database connection URL

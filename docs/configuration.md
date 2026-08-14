@@ -109,11 +109,43 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
 - SQLite files are created automatically, but the parent directory must exist
   (the repo has a `data/` directory).
 - All timestamps are stored in UTC with millisecond precision.
-- `server.trusted_proxies` lists reverse proxies allowed to set
-  `X-Forwarded-For`; rate limiting ignores the header from any other peer.
+- `server.trusted_proxies` declares which reverse proxies may set
+  `X-Forwarded-For`; see [Reverse proxy trust](#reverse-proxy-trust) below.
+  When overriding through the environment, use a comma-separated string
+  (`CUMMENTS__SERVER__TRUSTED_PROXIES="loopback,10.0.0.0/8"`) or a
+  JSON-style array string (`["loopback", "10.0.0.0/8"]`).
 - `security.allow_private_verification_origins` (default `false`) permits
   verification of loopback/private/link-local IP-literal origins; keep it
   disabled in production because `confirm` makes outbound HTTP/DNS probes.
+
+## Reverse proxy trust
+
+`server.trusted_proxies` accepts an array of named presets and CIDR
+networks:
+
+```toml
+[server]
+trusted_proxies = ["loopback", "private", "10.42.0.0/16"]
+```
+
+Each entry is either a preset or a CIDR:
+
+| 条目 | 展开 / 含义 |
+|---|---|
+| `loopback` | `127.0.0.0/8`、`::1/128` |
+| `private` | `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、`fc00::/7` |
+| `linklocal` | `169.254.0.0/16`、`fe80::/10` |
+| `10.42.0.0/16` | 显式 CIDR |
+
+Bare IPs are rejected to keep intent explicit: use `127.0.0.1/32` or
+`::1/128` instead. Unknown presets, invalid CIDRs, and `0.0.0.0/0` /
+`::/0` all fail startup with a message naming the offending entry.
+
+Rate limiting honors `X-Forwarded-For` only when the direct peer is inside
+the trusted set. The list is then walked right-to-left, skipping every
+trusted entry, and the nearest untrusted address becomes the client key.
+Only list networks you actually control behind the reverse proxy; a wide
+network means any host on it can forge the client IP seen by the limiter.
 
 ## Site verification and write-path authentication
 

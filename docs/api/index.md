@@ -150,9 +150,9 @@ window), so EventSource auto-reconnect and normal page refreshes do not
 silently exhaust the quota.
 
 Client keys are the peer IP by default. `X-Forwarded-For` is honored only
-when the peer is listed in `server.trusted_proxies`; the list is then walked
-right-to-left, skipping trusted proxies, and the nearest untrusted address is
-used as the client key.
+when the peer is inside a `server.trusted_proxies` preset or CIDR; the list
+is then walked right-to-left, skipping trusted proxies, and the nearest
+untrusted address is used as the client key.
 
 Verification origins must be public by default: loopback/private/link-local
 IP-literal origins are rejected unless
