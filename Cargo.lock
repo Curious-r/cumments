@@ -988,8 +988,10 @@ name = "cumments-projector"
 version = "0.23.3"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.23.1",
+ "bytes",
  "chrono",
  "cumments-core",
  "cumments-store",

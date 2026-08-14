@@ -85,6 +85,10 @@ pub struct RoleClaim {
     /// Empty string for site-level roles (owner/co-manager); otherwise the
     /// comment room this moderator claim targets.
     pub room_id: String,
+    /// The DM room the AppService bot joined to verify this claim, if any.
+    /// Set on conditional auto-join; used to leave the DM once the claim
+    /// reaches a terminal state.
+    pub dm_room_id: Option<String>,
     pub user_id: String,
     pub level: i64,
     pub token_hash: String,

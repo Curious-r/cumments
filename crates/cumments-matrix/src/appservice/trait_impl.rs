@@ -26,6 +26,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.leave_room_impl(room_id).await
     }
 
+    async fn join_room(&self, room_id: &str) -> Result<()> {
+        self.join_room_impl(room_id).await
+    }
+
     async fn remove_room_alias(
         &self,
         site_id: &SiteId,

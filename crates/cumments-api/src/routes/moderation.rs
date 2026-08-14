@@ -62,6 +62,10 @@ pub struct RevokedRoleResponse {
     pub revoked: bool,
     pub user_id: String,
     pub level: i64,
+    /// Non-empty only when the revocation leaves the site in a notable state
+    /// (e.g. the last owner was removed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -297,13 +301,28 @@ pub(crate) async fn remove_owner_handler(
         .revoke_role_claim(site_id.as_str(), "", &user_id, OWNER_LEVEL)
         .await
         .map_err(|e| AppError::Internal(format!("failed to revoke role claim: {e}")))?;
+    let mut warnings = Vec::new();
     if !revoked {
         remove_site_role(&state, &site_id, &user_id, OWNER_LEVEL).await?;
+        state
+            .store
+            .mark_applied_claim_revoked(site_id.as_str(), "", &user_id, OWNER_LEVEL)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!("failed to mark applied claim revoked: {e}"))
+            })?;
     }
+    let roles = state
+        .store
+        .list_site_roles(site_id.as_str())
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list site roles: {e}")))?;
+    warnings.extend(owner_removal_warnings(&roles));
     Ok(Json(RevokedRoleResponse {
         revoked: true,
         user_id,
         level: OWNER_LEVEL,
+        warnings,
     }))
 }
 
@@ -339,11 +358,19 @@ pub(crate) async fn remove_co_manager_handler(
         .map_err(|e| AppError::Internal(format!("failed to revoke role claim: {e}")))?;
     if !revoked {
         remove_site_role(&state, &site_id, &user_id, CO_MANAGER_LEVEL).await?;
+        state
+            .store
+            .mark_applied_claim_revoked(site_id.as_str(), "", &user_id, CO_MANAGER_LEVEL)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!("failed to mark applied claim revoked: {e}"))
+            })?;
     }
     Ok(Json(RevokedRoleResponse {
         revoked: true,
         user_id,
         level: CO_MANAGER_LEVEL,
+        warnings: Vec::new(),
     }))
 }
 
@@ -383,11 +410,19 @@ pub(crate) async fn remove_room_moderator_handler(
         .map_err(|e| AppError::Internal(format!("failed to revoke role claim: {e}")))?;
     if !revoked {
         remove_room_moderator_role(&state, &site_id, &post_slug, &user_id).await?;
+        state
+            .store
+            .mark_applied_claim_revoked(site_id.as_str(), &room_id, &user_id, MODERATOR_LEVEL)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!("failed to mark applied claim revoked: {e}"))
+            })?;
     }
     Ok(Json(RevokedRoleResponse {
         revoked: true,
         user_id,
         level: MODERATOR_LEVEL,
+        warnings: Vec::new(),
     }))
 }
 
@@ -447,4 +482,44 @@ pub(crate) async fn retire_site_handler(
         site_id: site_id.as_str().to_string(),
         status: "retiring",
     }))
+}
+
+/// Warnings attached to a role-revocation response. Currently only the
+/// "last site owner" case is notable: the site stays operational because the
+/// AppService sender remains the backstop, but no human can manage it.
+fn owner_removal_warnings(roles: &[RoleEntry]) -> Vec<String> {
+    if roles.iter().any(|role| role.level == OWNER_LEVEL) {
+        Vec::new()
+    } else {
+        vec![
+            "last site owner revoked; the site has no human owner and the AppService \
+             sender remains the only backstop"
+                .to_string(),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owner_removal_warns_only_when_no_owner_remains() {
+        assert!(owner_removal_warnings(&[]).len() == 1);
+        assert!(
+            owner_removal_warnings(&[RoleEntry {
+                user_id: "@co:hs".into(),
+                level: CO_MANAGER_LEVEL,
+            }])
+            .len()
+                == 1
+        );
+        assert!(
+            owner_removal_warnings(&[RoleEntry {
+                user_id: "@owner:hs".into(),
+                level: OWNER_LEVEL,
+            }])
+            .is_empty()
+        );
+    }
 }

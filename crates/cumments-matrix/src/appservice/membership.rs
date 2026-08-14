@@ -131,6 +131,44 @@ impl AppServiceMatrixDriver {
         }
     }
 
+    /// Makes the AS sender join a room, typically to accept a claim-DM
+    /// invite after the conditional auto-join gate passes. A room the sender
+    /// is already in counts as joined.
+    pub(super) async fn join_room_impl(&self, room_id: &str) -> Result<()> {
+        let path = format!("_matrix/client/v3/rooms/{}/join", percent_encode(room_id));
+        let resp = self
+            .request(reqwest::Method::POST, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Join request failed: {}", e))?;
+
+        match resp.status().as_u16() {
+            200 => Ok(()),
+            403 => {
+                let body = resp.text().await.unwrap_or_default();
+                let errcode = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("errcode")
+                            .and_then(|e| e.as_str())
+                            .map(str::to_owned)
+                    });
+                if errcode.as_deref() == Some("M_FORBIDDEN")
+                    && self.is_joined(room_id, &self.sender_user_id()).await
+                {
+                    Ok(())
+                } else {
+                    Err(anyhow!("Joining room {room_id} was forbidden: {body}"))
+                }
+            }
+            status => {
+                let body = resp.text().await.unwrap_or_default();
+                Err(anyhow!("Joining room {room_id} failed ({status}): {body}"))
+            }
+        }
+    }
+
     /// Invites a real Matrix user to a room as the AS sender. Users who are
     /// already joined (including a join racing the invite) are a successful
     /// no-op.

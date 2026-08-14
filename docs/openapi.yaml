@@ -1919,6 +1919,11 @@ components:
         level:
           type: integer
           enum: [100, 75, 50]
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Non-empty when the revocation leaves a notable state (e.g. the last site owner was removed).
     SiteRolesResponse:
       type: object
       required: [owners, co_managers]

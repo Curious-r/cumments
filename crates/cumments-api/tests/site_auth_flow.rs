@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
-use cumments_core::governance::RoleEntry;
+use cumments_core::governance::{NewRoleClaim, OWNER_LEVEL, RoleEntry};
 use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{
@@ -1463,6 +1463,84 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         serde_json::from_str(&body_text(listed).await).expect("parse response");
     assert_eq!(listed_json["owners"], serde_json::json!(["@owner:hs"]));
     assert_eq!(listed_json["co_managers"], serde_json::json!(["@co:hs"]));
+}
+
+#[tokio::test]
+async fn applied_owner_revocation_marks_the_claim_revoked() {
+    let (state, store) = test_state(
+        "applied-revoke",
+        SiteVerificationPolicy::Required,
+        Some("test-admin-token"),
+    )
+    .await;
+    let site_id = "applied-revoke-site";
+    store
+        .register_site(site_id, &token_hash("claim-token"), false)
+        .await
+        .expect("register site");
+
+    // Drive the claim to `applied` exactly like the DM + ClaimsPass flow.
+    store
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: site_id.to_string(),
+            room_id: String::new(),
+            user_id: "@owner:hs".to_string(),
+            level: OWNER_LEVEL,
+            token_hash: "verify-hash".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        })
+        .await
+        .expect("upsert claim");
+    let claim = store
+        .pending_claims_for_user("@owner:hs")
+        .await
+        .expect("pending claims")
+        .remove(0);
+    assert!(store.mark_claim_activated(claim.id).await.unwrap());
+    let activated = store
+        .activated_unapplied_claims()
+        .await
+        .expect("activated claims")
+        .remove(0);
+    store
+        .mark_claim_applied(activated.id)
+        .await
+        .expect("mark applied");
+    store
+        .replace_site_roles(
+            site_id,
+            &[RoleEntry {
+                user_id: "@owner:hs".into(),
+                level: OWNER_LEVEL,
+            }],
+        )
+        .await
+        .expect("project owner");
+
+    let router = cumments_api::build_router(state);
+    let removed = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::DELETE,
+            &format!("/api/v1/sites/{site_id}/owners?user_id=%40owner%3Ahs"),
+            None,
+            &[("x-cumments-claim-token", "claim-token".to_string())],
+            "",
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(removed.status(), StatusCode::OK);
+    let removed_json: serde_json::Value =
+        serde_json::from_str(&body_text(removed).await).expect("parse response");
+    assert_eq!(removed_json["revoked"], serde_json::json!(true));
+    assert!(
+        store
+            .list_applied_claims()
+            .await
+            .expect("applied claims")
+            .is_empty(),
+        "the applied claim row must be marked revoked after the Matrix write"
+    );
 }
 
 #[tokio::test]

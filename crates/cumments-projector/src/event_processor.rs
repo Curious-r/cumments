@@ -23,8 +23,8 @@ use cumments_core::{
         TextStyle,
     },
     ports::{
-        GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, RoomStore, SiteStore,
-        SubmissionStore,
+        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
+        SiteStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
@@ -45,6 +45,7 @@ pub struct EventProcessor {
     governance_store: Arc<dyn GovernanceStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     submission_store: Arc<dyn SubmissionStore>,
+    driver: Option<Arc<dyn MatrixDriver>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
@@ -63,6 +64,7 @@ pub struct EventProcessorDeps {
     pub governance_store: Arc<dyn GovernanceStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub submission_store: Arc<dyn SubmissionStore>,
+    pub driver: Option<Arc<dyn MatrixDriver>>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
@@ -78,6 +80,7 @@ impl EventProcessor {
             governance_store: deps.governance_store,
             role_claim_store: deps.role_claim_store,
             submission_store: deps.submission_store,
+            driver: deps.driver,
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
@@ -679,6 +682,43 @@ impl EventProcessor {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            // Conditional auto-join: accept claim-DM invites only when the
+            // inviter has a pending role claim. Unconditional auto-join would
+            // let anyone pull the bot into arbitrary rooms, after which the
+            // homeserver pushes that room's whole event stream to the AS.
+            if membership == "invite"
+                && self
+                    .driver
+                    .as_ref()
+                    .and_then(|driver| driver.sender_user_id())
+                    .as_deref()
+                    == Some(event.state_key.as_str())
+            {
+                let inviter = &event.sender;
+                let claims = self
+                    .role_claim_store
+                    .pending_claims_for_user(inviter)
+                    .await?;
+                if claims.is_empty() {
+                    debug!(
+                        "Ignoring invite for {} in {}: no pending role claim",
+                        inviter, event.room_id
+                    );
+                } else if let Some(driver) = &self.driver {
+                    match driver.join_room(&event.room_id).await {
+                        Ok(()) => {
+                            self.role_claim_store
+                                .set_claim_dm_room_for_user(inviter, &event.room_id)
+                                .await?;
+                            info!("Bot joined claim DM {} for {}", event.room_id, inviter);
+                        }
+                        Err(e) => warn!(
+                            "Bot failed to join claim DM {} for {}: {:#}",
+                            event.room_id, inviter, e
+                        ),
+                    }
+                }
+            }
             self.room_store
                 .save_member(&RoomMember {
                     room_id: event.room_id.clone(),
@@ -699,6 +739,18 @@ impl EventProcessor {
                         .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
                 })
                 .await?;
+        }
+        if event.event_type == "m.room.encryption"
+            && self
+                .role_claim_store
+                .claim_dm_room_exists(&event.room_id)
+                .await?
+        {
+            warn!(
+                "Claim DM {} is encrypted; verification tokens cannot be read \
+                 (claim DMs must be unencrypted)",
+                event.room_id
+            );
         }
         if event.event_type == POWER_LEVELS_EVENT_TYPE {
             let roles: Vec<RoleEntry> = role_entries(&event.content, MODERATOR_LEVEL)

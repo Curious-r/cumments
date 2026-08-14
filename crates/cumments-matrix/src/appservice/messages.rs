@@ -544,9 +544,28 @@ impl AppServiceMatrixDriver {
 mod tests {
     use super::super::test_support::test_driver;
     use super::*;
+    use cumments_core::ports::MatrixDriver;
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn join_room_as_sender_accepts_claim_dm() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/_matrix/client/v3/rooms/%21dm%3Ahs/join"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "room_id": "!dm:hs" })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        driver
+            .join_room("!dm:hs")
+            .await
+            .expect("join should succeed");
+        server.verify().await;
+    }
 
     #[tokio::test]
     async fn room_events_parse_final_empty_page_without_end() {

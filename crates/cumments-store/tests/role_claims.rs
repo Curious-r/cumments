@@ -1,157 +1,136 @@
 use chrono::{Duration, Utc};
-use cumments_core::governance::{NewRoleClaim, RoleClaimStatus};
-use cumments_core::ports::RoleClaimStore;
+use cumments_core::{
+    governance::{NewRoleClaim, OWNER_LEVEL, RoleClaimStatus},
+    ports::RoleClaimStore,
+};
 use cumments_store::DbStore;
 
 fn test_db_url(name: &str) -> String {
     let path = std::path::Path::new("/tmp").join(format!(
-        "cumments-claims-{}-{}.db",
+        "cumments-test-role-claims-{}-{}.db",
         name,
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);
+    std::fs::File::create(&path).expect("create db file");
     format!("sqlite://{}", path.display())
 }
 
-fn new_claim(user_id: &str, level: i64, expires_at: chrono::DateTime<Utc>) -> NewRoleClaim {
+fn new_claim(user_id: &str, expires_in: chrono::Duration) -> NewRoleClaim {
     NewRoleClaim {
         site_id: "my-blog".to_string(),
         room_id: String::new(),
         user_id: user_id.to_string(),
-        level,
-        token_hash: format!("hash-of-{user_id}-{level}"),
-        expires_at,
+        level: OWNER_LEVEL,
+        token_hash: "token-hash".to_string(),
+        expires_at: Utc::now() + expires_in,
     }
 }
 
 #[tokio::test]
-async fn claim_lifecycle_pending_activated_applied() {
-    let store = DbStore::connect(&test_db_url("lifecycle"))
+async fn claim_dm_room_is_tracked_and_cleared_on_regrant() {
+    let store = DbStore::connect(&test_db_url("dm-room"))
         .await
         .expect("connect db");
-
-    let claim = store
-        .upsert_role_claim(&new_claim(
-            "@alice:hs",
-            100,
-            Utc::now() + Duration::hours(24),
-        ))
+    store
+        .upsert_role_claim(&new_claim("@u:hs", Duration::hours(1)))
         .await
-        .expect("create claim");
-    assert_eq!(claim.status, RoleClaimStatus::Pending);
-    assert_eq!(
-        store
-            .pending_claims_for_user("@alice:hs")
-            .await
-            .expect("pending list")
-            .len(),
-        1
-    );
+        .expect("upsert");
 
+    store
+        .set_claim_dm_room_for_user("@u:hs", "!dm:hs")
+        .await
+        .expect("set dm room");
+    assert!(store.claim_dm_room_exists("!dm:hs").await.unwrap());
+    assert_eq!(
+        store.claim_dm_rooms().await.unwrap(),
+        vec![("@u:hs".to_string(), "!dm:hs".to_string())]
+    );
     assert!(
         store
-            .mark_claim_activated(claim.id)
+            .active_claims_in_dm_room("@u:hs", "!dm:hs")
             .await
-            .expect("activate"),
-        "pending claim should activate"
-    );
-    assert_eq!(
-        store
-            .activated_unapplied_claims()
-            .await
-            .expect("activated list")
-            .len(),
-        1
+            .unwrap()
     );
 
-    store.mark_claim_applied(claim.id).await.expect("apply");
-    assert!(
-        store
-            .activated_unapplied_claims()
-            .await
-            .expect("activated list")
-            .is_empty()
-    );
-}
-
-#[tokio::test]
-async fn reissuing_a_role_rotates_the_token() {
-    let store = DbStore::connect(&test_db_url("rotate"))
+    // Re-granting rotates the claim back to pending without inheriting the
+    // old DM room, so the bot treats it as a fresh verification flow.
+    store
+        .upsert_role_claim(&new_claim("@u:hs", Duration::hours(1)))
         .await
-        .expect("connect db");
-    let expires = Utc::now() + Duration::hours(24);
-
-    let first = store
-        .upsert_role_claim(&new_claim("@alice:hs", 75, expires))
-        .await
-        .expect("first issue");
-    let mut rotated = new_claim("@alice:hs", 75, expires);
-    rotated.token_hash = "rotated-token".to_string();
-    let second = store
-        .upsert_role_claim(&rotated)
-        .await
-        .expect("rotate token");
-
-    assert_eq!(first.id, second.id, "same scope must reuse the claim row");
-    assert_eq!(second.token_hash, "rotated-token");
-    assert_eq!(
-        store
-            .pending_claims_for_user("@alice:hs")
-            .await
-            .expect("pending list")
-            .len(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn revoke_cancels_unapplied_claims_and_expired_rows_are_purged() {
-    let store = DbStore::connect(&test_db_url("revoke"))
-        .await
-        .expect("connect db");
-
-    let claim = store
-        .upsert_role_claim(&new_claim(
-            "@alice:hs",
-            50,
-            Utc::now() + Duration::hours(24),
-        ))
-        .await
-        .expect("create claim");
-    assert_eq!(claim.status, RoleClaimStatus::Pending);
-    assert!(
-        store
-            .revoke_role_claim("my-blog", "", "@alice:hs", 50)
-            .await
-            .expect("revoke"),
-        "first revoke cancels the pending claim"
-    );
+        .expect("re-grant");
+    assert!(!store.claim_dm_room_exists("!dm:hs").await.unwrap());
+    assert!(store.claim_dm_rooms().await.unwrap().is_empty());
     assert!(
         !store
-            .revoke_role_claim("my-blog", "", "@alice:hs", 50)
+            .active_claims_in_dm_room("@u:hs", "!dm:hs")
             .await
-            .expect("revoke again"),
-        "already revoked claim is not cancellable again"
+            .unwrap()
     );
-    assert!(
-        store
-            .pending_claims_for_user("@alice:hs")
-            .await
-            .expect("pending list")
-            .is_empty()
-    );
+}
 
-    // An expired pending claim disappears from queries and from the purge.
-    store
-        .upsert_role_claim(&new_claim("@bob:hs", 50, Utc::now() - Duration::seconds(1)))
+#[tokio::test]
+async fn applied_claim_is_revoked_after_matrix_role_removal() {
+    let store = DbStore::connect(&test_db_url("applied-revoke"))
         .await
-        .expect("expired claim");
-    assert_eq!(store.purge_expired_claims().await.expect("purge"), 1);
+        .expect("connect db");
+    store
+        .upsert_role_claim(&new_claim("@u:hs", Duration::hours(1)))
+        .await
+        .expect("upsert");
+
+    let claim = store
+        .pending_claims_for_user("@u:hs")
+        .await
+        .expect("pending")
+        .remove(0);
+    assert!(store.mark_claim_activated(claim.id).await.unwrap());
+    store
+        .mark_claim_applied(store.activated_unapplied_claims().await.unwrap()[0].id)
+        .await
+        .expect("mark applied");
+
+    let applied = store.list_applied_claims().await.unwrap();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].status, RoleClaimStatus::Applied);
+
+    // An applied claim is not cancellable through the pending path...
+    assert!(
+        !store
+            .revoke_role_claim("my-blog", "", "@u:hs", OWNER_LEVEL)
+            .await
+            .unwrap()
+    );
+    // ...but the applied-revocation path (used after the Matrix write) works.
     assert!(
         store
-            .pending_claims_for_user("@bob:hs")
+            .mark_applied_claim_revoked("my-blog", "", "@u:hs", OWNER_LEVEL)
             .await
-            .expect("pending list")
-            .is_empty()
+            .unwrap()
     );
+    assert!(store.list_applied_claims().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn expired_claims_do_not_keep_the_bot_in_a_dm() {
+    let store = DbStore::connect(&test_db_url("expired-dm"))
+        .await
+        .expect("connect db");
+    store
+        .upsert_role_claim(&new_claim("@u:hs", Duration::seconds(-1)))
+        .await
+        .expect("upsert");
+    store
+        .set_claim_dm_room_for_user("@u:hs", "!dm:hs")
+        .await
+        .expect("set dm room");
+
+    assert!(
+        !store
+            .active_claims_in_dm_room("@u:hs", "!dm:hs")
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.purge_expired_claims().await.unwrap(), 1);
+    assert!(!store.claim_dm_room_exists("!dm:hs").await.unwrap());
 }

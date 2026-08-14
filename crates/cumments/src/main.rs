@@ -144,29 +144,6 @@ async fn main() -> Result<()> {
     let projection_notify = Arc::new(tokio::sync::Notify::new());
 
     // ─────────────────────────────────────────────────────────────
-    // 5. Initialize EventProcessor (shared across all modes)
-    // ─────────────────────────────────────────────────────────────
-    let event_processor = Arc::new(cumments_projector::event_processor::EventProcessor::new(
-        cumments_projector::event_processor::EventProcessorDeps {
-            site_store: db_store.clone(),
-            registry_store: db_store.clone(),
-            message_store: db_store.clone(),
-            room_store: db_store.clone(),
-            governance_store: db_store.clone(),
-            role_claim_store: db_store.clone(),
-            submission_store: db_store.clone(),
-            event_bus: event_bus.clone(),
-            projection_notify: projection_notify.clone(),
-            server_name: settings
-                .matrix
-                .homeserver
-                .as_ref()
-                .and_then(|h| h.domain.clone()),
-        },
-    ));
-    tracing::info!("EventProcessor initialized.");
-
-    // ─────────────────────────────────────────────────────────────
     // 6. Validate mode and extract validated AppService settings
     // ─────────────────────────────────────────────────────────────
     if settings.matrix.mode == Mode::AppService
@@ -235,6 +212,30 @@ async fn main() -> Result<()> {
     };
 
     // ─────────────────────────────────────────────────────────────
+    // 7a. Initialize EventProcessor (shared across all modes)
+    // ─────────────────────────────────────────────────────────────
+    let event_processor = Arc::new(cumments_projector::event_processor::EventProcessor::new(
+        cumments_projector::event_processor::EventProcessorDeps {
+            site_store: db_store.clone(),
+            registry_store: db_store.clone(),
+            message_store: db_store.clone(),
+            room_store: db_store.clone(),
+            governance_store: db_store.clone(),
+            role_claim_store: db_store.clone(),
+            submission_store: db_store.clone(),
+            driver: Some(driver.clone()),
+            event_bus: event_bus.clone(),
+            projection_notify: projection_notify.clone(),
+            server_name: settings
+                .matrix
+                .homeserver
+                .as_ref()
+                .and_then(|h| h.domain.clone()),
+        },
+    ));
+    tracing::info!("EventProcessor initialized.");
+
+    // ─────────────────────────────────────────────────────────────
     // 7b. Handle the backfill subcommand (needs driver + processor)
     // ─────────────────────────────────────────────────────────────
     if let Some(cmd) = &args.command {
@@ -272,6 +273,7 @@ async fn main() -> Result<()> {
             registry_store: db_store.clone(),
             site_store: db_store.clone(),
             role_claim_store: db_store.clone(),
+            governance_store: db_store.clone(),
             message_store: db_store.clone(),
             site_auth_store: db_store.clone(),
             driver: driver.clone(),

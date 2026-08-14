@@ -5,13 +5,16 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cumments_core::governance::{NewRoleClaim, RoleClaim, RoleClaimStatus};
 use cumments_core::ports::RoleClaimStore;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 
 fn to_claim(model: role_claims::Model) -> Result<RoleClaim> {
     Ok(RoleClaim {
         id: model.id,
         site_id: model.site_id,
         room_id: model.room_id,
+        dm_room_id: model.dm_room_id,
         user_id: model.user_id,
         level: model.level,
         token_hash: model.token_hash,
@@ -33,6 +36,7 @@ impl RoleClaimStore for DbStore {
         let model = role_claims::ActiveModel {
             site_id: Set(claim.site_id.clone()),
             room_id: Set(claim.room_id.clone()),
+            dm_room_id: Set(None),
             user_id: Set(claim.user_id.clone()),
             level: Set(claim.level),
             token_hash: Set(claim.token_hash.clone()),
@@ -55,6 +59,7 @@ impl RoleClaimStore for DbStore {
                     role_claims::Column::TokenHash,
                     role_claims::Column::Status,
                     role_claims::Column::ExpiresAt,
+                    role_claims::Column::DmRoomId,
                     role_claims::Column::ActivatedAt,
                     role_claims::Column::AppliedAt,
                 ])
@@ -152,6 +157,88 @@ impl RoleClaimStore for DbStore {
             .exec(&self.db)
             .await?;
         Ok(result.rows_affected > 0)
+    }
+
+    async fn mark_applied_claim_revoked(
+        &self,
+        site_id: &str,
+        room_id: &str,
+        user_id: &str,
+        level: i64,
+    ) -> Result<bool> {
+        let result = role_claims::Entity::update_many()
+            .col_expr(
+                role_claims::Column::Status,
+                sea_orm::sea_query::Expr::value(RoleClaimStatus::Revoked.as_str()),
+            )
+            .filter(role_claims::Column::SiteId.eq(site_id))
+            .filter(role_claims::Column::RoomId.eq(room_id))
+            .filter(role_claims::Column::UserId.eq(user_id))
+            .filter(role_claims::Column::Level.eq(level))
+            .filter(role_claims::Column::Status.eq(RoleClaimStatus::Applied.as_str()))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
+    }
+
+    async fn list_applied_claims(&self) -> Result<Vec<RoleClaim>> {
+        let rows = role_claims::Entity::find()
+            .filter(role_claims::Column::Status.eq(RoleClaimStatus::Applied.as_str()))
+            .order_by_asc(role_claims::Column::Id)
+            .all(&self.db)
+            .await?;
+        rows.into_iter().map(to_claim).collect()
+    }
+
+    async fn set_claim_dm_room_for_user(&self, user_id: &str, room_id: &str) -> Result<()> {
+        role_claims::Entity::update_many()
+            .col_expr(
+                role_claims::Column::DmRoomId,
+                sea_orm::sea_query::Expr::value(room_id.to_owned()),
+            )
+            .filter(role_claims::Column::UserId.eq(user_id))
+            .filter(role_claims::Column::Status.eq(RoleClaimStatus::Pending.as_str()))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn claim_dm_room_exists(&self, room_id: &str) -> Result<bool> {
+        let count = role_claims::Entity::find()
+            .filter(role_claims::Column::DmRoomId.eq(room_id))
+            .count(&self.db)
+            .await?;
+        Ok(count > 0)
+    }
+
+    async fn claim_dm_rooms(&self) -> Result<Vec<(String, String)>> {
+        let rows: Vec<(String, Option<String>)> = role_claims::Entity::find()
+            .select_only()
+            .column(role_claims::Column::UserId)
+            .column(role_claims::Column::DmRoomId)
+            .distinct()
+            .filter(role_claims::Column::DmRoomId.is_not_null())
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(user_id, room_id)| room_id.map(|room_id| (user_id, room_id)))
+            .collect())
+    }
+
+    async fn active_claims_in_dm_room(&self, user_id: &str, room_id: &str) -> Result<bool> {
+        let count = role_claims::Entity::find()
+            .filter(role_claims::Column::UserId.eq(user_id))
+            .filter(role_claims::Column::DmRoomId.eq(room_id))
+            .filter(role_claims::Column::Status.is_in([
+                RoleClaimStatus::Pending.as_str(),
+                RoleClaimStatus::Activated.as_str(),
+            ]))
+            .filter(role_claims::Column::ExpiresAt.gt(Utc::now()))
+            .count(&self.db)
+            .await?;
+        Ok(count > 0)
     }
 
     async fn purge_expired_claims(&self) -> Result<u64> {

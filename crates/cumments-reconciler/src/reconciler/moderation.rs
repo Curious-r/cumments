@@ -13,7 +13,7 @@ use cumments_core::governance::{
     set_role_level,
 };
 use cumments_core::models::SiteId;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Applies role claims that the target MXID verified through the DM token
 /// flow, writing them into Matrix power levels.
@@ -28,6 +28,8 @@ impl ClaimsPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
+        // Leave claim DMs whose claims expired before their rows are purged.
+        self.leave_unneeded_claim_dms().await;
         self.deps.role_claim_store.purge_expired_claims().await?;
         let claims = self
             .deps
@@ -67,7 +69,73 @@ impl ClaimsPass {
                 .await?;
             applied += 1;
         }
+        self.reconcile_applied_claims().await?;
+        self.leave_unneeded_claim_dms().await;
         Ok(applied)
+    }
+
+    /// Converges applied claim rows with the projected Matrix roles: a row
+    /// whose role no longer exists (removed via API or directly in Matrix)
+    /// is marked revoked.
+    async fn reconcile_applied_claims(&self) -> Result<()> {
+        for claim in self.deps.role_claim_store.list_applied_claims().await? {
+            let present = if claim.room_id.is_empty() {
+                let Ok(site_id) = SiteId::new(claim.site_id.clone()) else {
+                    continue;
+                };
+                self.deps
+                    .governance_store
+                    .list_site_roles(site_id.as_str())
+                    .await?
+                    .iter()
+                    .any(|role| role.user_id == claim.user_id && role.level == claim.level)
+            } else {
+                self.deps
+                    .governance_store
+                    .list_room_roles(&claim.room_id)
+                    .await?
+                    .iter()
+                    .any(|role| role.user_id == claim.user_id && role.level == claim.level)
+            };
+            if !present {
+                self.deps
+                    .role_claim_store
+                    .mark_applied_claim_revoked(
+                        &claim.site_id,
+                        &claim.room_id,
+                        &claim.user_id,
+                        claim.level,
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Best-effort exit from claim DMs once the user has no pending or
+    /// activated claims left in them.
+    async fn leave_unneeded_claim_dms(&self) {
+        let Ok(rooms) = self.deps.role_claim_store.claim_dm_rooms().await else {
+            return;
+        };
+        for (user_id, room_id) in rooms {
+            let active = self
+                .deps
+                .role_claim_store
+                .active_claims_in_dm_room(&user_id, &room_id)
+                .await
+                .unwrap_or(true);
+            if active {
+                continue;
+            }
+            match self.deps.driver.leave_room(&room_id).await {
+                Ok(()) => info!("Bot left claim DM {room_id} for {user_id}"),
+                Err(e) => warn!(
+                    "Bot failed to leave claim DM {room_id} for {user_id}: {:#}",
+                    e
+                ),
+            }
+        }
     }
 }
 

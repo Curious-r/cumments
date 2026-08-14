@@ -42,6 +42,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260815_000046_unified_submission_txn_ids".to_string()),
         "000046 must be registered or upgrades from 0.23.2 miss delete/update txn columns"
     );
+    assert!(
+        names.contains(&"m20260815_000047_role_claim_dm_room".to_string()),
+        "000047 must be registered or claim DMs cannot be tracked"
+    );
 }
 
 #[tokio::test]
@@ -55,7 +59,8 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     db.execute_unprepared(
         "DELETE FROM seaql_migrations WHERE version IN \
          ('m20260815_000045_post_submission_txn_id', \
-          'm20260815_000046_unified_submission_txn_ids')",
+          'm20260815_000046_unified_submission_txn_ids', \
+          'm20260815_000047_role_claim_dm_room')",
     )
     .await
     .expect("un-apply txn migrations");
@@ -67,6 +72,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         "ALTER TABLE update_submissions DROP COLUMN matrix_event_id",
         "ALTER TABLE post_submissions \
          ADD COLUMN force_new_txn BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE role_claims DROP COLUMN dm_room_id",
     ] {
         db.execute_unprepared(sql).await.expect("rewind schema");
     }
@@ -76,6 +82,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     let post_columns = column_names(&db, "post_submissions").await;
     let delete_columns = column_names(&db, "delete_submissions").await;
     let update_columns = column_names(&db, "update_submissions").await;
+    let claim_columns = column_names(&db, "role_claims").await;
 
     assert!(post_columns.iter().any(|c| c == "txn_id"));
     assert!(!post_columns.iter().any(|c| c == "force_new_txn"));
@@ -83,4 +90,5 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         assert!(columns.iter().any(|c| c == "txn_id"));
         assert!(columns.iter().any(|c| c == "matrix_event_id"));
     }
+    assert!(claim_columns.iter().any(|c| c == "dm_room_id"));
 }

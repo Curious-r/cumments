@@ -12,6 +12,8 @@ pub struct Model {
     pub site_id: String,
     /// Empty string for site-level roles; comment room ID for moderators.
     pub room_id: String,
+    /// The DM room the bot joined to verify this claim, if any.
+    pub dm_room_id: Option<String>,
     pub user_id: String,
     pub level: i64,
     pub token_hash: String,

@@ -23,8 +23,9 @@ Adds or removes an owner (level 100 in the Space and every comment room).
 POST returns
 `{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
 DELETE returns `{ "revoked": true, "user_id", "level" }` and cancels a
-pending claim or removes an applied role. Registering the owner is the
-one-time bootstrap step.
+pending claim or removes an applied role; when the last site owner is
+removed the response also carries a `warnings` array. Registering the owner
+is the one-time bootstrap step.
 
 ## Site co-managers
 

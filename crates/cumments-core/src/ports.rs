@@ -504,6 +504,33 @@ pub trait RoleClaimStore: Send + Sync {
         level: i64,
     ) -> Result<bool>;
 
+    /// Marks an applied claim as revoked after its Matrix role was removed.
+    /// Returns `false` when no applied claim exists for the key.
+    async fn mark_applied_claim_revoked(
+        &self,
+        site_id: &str,
+        room_id: &str,
+        user_id: &str,
+        level: i64,
+    ) -> Result<bool>;
+
+    /// Every applied claim whose Matrix role should still exist. Used by the
+    /// background auditor to converge claim rows with projected power levels.
+    async fn list_applied_claims(&self) -> Result<Vec<RoleClaim>>;
+
+    /// Records the DM room the bot joined for a user's pending claims.
+    async fn set_claim_dm_room_for_user(&self, user_id: &str, room_id: &str) -> Result<()>;
+
+    /// Whether any claim references this room as its verification DM.
+    async fn claim_dm_room_exists(&self, room_id: &str) -> Result<bool>;
+
+    /// Distinct `(user_id, dm_room_id)` pairs recorded for claim DMs.
+    async fn claim_dm_rooms(&self) -> Result<Vec<(String, String)>>;
+
+    /// Whether the user still has a pending or activated claim verified in
+    /// this DM room. Used to decide when the bot may leave.
+    async fn active_claims_in_dm_room(&self, user_id: &str, room_id: &str) -> Result<bool>;
+
     /// Deletes expired claims that never reached `applied`. Applied claims
     /// are kept for audit purposes.
     async fn purge_expired_claims(&self) -> Result<u64>;
@@ -627,6 +654,11 @@ pub trait MatrixDriver: Send + Sync {
     /// Removes the AS sender from a room. Rooms already left (or unknown to
     /// the homeserver) are treated as success.
     async fn leave_room(&self, room_id: &str) -> Result<()>;
+
+    /// Joins a room as the AS sender. Used to accept claim-DM invites after
+    /// the conditional auto-join gate passes. Already-joined rooms are a
+    /// successful no-op.
+    async fn join_room(&self, room_id: &str) -> Result<()>;
 
     /// Deletes the site's Space alias (`post_slug: None`) or one comment
     /// room's alias from the room directory. Missing aliases are a no-op.
