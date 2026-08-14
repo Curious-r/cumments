@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use cumments_core::{
     identity::derive_guest_id_from_public_key,
     models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
@@ -65,7 +66,7 @@ impl MatrixDriver for LoggingMatrixDriver {
 
     async fn upload_media(
         &self,
-        bytes: &[u8],
+        bytes: Bytes,
         filename: &str,
         mimetype: &str,
         author_public_key: &str,

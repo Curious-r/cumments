@@ -13,6 +13,7 @@ use crate::site_auth::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 
 /// Idempotency metadata attached to one write request.
 ///
@@ -608,7 +609,7 @@ pub trait MatrixDriver: Send + Sync {
     /// upload.
     async fn upload_media(
         &self,
-        bytes: &[u8],
+        bytes: Bytes,
         filename: &str,
         mimetype: &str,
         author_public_key: &str,

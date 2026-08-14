@@ -40,7 +40,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
     async fn upload_media(
         &self,
-        bytes: &[u8],
+        bytes: bytes::Bytes,
         filename: &str,
         mimetype: &str,
         author_public_key: &str,

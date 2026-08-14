@@ -6,6 +6,7 @@ use crate::wire::{
     build_poll_vote_body, build_reaction_body, build_redaction_body, percent_encode,
 };
 use anyhow::{Result, anyhow};
+use bytes::Bytes;
 use cumments_core::{
     identity::derive_guest_id_from_public_key,
     models::{CommentMedia, RoomEventPage, SiteId},
@@ -51,7 +52,7 @@ impl AppServiceMatrixDriver {
     #[instrument(skip(self, bytes))]
     pub(super) async fn upload_media_impl(
         &self,
-        bytes: &[u8],
+        bytes: Bytes,
         filename: &str,
         mimetype: &str,
         author_public_key: &str,
@@ -68,7 +69,7 @@ impl AppServiceMatrixDriver {
             )
             .query(&[("filename", filename)])
             .header("Content-Type", mimetype)
-            .body(bytes.to_vec())
+            .body(bytes)
             .send()
             .await
             .map_err(|e| anyhow!("media upload request failed: {e}"))?;
@@ -562,7 +563,7 @@ mod tests {
         let driver = test_driver(&server);
         let url = driver
             .upload_media_impl(
-                b"image-bytes",
+                Bytes::from_static(b"image-bytes"),
                 "cat.png",
                 "image/png",
                 "pubkey",

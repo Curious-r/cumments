@@ -943,6 +943,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.23.1",
+ "bytes",
  "chrono",
  "ed25519-dalek",
  "hex",
@@ -968,6 +969,7 @@ version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes",
  "chrono",
  "cumments-core",
  "hex",

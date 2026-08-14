@@ -259,15 +259,10 @@ pub(crate) async fn upload_media_handler(
         return Err(AppError::InvalidSignature);
     }
 
+    let size = body.len();
     let url = state
         .driver
-        .upload_media(
-            &body,
-            &filename,
-            &mimetype,
-            &author_public_key,
-            &site_id_val,
-        )
+        .upload_media(body, &filename, &mimetype, &author_public_key, &site_id_val)
         .await
         .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
     state
@@ -294,7 +289,7 @@ pub(crate) async fn upload_media_handler(
         "url": url,
         "filename": filename,
         "mimetype": mimetype,
-        "size": body.len(),
+        "size": size,
         "voice": false,
         "kind": kind,
     })))
