@@ -98,12 +98,15 @@ impl AppServiceMatrixDriver {
         self.user_id(&self.sender_localpart)
     }
 
-    /// Generate a transaction ID for idempotent requests.
+    /// Generate a deterministic transaction ID for idempotent requests that
+    /// are not part of the post queue.
     ///
     /// When a submission ID is available the txn ID is deterministic: if the
     /// homeserver accepted the first attempt but the response was lost, a
     /// retry with the same txn ID returns the original event instead of
-    /// creating a duplicate.
+    /// creating a duplicate. Post submissions do not use this helper: their
+    /// transaction ID is allocated by the reconciler and persisted on the
+    /// submission row.
     ///
     /// The `kind` is part of the ID because homeservers scope transaction-ID
     /// deduplication per (user, device, txn_id) without considering the
@@ -112,12 +115,6 @@ impl AppServiceMatrixDriver {
     /// otherwise make an edit replay the original post.
     fn txn_id(&self, kind: &str, submission_id: Option<i64>) -> String {
         format_txn_id(kind, submission_id)
-    }
-
-    /// A fresh random transaction ID for retries after a confirmed-absent
-    /// event, so the homeserver does not keep returning the old ghost event.
-    fn fresh_txn_id(&self, kind: &str) -> String {
-        format_txn_id(kind, None)
     }
 
     /// Make an authenticated CS API request with optional virtual user.

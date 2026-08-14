@@ -3,6 +3,7 @@
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
+use cumments_core::submissions::fresh_transaction_id;
 use tracing::{error, warn};
 
 /// Reconciles pending post (and location) submissions toward Matrix.
@@ -144,6 +145,20 @@ impl PostsPass {
                 };
 
                 // 4. Hands: Post the actual message
+                let txn_id = if pending.force_new_txn || pending.txn_id.is_none() {
+                    let txn_id = fresh_transaction_id("post");
+                    self.deps
+                        .submission_store
+                        .set_post_submission_txn_id(id, &txn_id)
+                        .await?;
+                    txn_id
+                } else {
+                    pending
+                        .txn_id
+                        .as_deref()
+                        .expect("txn_id present when force_new_txn is false")
+                        .to_owned()
+                };
                 let event_id = {
                     let result = if let Some(location) = &command.location {
                         self.deps
@@ -158,7 +173,7 @@ impl PostsPass {
                                 &command.author_signature,
                                 &command.author_challenge,
                                 Some(id),
-                                pending.force_new_txn,
+                                &txn_id,
                             )
                             .await
                     } else {
@@ -177,7 +192,7 @@ impl PostsPass {
                                 reply_to_body.as_deref(),
                                 reply_to_sender.as_deref(),
                                 Some(id),
-                                pending.force_new_txn,
+                                &txn_id,
                             )
                             .await
                     };

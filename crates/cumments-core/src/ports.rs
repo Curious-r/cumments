@@ -70,10 +70,15 @@ pub trait SubmissionStore: Send + Sync {
     /// many rows were recovered.
     async fn recover_expired_submission_leases(&self) -> Result<u64>;
 
+    /// Persists the transaction ID chosen for a post submission's next send.
+    /// Must be called before the driver request so a retry after a lost
+    /// response reuses the same ID (homeserver-side idempotency). Also clears
+    /// the `force_new_txn` flag once a fresh ID has been allocated.
+    async fn set_post_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()>;
+
     /// Marks a post submission so its next send uses a fresh transaction ID.
     /// Called when the timeout pass confirmed the recorded event is absent,
-    /// which otherwise would keep reusing a deterministic ID that points at
-    /// a ghost event.
+    /// which otherwise would keep reusing an ID that points at a ghost event.
     async fn mark_post_submission_force_new_txn(&self, id: i64) -> Result<()>;
 
     /// Atomically claims up to `limit` due post submissions, oldest first,
@@ -644,10 +649,10 @@ pub trait MatrixDriver: Send + Sync {
         // the projector can close the loop even if the push arrives before the
         // reconciler's write-back.
         submission_id: Option<i64>,
-        // When true, use a fresh random transaction ID even though a
-        // submission ID is available. Set after a timeout pass confirmed
-        // the deterministic ID points at an event absent from the homeserver.
-        force_new_txn: bool,
+        // The exact transaction ID to use for this attempt. It is persisted on
+        // the submission row so retries reuse it; a confirmed-absent event
+        // clears it and the reconciler allocates a fresh one.
+        txn_id: &str,
     ) -> Result<String>;
 
     /// Sends a reaction (`m.reaction`) as the guest's virtual user.
@@ -689,7 +694,7 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
         submission_id: Option<i64>,
         // See [`Self::post_message`].
-        force_new_txn: bool,
+        txn_id: &str,
     ) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.

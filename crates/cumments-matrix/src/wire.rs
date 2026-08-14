@@ -6,8 +6,7 @@
 
 use cumments_core::models::{CommentMedia, MediaKind};
 use cumments_core::protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE};
-use rand::Rng;
-use std::time::{SystemTime, UNIX_EPOCH};
+use cumments_core::submissions::fresh_transaction_id;
 
 /// Preferred alias localpart prefix. The Matrix spec recommends exclusive
 /// user and alias namespaces begin with `_` after the sigil, e.g.
@@ -415,15 +414,7 @@ pub(crate) fn percent_encode(s: &str) -> String {
 pub(crate) fn format_txn_id(kind: &str, submission_id: Option<i64>) -> String {
     match submission_id {
         Some(id) => format!("cumments_{}_{}", kind, id),
-        None => {
-            let ts = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let mut random_bytes = [0u8; 16];
-            rand::rng().fill_bytes(&mut random_bytes);
-            format!("cumments_{}_{}_{}", kind, ts, hex::encode(random_bytes))
-        }
+        None => fresh_transaction_id(kind),
     }
 }
 

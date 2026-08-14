@@ -47,6 +47,7 @@ pub mod m20260814_000041_submissions_rename;
 pub mod m20260814_000042_submission_leases;
 pub mod m20260814_000043_media_upload_idempotency;
 pub mod m20260814_000044_post_submission_fresh_txn;
+pub mod m20260815_000045_post_submission_txn_id;
 
 pub struct Migrator;
 

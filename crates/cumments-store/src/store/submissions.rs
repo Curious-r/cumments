@@ -126,6 +126,7 @@ impl SubmissionStore for DbStore {
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
             force_new_txn: Set(false),
+            txn_id: Set(None),
             author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -199,6 +200,7 @@ impl SubmissionStore for DbStore {
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
             force_new_txn: Set(false),
+            txn_id: Set(None),
             author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -373,11 +375,40 @@ impl SubmissionStore for DbStore {
         Ok(recovered)
     }
 
+    async fn set_post_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()> {
+        post_submissions::Entity::update_many()
+            .col_expr(
+                post_submissions::Column::TxnId,
+                sea_orm::sea_query::Expr::value(Some(txn_id)),
+            )
+            .col_expr(
+                post_submissions::Column::ForceNewTxn,
+                sea_orm::sea_query::Expr::value(false),
+            )
+            .col_expr(
+                post_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(post_submissions::Column::Id.eq(id))
+            .filter(post_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
     async fn mark_post_submission_force_new_txn(&self, id: i64) -> Result<()> {
         post_submissions::Entity::update_many()
             .col_expr(
                 post_submissions::Column::ForceNewTxn,
                 sea_orm::sea_query::Expr::value(true),
+            )
+            .col_expr(
+                post_submissions::Column::TxnId,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
             )
             .col_expr(
                 post_submissions::Column::UpdatedAt,
@@ -410,6 +441,7 @@ impl SubmissionStore for DbStore {
                 Ok(command) => submissions.push(PendingPostSubmission {
                     id: m.id,
                     command,
+                    txn_id: m.txn_id,
                     force_new_txn: m.force_new_txn,
                 }),
                 Err(e) => warn!(
@@ -1162,6 +1194,7 @@ impl DbStore {
                 Ok(command) => submissions.push(PendingPostSubmission {
                     id: m.id,
                     command,
+                    txn_id: m.txn_id,
                     force_new_txn: m.force_new_txn,
                 }),
                 Err(e) => warn!(

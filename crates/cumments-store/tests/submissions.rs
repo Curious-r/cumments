@@ -206,7 +206,37 @@ async fn pending_submission_batch_is_limited() {
 }
 
 #[tokio::test]
-async fn force_new_txn_flag_is_claimed_with_the_submission() {
+async fn post_txn_id_is_persisted_before_claim_and_reused() {
+    let store = DbStore::connect(&test_db_url("post-txn-id"))
+        .await
+        .expect("connect db");
+    let id = store
+        .save_post_submission(&post_command())
+        .await
+        .expect("save submission");
+    store
+        .set_post_submission_txn_id(id, "cumments_post_<random>")
+        .await
+        .expect("persist txn id");
+
+    let claimed = store
+        .claim_pending_post_submissions(100, lease(Duration::minutes(5)))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(
+        claimed[0].txn_id.as_deref(),
+        Some("cumments_post_<random>"),
+        "the allocated txn id must be persisted so retries reuse it"
+    );
+    assert!(
+        !claimed[0].force_new_txn,
+        "persisting a fresh txn id must clear the force-new flag"
+    );
+}
+
+#[tokio::test]
+async fn force_new_txn_flag_clears_txn_id_and_is_claimed_with_the_submission() {
     let store = DbStore::connect(&test_db_url("force-new-txn"))
         .await
         .expect("connect db");
@@ -214,6 +244,10 @@ async fn force_new_txn_flag_is_claimed_with_the_submission() {
         .save_post_submission(&post_command())
         .await
         .expect("save submission");
+    store
+        .set_post_submission_txn_id(id, "old-txn")
+        .await
+        .expect("persist old txn id");
     store
         .mark_post_submission_force_new_txn(id)
         .await
@@ -226,7 +260,11 @@ async fn force_new_txn_flag_is_claimed_with_the_submission() {
     assert_eq!(claimed.len(), 1);
     assert!(
         claimed[0].force_new_txn,
-        "timeout-confirmed-absent submissions must use a fresh transaction ID"
+        "timeout-confirmed-absent submissions must allocate a fresh transaction ID"
+    );
+    assert!(
+        claimed[0].txn_id.is_none(),
+        "the stale txn id must be cleared before allocating a fresh one"
     );
 
     store

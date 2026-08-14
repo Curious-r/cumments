@@ -5,6 +5,27 @@
 //! idempotency contract.
 
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
+use rand::Rng;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Generate a fresh, namespaced transaction ID for a submission-driven
+/// homeserver request.
+///
+/// Unlike the deterministic IDs used for update/delete queues, post
+/// transaction IDs are random: some homeservers (notably tuwunel) have been
+/// observed returning an event ID for a deterministic `cumments_post_<id>`
+/// transaction without ever making the event queryable. The ID is persisted
+/// on the submission row so retries reuse it; only a confirmed-absent event
+/// clears it and allocates a new one.
+pub fn fresh_transaction_id(kind: &str) -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let mut random_bytes = [0u8; 16];
+    rand::rng().fill_bytes(&mut random_bytes);
+    format!("cumments_{}_{}_{}", kind, ts, hex::encode(random_bytes))
+}
 
 /// Idempotency metadata attached to one write request.
 ///
@@ -33,8 +54,12 @@ pub enum IdempotencyOutcome {
 pub struct PendingPostSubmission {
     pub id: i64,
     pub command: PostCommentCommand,
+    /// The transaction ID chosen for the latest send attempt, if any.
+    /// `None` means the next attempt must allocate (and persist) a fresh one.
+    pub txn_id: Option<String>,
     /// When true the previous send was confirmed absent on the homeserver
-    /// and the next attempt must use a fresh transaction ID.
+    /// and the next attempt must allocate a fresh transaction ID even if one
+    /// was already stored.
     pub force_new_txn: bool,
 }
 
@@ -59,4 +84,18 @@ pub struct StuckPostSubmission {
     pub id: i64,
     pub event_id: String,
     pub room_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fresh_transaction_id;
+
+    #[test]
+    fn fresh_transaction_ids_are_namespaced_and_unique() {
+        let a = fresh_transaction_id("post");
+        let b = fresh_transaction_id("post");
+        assert!(a.starts_with("cumments_post_"));
+        assert!(b.starts_with("cumments_post_"));
+        assert_ne!(a, b);
+    }
 }

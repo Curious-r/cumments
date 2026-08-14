@@ -96,7 +96,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
         submission_id: Option<i64>,
-        _force_new_txn: bool,
+        _txn_id: &str,
     ) -> Result<String> {
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
@@ -157,7 +157,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_signature: &str,
         _author_challenge: &str,
         submission_id: Option<i64>,
-        _force_new_txn: bool,
+        _txn_id: &str,
     ) -> Result<String> {
         info!(
             "LOGGING: Post location {geo_uri} in {room_id} ({}) as {} submission {}",
