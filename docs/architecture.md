@@ -15,12 +15,15 @@ Everything below follows from three invariants:
 1. **Matrix is the only source of truth.** Comments, roles and room state
    live in Matrix events; the local SQLite is a disposable projection that
    `cumments backfill` can rebuild. Nothing local is authoritative.
-2. **One write seam.** Every mutation of Matrix state goes through the
-   AppService sender (the creator of every Space and room). The API and CLI
-   never touch the homeserver through any other path: comment writes are
-   persisted locally as submissions for the reconciler, while governance
-   writes may go through the shared driver synchronously — the seam is
-   single, the path is not.
+2. **One write seam.** Every homeserver write initiated by Cumments goes
+   through `MatrixDriver`. The API and reconciler never call the homeserver
+   directly for state changes; the CLI only writes local intent rows that
+   the reconciler later applies. The driver authenticates with the
+   AppService `as_token` and sends either as the AppService sender (room
+   creation, state events, redactions) or as a virtual user in the
+   `@_cumments_.*` namespace (guest messages, media uploads). Read paths
+   (backfill, ephemeral `/sync`, media proxy fetches) stay outside this
+   seam because they do not mutate Matrix state.
 3. **Push closes the loop.** The homeserver pushes events back, the projector
    updates the read model, and the reconciler confirms its work. The same
    idempotent projection serves both live pushes and `backfill`.
