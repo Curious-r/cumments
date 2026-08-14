@@ -51,6 +51,7 @@ pub mod m20260815_000045_post_submission_txn_id;
 pub mod m20260815_000046_unified_submission_txn_ids;
 pub mod m20260815_000047_role_claim_dm_room;
 pub mod m20260815_000048_media_upload_submission;
+pub mod m20260815_000049_command_audit_log;
 
 pub struct Migrator;
 
@@ -150,6 +151,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000046_unified_submission_txn_ids::Migration),
             Box::new(m20260815_000047_role_claim_dm_room::Migration),
             Box::new(m20260815_000048_media_upload_submission::Migration),
+            Box::new(m20260815_000049_command_audit_log::Migration),
         ]
     }
 }

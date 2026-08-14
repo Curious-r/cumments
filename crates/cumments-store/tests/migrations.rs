@@ -50,6 +50,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260815_000048_media_upload_submission".to_string()),
         "000048 must be registered or orphan cleanup can delete retrying media"
     );
+    assert!(
+        names.contains(&"m20260815_000049_command_audit_log".to_string()),
+        "000049 must be registered or chat command audit records are lost"
+    );
 }
 
 #[tokio::test]
@@ -65,7 +69,8 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
          ('m20260815_000045_post_submission_txn_id', \
           'm20260815_000046_unified_submission_txn_ids', \
           'm20260815_000047_role_claim_dm_room', \
-          'm20260815_000048_media_upload_submission')",
+          'm20260815_000048_media_upload_submission', \
+          'm20260815_000049_command_audit_log')",
     )
     .await
     .expect("un-apply txn migrations");
@@ -79,6 +84,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
          ADD COLUMN force_new_txn BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE role_claims DROP COLUMN dm_room_id",
         "ALTER TABLE media_uploads DROP COLUMN submission_id",
+        "DROP TABLE command_audit_logs",
     ] {
         db.execute_unprepared(sql).await.expect("rewind schema");
     }
@@ -99,4 +105,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     }
     assert!(claim_columns.iter().any(|c| c == "dm_room_id"));
     assert!(media_columns.iter().any(|c| c == "submission_id"));
+    let audit_columns = column_names(&db, "command_audit_logs").await;
+    assert!(audit_columns.iter().any(|c| c == "actor_mxid"));
+    assert!(audit_columns.iter().any(|c| c == "created_at"));
 }

@@ -4,6 +4,7 @@ pub mod prelude;
 
 pub mod backfill_cursors;
 pub mod backfill_tombstones;
+pub mod command_audit_logs;
 pub mod comments;
 pub mod delete_submissions;
 pub mod idempotency_keys;

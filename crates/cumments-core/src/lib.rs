@@ -1,5 +1,6 @@
 // This lib.rs file will declare the modules of our core crate.
 
+pub mod audit;
 pub mod commands;
 pub mod ephemeral;
 pub mod governance;

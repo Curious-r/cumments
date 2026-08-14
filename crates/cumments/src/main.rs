@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
-use cumments_core::ports::MatrixDriver;
+use cumments_core::ports::{CommandAuditStore, MatrixDriver};
 use cumments_core::site_service::SiteService;
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -70,6 +70,9 @@ async fn main() -> Result<()> {
             cli::Commands::Rooms(_) => {
                 // Handled after the database is connected.
             }
+            cli::Commands::Audit(_) => {
+                // Handled after the database is connected.
+            }
             cli::Commands::Completions(args) => {
                 cli::handle_completions(args)?;
                 return Ok(());
@@ -116,6 +119,13 @@ async fn main() -> Result<()> {
     // Handle CLI subcommands that only need the database.
     if let Some(cli::Commands::Rooms(rooms_args)) = &args.command {
         cli::handle_rooms_command(&db_store, rooms_args).await?;
+        return Ok(());
+    }
+    if let Some(cli::Commands::Audit(audit_args)) = &args.command {
+        let entries = db_store
+            .list_command_audit(audit_args.actor.as_deref(), audit_args.limit)
+            .await?;
+        cli::print_json(&entries)?;
         return Ok(());
     }
 
@@ -269,6 +279,7 @@ async fn main() -> Result<()> {
             }
             cli::Commands::Backup(_) => unreachable!("handled earlier"),
             cli::Commands::Sites(_) => unreachable!("handled earlier"),
+            cli::Commands::Audit(_) => unreachable!("handled earlier"),
             cli::Commands::Rooms(_) => unreachable!("handled earlier"),
             cli::Commands::Completions(_) => unreachable!("handled earlier"),
         }

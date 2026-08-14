@@ -5,7 +5,7 @@ use cumments_api::routes::admin::{AdminQuarantinedRoom, AdminSite};
 use serde::Serialize;
 
 /// Prints one JSON document to stdout (machine-readable CLI output).
-pub(super) fn print_json<T: Serialize>(value: &T) -> Result<()> {
+pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string(value)?);
     Ok(())
 }

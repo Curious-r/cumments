@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::entities::active_enums::SubmissionStatus;
 
+pub mod audit;
 pub mod backfill;
 pub mod decommission;
 pub mod governance;

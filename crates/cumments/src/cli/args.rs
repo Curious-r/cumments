@@ -51,6 +51,17 @@ pub struct BackupArgs {
     pub output: PathBuf,
 }
 
+/// List the chat command audit log.
+#[derive(clap::Args, Debug)]
+pub struct AuditArgs {
+    /// Only entries from this MXID.
+    #[arg(long)]
+    pub actor: Option<String>,
+    /// Maximum entries to show.
+    #[arg(long, default_value_t = 50)]
+    pub limit: u64,
+}
+
 /// Site management subcommands.
 #[derive(clap::Args, Debug)]
 pub struct SitesArgs {
@@ -244,6 +255,9 @@ pub enum Commands {
     /// Create a consistent single-file SQLite backup
     #[command(name = "backup")]
     Backup(BackupArgs),
+    /// List the chat command audit log
+    #[command(name = "audit")]
+    Audit(AuditArgs),
     /// Manage sites registered through the API
     #[command(name = "sites")]
     Sites(SitesArgs),

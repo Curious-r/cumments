@@ -1,3 +1,4 @@
+use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
 use crate::media_upload::{
@@ -871,6 +872,20 @@ pub trait BackfillCursorStore: Send + Sync {
 
     /// Persist the next pagination token for a room.
     async fn save_cursor(&self, room_id: &str, next_token: &str) -> Result<()>;
+}
+
+/// Persistence for the chat command audit log.
+#[async_trait]
+pub trait CommandAuditStore: Send + Sync {
+    /// Records one chat command outcome.
+    async fn record_command_audit(&self, entry: &NewCommandAuditEntry) -> Result<()>;
+
+    /// Lists recorded commands, optionally filtered by actor, newest first.
+    async fn list_command_audit(
+        &self,
+        actor_mxid: Option<&str>,
+        limit: u64,
+    ) -> Result<Vec<CommandAuditEntry>>;
 }
 
 /// Port for virtual user identity management (AppService mode).
