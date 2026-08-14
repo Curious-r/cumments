@@ -11,8 +11,7 @@ use tracing::info;
 /// always safe.
 const MAX_CACHE_ENTRIES: usize = 4096;
 
-/// A Domain Service that manages the lifecycle of Matrix Spaces for sites.
-/// This is the "Brain" for site-related logic.
+/// A shared service that manages the lifecycle of Matrix Spaces for sites.
 pub struct SiteService {
     store: Arc<dyn SiteStore>,
     cache: Arc<RwLock<HashMap<String, String>>>,

@@ -1,7 +1,4 @@
-use crate::commands::{
-    DeleteCommentCommand, PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission,
-    PostCommentCommand, StuckPostSubmission, UpdateCommentCommand,
-};
+use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
 use crate::models::{
     CommentMedia, Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom,
@@ -11,31 +8,13 @@ use crate::models::{
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
 };
+use crate::submissions::{
+    IdempotencyInput, IdempotencyOutcome, PendingDeleteSubmission, PendingPostSubmission,
+    PendingUpdateSubmission, StuckPostSubmission,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-
-/// Idempotency metadata attached to one write request.
-///
-/// The key scopes retries to a single author, and the request fingerprint
-/// detects reuse of the same key with a different request body.
-#[derive(Clone, Debug)]
-pub struct IdempotencyInput {
-    pub author_public_key: String,
-    pub key: String,
-    pub request_fingerprint: String,
-}
-
-/// Result of an idempotency-aware submission save.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IdempotencyOutcome {
-    /// A new submission was queued.
-    Accepted { submission_id: i64 },
-    /// The exact same request was already accepted; return the original id.
-    Replayed { submission_id: i64 },
-    /// The key is already bound to a different request fingerprint.
-    Reused,
-}
 
 /// The port for all submission storage operations.
 #[async_trait]

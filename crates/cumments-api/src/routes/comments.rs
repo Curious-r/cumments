@@ -17,8 +17,8 @@ use cumments_core::{
     commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
     identity::{post_signature_message, signature_message, verify_signature},
     models::{AuthorKind, Content, MediaKind, PostSlug, SiteId},
-    ports::{IdempotencyInput, IdempotencyOutcome},
     site_auth::sha256_hex,
+    submissions::{IdempotencyInput, IdempotencyOutcome},
 };
 use ruma_common::EventId;
 use validator::Validate;

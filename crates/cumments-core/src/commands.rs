@@ -93,33 +93,3 @@ pub struct UpdateCommentCommand {
     #[serde(default)]
     pub author_challenge: String,
 }
-
-/// A post submission together with its queue row id.
-#[derive(Debug, Clone)]
-pub struct PendingPostSubmission {
-    pub id: i64,
-    pub command: PostCommentCommand,
-}
-
-/// A delete submission together with its queue row id.
-#[derive(Debug, Clone)]
-pub struct PendingDeleteSubmission {
-    pub id: i64,
-    pub command: DeleteCommentCommand,
-}
-
-/// An update submission together with its queue row id.
-#[derive(Debug, Clone)]
-pub struct PendingUpdateSubmission {
-    pub id: i64,
-    pub command: UpdateCommentCommand,
-}
-
-/// A post submission stuck in `waiting_for_sync`, with the recorded Matrix event
-/// and room ids used to verify whether the event actually exists.
-#[derive(Debug, Clone)]
-pub struct StuckPostSubmission {
-    pub id: i64,
-    pub event_id: String,
-    pub room_id: Option<String>,
-}
