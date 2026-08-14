@@ -179,6 +179,7 @@
                     members_online: "人在线",
                     member_joined: "加入了房间",
                     member_left: "离开了房间",
+                    member_renamed: "改了名字",
                     room_name_changed: "修改了房间名：",
                     room_topic_changed: "更新了话题：",
                     room_avatar_changed: "更换了房间头像",
@@ -337,6 +338,7 @@
                     members_online: "online",
                     member_joined: "joined the room",
                     member_left: "left the room",
+                    member_renamed: "changed name",
                     room_name_changed: "changed the room name to: ",
                     room_topic_changed: "updated the topic: ",
                     room_avatar_changed: "changed the room avatar",
@@ -1412,8 +1414,11 @@
                 const name = info.name
                     ? escapeHtml(info.name)
                     : escapeHtml(cfg.slug);
+                const joinedUsers = new Map();
                 const system = (info.system_messages || [])
-                    .map(renderSystemMessage)
+                    .slice()
+                    .reverse()
+                    .map((event) => renderSystemMessage(event, joinedUsers))
                     .filter(Boolean)
                     .join("");
                 const governanceUsers = [
@@ -1446,7 +1451,7 @@
                 updatePresenceIndicator();
             }
 
-            function renderSystemMessage(event) {
+            function renderSystemMessage(event, joinedUsers) {
                 const content = event.content_json || {};
                 const time = formatTime(new Date(event.origin_server_ts).toISOString());
                 let text = "";
@@ -1455,9 +1460,21 @@
                         const user = event.state_key || "";
                         const name = content.displayname || user;
                         if (content.membership === "join") {
-                            text = `${name} ${t("member_joined")}`;
+                            if (joinedUsers.has(user)) {
+                                // A join while already joined is a display-name
+                                // update (homeserver profile propagation), not
+                                // a new member. Skip identical re-joins.
+                                text =
+                                    joinedUsers.get(user) === name
+                                        ? ""
+                                        : `${name} ${t("member_renamed")}`;
+                            } else {
+                                text = `${name} ${t("member_joined")}`;
+                            }
+                            joinedUsers.set(user, name);
                         } else if (content.membership === "leave") {
                             text = `${name} ${t("member_left")}`;
+                            joinedUsers.delete(user);
                         } else {
                             return "";
                         }
