@@ -1,4 +1,5 @@
-//! Public read-only media proxy for Matrix MXC media.
+//! Guest media upload, preset stickers, and the public read-only media
+//! proxy for Matrix MXC media.
 //!
 //! The read model stores `mxc://` references; browsers cannot download them
 //! without Matrix credentials. This endpoint fetches the media with the
@@ -107,10 +108,6 @@ impl MediaProxy {
         ))
     }
 
-    pub fn server_name(&self) -> &str {
-        &self.server_name
-    }
-
     /// Rewrites media URLs inside a message for API/SSE delivery.
     pub fn proxify_message(&self, message: &mut Message) {
         match &mut message.content {
@@ -196,7 +193,7 @@ pub(crate) async fn upload_media_handler(
     Query(query): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    if state.media_proxy.is_none() {
+    if state.driver.sender_user_id().is_none() {
         return Err(AppError::NotFound(
             "Media uploads are not enabled for this deployment.".to_string(),
         ));
