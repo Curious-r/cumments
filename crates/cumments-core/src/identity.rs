@@ -73,13 +73,13 @@ pub fn verify_signature(public_key_b64: &str, message: &str, signature_b64: &str
 
 /// Public, stable identifier derived from an Ed25519 public key.
 ///
-/// First 8 bytes of SHA-256 over the raw public key, hex-encoded (16 chars) –
-/// same derivation used for the virtual user ID. 64 bits makes collisions
-/// negligible for realistic comment-system deployments.
+/// First 16 bytes of SHA-256 over the raw public key, hex-encoded (32 chars) –
+/// same derivation used for the virtual user ID. 128 bits makes collisions
+/// infeasible even against adversarial key construction.
 pub fn derive_guest_id_from_public_key(public_key_b64: &str) -> Option<String> {
     let bytes = URL_SAFE_NO_PAD.decode(public_key_b64.trim()).ok()?;
     let hash = Sha256::digest(&bytes);
-    Some(hex::encode(&hash[..8]))
+    Some(hex::encode(&hash[..16]))
 }
 
 #[cfg(test)]
@@ -126,7 +126,7 @@ mod tests {
         let a = derive_guest_id_from_public_key(&public_key_b64).expect("valid key");
         let b = derive_guest_id_from_public_key(&public_key_b64).expect("valid key");
         assert_eq!(a, b);
-        assert_eq!(a.len(), 16);
+        assert_eq!(a.len(), 32);
 
         let other = SigningKey::from_bytes(&[9u8; 32]);
         let other_b64 = URL_SAFE_NO_PAD.encode(other.verifying_key().to_bytes());

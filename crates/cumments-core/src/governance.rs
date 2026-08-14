@@ -396,7 +396,9 @@ mod tests {
     #[test]
     fn as_managed_users_are_detected_by_localpart_prefix() {
         assert!(is_as_managed_user("@_cumments_bot:hs"));
-        assert!(is_as_managed_user("@_cumments_a_3282f2a21b4a1e6b:hs"));
+        assert!(is_as_managed_user(
+            "@_cumments_a_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs"
+        ));
         assert!(!is_as_managed_user("@owner:hs"));
         assert!(!is_as_managed_user("not-an-mxid"));
     }

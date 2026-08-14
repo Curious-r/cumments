@@ -47,7 +47,7 @@ fn guest_message(event_id: &str, body: &str) -> Message {
         redacted_by: None,
         reactions: Vec::new(),
         room_id: "!room:hs".to_string(),
-        sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718:hs".to_string(),
+        sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
         raw_content: serde_json::json!({ "msgtype": "m.text", "body": body }),
     }
 }
@@ -69,7 +69,10 @@ async fn save_message_records_typed_content_and_internal_fields() {
         .expect("get message")
         .expect("message exists");
     assert_eq!(stored.room_id, "!room:hs");
-    assert_eq!(stored.sender_mxid, "@_cumments_my-blog_a1b2c3d4e5f60718:hs");
+    assert_eq!(
+        stored.sender_mxid,
+        "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs"
+    );
     assert_eq!(stored.author.kind, AuthorKind::Guest);
     assert_eq!(
         stored.author.public_key.as_deref(),
@@ -114,7 +117,7 @@ async fn apply_edit_updates_content_and_records_revision() {
         event_id: "$edit:hs".to_string(),
         content: updated.content.clone(),
         edited_at: updated.edited_at.unwrap(),
-        editor_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718:hs".to_string(),
+        editor_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
     };
 
     assert!(
