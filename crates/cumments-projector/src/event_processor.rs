@@ -11,7 +11,7 @@ use crate::parsed::{
     ParsedSpaceChild,
 };
 use crate::verification::{verify_delete_proof, verify_guest_event};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
@@ -616,16 +616,31 @@ impl EventProcessor {
     }
 
     async fn active_site_for(&self, event: &ParsedRoomMessage) -> Result<String> {
-        self.active_sites
-            .lock()
-            .await
-            .get(&event.sender)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "未指定站点；请用 `!cumments site use <id>` 或直接写 `!cumments site <id> ...`"
-                )
-            })
+        if let Some(id) = self.active_sites.lock().await.get(&event.sender).cloned() {
+            return Ok(id);
+        }
+        // Fall back to the owner's sites: a single owned site is automatic,
+        // multiple owned sites list the ambiguity instead of guessing.
+        let mut owned = Vec::new();
+        for site in self.site_auth_store.list_site_auth().await? {
+            let roles = self.governance_store.list_site_roles(&site.site_id).await?;
+            if roles
+                .iter()
+                .any(|role| role.level == OWNER_LEVEL && role.user_id == event.sender)
+            {
+                owned.push(site.site_id);
+            }
+        }
+        match owned.len() {
+            0 => Err(anyhow!(
+                "你没有拥有任何站点；请先 `!cumments site register <id>` 注册"
+            )),
+            1 => Ok(owned.remove(0)),
+            _ => Err(anyhow!(
+                "你拥有多个站点：{}；请用 `!cumments site use <id>` 指定",
+                owned.join(", ")
+            )),
+        }
     }
 
     async fn site_status(&self, site_id: &str) -> Result<String> {

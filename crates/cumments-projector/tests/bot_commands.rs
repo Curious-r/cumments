@@ -177,6 +177,13 @@ async fn owner_can_create_co_manager_claim_and_retire_with_confirm() {
         1
     );
 
+    // A single owned site makes `site status` unambiguous without `use`.
+    assert!(
+        p.process_bot_command(&command_message("@alice:hs", "!cumments site status"))
+            .await
+            .expect("process")
+    );
+
     // Retire asks for confirmation first, then succeeds with --confirm.
     assert!(
         p.process_bot_command(&command_message(
