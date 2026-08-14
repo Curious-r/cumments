@@ -46,6 +46,7 @@ fn processor(store: Arc<DbStore>, driver: Arc<TestDriver>) -> EventProcessor {
         role_claim_store: store.clone(),
         submission_store: store.clone(),
         driver: Some(driver),
+        admin_mxids: Vec::new(),
         event_bus: tx,
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),

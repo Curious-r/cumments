@@ -165,6 +165,10 @@ pub struct Security {
     /// Operator token for the admin API. When unset, admin routes return 403.
     #[serde(default)]
     pub admin_token: Option<String>,
+    /// Instance operators for the Matrix chat channel (fully qualified MXIDs).
+    /// Empty by default: the bot's platform commands are disabled.
+    #[serde(default)]
+    pub admin_mxids: Vec<String>,
     /// Allow verification of IP-literal origins in loopback/private/link-local
     /// address space. Off by default because confirm performs outbound probes.
     #[serde(default)]

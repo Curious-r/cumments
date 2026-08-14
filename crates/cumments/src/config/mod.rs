@@ -8,7 +8,8 @@ mod settings;
 
 pub use paths::{get_configuration, resolve_config_path};
 pub use policy::{
-    admin_token_hash, build_site_auth_policy, is_known_pow_placeholder, validate_pow_secret,
+    admin_token_hash, build_site_auth_policy, is_known_pow_placeholder, validate_admin_mxids,
+    validate_pow_secret,
 };
 pub(crate) use registration::regex_escape;
 pub use settings::{

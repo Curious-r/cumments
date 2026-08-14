@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read configuration: {e}"))?;
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
     let admin_token_hash = config::admin_token_hash(&settings.security)?;
+    let admin_mxids = config::validate_admin_mxids(&settings.security)?;
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
     {
@@ -244,6 +245,7 @@ async fn main() -> Result<()> {
             role_claim_store: db_store.clone(),
             submission_store: db_store.clone(),
             driver: Some(driver.clone()),
+            admin_mxids: admin_mxids.clone(),
             event_bus: event_bus.clone(),
             projection_notify: projection_notify.clone(),
             server_name: settings

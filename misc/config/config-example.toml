@@ -49,6 +49,9 @@ site_verification = "optional"
 # Operator token for the admin API (optional). Unset disables admin routes.
 # Prefer the CUMMENTS__SECURITY__ADMIN_TOKEN environment variable.
 # admin_token = "change-me"
+# Matrix chat-channel instance operators (fully qualified MXIDs). Empty by
+# default: the bot's platform-level commands are disabled.
+# admin_mxids = ["@admin:your-matrix-domain"]
 
 # Allow verification against loopback/private/link-local IP-literal origins.
 # Keep false in production: verification confirm makes outbound HTTP/DNS

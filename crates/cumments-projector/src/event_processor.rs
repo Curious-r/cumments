@@ -46,6 +46,8 @@ pub struct EventProcessor {
     role_claim_store: Arc<dyn RoleClaimStore>,
     submission_store: Arc<dyn SubmissionStore>,
     driver: Option<Arc<dyn MatrixDriver>>,
+    #[allow(dead_code)] // read by the chat command router (next slice)
+    admin_mxids: Vec<String>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
@@ -65,6 +67,8 @@ pub struct EventProcessorDeps {
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub submission_store: Arc<dyn SubmissionStore>,
     pub driver: Option<Arc<dyn MatrixDriver>>,
+    /// Instance operators for chat commands (from `security.admin_mxids`).
+    pub admin_mxids: Vec<String>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
@@ -81,6 +85,7 @@ impl EventProcessor {
             role_claim_store: deps.role_claim_store,
             submission_store: deps.submission_store,
             driver: deps.driver,
+            admin_mxids: deps.admin_mxids,
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,

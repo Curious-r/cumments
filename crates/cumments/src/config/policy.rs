@@ -2,6 +2,7 @@
 
 use super::settings::{Mode, Security, SiteConfig};
 use anyhow::{Result, anyhow, bail};
+use cumments_core::governance::{is_as_managed_user, validate_governance_user_id};
 use cumments_core::models::ID_REGEX;
 use cumments_core::site_auth::{
     KNOWN_SECRET_PLACEHOLDERS, OriginPattern, SITE_SECRET_MIN_LENGTH, SiteAuthMode, SiteAuthPolicy,
@@ -150,6 +151,20 @@ pub fn admin_token_hash(security: &Security) -> Result<Option<String>> {
     Ok(Some(cumments_core::site_auth::token_hash(token)))
 }
 
+/// Validates and normalizes the chat-channel instance operators.
+pub fn validate_admin_mxids(security: &Security) -> Result<Vec<String>> {
+    let mut admins = Vec::with_capacity(security.admin_mxids.len());
+    for raw in &security.admin_mxids {
+        let mxid = validate_governance_user_id(raw)
+            .map_err(|e| anyhow::anyhow!("invalid admin_mxids entry `{raw}`: {e}"))?;
+        if is_as_managed_user(&mxid) {
+            bail!("admin_mxids must not contain Cumments service accounts: {mxid}");
+        }
+        admins.push(mxid);
+    }
+    Ok(admins)
+}
+
 /// Known example/placeholder secrets shipped in the repository. They are
 /// harmless in `logging` mode but would let anyone forge PoW challenges in
 /// production.
@@ -198,6 +213,7 @@ mod tests {
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             admin_token: None,
+            admin_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -243,6 +259,7 @@ mod tests {
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Required,
             admin_token: None,
+            admin_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -281,6 +298,7 @@ mod tests {
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             admin_token: None,
+            admin_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -338,6 +356,7 @@ mod tests {
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             admin_token: None,
+            admin_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -362,6 +381,42 @@ mod tests {
         assert_eq!(
             hash,
             cumments_core::site_auth::token_hash("a-very-long-admin-token-0123456789")
+        );
+    }
+
+    #[test]
+    fn admin_mxids_validate_and_reject_service_accounts() {
+        let invalid = Security {
+            pow_secret: "secret".to_string(),
+            pow_difficulty: 4,
+            site_verification: SiteVerificationPolicy::Optional,
+            admin_token: None,
+            admin_mxids: vec![
+                "@admin:example.org".to_string(),
+                "@_cumments_bot:example.org".to_string(),
+            ],
+            allow_private_verification_origins: false,
+            preset_stickers: Vec::new(),
+            media_sign_key: None,
+        };
+        assert!(
+            validate_admin_mxids(&invalid).is_err(),
+            "service accounts must not be instance operators"
+        );
+
+        let valid = Security {
+            pow_secret: "secret".to_string(),
+            pow_difficulty: 4,
+            site_verification: SiteVerificationPolicy::Optional,
+            admin_token: None,
+            admin_mxids: vec!["@admin:example.org".to_string()],
+            allow_private_verification_origins: false,
+            preset_stickers: Vec::new(),
+            media_sign_key: None,
+        };
+        assert_eq!(
+            validate_admin_mxids(&valid).expect("valid admins"),
+            vec!["@admin:example.org".to_string()]
         );
     }
 }
