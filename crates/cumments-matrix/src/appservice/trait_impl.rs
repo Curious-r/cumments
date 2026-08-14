@@ -229,6 +229,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.get_joined_rooms_impl().await
     }
 
+    async fn get_joined_members(&self, room_id: &str) -> Result<Vec<String>> {
+        self.get_joined_members_impl(room_id).await
+    }
+
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         self.get_room_metadata_impl(room_id).await
     }

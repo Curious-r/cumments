@@ -243,6 +243,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(Vec::new())
     }
 
+    async fn get_joined_members(&self, _room_id: &str) -> Result<Vec<String>> {
+        info!("LOGGING: Joined members (no real homeserver)");
+        Ok(Vec::new())
+    }
+
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         info!(
             "LOGGING: Room metadata for {} (no real homeserver)",

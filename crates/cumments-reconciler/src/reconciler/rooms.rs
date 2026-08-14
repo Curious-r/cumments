@@ -255,6 +255,9 @@ mod tests {
         async fn get_joined_rooms(&self) -> anyhow::Result<Vec<String>> {
             unimplemented!("not used in this test")
         }
+        async fn get_joined_members(&self, _room_id: &str) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
         async fn get_room_metadata(
             &self,
             _room_id: &str,

@@ -590,6 +590,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn joined_members_lists_member_mxids() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/_matrix/client/v3/rooms/%21room%3Ahs/joined_members"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "joined": {
+                    "@_cumments_bot:hs": {"display_name": "bot"},
+                    "@alice:hs": {"display_name": "Alice"}
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let members = driver
+            .get_joined_members("!room:hs")
+            .await
+            .expect("list members");
+        assert_eq!(members.len(), 2);
+        assert!(members.contains(&"@_cumments_bot:hs".to_string()));
+        assert!(members.contains(&"@alice:hs".to_string()));
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn room_events_parse_final_empty_page_without_end() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

@@ -830,6 +830,11 @@ pub trait MatrixDriver: Send + Sync {
     /// Cumments rooms after a local DB reset.
     async fn get_joined_rooms(&self) -> Result<Vec<String>>;
 
+    /// The joined member MXIDs of a room, queried as the AS sender. Used to
+    /// verify a "private channel" (exactly the bot and one other user) before
+    /// acting on sensitive chat commands.
+    async fn get_joined_members(&self, room_id: &str) -> Result<Vec<String>>;
+
     /// Read a room's `host.curious.cumments.metadata` state event, if any.
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
 

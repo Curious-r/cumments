@@ -17,6 +17,11 @@ struct JoinedRoomsResponse {
     joined_rooms: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct JoinedMembersResponse {
+    joined: std::collections::HashMap<String, serde_json::Value>,
+}
+
 impl AppServiceMatrixDriver {
     /// Resolve the virtual user ID for a given author public key.
     pub(super) async fn resolve_virtual_user(
@@ -385,5 +390,35 @@ impl AppServiceMatrixDriver {
             .await
             .map_err(|e| anyhow!("Failed to parse joined_rooms response: {}", e))?;
         Ok(data.joined_rooms)
+    }
+
+    /// Lists the joined member MXIDs of a room.
+    pub(super) async fn get_joined_members_impl(&self, room_id: &str) -> Result<Vec<String>> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/joined_members",
+            percent_encode(room_id)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to list joined members: {}", e))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to list joined members for {room_id} ({status}): {error_body}"
+            ));
+        }
+
+        let data: JoinedMembersResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse joined_members response: {}", e))?;
+        Ok(data.joined.into_keys().collect())
     }
 }

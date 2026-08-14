@@ -5,6 +5,7 @@ use cumments_core::site_auth::token_hash;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{ParsedRoomMessage, ParsedRoomState};
 use cumments_store::DbStore;
+mod common;
 use std::sync::Arc;
 use tokio::sync::{Notify, broadcast};
 
@@ -176,7 +177,10 @@ async fn claim_dm_activates_only_the_matching_token() {
         governance_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
-        driver: None,
+        driver: Some(Arc::new(common::TestDriver::with_joined_members(vec![
+            "@_cumments_bot:hs".to_string(),
+            "@alice:hs".to_string(),
+        ]))),
         event_bus: tx,
         projection_notify: projection_notify.clone(),
         server_name: Some("hs".to_string()),
@@ -242,5 +246,63 @@ async fn claim_dm_activates_only_the_matching_token() {
         .await
         .is_ok(),
         "claim activation must wake the reconciler"
+    );
+}
+
+#[tokio::test]
+async fn claim_dm_requires_a_verified_private_channel() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("claim-dm-private"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: "my-blog".to_string(),
+            room_id: String::new(),
+            user_id: "@bob:hs".to_string(),
+            level: 100,
+            token_hash: token_hash("secret-token"),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+        })
+        .await
+        .expect("create claim");
+
+    let (tx, _rx) = broadcast::channel(16);
+    // Three joined members: not a private channel, so even a valid token
+    // must not activate the claim.
+    let processor = EventProcessor::new(EventProcessorDeps {
+        site_store: store.clone(),
+        registry_store: store.clone(),
+        message_store: store.clone(),
+        room_store: store.clone(),
+        governance_store: store.clone(),
+        role_claim_store: store.clone(),
+        submission_store: store.clone(),
+        driver: Some(Arc::new(common::TestDriver::with_joined_members(vec![
+            "@_cumments_bot:hs".to_string(),
+            "@alice:hs".to_string(),
+            "@bob:hs".to_string(),
+        ]))),
+        event_bus: tx,
+        projection_notify: Arc::new(Notify::new()),
+        server_name: Some("hs".to_string()),
+    });
+
+    let message = claim_message("@bob:hs", "cumments-claim:secret-token");
+    assert!(
+        !processor
+            .process_claim_dm(&message)
+            .await
+            .expect("process claim"),
+        "claims must not activate outside a verified private channel"
+    );
+    assert_eq!(
+        store
+            .pending_claims_for_user("@bob:hs")
+            .await
+            .expect("pending claims")
+            .len(),
+        1
     );
 }

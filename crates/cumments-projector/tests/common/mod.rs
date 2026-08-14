@@ -1,67 +1,21 @@
-use chrono::{Duration, Utc};
+//! Shared test double for projector integration tests.
+
 use cumments_core::{
-    governance::{NewRoleClaim, OWNER_LEVEL},
     models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
-    ports::{MatrixDriver, RoleClaimStore},
+    ports::MatrixDriver,
 };
-use cumments_projector::{
-    event_processor::{EventProcessor, EventProcessorDeps},
-    parsed::ParsedRoomState,
-};
-use cumments_store::DbStore;
-use std::sync::Arc;
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::Mutex;
 
-fn test_db_url(name: &str) -> String {
-    let path = std::path::Path::new("/tmp").join(format!(
-        "cumments-claim-dm-invite-{}-{}.db",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    std::fs::File::create(&path).expect("create db file");
-    format!("sqlite://{}", path.display())
-}
-
-fn invite_event(room_id: &str, sender: &str) -> ParsedRoomState {
-    ParsedRoomState {
-        room_id: room_id.to_string(),
-        event_id: "$invite".to_string(),
-        sender: sender.to_string(),
-        event_type: "m.room.member".to_string(),
-        state_key: "@_cumments_bot:hs".to_string(),
-        origin_server_ts: 1,
-        content: serde_json::json!({ "membership": "invite" }),
-    }
-}
-
-fn processor(store: Arc<DbStore>, driver: Arc<TestDriver>) -> EventProcessor {
-    let (tx, _rx) = broadcast::channel(16);
-    EventProcessor::new(EventProcessorDeps {
-        site_store: store.clone(),
-        registry_store: store.clone(),
-        message_store: store.clone(),
-        room_store: store.clone(),
-        governance_store: store.clone(),
-        role_claim_store: store.clone(),
-        submission_store: store.clone(),
-        driver: Some(driver),
-        event_bus: tx,
-        projection_notify: Arc::new(Notify::new()),
-        server_name: Some("hs".to_string()),
-    })
-}
-
-/// Minimal driver double: records joins and delegates everything else to
-/// `unimplemented!()` because no other driver method is exercised here.
-struct TestDriver {
-    joined: Mutex<Vec<String>>,
+pub struct TestDriver {
+    pub joined: Mutex<Vec<String>>,
+    pub joined_members: Mutex<Vec<String>>,
 }
 
 impl TestDriver {
-    fn new() -> Self {
+    pub fn with_joined_members(members: Vec<String>) -> Self {
         Self {
             joined: Mutex::new(Vec::new()),
+            joined_members: Mutex::new(members),
         }
     }
 }
@@ -81,7 +35,7 @@ impl MatrixDriver for TestDriver {
         unimplemented!("not used in this test")
     }
     async fn set_room_name(&self, _room_id: &str, _name: &str) -> anyhow::Result<()> {
-        unimplemented!("not used in this test")
+        Ok(())
     }
     async fn leave_room(&self, _room_id: &str) -> anyhow::Result<()> {
         unimplemented!("not used in this test")
@@ -98,7 +52,7 @@ impl MatrixDriver for TestDriver {
         _site_id: &SiteId,
         _post_slug: Option<&PostSlug>,
     ) -> anyhow::Result<()> {
-        unimplemented!("not used in this test")
+        Ok(())
     }
     async fn delete_media(&self, _server: &str, _media_id: &str) -> anyhow::Result<bool> {
         unimplemented!("not used in this test")
@@ -211,7 +165,7 @@ impl MatrixDriver for TestDriver {
         unimplemented!("not used in this test")
     }
     async fn get_joined_members(&self, _room_id: &str) -> anyhow::Result<Vec<String>> {
-        Ok(Vec::new())
+        Ok(self.joined_members.lock().await.clone())
     }
     async fn get_room_metadata(&self, _room_id: &str) -> anyhow::Result<Option<serde_json::Value>> {
         unimplemented!("not used in this test")
@@ -241,44 +195,4 @@ impl MatrixDriver for TestDriver {
     async fn invite_user(&self, _room_id: &str, _user_id: &str) -> anyhow::Result<()> {
         unimplemented!("not used in this test")
     }
-}
-
-#[tokio::test]
-async fn bot_joins_dm_only_when_inviter_has_a_pending_claim() {
-    let store = Arc::new(
-        DbStore::connect(&test_db_url("with-claim"))
-            .await
-            .expect("connect db"),
-    );
-    store
-        .upsert_role_claim(&NewRoleClaim {
-            site_id: "my-blog".to_string(),
-            room_id: String::new(),
-            user_id: "@owner:hs".to_string(),
-            level: OWNER_LEVEL,
-            token_hash: "hash".to_string(),
-            expires_at: Utc::now() + Duration::hours(1),
-        })
-        .await
-        .expect("upsert claim");
-
-    let driver = Arc::new(TestDriver::new());
-    processor(store.clone(), driver.clone())
-        .process_room_state(invite_event("!dm:hs", "@owner:hs"))
-        .await
-        .expect("process invite");
-    assert_eq!(*driver.joined.lock().await, vec!["!dm:hs"]);
-    assert!(store.claim_dm_room_exists("!dm:hs").await.unwrap());
-
-    let stranger_store = Arc::new(
-        DbStore::connect(&test_db_url("without-claim"))
-            .await
-            .expect("connect db"),
-    );
-    let stranger_driver = Arc::new(TestDriver::new());
-    processor(stranger_store, stranger_driver.clone())
-        .process_room_state(invite_event("!other-dm:hs", "@stranger:hs"))
-        .await
-        .expect("process invite");
-    assert!(stranger_driver.joined.lock().await.is_empty());
 }

@@ -121,6 +121,37 @@ impl EventProcessor {
             return Ok(false);
         }
 
+        // Claim tokens are capabilities: activate them only in a verified
+        // private channel (exactly the bot and the sender). Fail closed when
+        // the channel cannot be verified.
+        let Some(driver) = &self.driver else {
+            debug!(
+                "Ignoring claim from {}: no driver to verify private channel",
+                event.sender
+            );
+            return Ok(false);
+        };
+        let Some(bot) = driver.sender_user_id() else {
+            debug!(
+                "Ignoring claim from {}: driver has no sender identity",
+                event.sender
+            );
+            return Ok(false);
+        };
+        let members = driver.get_joined_members(&event.room_id).await?;
+        let private = members.len() == 2
+            && members.iter().any(|m| m == &event.sender)
+            && members.iter().any(|m| m == &bot);
+        if !private {
+            warn!(
+                "Rejecting claim from {} in {}: not a verified private channel ({} joined members)",
+                event.sender,
+                event.room_id,
+                members.len()
+            );
+            return Ok(false);
+        }
+
         let presented_hash = sha256_hex(token.as_bytes());
         for claim in self
             .role_claim_store
