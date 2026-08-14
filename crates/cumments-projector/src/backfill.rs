@@ -168,7 +168,7 @@ impl Backfiller {
                 ) {
                     (Ok(site_id_val), Ok(post_slug_val)) => {
                         self.registry_store
-                            .register_room(room_id, &site_id_val, &post_slug_val)
+                            .register_room_if_absent(room_id, &site_id_val, &post_slug_val)
                             .await?;
                         info!(
                             "Backfill: discovered comment room {} for {}/{}",
@@ -233,7 +233,7 @@ impl Backfiller {
         };
 
         self.registry_store
-            .register_room(room_id, &site_id, &post_slug)
+            .register_room_if_absent(room_id, &site_id, &post_slug)
             .await?;
         info!(
             "Backfill: discovered legacy comment room {} for {}/{} via alias {}",

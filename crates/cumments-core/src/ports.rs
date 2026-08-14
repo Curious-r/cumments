@@ -408,6 +408,16 @@ pub trait RegistryStore: Send + Sync {
         post_slug: &PostSlug,
     ) -> Result<()>;
 
+    /// Registers a room only when it is not already in the registry, without
+    /// changing the lifecycle status of existing rows. Used by backfill so
+    /// quarantined or superseded rooms are not silently resurrected.
+    async fn register_room_if_absent(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<()>;
+
     /// Retires a room from the registry (e.g. the room no longer exists or
     /// was replaced), keeping the row for projection history.
     async fn retire_room(&self, room_id: &str) -> Result<()>;

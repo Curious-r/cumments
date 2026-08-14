@@ -129,6 +129,37 @@ impl RegistryStore for DbStore {
         Ok(())
     }
 
+    async fn register_room_if_absent(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: &PostSlug,
+    ) -> Result<()> {
+        let active_model = room_registry::ActiveModel {
+            room_id: Set(room_id.to_owned()),
+            site_id: Set(site_id.as_str().to_owned()),
+            post_slug: Set(post_slug.as_str().to_owned()),
+            status: Set(RoomStatus::Active.as_str().to_owned()),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            quarantine_reason: Set(None),
+            quarantined_at: Set(None),
+            adoption_failures: Set(0),
+            next_attempt_at: Set(None),
+        };
+
+        room_registry::Entity::insert(active_model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(room_registry::Column::RoomId)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec_without_returning(&self.db)
+            .await?;
+
+        Ok(())
+    }
+
     async fn retire_room(&self, room_id: &str) -> Result<()> {
         room_registry::Entity::update_many()
             .col_expr(
