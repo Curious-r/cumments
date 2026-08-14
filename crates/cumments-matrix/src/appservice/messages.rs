@@ -22,8 +22,9 @@ struct SendEventResponse {
 
 #[derive(Deserialize)]
 struct MessagesResponse {
-    start: String,
-    end: String,
+    /// The pagination token for the next older page. Homeservers omit it on
+    /// the final (or empty) page, so it must be optional.
+    end: Option<String>,
     chunk: Vec<serde_json::Value>,
 }
 
@@ -533,8 +534,8 @@ impl AppServiceMatrixDriver {
             .map_err(|e| anyhow!("Failed to parse messages response: {}", e))?;
         Ok(RoomEventPage {
             events: data.chunk,
-            next_token: Some(data.end.clone()),
-            has_more: data.start != data.end,
+            next_token: data.end.clone(),
+            has_more: data.end.is_some(),
         })
     }
 }
@@ -546,6 +547,31 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn room_events_parse_final_empty_page_without_end() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("dir", "b"))
+            .and(query_param("from", "4142337"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "start": "4142337",
+                "chunk": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let page = driver
+            .get_room_events_impl("!room:hs", Some("4142337"), 100)
+            .await
+            .expect("final empty page should parse without an end token");
+        assert!(page.events.is_empty());
+        assert!(!page.has_more);
+        assert!(page.next_token.is_none());
+        server.verify().await;
+    }
 
     #[tokio::test]
     async fn upload_media_sends_as_the_authors_virtual_user() {
