@@ -17,6 +17,9 @@ pub struct Model {
     /// When a a comment submission referencing this media was queued/sent; used by
     /// orphan cleanup.
     pub used_at: Option<DateTimeUtc>,
+    /// The post submission that currently references this media, if any.
+    /// Orphan cleanup skips media bound to a non-terminal submission.
+    pub submission_id: Option<i64>,
     pub created_at: DateTimeUtc,
 }
 

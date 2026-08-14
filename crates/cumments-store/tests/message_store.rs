@@ -1,11 +1,12 @@
 use chrono::Utc;
+use cumments_core::commands::PostCommentCommand;
 use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageRevision,
-    MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction, SiteId, TextContent,
-    TextStyle, UnknownContent,
+    AuthorKind, AuthorSnapshot, CommentMedia, Content, MediaContent, MediaKind, Message,
+    MessageRevision, MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction, SiteId,
+    TextContent, TextStyle, UnknownContent,
 };
-use cumments_core::ports::{MessageStore, VirtualUserStore};
+use cumments_core::ports::{MessageStore, SubmissionStore, VirtualUserStore};
 use cumments_store::DbStore;
 
 /// Unique SQLite file per test to avoid shared in-memory state.
@@ -561,6 +562,67 @@ async fn media_uploads_track_ownership_and_usage() {
             .await
             .expect("ownership after delete"),
         "deleted upload must no longer prove ownership"
+    );
+}
+
+#[tokio::test]
+async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
+    let store = DbStore::connect(&test_db_url("media-submission"))
+        .await
+        .expect("connect db");
+    store
+        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", "hello")
+        .await
+        .expect("record upload");
+
+    let command = PostCommentCommand {
+        site_id: SiteId::from("my-blog"),
+        post_slug: PostSlug::from("hello"),
+        content: "with media".to_string(),
+        media: Some(CommentMedia {
+            kind: Some(MediaKind::Image),
+            url: "mxc://hs/cat".to_string(),
+            filename: Some("cat.png".to_string()),
+            mimetype: Some("image/png".to_string()),
+            size: Some(42),
+            width: Some(64),
+            height: Some(64),
+            voice: false,
+        }),
+        location: None,
+        display_name: "Alice".to_string(),
+        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
+        author_signature: "sig".to_string(),
+        author_challenge: "chal".to_string(),
+        reply_to: None,
+    };
+    let id = store
+        .save_post_submission(&command)
+        .await
+        .expect("save submission");
+
+    let orphan_cutoff = Utc::now() + chrono::Duration::days(1);
+    assert!(
+        store
+            .list_unused_media_before(orphan_cutoff)
+            .await
+            .expect("list unused")
+            .is_empty(),
+        "media referenced by a pending submission must not be swept"
+    );
+
+    store
+        .dead_letter_post_submission(id, "terminal")
+        .await
+        .expect("dead letter");
+    assert_eq!(
+        store
+            .list_unused_media_before(orphan_cutoff)
+            .await
+            .expect("list unused after terminal")
+            .len(),
+        1,
+        "once the submission is terminal the media is orphan-eligible again"
     );
 }
 

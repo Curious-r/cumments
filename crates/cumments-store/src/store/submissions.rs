@@ -1,7 +1,7 @@
 use super::DbStore;
 use crate::entities::{
-    active_enums::SubmissionStatus, delete_submissions, idempotency_keys, post_submissions,
-    update_submissions,
+    active_enums::SubmissionStatus, delete_submissions, idempotency_keys, media_uploads,
+    post_submissions, update_submissions,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -135,7 +135,11 @@ impl SubmissionStore for DbStore {
         let result = post_submissions::Entity::insert(active_model)
             .exec(&self.db)
             .await?;
-        Ok(result.last_insert_id)
+        let submission_id = result.last_insert_id;
+        if let Some(media) = &command.media {
+            bind_media_submission(&self.db, &media.url, submission_id).await?;
+        }
+        Ok(submission_id)
     }
 
     async fn save_delete_submission(&self, command: &DeleteCommentCommand) -> Result<i64> {
@@ -208,6 +212,9 @@ impl SubmissionStore for DbStore {
             .exec(&txn)
             .await?;
         let submission_id = result.last_insert_id;
+        if let Some(media) = &command.media {
+            bind_media_submission(&txn, &media.url, submission_id).await?;
+        }
 
         let outcome = self
             .save_idempotency_record(&txn, idempotency, submission_id)
@@ -1183,6 +1190,24 @@ impl SubmissionStore for DbStore {
         )
         .await
     }
+}
+
+/// Records which post submission currently references a media upload, so the
+/// orphan sweep skips it while the submission is still retrying.
+async fn bind_media_submission<C: ConnectionTrait>(
+    db: &C,
+    mxc_url: &str,
+    submission_id: i64,
+) -> Result<()> {
+    media_uploads::Entity::update_many()
+        .col_expr(
+            media_uploads::Column::SubmissionId,
+            sea_orm::sea_query::Expr::value(submission_id),
+        )
+        .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 impl DbStore {

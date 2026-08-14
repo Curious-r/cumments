@@ -2,7 +2,7 @@ use super::DbStore;
 use super::is_unique_violation;
 use crate::entities::{
     backfill_tombstones, media_upload_idempotency, media_uploads, message_revisions, messages,
-    poll_responses, reactions,
+    poll_responses, post_submissions, reactions,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -531,6 +531,7 @@ impl MessageStore for DbStore {
             site_id: Set(site_id.to_owned()),
             post_slug: Set(post_slug.to_owned()),
             used_at: Set(None),
+            submission_id: Set(None),
             created_at: Set(now),
             ..Default::default()
         };
@@ -542,6 +543,7 @@ impl MessageStore for DbStore {
                         media_uploads::Column::SiteId,
                         media_uploads::Column::PostSlug,
                         media_uploads::Column::UsedAt,
+                        media_uploads::Column::SubmissionId,
                     ])
                     .to_owned(),
             )
@@ -584,12 +586,32 @@ impl MessageStore for DbStore {
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<String>> {
+        // Media bound to a pending/processing/waiting submission must survive
+        // the 24h orphan window: the submission may still send it.
+        let active_submissions: Vec<i64> = post_submissions::Entity::find()
+            .select_only()
+            .column(post_submissions::Column::Id)
+            .filter(post_submissions::Column::Status.is_in([
+                "pending",
+                "processing",
+                "waiting_for_sync",
+            ]))
+            .into_tuple()
+            .all(&self.db)
+            .await?;
         let rows = media_uploads::Entity::find()
             .filter(media_uploads::Column::UsedAt.is_null())
             .filter(media_uploads::Column::CreatedAt.lt(cutoff))
             .all(&self.db)
-            .await?;
-        Ok(rows.into_iter().map(|row| row.mxc_url).collect())
+            .await?
+            .into_iter()
+            .filter(|row| {
+                row.submission_id
+                    .is_none_or(|id| !active_submissions.contains(&id))
+            })
+            .map(|row| row.mxc_url)
+            .collect();
+        Ok(rows)
     }
 
     async fn delete_media_upload(&self, mxc_url: &str) -> Result<()> {

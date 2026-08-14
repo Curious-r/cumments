@@ -46,6 +46,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260815_000047_role_claim_dm_room".to_string()),
         "000047 must be registered or claim DMs cannot be tracked"
     );
+    assert!(
+        names.contains(&"m20260815_000048_media_upload_submission".to_string()),
+        "000048 must be registered or orphan cleanup can delete retrying media"
+    );
 }
 
 #[tokio::test]
@@ -60,7 +64,8 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         "DELETE FROM seaql_migrations WHERE version IN \
          ('m20260815_000045_post_submission_txn_id', \
           'm20260815_000046_unified_submission_txn_ids', \
-          'm20260815_000047_role_claim_dm_room')",
+          'm20260815_000047_role_claim_dm_room', \
+          'm20260815_000048_media_upload_submission')",
     )
     .await
     .expect("un-apply txn migrations");
@@ -73,6 +78,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         "ALTER TABLE post_submissions \
          ADD COLUMN force_new_txn BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE role_claims DROP COLUMN dm_room_id",
+        "ALTER TABLE media_uploads DROP COLUMN submission_id",
     ] {
         db.execute_unprepared(sql).await.expect("rewind schema");
     }
@@ -83,6 +89,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     let delete_columns = column_names(&db, "delete_submissions").await;
     let update_columns = column_names(&db, "update_submissions").await;
     let claim_columns = column_names(&db, "role_claims").await;
+    let media_columns = column_names(&db, "media_uploads").await;
 
     assert!(post_columns.iter().any(|c| c == "txn_id"));
     assert!(!post_columns.iter().any(|c| c == "force_new_txn"));
@@ -91,4 +98,5 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         assert!(columns.iter().any(|c| c == "matrix_event_id"));
     }
     assert!(claim_columns.iter().any(|c| c == "dm_room_id"));
+    assert!(media_columns.iter().any(|c| c == "submission_id"));
 }
