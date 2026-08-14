@@ -2,9 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use cumments_core::ports::MatrixDriver;
 use cumments_core::site_service::SiteService;
-use std::collections::HashSet;
 use std::io::IsTerminal;
-use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -341,15 +339,9 @@ async fn main() -> Result<()> {
         settings.security.pow_secret,
         settings.security.pow_difficulty,
     );
-    let trusted_proxies = settings
-        .server
-        .trusted_proxies
-        .iter()
-        .map(|s| {
-            s.parse::<IpAddr>()
-                .map_err(|e| anyhow::anyhow!("invalid server.trusted_proxies entry `{s}`: {e}"))
-        })
-        .collect::<Result<HashSet<_>>>()?;
+    let trusted_proxies = cumments_api::trusted_proxy::TrustedProxySet::from_rules(
+        settings.server.trusted_proxies.as_slice(),
+    )?;
     let media_proxy = appservice.as_ref().map(|runtime| {
         let media_sign_key = settings.security.media_sign_key.clone().unwrap_or_else(|| {
             tracing::warn!(

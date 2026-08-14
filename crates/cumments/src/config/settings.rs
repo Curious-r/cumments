@@ -2,6 +2,7 @@
 
 use super::registration::{RegistrationCheck, validate_registration_file};
 use anyhow::{Result, anyhow, bail};
+use cumments_api::trusted_proxy::TrustedProxyRules;
 use cumments_core::site_auth::{SiteAuthMode, SiteVerificationPolicy};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ pub struct Server {
     /// limiting only trusts the header when the peer is in this list;
     /// otherwise the peer IP is used as the client key.
     #[serde(default)]
-    pub trusted_proxies: Vec<String>,
+    pub trusted_proxies: TrustedProxyRules,
 }
 
 impl Default for Server {
@@ -39,7 +40,7 @@ impl Default for Server {
         Self {
             host: "localhost".to_string(),
             port: 7931,
-            trusted_proxies: Vec::new(),
+            trusted_proxies: TrustedProxyRules::default(),
         }
     }
 }
@@ -675,5 +676,95 @@ mode = "logging"
 
         settings.rate_limit.write.window = "500ms".to_string();
         assert!(settings.rate_limit.resolved().is_err(), "sub-second window");
+    }
+
+    #[test]
+    fn trusted_proxies_parse_presets_and_cidrs() {
+        let settings = parse(
+            r#"
+[server]
+host = "localhost"
+port = 7931
+trusted_proxies = ["loopback", "private", "10.42.0.0/16"]
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "logging"
+"#,
+        )
+        .expect("parse settings");
+
+        let set = cumments_api::trusted_proxy::TrustedProxySet::from_rules(
+            settings.server.trusted_proxies.as_slice(),
+        )
+        .expect("valid trusted proxy rules");
+        assert!(set.contains("127.0.0.1".parse().unwrap()));
+        assert!(set.contains("10.42.0.1".parse().unwrap()));
+        assert!(!set.contains("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn trusted_proxies_reject_bare_ips_with_fix_hint() {
+        let error = match parse(
+            r#"
+[server]
+host = "localhost"
+port = 7931
+trusted_proxies = ["127.0.0.1"]
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "logging"
+"#,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("bare IP must be rejected"),
+        };
+        let message = error.to_string();
+        assert!(message.contains("trusted_proxies[0]"), "{message}");
+        assert!(message.contains("127.0.0.1/32"), "{message}");
+    }
+
+    #[test]
+    fn trusted_proxies_reject_unknown_presets() {
+        let error = match parse(
+            r#"
+[server]
+host = "localhost"
+port = 7931
+trusted_proxies = ["k8s"]
+
+[database]
+url = "sqlite://data/cumments.db"
+
+[security]
+pow_secret = "secret"
+pow_difficulty = 4
+
+[matrix]
+mode = "logging"
+"#,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("unknown preset must be rejected"),
+        };
+        let message = error.to_string();
+        assert!(message.contains("trusted_proxies[0]"), "{message}");
+        assert!(
+            message.contains("loopback | private | linklocal"),
+            "{message}"
+        );
     }
 }

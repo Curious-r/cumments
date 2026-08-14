@@ -40,8 +40,6 @@ use cumments_core::{
     site_auth::SiteAuthPolicy,
     site_service::SiteService,
 };
-use std::collections::HashSet;
-use std::net::IpAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Notify, broadcast};
@@ -53,6 +51,7 @@ pub mod rate_limit;
 pub mod request;
 pub mod routes;
 pub mod site_auth;
+pub mod trusted_proxy;
 
 // ----------------------
 
@@ -114,7 +113,7 @@ pub struct ApiState {
     /// Anti-abuse limiter for verification confirm (outbound probes).
     pub confirm_limiter: Arc<rate_limit::RateLimiter>,
     /// Reverse proxies trusted to set `X-Forwarded-For` for rate limiting.
-    pub trusted_proxies: Arc<HashSet<IpAddr>>,
+    pub trusted_proxies: Arc<trusted_proxy::TrustedProxySet>,
     /// Allow verification of loopback/private/link-local IP-literal origins.
     pub allow_private_verification_origins: bool,
     /// Per-client-key limiter for comment write submissions (POST/PATCH/DELETE).

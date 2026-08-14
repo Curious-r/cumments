@@ -6,10 +6,11 @@
 //! correctly.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use crate::trusted_proxy::TrustedProxySet;
 
 /// Upper bound on tracked keys; beyond it, new keys are refused instead of
 /// growing memory without limit (keys are client-controlled via XFF).
@@ -26,9 +27,9 @@ const MAX_KEYS: usize = 10_000;
 pub fn client_key(
     headers: &axum::http::HeaderMap,
     addr: Option<SocketAddr>,
-    trusted_proxies: &HashSet<IpAddr>,
+    trusted_proxies: &TrustedProxySet,
 ) -> String {
-    if addr.is_some_and(|peer| trusted_proxies.contains(&peer.ip())) {
+    if addr.is_some_and(|peer| trusted_proxies.contains(peer.ip())) {
         if let Some(forwarded) = headers
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok())
@@ -40,7 +41,7 @@ pub fn client_key(
                 }
                 if entry
                     .parse::<IpAddr>()
-                    .is_ok_and(|ip| trusted_proxies.contains(&ip))
+                    .is_ok_and(|ip| trusted_proxies.contains(ip))
                 {
                     // This hop is another trusted proxy; keep walking toward
                     // the client.
@@ -104,11 +105,20 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trusted_proxy::TrustedProxyRule;
     use axum::http::HeaderValue;
     use std::net::Ipv4Addr;
 
-    fn no_proxies() -> HashSet<IpAddr> {
-        HashSet::new()
+    fn no_proxies() -> TrustedProxySet {
+        TrustedProxySet::default()
+    }
+
+    fn trusted_proxies(entries: &[&str]) -> TrustedProxySet {
+        let rules: Vec<_> = entries
+            .iter()
+            .map(|entry| TrustedProxyRule::parse(entry).expect("valid trusted proxy rule"))
+            .collect();
+        TrustedProxySet::from_rules(&rules).expect("valid trusted proxy set")
     }
 
     #[test]
@@ -148,7 +158,7 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
         let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
-        let trusted: HashSet<IpAddr> = [IpAddr::V4(Ipv4Addr::LOCALHOST)].into();
+        let trusted = trusted_proxies(&["127.0.0.1/32"]);
 
         let key = client_key(&headers, Some(peer), &trusted);
         assert_eq!(key, "203.0.113.9");
@@ -159,7 +169,7 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
         let peer = SocketAddr::from((Ipv4Addr::new(10, 0, 0, 5), 1234));
-        let trusted: HashSet<IpAddr> = [IpAddr::V4(Ipv4Addr::LOCALHOST)].into();
+        let trusted = trusted_proxies(&["127.0.0.1/32"]);
 
         let key = client_key(&headers, Some(peer), &trusted);
         assert_eq!(key, "10.0.0.5");
@@ -175,7 +185,7 @@ mod tests {
             HeaderValue::from_static("198.51.100.9, 203.0.113.7"),
         );
         let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
-        let trusted: HashSet<IpAddr> = [IpAddr::V4(Ipv4Addr::LOCALHOST)].into();
+        let trusted = trusted_proxies(&["127.0.0.1/32"]);
 
         let key = client_key(&headers, Some(peer), &trusted);
         assert_eq!(key, "203.0.113.7");
@@ -189,13 +199,37 @@ mod tests {
             HeaderValue::from_static("203.0.113.9, 10.0.0.2"),
         );
         let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
-        let trusted: HashSet<IpAddr> = [
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
-        ]
-        .into();
+        let trusted = trusted_proxies(&["127.0.0.1/32", "10.0.0.2/32"]);
 
         let key = client_key(&headers, Some(peer), &trusted);
         assert_eq!(key, "203.0.113.9");
+    }
+
+    #[test]
+    fn cidr_trusted_proxy_skips_intermediate_proxies() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.9, 10.0.0.2"),
+        );
+        let peer = SocketAddr::from((Ipv4Addr::new(10, 0, 0, 5), 1234));
+        let trusted = trusted_proxies(&["10.0.0.0/8"]);
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "203.0.113.9");
+    }
+
+    #[test]
+    fn untrusted_peer_cannot_spoof_a_trusted_cidr_entry() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.9, 10.0.0.2"),
+        );
+        let peer = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 1), 1234));
+        let trusted = trusted_proxies(&["10.0.0.0/8"]);
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "192.0.2.1");
     }
 }
