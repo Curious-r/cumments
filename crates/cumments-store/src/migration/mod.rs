@@ -144,6 +144,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260814_000042_submission_leases::Migration),
             Box::new(m20260814_000043_media_upload_idempotency::Migration),
             Box::new(m20260814_000044_post_submission_fresh_txn::Migration),
+            Box::new(m20260815_000045_post_submission_txn_id::Migration),
+            Box::new(m20260815_000046_unified_submission_txn_ids::Migration),
         ]
     }
 }
