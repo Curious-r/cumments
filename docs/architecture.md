@@ -24,15 +24,20 @@ Everything below follows from three invariants:
    `@_cumments_.*` namespace (guest messages, media uploads). Read paths
    (backfill, ephemeral `/sync`, media proxy fetches) stay outside this
    seam because they do not mutate Matrix state.
-3. **Push closes the loop.** The homeserver pushes events back, the projector
-   updates the read model, and the reconciler confirms its work. The same
-   idempotent projection serves both live pushes and `backfill`.
+3. **Push closes the loop.** In AppService mode the homeserver pushes events
+   back, the projector updates the read model, and the reconciler confirms
+   its work. The same idempotent projection also serves `backfill`; Logging
+   mode has no homeserver push and therefore no closed loop.
 
-Together these collapse the design space: a new feature has only one shape it
-can fit into — durable local submission of the user's intent, background convergence on Matrix, then
-projection of the result. That is the controller/reconciler pattern
-(observe → diff → act), and it matches Matrix itself, which is an append-only
-event log with full-state events.
+Together these collapse the design space into one conceptual skeleton:
+durable local submission of the user's intent, background convergence on
+Matrix, then projection of the result. How much machinery a feature needs
+sits on the spectrum below, not in a second shape. There are also two
+control loops with different timings: the write path is
+`intent → act → observe → confirm`, while convergence passes such as
+governance sync are `observe → diff → act`. Both rely on idempotency and
+replay, and both match Matrix itself, which is an append-only event log with
+full-state events.
 
 ### Background-action intensity spectrum
 
