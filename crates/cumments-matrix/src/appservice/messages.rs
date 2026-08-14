@@ -538,6 +538,34 @@ impl AppServiceMatrixDriver {
             has_more: data.end.is_some(),
         })
     }
+
+    /// Sends a plain-text reply as the AS sender.
+    pub(super) async fn send_bot_message_impl(&self, room_id: &str, body: &str) -> Result<String> {
+        let txn_id = fresh_transaction_id("bot");
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+            percent_encode(room_id),
+            percent_encode(&txn_id)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, None)
+            .json(&serde_json::json!({ "msgtype": "m.text", "body": body }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("Bot message request failed: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Bot message to {room_id} failed ({status}): {error_body}"
+            ));
+        }
+        let data: SendEventResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse send response: {}", e))?;
+        Ok(data.event_id)
+    }
 }
 
 #[cfg(test)]
@@ -546,7 +574,7 @@ mod tests {
     use super::*;
     use cumments_core::ports::MatrixDriver;
     use serde_json::json;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -612,6 +640,30 @@ mod tests {
         assert_eq!(members.len(), 2);
         assert!(members.contains(&"@_cumments_bot:hs".to_string()));
         assert!(members.contains(&"@alice:hs".to_string()));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn bot_message_sends_as_the_sender() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(body_partial_json(json!({
+                "msgtype": "m.text",
+                "body": "hello from bot",
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "event_id": "$reply:hs" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let event_id = driver
+            .send_bot_message("!room:hs", "hello from bot")
+            .await
+            .expect("send bot message");
+        assert_eq!(event_id, "$reply:hs");
         server.verify().await;
     }
 

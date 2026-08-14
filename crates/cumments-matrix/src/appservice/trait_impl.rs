@@ -233,6 +233,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.get_joined_members_impl(room_id).await
     }
 
+    async fn send_bot_message(&self, room_id: &str, body: &str) -> Result<String> {
+        self.send_bot_message_impl(room_id, body).await
+    }
+
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         self.get_room_metadata_impl(room_id).await
     }

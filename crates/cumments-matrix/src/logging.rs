@@ -248,6 +248,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(Vec::new())
     }
 
+    async fn send_bot_message(&self, room_id: &str, body: &str) -> Result<String> {
+        info!("LOGGING: Bot message to {room_id}: {body}");
+        Ok("$logging:hs".to_string())
+    }
+
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>> {
         info!(
             "LOGGING: Room metadata for {} (no real homeserver)",

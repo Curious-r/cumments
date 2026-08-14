@@ -258,6 +258,9 @@ mod tests {
         async fn get_joined_members(&self, _room_id: &str) -> anyhow::Result<Vec<String>> {
             Ok(Vec::new())
         }
+        async fn send_bot_message(&self, _room_id: &str, _body: &str) -> anyhow::Result<String> {
+            Ok("$reply:hs".to_string())
+        }
         async fn get_room_metadata(
             &self,
             _room_id: &str,

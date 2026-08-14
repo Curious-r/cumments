@@ -836,6 +836,10 @@ pub trait MatrixDriver: Send + Sync {
     /// acting on sensitive chat commands.
     async fn get_joined_members(&self, room_id: &str) -> Result<Vec<String>>;
 
+    /// Sends a plain-text message in a room as the AS sender (the bot).
+    /// Returns the event ID. Used for chat command replies.
+    async fn send_bot_message(&self, room_id: &str, body: &str) -> Result<String>;
+
     /// Read a room's `host.curious.cumments.metadata` state event, if any.
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<serde_json::Value>>;
 

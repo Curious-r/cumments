@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 pub struct TestDriver {
     pub joined: Mutex<Vec<String>>,
     pub joined_members: Mutex<Vec<String>>,
+    pub replies: Mutex<Vec<(String, String)>>,
 }
 
 impl TestDriver {
@@ -16,6 +17,7 @@ impl TestDriver {
         Self {
             joined: Mutex::new(Vec::new()),
             joined_members: Mutex::new(members),
+            replies: Mutex::new(Vec::new()),
         }
     }
 }
@@ -166,6 +168,13 @@ impl MatrixDriver for TestDriver {
     }
     async fn get_joined_members(&self, _room_id: &str) -> anyhow::Result<Vec<String>> {
         Ok(self.joined_members.lock().await.clone())
+    }
+    async fn send_bot_message(&self, room_id: &str, body: &str) -> anyhow::Result<String> {
+        self.replies
+            .lock()
+            .await
+            .push((room_id.to_string(), body.to_string()));
+        Ok("$reply:hs".to_string())
     }
     async fn get_room_metadata(&self, _room_id: &str) -> anyhow::Result<Option<serde_json::Value>> {
         unimplemented!("not used in this test")
