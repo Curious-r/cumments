@@ -12,6 +12,11 @@ pub struct Model {
     pub post_slug: String,
     pub event_id: String,
     pub room_id: Option<String>,
+    /// The replacement event ID recorded when the submission moved to
+    /// `waiting_for_sync`, used to verify the event actually exists.
+    pub matrix_event_id: Option<String>,
+    /// The transaction ID chosen for the latest send attempt, if any.
+    pub txn_id: Option<String>,
     pub content: String,
     pub author_public_key: Option<String>,
     pub author_signature: Option<String>,

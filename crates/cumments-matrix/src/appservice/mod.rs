@@ -9,7 +9,6 @@ mod test_support;
 mod trait_impl;
 mod versions;
 
-use crate::wire::format_txn_id;
 use anyhow::{Result, anyhow};
 use cumments_core::ports::VirtualUserStore;
 use std::collections::{HashMap, HashSet};
@@ -96,25 +95,6 @@ impl AppServiceMatrixDriver {
     /// and redactions.
     fn sender_user_id(&self) -> String {
         self.user_id(&self.sender_localpart)
-    }
-
-    /// Generate a deterministic transaction ID for idempotent requests that
-    /// are not part of the post queue.
-    ///
-    /// When a submission ID is available the txn ID is deterministic: if the
-    /// homeserver accepted the first attempt but the response was lost, a
-    /// retry with the same txn ID returns the original event instead of
-    /// creating a duplicate. Post submissions do not use this helper: their
-    /// transaction ID is allocated by the reconciler and persisted on the
-    /// submission row.
-    ///
-    /// The `kind` is part of the ID because homeservers scope transaction-ID
-    /// deduplication per (user, device, txn_id) without considering the
-    /// endpoint. Post and update submissions are both sent by the same virtual
-    /// user through `/send`, so separate queues with colliding ids would
-    /// otherwise make an edit replay the original post.
-    fn txn_id(&self, kind: &str, submission_id: Option<i64>) -> String {
-        format_txn_id(kind, submission_id)
     }
 
     /// Make an authenticated CS API request with optional virtual user.

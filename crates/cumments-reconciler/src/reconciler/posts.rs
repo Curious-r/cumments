@@ -145,7 +145,7 @@ impl PostsPass {
                 };
 
                 // 4. Hands: Post the actual message
-                let txn_id = if pending.force_new_txn || pending.txn_id.is_none() {
+                let txn_id = if pending.txn_id.is_none() {
                     let txn_id = fresh_transaction_id("post");
                     self.deps
                         .submission_store
@@ -156,7 +156,7 @@ impl PostsPass {
                     pending
                         .txn_id
                         .as_deref()
-                        .expect("txn_id present when force_new_txn is false")
+                        .expect("txn_id present")
                         .to_owned()
                 };
                 let event_id = {

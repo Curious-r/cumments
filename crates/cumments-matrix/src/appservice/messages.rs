@@ -10,6 +10,7 @@ use bytes::Bytes;
 use cumments_core::{
     identity::derive_guest_id_from_public_key,
     models::{CommentMedia, RoomEventPage, SiteId},
+    submissions::fresh_transaction_id,
 };
 use serde::Deserialize;
 use tracing::{instrument, warn};
@@ -210,7 +211,7 @@ impl AppServiceMatrixDriver {
             author_challenge,
             &guest_id,
         );
-        let txn_id = self.txn_id("react", None);
+        let txn_id = fresh_transaction_id("react");
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.reaction/{}",
             percent_encode(room_id),
@@ -256,7 +257,7 @@ impl AppServiceMatrixDriver {
             author_challenge,
             &guest_id,
         );
-        let txn_id = self.txn_id("vote", None);
+        let txn_id = fresh_transaction_id("vote");
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -351,6 +352,7 @@ impl AppServiceMatrixDriver {
         author_challenge: &str,
         site_id: &SiteId,
         submission_id: Option<i64>,
+        txn_id: &str,
     ) -> Result<String> {
         // 1. Resolve virtual user (includes site_id)
         let virtual_user = self
@@ -379,7 +381,6 @@ impl AppServiceMatrixDriver {
             submission_id,
         );
 
-        let txn_id = self.txn_id("update", submission_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -423,9 +424,9 @@ impl AppServiceMatrixDriver {
         event_id: &str,
         submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
-    ) -> Result<()> {
+        txn_id: &str,
+    ) -> Result<String> {
         // Redact as the sender user (has admin power level in the room).
-        let txn_id = self.txn_id("delete", submission_id);
         let path = format!(
             "_matrix/client/v3/rooms/{}/redact/{}/{}",
             percent_encode(room_id),
@@ -457,7 +458,11 @@ impl AppServiceMatrixDriver {
             ));
         }
 
-        Ok(())
+        let data: SendEventResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse redact response: {}", e))?;
+        Ok(data.event_id)
     }
 
     #[instrument(skip(self))]

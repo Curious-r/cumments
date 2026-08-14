@@ -11,12 +11,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Generate a fresh, namespaced transaction ID for a submission-driven
 /// homeserver request.
 ///
-/// Unlike the deterministic IDs used for update/delete queues, post
-/// transaction IDs are random: some homeservers (notably tuwunel) have been
-/// observed returning an event ID for a deterministic `cumments_post_<id>`
-/// transaction without ever making the event queryable. The ID is persisted
-/// on the submission row so retries reuse it; only a confirmed-absent event
-/// clears it and allocates a new one.
+/// All submission queues use random transaction IDs: some homeservers
+/// (notably tuwunel) have been observed returning an event ID for
+/// deterministic `cumments_<kind>_<id>` transactions without ever making the
+/// event queryable. The ID is persisted on the submission row so retries
+/// reuse it; only a confirmed-absent event clears it and allocates a new one.
 pub fn fresh_transaction_id(kind: &str) -> String {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -57,10 +56,6 @@ pub struct PendingPostSubmission {
     /// The transaction ID chosen for the latest send attempt, if any.
     /// `None` means the next attempt must allocate (and persist) a fresh one.
     pub txn_id: Option<String>,
-    /// When true the previous send was confirmed absent on the homeserver
-    /// and the next attempt must allocate a fresh transaction ID even if one
-    /// was already stored.
-    pub force_new_txn: bool,
 }
 
 /// A delete submission together with its queue row id.
@@ -68,6 +63,8 @@ pub struct PendingPostSubmission {
 pub struct PendingDeleteSubmission {
     pub id: i64,
     pub command: DeleteCommentCommand,
+    /// The transaction ID chosen for the latest send attempt, if any.
+    pub txn_id: Option<String>,
 }
 
 /// An update submission together with its queue row id.
@@ -75,12 +72,32 @@ pub struct PendingDeleteSubmission {
 pub struct PendingUpdateSubmission {
     pub id: i64,
     pub command: UpdateCommentCommand,
+    /// The transaction ID chosen for the latest send attempt, if any.
+    pub txn_id: Option<String>,
 }
 
 /// A post submission stuck in `waiting_for_sync`, with the recorded Matrix
 /// event and room ids used to verify whether the event actually exists.
 #[derive(Debug, Clone)]
 pub struct StuckPostSubmission {
+    pub id: i64,
+    pub event_id: String,
+    pub room_id: Option<String>,
+}
+
+/// A delete submission stuck in `waiting_for_sync`, with the recorded redaction
+/// event and room ids used to verify whether the event actually exists.
+#[derive(Debug, Clone)]
+pub struct StuckDeleteSubmission {
+    pub id: i64,
+    pub event_id: String,
+    pub room_id: Option<String>,
+}
+
+/// An update submission stuck in `waiting_for_sync`, with the recorded
+/// replacement event and room ids used to verify whether it actually exists.
+#[derive(Debug, Clone)]
+pub struct StuckUpdateSubmission {
     pub id: i64,
     pub event_id: String,
     pub room_id: Option<String>,

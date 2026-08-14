@@ -6,7 +6,6 @@
 
 use cumments_core::models::{CommentMedia, MediaKind};
 use cumments_core::protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE};
-use cumments_core::submissions::fresh_transaction_id;
 
 /// Preferred alias localpart prefix. The Matrix spec recommends exclusive
 /// user and alias namespaces begin with `_` after the sigil, e.g.
@@ -407,17 +406,6 @@ pub(crate) fn percent_encode(s: &str) -> String {
     result
 }
 
-/// Deterministic transaction ID for submission-driven requests.
-///
-/// The operation kind is part of the ID so distinct submission queues can never
-/// collide on a homeserver that deduplicates by `(user, device, txn_id)`.
-pub(crate) fn format_txn_id(kind: &str, submission_id: Option<i64>) -> String {
-    match submission_id {
-        Some(id) => format!("cumments_{}_{}", kind, id),
-        None => fresh_transaction_id(kind),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -757,31 +745,6 @@ mod tests {
         let body = build_redaction_body(Some(&proof));
         assert_eq!(body["reason"], proof.to_string());
         assert_eq!(build_redaction_body(None), json!({}));
-    }
-
-    #[test]
-    fn txn_ids_are_deterministic_and_namespaced_per_operation() {
-        assert_eq!(format_txn_id("post", Some(7)), "cumments_post_7");
-        assert_eq!(format_txn_id("update", Some(7)), "cumments_update_7");
-        assert_eq!(format_txn_id("delete", Some(7)), "cumments_delete_7");
-        // Same submission id in different queues must never produce the same txn id.
-        let ids: std::collections::HashSet<_> = [
-            format_txn_id("post", Some(7)),
-            format_txn_id("update", Some(7)),
-            format_txn_id("delete", Some(7)),
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(ids.len(), 3);
-    }
-
-    #[test]
-    fn txn_ids_without_submission_are_random_but_namespaced() {
-        let a = format_txn_id("post", None);
-        let b = format_txn_id("post", None);
-        assert!(a.starts_with("cumments_post_"));
-        assert!(b.starts_with("cumments_post_"));
-        assert_ne!(a, b);
     }
 
     #[test]

@@ -114,7 +114,7 @@ impl TimeoutsPass {
                             .await?;
                         self.deps
                             .submission_store
-                            .mark_post_submission_force_new_txn(id)
+                            .clear_post_submission_txn_id(id)
                             .await?;
                         let retrying = self
                             .deps
@@ -159,53 +159,222 @@ impl TimeoutsPass {
             }
         }
 
-        // Redaction and replacement are idempotent, so rescheduling is safe.
         loop {
-            let ids = self
+            let stuck = self
                 .deps
                 .submission_store
-                .get_stuck_delete_submission_ids(cutoff, SUBMISSION_BATCH_SIZE)
+                .get_stuck_delete_submissions(cutoff, SUBMISSION_BATCH_SIZE)
                 .await?;
-            if ids.is_empty() {
+            if stuck.is_empty() {
                 break;
             }
-            for id in ids {
+            for stuck in stuck {
+                let id = stuck.id;
                 handled += 1;
-                let retrying = self
+                let Some(room_id) = stuck.room_id else {
+                    warn!(
+                        "Delete submission [{}] timed out with no room recorded; rescheduling",
+                        id
+                    );
+                    let retrying = self
+                        .deps
+                        .submission_store
+                        .record_delete_submission_failure(
+                            id,
+                            "waiting_for_sync timed out; room_id was not recorded",
+                        )
+                        .await?;
+                    if !retrying {
+                        error!("Delete submission [{}] exhausted retries after timeout", id);
+                    }
+                    continue;
+                };
+                if stuck.event_id.is_empty() {
+                    warn!(
+                        "Delete submission [{}] timed out with no event id recorded; rescheduling",
+                        id
+                    );
+                    let retrying = self
+                        .deps
+                        .submission_store
+                        .record_delete_submission_failure(
+                            id,
+                            "waiting_for_sync timed out; event_id was not recorded",
+                        )
+                        .await?;
+                    if !retrying {
+                        error!("Delete submission [{}] exhausted retries after timeout", id);
+                    }
+                    continue;
+                }
+                match self
                     .deps
-                    .submission_store
-                    .record_delete_submission_failure(
-                        id,
-                        "waiting_for_sync timed out; rescheduling",
-                    )
-                    .await?;
-                if !retrying {
-                    error!("Delete submission [{}] exhausted retries after timeout", id);
+                    .driver
+                    .event_exists(&room_id, &stuck.event_id)
+                    .await
+                {
+                    Ok(true) => {
+                        warn!(
+                            "Delete submission [{}] event {} exists but projection is delayed; rescheduling with the same txn",
+                            id, stuck.event_id
+                        );
+                        let retrying = self
+                            .deps
+                            .submission_store
+                            .record_delete_submission_failure(
+                                id,
+                                "waiting_for_sync timed out; event exists, rescheduling",
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Delete submission [{}] exhausted retries after timeout", id);
+                        }
+                    }
+                    Ok(false) => {
+                        warn!(
+                            "Delete submission [{}] timed out and event {} is absent; clearing txn and resending",
+                            id, stuck.event_id
+                        );
+                        self.deps
+                            .submission_store
+                            .clear_delete_submission_txn_id(id)
+                            .await?;
+                        let retrying = self
+                            .deps
+                            .submission_store
+                            .record_delete_submission_failure(
+                                id,
+                                "waiting_for_sync timed out; event absent, resending",
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Delete submission [{}] exhausted retries after timeout", id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Delete submission [{}] timeout check failed: {:?}", id, e);
+                        let retrying = self
+                            .deps
+                            .submission_store
+                            .record_delete_submission_failure(
+                                id,
+                                &format!("waiting_for_sync timeout check failed: {e}"),
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Delete submission [{}] exhausted retries after timeout", id);
+                        }
+                    }
                 }
             }
         }
 
         loop {
-            let ids = self
+            let stuck = self
                 .deps
                 .submission_store
-                .get_stuck_update_submission_ids(cutoff, SUBMISSION_BATCH_SIZE)
+                .get_stuck_update_submissions(cutoff, SUBMISSION_BATCH_SIZE)
                 .await?;
-            if ids.is_empty() {
+            if stuck.is_empty() {
                 break;
             }
-            for id in ids {
+            for stuck in stuck {
+                let id = stuck.id;
                 handled += 1;
-                let retrying = self
+                let Some(room_id) = stuck.room_id else {
+                    warn!(
+                        "Update submission [{}] timed out with no room recorded; rescheduling",
+                        id
+                    );
+                    let retrying = self
+                        .deps
+                        .submission_store
+                        .record_update_submission_failure(
+                            id,
+                            "waiting_for_sync timed out; room_id was not recorded",
+                        )
+                        .await?;
+                    if !retrying {
+                        error!("Update submission [{}] exhausted retries after timeout", id);
+                    }
+                    continue;
+                };
+                if stuck.event_id.is_empty() {
+                    warn!(
+                        "Update submission [{}] timed out with no event id recorded; rescheduling",
+                        id
+                    );
+                    let retrying = self
+                        .deps
+                        .submission_store
+                        .record_update_submission_failure(
+                            id,
+                            "waiting_for_sync timed out; event_id was not recorded",
+                        )
+                        .await?;
+                    if !retrying {
+                        error!("Update submission [{}] exhausted retries after timeout", id);
+                    }
+                    continue;
+                }
+                match self
                     .deps
-                    .submission_store
-                    .record_update_submission_failure(
-                        id,
-                        "waiting_for_sync timed out; rescheduling",
-                    )
-                    .await?;
-                if !retrying {
-                    error!("Update submission [{}] exhausted retries after timeout", id);
+                    .driver
+                    .event_exists(&room_id, &stuck.event_id)
+                    .await
+                {
+                    Ok(true) => {
+                        warn!(
+                            "Update submission [{}] event {} exists but projection is delayed; rescheduling with the same txn",
+                            id, stuck.event_id
+                        );
+                        let retrying = self
+                            .deps
+                            .submission_store
+                            .record_update_submission_failure(
+                                id,
+                                "waiting_for_sync timed out; event exists, rescheduling",
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Update submission [{}] exhausted retries after timeout", id);
+                        }
+                    }
+                    Ok(false) => {
+                        warn!(
+                            "Update submission [{}] timed out and event {} is absent; clearing txn and resending",
+                            id, stuck.event_id
+                        );
+                        self.deps
+                            .submission_store
+                            .clear_update_submission_txn_id(id)
+                            .await?;
+                        let retrying = self
+                            .deps
+                            .submission_store
+                            .record_update_submission_failure(
+                                id,
+                                "waiting_for_sync timed out; event absent, resending",
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Update submission [{}] exhausted retries after timeout", id);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Update submission [{}] timeout check failed: {:?}", id, e);
+                        let retrying = self
+                            .deps
+                            .submission_store
+                            .record_update_submission_failure(
+                                id,
+                                &format!("waiting_for_sync timeout check failed: {e}"),
+                            )
+                            .await?;
+                        if !retrying {
+                            error!("Update submission [{}] exhausted retries after timeout", id);
+                        }
+                    }
                 }
             }
         }

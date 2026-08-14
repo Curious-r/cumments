@@ -3,6 +3,7 @@
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
+use cumments_core::submissions::fresh_transaction_id;
 use tracing::{error, warn};
 
 /// Reconciles pending update (edit) submissions toward Matrix.
@@ -126,8 +127,22 @@ impl UpdatesPass {
                     .flatten()
                     .unwrap_or_else(|| "Guest".to_string());
 
-                // 5. Hands: Perform the update (m.replace)
-                match self
+                // 5. Hands: Allocate/reuse the transaction ID, then send m.replace
+                let txn_id = if pending.txn_id.is_none() {
+                    let txn_id = fresh_transaction_id("update");
+                    self.deps
+                        .submission_store
+                        .set_update_submission_txn_id(id, &txn_id)
+                        .await?;
+                    txn_id
+                } else {
+                    pending
+                        .txn_id
+                        .as_deref()
+                        .expect("txn_id present")
+                        .to_owned()
+                };
+                let event_id = match self
                     .deps
                     .driver
                     .update_message(
@@ -140,10 +155,11 @@ impl UpdatesPass {
                         &command.author_challenge,
                         &command.site_id,
                         Some(id),
+                        &txn_id,
                     )
                     .await
                 {
-                    Ok(_) => {}
+                    Ok(event_id) => event_id,
                     Err(e) => {
                         if is_room_gone(&e) {
                             warn!(
@@ -154,12 +170,12 @@ impl UpdatesPass {
                         }
                         return Err(e);
                     }
-                }
+                };
 
                 // 6. Closed-loop: Mark as waiting for sync
                 self.deps
                     .submission_store
-                    .mark_update_submission_waiting_for_sync(id, &room_id)
+                    .mark_update_submission_waiting_for_sync(id, &event_id, &room_id)
                     .await?;
 
                 Ok(())

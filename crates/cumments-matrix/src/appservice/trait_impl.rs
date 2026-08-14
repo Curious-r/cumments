@@ -179,6 +179,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_challenge: &str,
         site_id: &SiteId,
         submission_id: Option<i64>,
+        txn_id: &str,
     ) -> Result<String> {
         self.update_message_impl(
             room_id,
@@ -190,6 +191,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_challenge,
             site_id,
             submission_id,
+            txn_id,
         )
         .await
     }
@@ -200,8 +202,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
         event_id: &str,
         submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
-    ) -> Result<()> {
-        self.redact_message_impl(room_id, event_id, submission_id, proof)
+        txn_id: &str,
+    ) -> Result<String> {
+        self.redact_message_impl(room_id, event_id, submission_id, proof, txn_id)
             .await
     }
 

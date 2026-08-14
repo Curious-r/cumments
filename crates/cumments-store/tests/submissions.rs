@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
-    commands::{PostCommentCommand, UpdateCommentCommand},
+    commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand},
     models::{PostSlug, SiteId},
     ports::SubmissionStore,
 };
@@ -31,6 +31,17 @@ fn update_command() -> UpdateCommentCommand {
         post_slug: PostSlug::from("hello-world"),
         event_id: "$original:hs".to_string(),
         content: "edited".to_string(),
+        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
+        author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        author_challenge: "1728000000.deadbeef.sig".to_string(),
+    }
+}
+
+fn delete_command() -> DeleteCommentCommand {
+    DeleteCommentCommand {
+        site_id: SiteId::from("my-blog"),
+        post_slug: PostSlug::from("hello-world"),
+        event_id: "$original:hs".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
         author_challenge: "1728000000.deadbeef.sig".to_string(),
@@ -229,15 +240,11 @@ async fn post_txn_id_is_persisted_before_claim_and_reused() {
         Some("cumments_post_<random>"),
         "the allocated txn id must be persisted so retries reuse it"
     );
-    assert!(
-        !claimed[0].force_new_txn,
-        "persisting a fresh txn id must clear the force-new flag"
-    );
 }
 
 #[tokio::test]
-async fn force_new_txn_flag_clears_txn_id_and_is_claimed_with_the_submission() {
-    let store = DbStore::connect(&test_db_url("force-new-txn"))
+async fn cleared_post_txn_id_is_claimed_as_none() {
+    let store = DbStore::connect(&test_db_url("clear-txn"))
         .await
         .expect("connect db");
     let id = store
@@ -249,9 +256,9 @@ async fn force_new_txn_flag_clears_txn_id_and_is_claimed_with_the_submission() {
         .await
         .expect("persist old txn id");
     store
-        .mark_post_submission_force_new_txn(id)
+        .clear_post_submission_txn_id(id)
         .await
-        .expect("mark fresh txn");
+        .expect("clear txn id");
 
     let claimed = store
         .claim_pending_post_submissions(100, lease(Duration::minutes(5)))
@@ -259,18 +266,66 @@ async fn force_new_txn_flag_clears_txn_id_and_is_claimed_with_the_submission() {
         .expect("claim");
     assert_eq!(claimed.len(), 1);
     assert!(
-        claimed[0].force_new_txn,
-        "timeout-confirmed-absent submissions must allocate a fresh transaction ID"
-    );
-    assert!(
         claimed[0].txn_id.is_none(),
-        "the stale txn id must be cleared before allocating a fresh one"
+        "the stale txn id must be cleared so the next attempt allocates a fresh one"
     );
 
     store
         .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
         .await
         .expect("mark waiting for sync");
+}
+
+#[tokio::test]
+async fn delete_txn_id_is_persisted_before_claim_and_reused() {
+    let store = DbStore::connect(&test_db_url("delete-txn-id"))
+        .await
+        .expect("connect db");
+    let id = store
+        .save_delete_submission(&delete_command())
+        .await
+        .expect("save delete submission");
+    store
+        .set_delete_submission_txn_id(id, "cumments_delete_<random>")
+        .await
+        .expect("persist txn id");
+
+    let claimed = store
+        .claim_pending_delete_submissions(100, lease(Duration::minutes(5)))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(
+        claimed[0].txn_id.as_deref(),
+        Some("cumments_delete_<random>"),
+        "delete retries must reuse the persisted txn id"
+    );
+}
+
+#[tokio::test]
+async fn update_txn_id_is_persisted_before_claim_and_reused() {
+    let store = DbStore::connect(&test_db_url("update-txn-id"))
+        .await
+        .expect("connect db");
+    let id = store
+        .save_update_submission(&update_command())
+        .await
+        .expect("save update submission");
+    store
+        .set_update_submission_txn_id(id, "cumments_update_<random>")
+        .await
+        .expect("persist txn id");
+
+    let claimed = store
+        .claim_pending_update_submissions(100, lease(Duration::minutes(5)))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(
+        claimed[0].txn_id.as_deref(),
+        Some("cumments_update_<random>"),
+        "update retries must reuse the persisted txn id"
+    );
 }
 
 #[tokio::test]
@@ -345,12 +400,12 @@ async fn update_submission_completion_closes_loop_and_never_regresses() {
         .await
         .expect("complete");
     store
-        .mark_update_submission_waiting_for_sync(id, "!room:hs")
+        .mark_update_submission_waiting_for_sync(id, "$update:hs", "!room:hs")
         .await
         .expect("late write-back");
 
     let stuck = store
-        .get_stuck_update_submission_ids(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_update_submissions(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(
@@ -399,7 +454,7 @@ async fn update_completion_by_event_id_only_closes_waiting_submissions() {
 
     // One edit is observed after its write-back; the other is still pending.
     store
-        .mark_update_submission_waiting_for_sync(first_id, "!room:hs")
+        .mark_update_submission_waiting_for_sync(first_id, "$update:hs", "!room:hs")
         .await
         .expect("mark first waiting");
     store
@@ -422,7 +477,7 @@ async fn update_completion_by_event_id_only_closes_waiting_submissions() {
     assert_eq!(pending[0].id, second_id);
 
     let stuck = store
-        .get_stuck_update_submission_ids(Utc::now() + Duration::minutes(1), 100)
+        .get_stuck_update_submissions(Utc::now() + Duration::minutes(1), 100)
         .await
         .expect("stuck query");
     assert!(stuck.is_empty(), "observed edit must not remain waiting");

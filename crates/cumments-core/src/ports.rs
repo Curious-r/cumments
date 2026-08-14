@@ -13,7 +13,7 @@ use crate::site_auth::{
 };
 use crate::submissions::{
     IdempotencyInput, IdempotencyOutcome, PendingDeleteSubmission, PendingPostSubmission,
-    PendingUpdateSubmission, StuckPostSubmission,
+    PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission, StuckUpdateSubmission,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -72,14 +72,28 @@ pub trait SubmissionStore: Send + Sync {
 
     /// Persists the transaction ID chosen for a post submission's next send.
     /// Must be called before the driver request so a retry after a lost
-    /// response reuses the same ID (homeserver-side idempotency). Also clears
-    /// the `force_new_txn` flag once a fresh ID has been allocated.
+    /// response reuses the same ID (homeserver-side idempotency).
     async fn set_post_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()>;
 
-    /// Marks a post submission so its next send uses a fresh transaction ID.
+    /// Clears a post submission's transaction ID so its next send allocates a
+    /// fresh one.
     /// Called when the timeout pass confirmed the recorded event is absent,
     /// which otherwise would keep reusing an ID that points at a ghost event.
-    async fn mark_post_submission_force_new_txn(&self, id: i64) -> Result<()>;
+    async fn clear_post_submission_txn_id(&self, id: i64) -> Result<()>;
+
+    /// Persists the transaction ID chosen for a delete submission's next send.
+    async fn set_delete_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()>;
+
+    /// Clears a delete submission's transaction ID after the timeout pass
+    /// confirmed its recorded event is absent.
+    async fn clear_delete_submission_txn_id(&self, id: i64) -> Result<()>;
+
+    /// Persists the transaction ID chosen for an update submission's next send.
+    async fn set_update_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()>;
+
+    /// Clears an update submission's transaction ID after the timeout pass
+    /// confirmed its recorded event is absent.
+    async fn clear_update_submission_txn_id(&self, id: i64) -> Result<()>;
 
     /// Atomically claims up to `limit` due post submissions, oldest first,
     /// marking them `processing` with a lease expiring at `lease_until`.
@@ -113,8 +127,14 @@ pub trait SubmissionStore: Send + Sync {
     /// the event before the reconciler has written back the Matrix event ID).
     async fn mark_post_submission_completed_by_id(&self, id: i64) -> Result<()>;
 
-    /// Transitions an update submission to 'waiting_for_sync'.
-    async fn mark_update_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
+    /// Transitions an update submission to 'waiting_for_sync' and records the
+    /// replacement event ID.
+    async fn mark_update_submission_waiting_for_sync(
+        &self,
+        id: i64,
+        event_id: &str,
+        room_id: &str,
+    ) -> Result<()>;
 
     /// Completes a specific update submission by its queue ID. Used when the edit
     /// event carries `host.curious.cumments.submission_id`, so completing one edit
@@ -122,8 +142,14 @@ pub trait SubmissionStore: Send + Sync {
     /// comment.
     async fn mark_update_submission_completed_by_id(&self, id: i64) -> Result<()>;
 
-    /// Transitions a delete submission to 'waiting_for_sync'.
-    async fn mark_delete_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()>;
+    /// Transitions a delete submission to 'waiting_for_sync' and records the
+    /// redaction event ID.
+    async fn mark_delete_submission_waiting_for_sync(
+        &self,
+        id: i64,
+        event_id: &str,
+        room_id: &str,
+    ) -> Result<()>;
 
     /// Records a processing failure. Returns `true` if the submission was
     /// scheduled for another attempt (pending + backoff), `false` if the
@@ -142,19 +168,19 @@ pub trait SubmissionStore: Send + Sync {
         limit: u64,
     ) -> Result<Vec<StuckPostSubmission>>;
 
-    /// IDs of delete submissions stuck in `waiting_for_sync` since before `cutoff`.
-    async fn get_stuck_delete_submission_ids(
+    /// Delete submissions stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_delete_submissions(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<i64>>;
+    ) -> Result<Vec<StuckDeleteSubmission>>;
 
-    /// IDs of update submissions stuck in `waiting_for_sync` since before `cutoff`.
-    async fn get_stuck_update_submission_ids(
+    /// Update submissions stuck in `waiting_for_sync` since before `cutoff`.
+    async fn get_stuck_update_submissions(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<i64>>;
+    ) -> Result<Vec<StuckUpdateSubmission>>;
 
     /// Moves a post submission to 'failed' without further retries. Used when the
     /// event exists on the homeserver but was never projected – resending
@@ -709,6 +735,8 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
         site_id: &SiteId,
         submission_id: Option<i64>,
+        // See [`Self::post_message`].
+        txn_id: &str,
     ) -> Result<String>;
 
     /// Redacts a message in a specific room.
@@ -722,7 +750,9 @@ pub trait MatrixDriver: Send + Sync {
         event_id: &str,
         submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
-    ) -> Result<()>;
+        // See [`Self::post_message`].
+        txn_id: &str,
+    ) -> Result<String>;
 
     /// Fetch one page of room history (CS API `/rooms/{roomId}/messages`).
     async fn get_room_events(

@@ -9,7 +9,7 @@ use cumments_core::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCo
 use cumments_core::ports::SubmissionStore;
 use cumments_core::submissions::{
     IdempotencyInput, IdempotencyOutcome, PendingDeleteSubmission, PendingPostSubmission,
-    PendingUpdateSubmission, StuckPostSubmission,
+    PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission, StuckUpdateSubmission,
 };
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
@@ -125,7 +125,6 @@ impl SubmissionStore for DbStore {
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
-            force_new_txn: Set(false),
             txn_id: Set(None),
             author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
@@ -199,7 +198,6 @@ impl SubmissionStore for DbStore {
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
-            force_new_txn: Set(false),
             txn_id: Set(None),
             author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
@@ -249,6 +247,8 @@ impl SubmissionStore for DbStore {
             payload: Set(payload),
             status: Set(SubmissionStatus::Pending),
             target_event_id: Set(Some(command.event_id.clone())),
+            matrix_event_id: Set(None),
+            txn_id: Set(None),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -298,6 +298,8 @@ impl SubmissionStore for DbStore {
             author_signature: Set(Some(command.author_signature.clone())),
             author_challenge: Set(Some(command.author_challenge.clone())),
             status: Set(SubmissionStatus::Pending),
+            matrix_event_id: Set(None),
+            txn_id: Set(None),
             retry_count: Set(0),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -382,8 +384,25 @@ impl SubmissionStore for DbStore {
                 sea_orm::sea_query::Expr::value(Some(txn_id)),
             )
             .col_expr(
-                post_submissions::Column::ForceNewTxn,
-                sea_orm::sea_query::Expr::value(false),
+                post_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(post_submissions::Column::Id.eq(id))
+            .filter(post_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn clear_post_submission_txn_id(&self, id: i64) -> Result<()> {
+        post_submissions::Entity::update_many()
+            .col_expr(
+                post_submissions::Column::TxnId,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
             )
             .col_expr(
                 post_submissions::Column::UpdatedAt,
@@ -400,22 +419,81 @@ impl SubmissionStore for DbStore {
         Ok(())
     }
 
-    async fn mark_post_submission_force_new_txn(&self, id: i64) -> Result<()> {
-        post_submissions::Entity::update_many()
+    async fn set_delete_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()> {
+        delete_submissions::Entity::update_many()
             .col_expr(
-                post_submissions::Column::ForceNewTxn,
-                sea_orm::sea_query::Expr::value(true),
+                delete_submissions::Column::TxnId,
+                sea_orm::sea_query::Expr::value(Some(txn_id)),
             )
             .col_expr(
-                post_submissions::Column::TxnId,
+                delete_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(delete_submissions::Column::Id.eq(id))
+            .filter(delete_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn clear_delete_submission_txn_id(&self, id: i64) -> Result<()> {
+        delete_submissions::Entity::update_many()
+            .col_expr(
+                delete_submissions::Column::TxnId,
                 sea_orm::sea_query::Expr::value(Option::<String>::None),
             )
             .col_expr(
-                post_submissions::Column::UpdatedAt,
+                delete_submissions::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
-            .filter(post_submissions::Column::Id.eq(id))
-            .filter(post_submissions::Column::Status.is_in([
+            .filter(delete_submissions::Column::Id.eq(id))
+            .filter(delete_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_update_submission_txn_id(&self, id: i64, txn_id: &str) -> Result<()> {
+        update_submissions::Entity::update_many()
+            .col_expr(
+                update_submissions::Column::TxnId,
+                sea_orm::sea_query::Expr::value(Some(txn_id)),
+            )
+            .col_expr(
+                update_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(update_submissions::Column::Id.eq(id))
+            .filter(update_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn clear_update_submission_txn_id(&self, id: i64) -> Result<()> {
+        update_submissions::Entity::update_many()
+            .col_expr(
+                update_submissions::Column::TxnId,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                update_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(update_submissions::Column::Id.eq(id))
+            .filter(update_submissions::Column::Status.is_in([
                 SubmissionStatus::Pending,
                 SubmissionStatus::Processing,
                 SubmissionStatus::WaitingForSync,
@@ -442,7 +520,6 @@ impl SubmissionStore for DbStore {
                     id: m.id,
                     command,
                     txn_id: m.txn_id,
-                    force_new_txn: m.force_new_txn,
                 }),
                 Err(e) => warn!(
                     "Skipping corrupt post command {} (will not block the batch): {:#}",
@@ -466,7 +543,11 @@ impl SubmissionStore for DbStore {
         let mut submissions = Vec::new();
         for m in models {
             match serde_json::from_str::<DeleteCommentCommand>(&m.payload) {
-                Ok(command) => submissions.push(PendingDeleteSubmission { id: m.id, command }),
+                Ok(command) => submissions.push(PendingDeleteSubmission {
+                    id: m.id,
+                    command,
+                    txn_id: m.txn_id,
+                }),
                 Err(e) => warn!(
                     "Skipping corrupt delete command {} (will not block the batch): {:#}",
                     m.id, e
@@ -499,6 +580,7 @@ impl SubmissionStore for DbStore {
                     author_signature: m.author_signature.unwrap_or_default(),
                     author_challenge: m.author_challenge.unwrap_or_default(),
                 },
+                txn_id: m.txn_id,
             })
             .collect())
     }
@@ -528,10 +610,6 @@ impl SubmissionStore for DbStore {
                         sea_orm::sea_query::Expr::value(
                             Option::<chrono::DateTime<chrono::Utc>>::None,
                         ),
-                    )
-                    .col_expr(
-                        post_submissions::COLUMN.force_new_txn,
-                        sea_orm::sea_query::Expr::value(false),
                     )
                     .filter(post_submissions::COLUMN.id.eq(id))
                     // Never regress an already-completed command: if the
@@ -569,13 +647,22 @@ impl SubmissionStore for DbStore {
         .await
     }
 
-    async fn mark_update_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
+    async fn mark_update_submission_waiting_for_sync(
+        &self,
+        id: i64,
+        event_id: &str,
+        room_id: &str,
+    ) -> Result<()> {
         self.transition_status(
             SubmissionStatus::WaitingForSync,
             update_submissions::Column::Status,
             update_submissions::Column::UpdatedAt,
             |query: UpdateMany<update_submissions::Entity>| {
                 query
+                    .col_expr(
+                        update_submissions::COLUMN.matrix_event_id,
+                        sea_orm::sea_query::Expr::value(event_id),
+                    )
                     .col_expr(
                         update_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
@@ -618,13 +705,22 @@ impl SubmissionStore for DbStore {
         .await
     }
 
-    async fn mark_delete_submission_waiting_for_sync(&self, id: i64, room_id: &str) -> Result<()> {
+    async fn mark_delete_submission_waiting_for_sync(
+        &self,
+        id: i64,
+        event_id: &str,
+        room_id: &str,
+    ) -> Result<()> {
         self.transition_status(
             SubmissionStatus::WaitingForSync,
             delete_submissions::Column::Status,
             delete_submissions::Column::UpdatedAt,
             |query: UpdateMany<delete_submissions::Entity>| {
                 query
+                    .col_expr(
+                        delete_submissions::COLUMN.matrix_event_id,
+                        sea_orm::sea_query::Expr::value(event_id),
+                    )
                     .col_expr(
                         delete_submissions::COLUMN.room_id,
                         sea_orm::sea_query::Expr::value(room_id),
@@ -906,11 +1002,11 @@ impl SubmissionStore for DbStore {
             .collect())
     }
 
-    async fn get_stuck_delete_submission_ids(
+    async fn get_stuck_delete_submissions(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<i64>> {
+    ) -> Result<Vec<StuckDeleteSubmission>> {
         let models = delete_submissions::Entity::find()
             .filter(
                 delete_submissions::COLUMN
@@ -922,14 +1018,21 @@ impl SubmissionStore for DbStore {
             .all(&self.db)
             .await?;
 
-        Ok(models.into_iter().map(|m| m.id).collect())
+        Ok(models
+            .into_iter()
+            .map(|m| StuckDeleteSubmission {
+                id: m.id,
+                event_id: m.matrix_event_id.unwrap_or_default(),
+                room_id: m.room_id,
+            })
+            .collect())
     }
 
-    async fn get_stuck_update_submission_ids(
+    async fn get_stuck_update_submissions(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
         limit: u64,
-    ) -> Result<Vec<i64>> {
+    ) -> Result<Vec<StuckUpdateSubmission>> {
         let models = update_submissions::Entity::find()
             .filter(
                 update_submissions::COLUMN
@@ -941,7 +1044,14 @@ impl SubmissionStore for DbStore {
             .all(&self.db)
             .await?;
 
-        Ok(models.into_iter().map(|m| m.id).collect())
+        Ok(models
+            .into_iter()
+            .map(|m| StuckUpdateSubmission {
+                id: m.id,
+                event_id: m.matrix_event_id.unwrap_or_default(),
+                room_id: m.room_id,
+            })
+            .collect())
     }
 
     async fn dead_letter_post_submission(&self, id: i64, error: &str) -> Result<()> {
@@ -1195,7 +1305,6 @@ impl DbStore {
                     id: m.id,
                     command,
                     txn_id: m.txn_id,
-                    force_new_txn: m.force_new_txn,
                 }),
                 Err(e) => warn!(
                     "Skipping corrupt post command {} (will not block the batch): {:#}",
@@ -1226,7 +1335,11 @@ impl DbStore {
         let mut submissions = Vec::new();
         for m in models {
             match serde_json::from_str::<DeleteCommentCommand>(&m.payload) {
-                Ok(command) => submissions.push(PendingDeleteSubmission { id: m.id, command }),
+                Ok(command) => submissions.push(PendingDeleteSubmission {
+                    id: m.id,
+                    command,
+                    txn_id: m.txn_id,
+                }),
                 Err(e) => warn!(
                     "Skipping corrupt delete command {} (will not block the batch): {:#}",
                     m.id, e
@@ -1266,6 +1379,7 @@ impl DbStore {
                     author_signature: m.author_signature.unwrap_or_default(),
                     author_challenge: m.author_challenge.unwrap_or_default(),
                 },
+                txn_id: m.txn_id,
             })
             .collect())
     }

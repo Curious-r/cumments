@@ -32,9 +32,6 @@ pub struct Model {
     /// (network/homeserver errors). Dead-lettered after a threshold so
     /// submissions cannot sit in limbo forever.
     pub timeout_check_errors: i64,
-    /// Set when a previous send was confirmed absent on the homeserver; the
-    /// next attempt must use a fresh transaction ID.
-    pub force_new_txn: bool,
     /// The transaction ID chosen for the latest send attempt, if any. `NULL`
     /// means the next attempt allocates a fresh one; a stored value is reused
     /// on retries so homeserver-side transaction idempotency is preserved.

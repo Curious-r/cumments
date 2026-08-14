@@ -179,6 +179,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_challenge: &str,
         _site_id: &SiteId,
         submission_id: Option<i64>,
+        _txn_id: &str,
     ) -> Result<String> {
         let guest_id = derive_guest_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
@@ -195,7 +196,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         event_id: &str,
         submission_id: Option<i64>,
         proof: Option<&serde_json::Value>,
-    ) -> Result<()> {
+        _txn_id: &str,
+    ) -> Result<String> {
         info!(
             "LOGGING: Redact message {} in room={} (submission={:?}, proof={})",
             event_id,
@@ -203,7 +205,7 @@ impl MatrixDriver for LoggingMatrixDriver {
             submission_id,
             proof.is_some()
         );
-        Ok(())
+        Ok(format!("log_redact_{}", event_id))
     }
 
     async fn event_exists(&self, _room_id: &str, event_id: &str) -> Result<bool> {

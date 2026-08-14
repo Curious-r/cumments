@@ -4,6 +4,7 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::protocol::REDACTION_PROOF_KEY;
+use cumments_core::submissions::fresh_transaction_id;
 use tracing::{error, warn};
 
 /// Reconciles pending delete submissions toward Matrix.
@@ -117,7 +118,7 @@ impl DeletionsPass {
                     .register_room(&room_id, &command.site_id, &command.post_slug)
                     .await?;
 
-                // 4. Hands: Perform the redaction
+                // 4. Hands: Allocate/reuse the transaction ID, then redact
                 let proof = serde_json::json!({
                     (REDACTION_PROOF_KEY): {
                         "site_id": command.site_id.as_str(),
@@ -129,13 +130,33 @@ impl DeletionsPass {
                         "submission_id": id,
                     }
                 });
-                match self
+                let txn_id = if pending.txn_id.is_none() {
+                    let txn_id = fresh_transaction_id("delete");
+                    self.deps
+                        .submission_store
+                        .set_delete_submission_txn_id(id, &txn_id)
+                        .await?;
+                    txn_id
+                } else {
+                    pending
+                        .txn_id
+                        .as_deref()
+                        .expect("txn_id present")
+                        .to_owned()
+                };
+                let redaction_event_id = match self
                     .deps
                     .driver
-                    .redact_message(&room_id, &command.event_id, Some(id), Some(&proof))
+                    .redact_message(
+                        &room_id,
+                        &command.event_id,
+                        Some(id),
+                        Some(&proof),
+                        &txn_id,
+                    )
                     .await
                 {
-                    Ok(()) => {}
+                    Ok(event_id) => event_id,
                     Err(e) => {
                         if is_room_gone(&e) {
                             warn!(
@@ -146,12 +167,12 @@ impl DeletionsPass {
                         }
                         return Err(e);
                     }
-                }
+                };
 
                 // 5. Concepts: Move to waiting_for_sync
                 self.deps
                     .submission_store
-                    .mark_delete_submission_waiting_for_sync(id, &room_id)
+                    .mark_delete_submission_waiting_for_sync(id, &redaction_event_id, &room_id)
                     .await?;
 
                 Ok(())
