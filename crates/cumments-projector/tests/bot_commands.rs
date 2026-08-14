@@ -1,0 +1,273 @@
+use cumments_core::{
+    audit::CommandAuditStatus,
+    governance::{OWNER_LEVEL, RoleEntry},
+    models::{Content, TextContent, TextStyle},
+    ports::{CommandAuditStore, GovernanceStore, RoleClaimStore, SiteAuthStore},
+    site_auth::{SiteLifecycle, token_hash},
+};
+use cumments_projector::{
+    event_processor::{EventProcessor, EventProcessorDeps},
+    parsed::ParsedRoomMessage,
+};
+use cumments_store::DbStore;
+mod common;
+use std::sync::Arc;
+use tokio::sync::{Notify, broadcast};
+
+fn test_db_url(name: &str) -> String {
+    let path = std::path::Path::new("/tmp").join(format!(
+        "cumments-bot-commands-{}-{}.db",
+        name,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    std::fs::File::create(&path).expect("create db file");
+    format!("sqlite://{}", path.display())
+}
+
+fn command_message(sender: &str, body: &str) -> ParsedRoomMessage {
+    ParsedRoomMessage {
+        room_id: "!dm:hs".to_string(),
+        event_id: "$cmd".to_string(),
+        sender: sender.to_string(),
+        content: Content::Text(TextContent {
+            body: body.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
+        display_name: None,
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
+        is_virtual_user_sender: false,
+        submission_id: None,
+        reply_to: None,
+        thread_root: None,
+        origin_server_ts: 1,
+        relates_to: None,
+        room_identity: None,
+        raw_content: serde_json::Value::Null,
+    }
+}
+
+fn processor(
+    store: Arc<DbStore>,
+    members: Vec<String>,
+    admin_mxids: Vec<String>,
+) -> EventProcessor {
+    let (tx, _rx) = broadcast::channel(16);
+    EventProcessor::new(EventProcessorDeps {
+        site_store: store.clone(),
+        registry_store: store.clone(),
+        message_store: store.clone(),
+        room_store: store.clone(),
+        governance_store: store.clone(),
+        role_claim_store: store.clone(),
+        submission_store: store.clone(),
+        audit_store: store.clone(),
+        site_auth_store: store.clone(),
+        site_service: Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+        )),
+        driver: Some(Arc::new(common::TestDriver::with_joined_members(members))),
+        admin_mxids,
+        event_bus: tx,
+        projection_notify: Arc::new(Notify::new()),
+        server_name: Some("hs".to_string()),
+    })
+}
+
+fn private_members(sender: &str) -> Vec<String> {
+    vec!["@_cumments_bot:hs".to_string(), sender.to_string()]
+}
+
+#[tokio::test]
+async fn unknown_command_replies_with_help() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("help"))
+            .await
+            .expect("connect db"),
+    );
+    let p = processor(store, private_members("@alice:hs"), Vec::new());
+    assert!(
+        p.process_bot_command(&command_message("@alice:hs", "!cumments nope"))
+            .await
+            .expect("process"),
+        "command must be consumed"
+    );
+}
+
+#[tokio::test]
+async fn admin_sites_list_works_and_unknown_user_is_denied() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("sites-list"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+
+    let p = processor(
+        store.clone(),
+        private_members("@admin:hs"),
+        vec!["@admin:hs".to_string()],
+    );
+    assert!(
+        p.process_bot_command(&command_message("@admin:hs", "!cumments sites list"))
+            .await
+            .expect("process"),
+        "admin command consumed"
+    );
+
+    let denied = processor(store.clone(), private_members("@stranger:hs"), Vec::new());
+    assert!(
+        denied
+            .process_bot_command(&command_message("@stranger:hs", "!cumments sites list"))
+            .await
+            .expect("process"),
+        "denied command consumed"
+    );
+    let audit = store
+        .list_command_audit(Some("@stranger:hs"), 10)
+        .await
+        .expect("audit");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].status, CommandAuditStatus::Denied);
+}
+
+#[tokio::test]
+async fn owner_can_create_co_manager_claim_and_retire_with_confirm() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("owner"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .replace_site_roles(
+            "my-blog",
+            &[RoleEntry {
+                user_id: "@alice:hs".into(),
+                level: OWNER_LEVEL,
+            }],
+        )
+        .await
+        .expect("project owner");
+
+    let p = processor(store.clone(), private_members("@alice:hs"), Vec::new());
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog co-manager add @bob:hs",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .pending_claims_for_user("@bob:hs")
+            .await
+            .expect("pending")
+            .len(),
+        1
+    );
+
+    // Retire asks for confirmation first, then succeeds with --confirm.
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog retire",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .get_site_auth("my-blog")
+            .await
+            .expect("site")
+            .expect("exists")
+            .lifecycle,
+        SiteLifecycle::Active
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog retire --confirm",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .get_site_auth("my-blog")
+            .await
+            .expect("site")
+            .expect("exists")
+            .lifecycle,
+        SiteLifecycle::Retiring
+    );
+}
+
+#[tokio::test]
+async fn site_registration_is_public_self_service() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("register"))
+            .await
+            .expect("connect db"),
+    );
+    let p = processor(store.clone(), private_members("@alice:hs"), Vec::new());
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site register my-blog",
+        ))
+        .await
+        .expect("process")
+    );
+    assert!(
+        store
+            .get_site_auth("my-blog")
+            .await
+            .expect("site")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn commands_outside_private_channel_are_consumed_silently() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("not-private"))
+            .await
+            .expect("connect db"),
+    );
+    let p = processor(
+        store.clone(),
+        vec![
+            "@_cumments_bot:hs".to_string(),
+            "@alice:hs".to_string(),
+            "@mallory:hs".to_string(),
+        ],
+        Vec::new(),
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site register my-blog",
+        ))
+        .await
+        .expect("process")
+    );
+    assert!(
+        store
+            .get_site_auth("my-blog")
+            .await
+            .expect("site")
+            .is_none()
+    );
+}

@@ -86,6 +86,11 @@ async fn power_levels_project_site_and_room_roles() {
         governance_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
+        audit_store: store.clone(),
+        site_auth_store: store.clone(),
+        site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
+        )),
         driver: None,
         admin_mxids: Vec::new(),
         event_bus: tx,
@@ -178,6 +183,11 @@ async fn claim_dm_activates_only_the_matching_token() {
         governance_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
+        audit_store: store.clone(),
+        site_auth_store: store.clone(),
+        site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
+        )),
         driver: Some(Arc::new(common::TestDriver::with_joined_members(vec![
             "@_cumments_bot:hs".to_string(),
             "@alice:hs".to_string(),
@@ -281,6 +291,11 @@ async fn claim_dm_requires_a_verified_private_channel() {
         governance_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
+        audit_store: store.clone(),
+        site_auth_store: store.clone(),
+        site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
+        )),
         driver: Some(Arc::new(common::TestDriver::with_joined_members(vec![
             "@_cumments_bot:hs".to_string(),
             "@alice:hs".to_string(),

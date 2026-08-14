@@ -45,6 +45,11 @@ fn processor(store: Arc<DbStore>, driver: Arc<TestDriver>) -> EventProcessor {
         governance_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
+        audit_store: store.clone(),
+        site_auth_store: store.clone(),
+        site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
+        )),
         driver: Some(driver),
         admin_mxids: Vec::new(),
         event_bus: tx,

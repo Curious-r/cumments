@@ -174,3 +174,14 @@ pub async fn rotate_claim_token(
 pub async fn retire_site(store: &dyn SiteAuthStore, site_id: &str) -> Result<bool> {
     store.mark_site_retiring(site_id).await
 }
+
+/// Issues a fresh HMAC secret for a site. Returns `None` when the site does
+/// not exist.
+pub async fn issue_secret(store: &dyn SiteAuthStore, site_id: &str) -> Result<Option<String>> {
+    if store.get_site_auth(site_id).await?.is_none() {
+        return Ok(None);
+    }
+    let secret = generate_token();
+    store.store_site_secret(site_id, &secret).await?;
+    Ok(Some(secret))
+}

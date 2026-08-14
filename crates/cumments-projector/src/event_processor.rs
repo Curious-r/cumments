@@ -12,9 +12,11 @@ use crate::parsed::{
 };
 use crate::verification::{verify_delete_proof, verify_guest_event};
 use anyhow::Result;
+use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
-        MODERATOR_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry, is_as_managed_user, role_entries,
+        CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry,
+        is_as_managed_user, role_entries,
     },
     identity::{post_signature_message, signature_message},
     models::{
@@ -23,14 +25,17 @@ use cumments_core::{
         TextStyle,
     },
     ports::{
-        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteStore, SubmissionStore,
+        CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, RegistryStore,
+        RoleClaimStore, RoomStore, SiteStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
-    site_auth::{constant_time_eq, sha256_hex},
+    site_auth::{constant_time_eq, generate_token, sha256_hex, token_hash},
 };
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
+use tokio::sync::Mutex;
 use tokio::sync::{Notify, broadcast};
 use tracing::{debug, info, instrument, warn};
 
@@ -45,9 +50,14 @@ pub struct EventProcessor {
     governance_store: Arc<dyn GovernanceStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     submission_store: Arc<dyn SubmissionStore>,
+    audit_store: Arc<dyn CommandAuditStore>,
+    site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
+    site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
     #[allow(dead_code)] // read by the chat command router (next slice)
     admin_mxids: Vec<String>,
+    command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
+    active_sites: Mutex<HashMap<String, String>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
@@ -66,12 +76,48 @@ pub struct EventProcessorDeps {
     pub governance_store: Arc<dyn GovernanceStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub submission_store: Arc<dyn SubmissionStore>,
+    pub audit_store: Arc<dyn CommandAuditStore>,
+    pub site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
+    pub site_service: Arc<cumments_core::site_service::SiteService>,
     pub driver: Option<Arc<dyn MatrixDriver>>,
     /// Instance operators for chat commands (from `security.admin_mxids`).
     pub admin_mxids: Vec<String>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
+}
+
+/// Result of one chat command: the reply text plus the resolved site id for
+/// audit purposes.
+struct CommandOutcome {
+    reply: String,
+    site_id: Option<String>,
+}
+
+impl CommandOutcome {
+    fn plain(reply: impl Into<String>) -> Self {
+        Self {
+            reply: reply.into(),
+            site_id: None,
+        }
+    }
+}
+
+fn help_text() -> &'static str {
+    "Cumments bot 命令：
+!cumments help
+!cumments sites list                     （实例管理员）
+!cumments site register <id>             公开注册站点
+!cumments site use <id>                  设置当前站点
+!cumments site <id> status               站点状态
+!cumments site <id> co-manager add|remove <mxid>
+!cumments site <id> post <slug> moderator add|remove <mxid>
+!cumments site <id> secret issue
+!cumments site <id> claim-token rotate    （实例管理员）
+!cumments site <id> retire --confirm
+!cumments rooms quarantined               （实例管理员）
+!cumments room <room_id> reinstate --confirm
+破坏性命令需要 --confirm；敏感 token 只在本私聊显示。"
 }
 
 impl EventProcessor {
@@ -84,8 +130,13 @@ impl EventProcessor {
             governance_store: deps.governance_store,
             role_claim_store: deps.role_claim_store,
             submission_store: deps.submission_store,
+            audit_store: deps.audit_store,
+            site_auth_store: deps.site_auth_store,
+            site_service: deps.site_service,
             driver: deps.driver,
             admin_mxids: deps.admin_mxids,
+            command_rate: Mutex::new(HashMap::new()),
+            active_sites: Mutex::new(HashMap::new()),
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
@@ -129,30 +180,10 @@ impl EventProcessor {
         // Claim tokens are capabilities: activate them only in a verified
         // private channel (exactly the bot and the sender). Fail closed when
         // the channel cannot be verified.
-        let Some(driver) = &self.driver else {
-            debug!(
-                "Ignoring claim from {}: no driver to verify private channel",
-                event.sender
-            );
-            return Ok(false);
-        };
-        let Some(bot) = driver.sender_user_id() else {
-            debug!(
-                "Ignoring claim from {}: driver has no sender identity",
-                event.sender
-            );
-            return Ok(false);
-        };
-        let members = driver.get_joined_members(&event.room_id).await?;
-        let private = members.len() == 2
-            && members.iter().any(|m| m == &event.sender)
-            && members.iter().any(|m| m == &bot);
-        if !private {
+        if !self.is_private_channel(event).await? {
             warn!(
-                "Rejecting claim from {} in {}: not a verified private channel ({} joined members)",
-                event.sender,
-                event.room_id,
-                members.len()
+                "Rejecting claim from {} in {}: not a verified private channel",
+                event.sender, event.room_id,
             );
             return Ok(false);
         }
@@ -172,6 +203,470 @@ impl EventProcessor {
             }
         }
         Ok(false)
+    }
+
+    /// Whether the room is a verified private channel: exactly the bot and
+    /// the sender are joined. Fails closed when it cannot be verified.
+    async fn is_private_channel(&self, event: &ParsedRoomMessage) -> Result<bool> {
+        let Some(driver) = &self.driver else {
+            return Ok(false);
+        };
+        let Some(bot) = driver.sender_user_id() else {
+            return Ok(false);
+        };
+        let members = driver.get_joined_members(&event.room_id).await?;
+        Ok(members.len() == 2
+            && members.iter().any(|m| m == &event.sender)
+            && members.iter().any(|m| m == &bot))
+    }
+
+    const COMMAND_RATE_LIMIT: usize = 10;
+    const COMMAND_RATE_WINDOW: StdDuration = StdDuration::from_secs(60);
+
+    /// Per-sender sliding-window command rate limit.
+    async fn command_rate_allowed(&self, sender: &str) -> bool {
+        let now = Instant::now();
+        let mut rates = self.command_rate.lock().await;
+        let queue = rates.entry(sender.to_string()).or_default();
+        while queue
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > Self::COMMAND_RATE_WINDOW)
+        {
+            queue.pop_front();
+        }
+        if queue.len() >= Self::COMMAND_RATE_LIMIT {
+            return false;
+        }
+        queue.push_back(now);
+        true
+    }
+
+    async fn reply(&self, event: &ParsedRoomMessage, body: &str) -> Result<()> {
+        if let Some(driver) = &self.driver {
+            driver.send_bot_message(&event.room_id, body).await?;
+        }
+        Ok(())
+    }
+
+    async fn record_audit(
+        &self,
+        event: &ParsedRoomMessage,
+        command: &str,
+        site_id: Option<String>,
+        status: CommandAuditStatus,
+        error: Option<String>,
+    ) -> Result<()> {
+        self.audit_store
+            .record_command_audit(&NewCommandAuditEntry {
+                actor_mxid: event.sender.clone(),
+                room_id: event.room_id.clone(),
+                command: command.to_string(),
+                site_id,
+                status,
+                error,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Handles `!cumments ...` messages. Returns `true` when the message was
+    /// consumed as a command (and must not be projected as a comment).
+    pub async fn process_bot_command(&self, event: &ParsedRoomMessage) -> Result<bool> {
+        if event.is_virtual_user_sender {
+            return Ok(false);
+        }
+        let Content::Text(text) = &event.content else {
+            return Ok(false);
+        };
+        if text.style != TextStyle::Normal
+            || event.relates_to.is_some()
+            || event.reply_to.is_some()
+            || event.thread_root.is_some()
+        {
+            return Ok(false);
+        }
+        let Some(rest) = text.body.trim().strip_prefix("!cumments") else {
+            return Ok(false);
+        };
+        let line = rest.trim();
+
+        // Commands only act inside a verified private channel; elsewhere the
+        // message is consumed silently so it never becomes a comment.
+        if !self.is_private_channel(event).await? {
+            debug!(
+                "Ignoring !cumments from {} outside a private channel",
+                event.sender
+            );
+            return Ok(true);
+        }
+        if !self.command_rate_allowed(&event.sender).await {
+            let msg = "命令过于频繁，请稍后再试。";
+            self.reply(event, msg).await?;
+            self.record_audit(event, line, None, CommandAuditStatus::RateLimited, None)
+                .await?;
+            return Ok(true);
+        }
+        if line.is_empty() {
+            self.reply(event, help_text()).await?;
+            self.record_audit(event, line, None, CommandAuditStatus::Invalid, None)
+                .await?;
+            return Ok(true);
+        }
+
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        match self.run_command(event, &tokens).await {
+            Ok(outcome) => {
+                self.reply(event, &outcome.reply).await?;
+                self.record_audit(event, line, outcome.site_id, CommandAuditStatus::Ok, None)
+                    .await?;
+            }
+            Err(e) => {
+                let text = e.to_string();
+                let denied = text.starts_with("denied:");
+                let status = if denied {
+                    CommandAuditStatus::Denied
+                } else {
+                    CommandAuditStatus::Error
+                };
+                let msg = text.strip_prefix("denied:").unwrap_or(&text);
+                let msg = format!("错误：{msg}");
+                self.reply(event, &msg).await?;
+                self.record_audit(event, line, None, status, Some(text))
+                    .await?;
+            }
+        }
+        Ok(true)
+    }
+
+    async fn run_command(
+        &self,
+        event: &ParsedRoomMessage,
+        tokens: &[&str],
+    ) -> Result<CommandOutcome> {
+        match tokens {
+            ["help"] => Ok(CommandOutcome::plain(help_text())),
+            ["sites", "list"] => {
+                self.require_admin(event)?;
+                let sites = self.site_auth_store.list_site_auth().await?;
+                let reply = if sites.is_empty() {
+                    "没有站点。".to_string()
+                } else {
+                    sites
+                        .iter()
+                        .map(|s| s.site_id.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                Ok(CommandOutcome::plain(reply))
+            }
+            ["site", "use", id] => {
+                SiteId::new(id.to_string())?;
+                self.active_sites
+                    .lock()
+                    .await
+                    .insert(event.sender.clone(), id.to_string());
+                Ok(CommandOutcome {
+                    reply: format!("当前站点已设为 {id}"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", "status"] => {
+                let id = self.active_site_for(event).await?;
+                self.site_status(&id).await.map(|reply| CommandOutcome {
+                    reply,
+                    site_id: Some(id),
+                })
+            }
+            ["site", id, "status"] => {
+                self.require_site_access(event, id).await?;
+                self.site_status(id).await.map(|reply| CommandOutcome {
+                    reply,
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", "register", id] => {
+                let site_id = SiteId::new(id.to_string())?;
+                let token = generate_token();
+                self.site_auth_store
+                    .register_site(site_id.as_str(), &token_hash(&token), true)
+                    .await?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "站点 {id} 已注册。claim token（只显示一次，请勿转发）：\n{token}"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "co-manager", "add", mxid] => {
+                self.require_site_access(event, id).await?;
+                let pending = cumments_core::management::create_role_claim(
+                    self.role_claim_store.as_ref(),
+                    id,
+                    "",
+                    mxid,
+                    CO_MANAGER_LEVEL,
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "已为 {mxid} 创建协管员认领。请对方给 bot 发送：\ncumments-claim:{}",
+                        pending.verify_token
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "co-manager", "remove", mxid] => {
+                self.require_site_access(event, id).await?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "确认移除 {id} 的协管员 {mxid}？请回复：\n!cumments site {id} co-manager remove {mxid} --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "co-manager", "remove", mxid, "--confirm"] => {
+                self.require_site_access(event, id).await?;
+                let driver = self.require_driver()?;
+                cumments_core::management::remove_site_role(
+                    self.role_claim_store.as_ref(),
+                    self.governance_store.as_ref(),
+                    driver,
+                    &self.site_service,
+                    id,
+                    mxid,
+                    CO_MANAGER_LEVEL,
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    reply: format!("已移除 {id} 的协管员 {mxid}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "post", slug, "moderator", "add", mxid] => {
+                self.require_site_access(event, id).await?;
+                let site_id = SiteId::new(id.to_string())?;
+                let post_slug = PostSlug::new(slug.to_string())?;
+                let room_id = self
+                    .registry_store
+                    .get_registered_room(&site_id, &post_slug)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("没有为 {id}/{slug} 注册的房间"))?;
+                let pending = cumments_core::management::create_role_claim(
+                    self.role_claim_store.as_ref(),
+                    id,
+                    &room_id,
+                    mxid,
+                    MODERATOR_LEVEL,
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "已为 {mxid} 创建版主认领。请对方给 bot 发送：\ncumments-claim:{}",
+                        pending.verify_token
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "post", slug, "moderator", "remove", mxid] => {
+                self.require_site_access(event, id).await?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments site {id} post {slug} moderator remove {mxid} --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            [
+                "site",
+                id,
+                "post",
+                slug,
+                "moderator",
+                "remove",
+                mxid,
+                "--confirm",
+            ] => {
+                self.require_site_access(event, id).await?;
+                let site_id = SiteId::new(id.to_string())?;
+                let post_slug = PostSlug::new(slug.to_string())?;
+                let room_id = self
+                    .registry_store
+                    .get_registered_room(&site_id, &post_slug)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("没有为 {id}/{slug} 注册的房间"))?;
+                cumments_core::management::remove_room_moderator(
+                    self.role_claim_store.as_ref(),
+                    self.governance_store.as_ref(),
+                    self.require_driver()?,
+                    id,
+                    &room_id,
+                    mxid,
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    reply: format!("已移除 {id}/{slug} 的版主 {mxid}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "claim-token", "rotate"] => {
+                self.require_admin(event)?;
+                let token = cumments_core::management::rotate_claim_token(
+                    self.site_auth_store.as_ref(),
+                    id,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
+                Ok(CommandOutcome {
+                    reply: format!("新 claim token（只显示一次，请勿转发）：\n{token}"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "secret", "issue"] => {
+                self.require_site_access(event, id).await?;
+                let secret =
+                    cumments_core::management::issue_secret(self.site_auth_store.as_ref(), id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
+                Ok(CommandOutcome {
+                    reply: format!("HMAC secret（只显示一次，请勿转发）：\n{secret}"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "retire"] => {
+                self.require_site_access(event, id).await?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "确认退役站点 {id}？此操作不可撤销。请回复：\n!cumments site {id} retire --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "retire", "--confirm"] => {
+                self.require_site_access(event, id).await?;
+                if !cumments_core::management::retire_site(self.site_auth_store.as_ref(), id)
+                    .await?
+                {
+                    return Err(anyhow::anyhow!("站点不存在或已退役"));
+                }
+                Ok(CommandOutcome {
+                    reply: format!("站点 {id} 已标记退役，后台正在处理。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["rooms", "quarantined"] => {
+                self.require_admin(event)?;
+                let rooms = self.registry_store.get_quarantined_rooms().await?;
+                let reply = if rooms.is_empty() {
+                    "没有隔离房间。".to_string()
+                } else {
+                    rooms
+                        .iter()
+                        .map(|r| format!("{} ({}/{})", r.room_id, r.site_id, r.post_slug))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                Ok(CommandOutcome::plain(reply))
+            }
+            ["room", room_id, "reinstate"] => {
+                self.require_admin(event)?;
+                Ok(CommandOutcome {
+                    reply: format!(
+                        "确认恢复房间 {room_id}？请回复：\n!cumments room {room_id} reinstate --confirm"
+                    ),
+                    site_id: None,
+                })
+            }
+            ["room", room_id, "reinstate", "--confirm"] => {
+                self.require_admin(event)?;
+                if !self.registry_store.reinstate_room(room_id).await? {
+                    return Err(anyhow::anyhow!("房间不在 registry 中"));
+                }
+                Ok(CommandOutcome {
+                    reply: format!("房间 {room_id} 已恢复。"),
+                    site_id: None,
+                })
+            }
+            _ => Ok(CommandOutcome::plain(help_text())),
+        }
+    }
+
+    fn require_admin(&self, event: &ParsedRoomMessage) -> Result<()> {
+        if self.admin_mxids.iter().any(|m| m == &event.sender) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("denied: 此命令仅限实例管理员"))
+        }
+    }
+
+    async fn require_site_access(&self, event: &ParsedRoomMessage, site_id: &str) -> Result<()> {
+        if self.admin_mxids.iter().any(|m| m == &event.sender) {
+            return Ok(());
+        }
+        let owner = self
+            .governance_store
+            .list_site_roles(site_id)
+            .await?
+            .iter()
+            .any(|role| role.level == OWNER_LEVEL && role.user_id == event.sender);
+        if owner {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("denied: 你不是站点 {site_id} 的站主"))
+        }
+    }
+
+    async fn active_site_for(&self, event: &ParsedRoomMessage) -> Result<String> {
+        self.active_sites
+            .lock()
+            .await
+            .get(&event.sender)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "未指定站点；请用 `!cumments site use <id>` 或直接写 `!cumments site <id> ...`"
+                )
+            })
+    }
+
+    async fn site_status(&self, site_id: &str) -> Result<String> {
+        let auth = self
+            .site_auth_store
+            .get_site_auth(site_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
+        let roles = self.governance_store.list_site_roles(site_id).await?;
+        let owners = roles
+            .iter()
+            .filter(|r| r.level == OWNER_LEVEL)
+            .map(|r| r.user_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let co_managers = roles
+            .iter()
+            .filter(|r| r.level == CO_MANAGER_LEVEL)
+            .map(|r| r.user_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "站点 {site_id}\n状态: {}\n站主: {}\n协管员: {}",
+            auth.auth_mode.as_str(),
+            if owners.is_empty() {
+                "（无）"
+            } else {
+                &owners
+            },
+            if co_managers.is_empty() {
+                "（无）"
+            } else {
+                &co_managers
+            },
+        ))
+    }
+
+    fn require_driver(&self) -> Result<&dyn cumments_core::ports::MatrixDriver> {
+        self.driver
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("当前模式没有 Matrix driver"))
     }
 
     /// Resolve the Cumments identity of a room from the local registry.

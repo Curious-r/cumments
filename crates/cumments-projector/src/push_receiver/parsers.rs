@@ -28,6 +28,9 @@ pub(crate) async fn process_single_event(
                 return Ok(());
             }
             if let Some(mut parsed) = parse_push_message(event) {
+                if processor.process_bot_command(&parsed).await? {
+                    return Ok(());
+                }
                 if processor.process_claim_dm(&parsed).await? {
                     return Ok(());
                 }

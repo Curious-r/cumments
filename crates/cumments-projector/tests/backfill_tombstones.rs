@@ -43,6 +43,11 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
         governance_store: store.clone() as Arc<dyn cumments_core::ports::GovernanceStore>,
         role_claim_store: store.clone() as Arc<dyn cumments_core::ports::RoleClaimStore>,
         submission_store: store.clone() as Arc<dyn cumments_core::ports::SubmissionStore>,
+        audit_store: store.clone() as Arc<dyn cumments_core::ports::CommandAuditStore>,
+        site_auth_store: store.clone() as Arc<dyn cumments_core::ports::SiteAuthStore>,
+        site_service: Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+        )),
         driver: None,
         admin_mxids: Vec::new(),
         event_bus: tx,
