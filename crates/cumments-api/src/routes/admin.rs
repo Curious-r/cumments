@@ -424,15 +424,11 @@ pub(crate) async fn rotate_claim_token_handler(
     Path(site_id): Path<String>,
 ) -> Result<Json<RotateClaimTokenResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let claim_token = generate_token();
-    let rotated = state
-        .store
-        .rotate_claim_token(site_id.as_str(), &token_hash(&claim_token))
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to rotate claim token: {e}")))?;
-    if !rotated {
-        return Err(AppError::NotFound("site not found".to_string()));
-    }
+    let claim_token =
+        cumments_core::management::rotate_claim_token(state.store.as_ref(), site_id.as_str())
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to rotate claim token: {e}")))?
+            .ok_or_else(|| AppError::NotFound("site not found".to_string()))?;
     Ok(Json(RotateClaimTokenResponse {
         site_id: site_id.as_str().to_string(),
         claim_token,

@@ -15,21 +15,17 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use cumments_core::{
     governance::{
-        CO_MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, OWNER_LEVEL, RoleEntry, role_entries,
-        set_role_level, validate_governance_user_id,
+        CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, RoleEntry, validate_governance_user_id,
     },
     models::{PostSlug, SiteId},
-    site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, generate_token, token_hash},
+    site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, token_hash},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-
-/// How long an unverified role claim stays valid.
-const CLAIM_TTL_HOURS: i64 = 24;
 
 #[derive(Debug, Deserialize)]
 pub struct UserIdRequest {
@@ -148,16 +144,6 @@ fn rate_limited(
     Ok(())
 }
 
-async fn site_space_id(state: &ApiState, site_id: &SiteId) -> Result<String, AppError> {
-    // Ensures the Space exists, provisioning it on first use so the owner can
-    // bootstrap before any comment has been posted.
-    state
-        .site_service
-        .ensure_space(site_id, state.driver.as_ref())
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to provision site space: {e}")))
-}
-
 async fn room_id_for(
     state: &ApiState,
     site_id: &SiteId,
@@ -194,81 +180,22 @@ async fn create_role_claim(
     user_id: &str,
     level: i64,
 ) -> Result<PendingRoleResponse, AppError> {
-    let verify_token = generate_token();
-    let claim = state
-        .store
-        .upsert_role_claim(&NewRoleClaim {
-            site_id: site_id.as_str().to_string(),
-            room_id: room_id.to_string(),
-            user_id: user_id.to_string(),
-            level,
-            token_hash: token_hash(&verify_token),
-            expires_at: Utc::now() + Duration::hours(CLAIM_TTL_HOURS),
-        })
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to store role claim: {e}")))?;
-    Ok(PendingRoleResponse {
-        pending: true,
-        user_id: user_id.to_string(),
-        level,
-        verify_token,
-        expires_at: claim.expires_at,
-    })
-}
-
-/// Removes an already-applied site-level role from the Space. The moderation
-/// sync then propagates the removal into every comment room.
-async fn remove_site_role(
-    state: &ApiState,
-    site_id: &SiteId,
-    user_id: &str,
-    level: i64,
-) -> Result<(), AppError> {
-    let space_id = site_space_id(state, site_id).await?;
-    set_role_level(state.driver.as_ref(), &space_id, user_id, level, false)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to update space power levels: {e}")))?;
-    state.governance_notify.notify_one();
-    Ok(())
-}
-
-/// Removes an already-applied room moderator. Site-level roles are rejected so
-/// this endpoint cannot fight the moderation sync pass.
-async fn remove_room_moderator_role(
-    state: &ApiState,
-    site_id: &SiteId,
-    post_slug: &PostSlug,
-    user_id: &str,
-) -> Result<(), AppError> {
-    let room_id = room_id_for(state, site_id, post_slug).await?;
-    let current = state
-        .driver
-        .get_room_power_levels(&room_id)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to read room power levels: {e}")))?
-        .unwrap_or_else(|| serde_json::json!({}));
-    let current_level = role_entries(&current, MODERATOR_LEVEL)
-        .into_iter()
-        .find(|role| role.user_id == user_id)
-        .map(|role| role.level)
-        .unwrap_or(0);
-    if current_level >= CO_MANAGER_LEVEL {
-        return Err(AppError::BadRequest(
-            "this user holds a site-level role; manage them through the owners \
-             or co-managers endpoint"
-                .to_string(),
-        ));
-    }
-    set_role_level(
-        state.driver.as_ref(),
-        &room_id,
+    let pending = cumments_core::management::create_role_claim(
+        state.store.as_ref(),
+        site_id.as_str(),
+        room_id,
         user_id,
-        MODERATOR_LEVEL,
-        false,
+        level,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("failed to update room power levels: {e}")))?;
-    Ok(())
+    .map_err(|e| AppError::Internal(format!("failed to store role claim: {e}")))?;
+    Ok(PendingRoleResponse {
+        pending: true,
+        user_id: pending.user_id,
+        level,
+        verify_token: pending.verify_token,
+        expires_at: pending.expires_at,
+    })
 }
 
 pub(crate) async fn add_owner_handler(
@@ -296,22 +223,21 @@ pub(crate) async fn remove_owner_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&user_id_from_query(&query)?)?;
-    let revoked = state
-        .store
-        .revoke_role_claim(site_id.as_str(), "", &user_id, OWNER_LEVEL)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to revoke role claim: {e}")))?;
-    let mut warnings = Vec::new();
-    if !revoked {
-        remove_site_role(&state, &site_id, &user_id, OWNER_LEVEL).await?;
-        state
-            .store
-            .mark_applied_claim_revoked(site_id.as_str(), "", &user_id, OWNER_LEVEL)
-            .await
-            .map_err(|e| {
-                AppError::Internal(format!("failed to mark applied claim revoked: {e}"))
-            })?;
+    let removal = cumments_core::management::remove_site_role(
+        state.store.as_ref(),
+        state.store.as_ref(),
+        state.driver.as_ref(),
+        &state.site_service,
+        site_id.as_str(),
+        &user_id,
+        OWNER_LEVEL,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("failed to remove owner: {e}")))?;
+    if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+        state.governance_notify.notify_one();
     }
+    let mut warnings = Vec::new();
     let roles = state
         .store
         .list_site_roles(site_id.as_str())
@@ -351,20 +277,19 @@ pub(crate) async fn remove_co_manager_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&user_id_from_query(&query)?)?;
-    let revoked = state
-        .store
-        .revoke_role_claim(site_id.as_str(), "", &user_id, CO_MANAGER_LEVEL)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to revoke role claim: {e}")))?;
-    if !revoked {
-        remove_site_role(&state, &site_id, &user_id, CO_MANAGER_LEVEL).await?;
-        state
-            .store
-            .mark_applied_claim_revoked(site_id.as_str(), "", &user_id, CO_MANAGER_LEVEL)
-            .await
-            .map_err(|e| {
-                AppError::Internal(format!("failed to mark applied claim revoked: {e}"))
-            })?;
+    let removal = cumments_core::management::remove_site_role(
+        state.store.as_ref(),
+        state.store.as_ref(),
+        state.driver.as_ref(),
+        &state.site_service,
+        site_id.as_str(),
+        &user_id,
+        CO_MANAGER_LEVEL,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("failed to remove co-manager: {e}")))?;
+    if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+        state.governance_notify.notify_one();
     }
     Ok(Json(RevokedRoleResponse {
         revoked: true,
@@ -403,20 +328,18 @@ pub(crate) async fn remove_room_moderator_handler(
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&user_id_from_query(&query)?)?;
     let room_id = room_id_for(&state, &site_id, &post_slug).await?;
-    let revoked = state
-        .store
-        .revoke_role_claim(site_id.as_str(), &room_id, &user_id, MODERATOR_LEVEL)
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to revoke role claim: {e}")))?;
-    if !revoked {
-        remove_room_moderator_role(&state, &site_id, &post_slug, &user_id).await?;
-        state
-            .store
-            .mark_applied_claim_revoked(site_id.as_str(), &room_id, &user_id, MODERATOR_LEVEL)
-            .await
-            .map_err(|e| {
-                AppError::Internal(format!("failed to mark applied claim revoked: {e}"))
-            })?;
+    let removal = cumments_core::management::remove_room_moderator(
+        state.store.as_ref(),
+        state.store.as_ref(),
+        state.driver.as_ref(),
+        site_id.as_str(),
+        &room_id,
+        &user_id,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("failed to remove moderator: {e}")))?;
+    if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+        state.governance_notify.notify_one();
     }
     Ok(Json(RevokedRoleResponse {
         revoked: true,
@@ -467,9 +390,7 @@ pub(crate) async fn retire_site_handler(
     Path(site_id): Path<String>,
 ) -> Result<Json<RetireSiteResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let marked = state
-        .store
-        .mark_site_retiring(site_id.as_str())
+    let marked = cumments_core::management::retire_site(state.store.as_ref(), site_id.as_str())
         .await
         .map_err(|e| AppError::Internal(format!("failed to retire site: {e}")))?;
     if !marked {

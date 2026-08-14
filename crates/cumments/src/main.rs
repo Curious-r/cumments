@@ -114,10 +114,6 @@ async fn main() -> Result<()> {
     tracing::info!("Database initialized.");
 
     // Handle CLI subcommands that only need the database.
-    if let Some(cli::Commands::Sites(sites_args)) = &args.command {
-        cli::handle_sites_command(&db_store, &site_auth_policy, sites_args).await?;
-        return Ok(());
-    }
     if let Some(cli::Commands::Rooms(rooms_args)) = &args.command {
         cli::handle_rooms_command(&db_store, rooms_args).await?;
         return Ok(());
@@ -210,6 +206,20 @@ async fn main() -> Result<()> {
         tracing::info!("Using 'logging' mode driver.");
         Arc::new(cumments_matrix::logging::LoggingMatrixDriver)
     };
+
+    // CLI site commands need the driver for applied-role removal; they run
+    // after driver setup instead of the early database-only phase.
+    if let Some(cli::Commands::Sites(sites_args)) = &args.command {
+        cli::handle_sites_command(
+            &db_store,
+            driver.as_ref(),
+            &site_service,
+            &site_auth_policy,
+            sites_args,
+        )
+        .await?;
+        return Ok(());
+    }
 
     // ─────────────────────────────────────────────────────────────
     // 7a. Initialize EventProcessor (shared across all modes)

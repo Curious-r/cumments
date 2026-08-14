@@ -4,24 +4,21 @@ use super::args::{ExportConfigArgs, RetireSiteArgs, SiteUserIdArg, SitesArgs, Si
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
-use chrono::{Duration, Utc};
 use cumments_api::routes::admin::{
     AdminListQuery, AdminPage, AdminSite, admin_meta, admin_page_bounds, admin_site,
     admin_site_from_config, config_snippet_toml,
 };
-use cumments_core::governance::{
-    CO_MANAGER_LEVEL, NewRoleClaim, OWNER_LEVEL, RoleEntry, validate_governance_user_id,
-};
+use cumments_core::governance::{CO_MANAGER_LEVEL, OWNER_LEVEL};
 use cumments_core::models::SiteId;
-use cumments_core::ports::{GovernanceStore, RoleClaimStore, SiteAuthStore};
+use cumments_core::ports::{MatrixDriver, SiteAuthStore};
 use cumments_core::site_auth::{Origin, SiteAuthMode, SiteAuthPolicy, register_site, token_hash};
+use cumments_core::site_service::SiteService;
 use std::collections::HashSet;
-
-/// How long an unverified role claim stays valid, matching the governance API.
-const ROLE_CLAIM_TTL_HOURS: i64 = 24;
 
 pub async fn handle_sites_command(
     store: &cumments_store::DbStore,
+    driver: &dyn MatrixDriver,
+    site_service: &SiteService,
     policy: &SiteAuthPolicy,
     args: &SitesArgs,
 ) -> Result<()> {
@@ -145,13 +142,10 @@ pub async fn handle_sites_command(
         SitesCommand::RotateClaimToken(args) => {
             let site_id = SiteId::new(args.site_id.clone())
                 .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
-            let claim_token = generate_token();
-            let rotated = store
-                .rotate_claim_token(site_id.as_str(), &token_hash(&claim_token))
-                .await?;
-            if !rotated {
-                bail!("site not found");
-            }
+            let claim_token =
+                cumments_core::management::rotate_claim_token(store, site_id.as_str())
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("site not found"))?;
             print_json(&serde_json::json!({
                 "site_id": site_id.as_str(),
                 "claim_token": claim_token,
@@ -161,9 +155,11 @@ pub async fn handle_sites_command(
         }
         SitesCommand::AddOwner(args) => add_role_claim(store, args, OWNER_LEVEL).await,
         SitesCommand::AddCoManager(args) => add_role_claim(store, args, CO_MANAGER_LEVEL).await,
-        SitesCommand::RemoveOwner(args) => remove_role_claim(store, args, OWNER_LEVEL).await,
+        SitesCommand::RemoveOwner(args) => {
+            remove_role_claim(store, driver, site_service, args, OWNER_LEVEL).await
+        }
         SitesCommand::RemoveCoManager(args) => {
-            remove_role_claim(store, args, CO_MANAGER_LEVEL).await
+            remove_role_claim(store, driver, site_service, args, CO_MANAGER_LEVEL).await
         }
         SitesCommand::Retire(args) => retire_site(store, policy, args).await,
     }
@@ -203,67 +199,53 @@ async fn add_role_claim(
     let site_id =
         SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
     require_api_registered_site(store, site_id.as_str()).await?;
-    let user_id = validate_governance_user_id(&args.user_id)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-
-    let verify_token = generate_token();
-    let claim = store
-        .upsert_role_claim(&NewRoleClaim {
-            site_id: site_id.as_str().to_string(),
-            room_id: String::new(),
-            user_id,
-            level,
-            token_hash: token_hash(&verify_token),
-            expires_at: Utc::now() + Duration::hours(ROLE_CLAIM_TTL_HOURS),
-        })
-        .await?;
+    let pending = cumments_core::management::create_role_claim(
+        store,
+        site_id.as_str(),
+        "",
+        &args.user_id,
+        level,
+    )
+    .await?;
     print_json(&serde_json::json!({
         "pending": true,
-        "user_id": claim.user_id,
-        "level": claim.level,
-        "verify_token": verify_token,
-        "expires_at": claim.expires_at,
+        "user_id": pending.user_id,
+        "level": pending.level,
+        "verify_token": pending.verify_token,
+        "expires_at": pending.expires_at,
     }))?;
     eprintln!(
-        "The target MXID must DM `cumments-claim:{verify_token}` to the AS bot to activate the role."
+        "The target MXID must DM `cumments-claim:{}` to the AS bot to activate the role.",
+        pending.verify_token
     );
     Ok(())
 }
 
-/// Mirrors the governance API's DELETE for the pending-claim part. Applied
-/// roles are Matrix power-level state, which the CLI deliberately does not
-/// write: operators remove those from a Matrix client or the admin API.
+/// Removes a site-level role through the shared management use case: cancels
+/// a pending claim, or removes an applied role from the Space power levels.
 async fn remove_role_claim(
     store: &cumments_store::DbStore,
+    driver: &dyn MatrixDriver,
+    site_service: &SiteService,
     args: &SiteUserIdArg,
     level: i64,
 ) -> Result<()> {
     let site_id =
         SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
     require_api_registered_site(store, site_id.as_str()).await?;
-    let user_id = validate_governance_user_id(&args.user_id)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-
-    let revoked = store
-        .revoke_role_claim(site_id.as_str(), "", &user_id, level)
-        .await?;
-    if !revoked {
-        let applied = store
-            .list_site_roles(site_id.as_str())
-            .await?
-            .iter()
-            .any(|role: &RoleEntry| role.user_id == user_id && role.level == level);
-        if applied {
-            bail!(
-                "role is already applied in Matrix; remove it from the Space power \
-                 levels in a Matrix client or through the admin API"
-            );
-        }
-        bail!("no pending claim or applied role for this user and level");
-    }
+    cumments_core::management::remove_site_role(
+        store,
+        store,
+        driver,
+        site_service,
+        site_id.as_str(),
+        &args.user_id,
+        level,
+    )
+    .await?;
     print_json(&serde_json::json!({
         "revoked": true,
-        "user_id": user_id,
+        "user_id": args.user_id,
         "level": level,
     }))?;
     Ok(())
@@ -297,8 +279,7 @@ async fn retire_site(
              the config file instead"
         );
     }
-    let marked = store.mark_site_retiring(site_id.as_str()).await?;
-    if !marked {
+    if !cumments_core::management::retire_site(store, site_id.as_str()).await? {
         bail!("site not found or already decommissioned");
     }
 
@@ -374,9 +355,17 @@ mod tests {
     };
     use super::super::test_support::*;
     use super::*;
+    use cumments_core::ports::RoleClaimStore;
     use cumments_core::site_auth::OriginPattern;
     use cumments_core::site_auth::SiteLifecycle;
     use cumments_store::DbStore;
+
+    async fn run_sites(store: &DbStore, policy: &SiteAuthPolicy, args: &SitesArgs) -> Result<()> {
+        let driver = cumments_matrix::LoggingMatrixDriver;
+        let site_service = SiteService::new(std::sync::Arc::new(store.clone())
+            as std::sync::Arc<dyn cumments_core::ports::SiteStore>);
+        handle_sites_command(store, &driver, &site_service, policy, args).await
+    }
 
     #[tokio::test]
     async fn sites_management_lifecycle() {
@@ -394,7 +383,7 @@ mod tests {
                 site_id: "my-blog".to_string(),
             }),
         };
-        handle_sites_command(&store, &policy, &rotate)
+        run_sites(&store, &policy, &rotate)
             .await
             .expect("rotate secret");
         let auth = store
@@ -411,7 +400,7 @@ mod tests {
             }),
         };
         assert!(
-            handle_sites_command(&store, &policy, &revoke_unconfirmed)
+            run_sites(&store, &policy, &revoke_unconfirmed)
                 .await
                 .is_err(),
             "revoke-secret must require --yes"
@@ -423,7 +412,7 @@ mod tests {
                 yes: true,
             }),
         };
-        handle_sites_command(&store, &policy, &revoke)
+        run_sites(&store, &policy, &revoke)
             .await
             .expect("revoke secret");
         let auth = store
@@ -443,7 +432,7 @@ mod tests {
                 site_id: "my-blog".to_string(),
             }),
         };
-        handle_sites_command(&store, &policy, &rotate_claim)
+        run_sites(&store, &policy, &rotate_claim)
             .await
             .expect("rotate claim token");
         let new_hash = store
@@ -476,7 +465,7 @@ mod tests {
                 origin: "https://blog.example.com".to_string(),
             }),
         };
-        handle_sites_command(&store, &policy, &revoke)
+        run_sites(&store, &policy, &revoke)
             .await
             .expect("revoke origin");
         let auth = store
@@ -492,7 +481,7 @@ mod tests {
                 raw: false,
             }),
         };
-        handle_sites_command(&store, &policy, &export)
+        run_sites(&store, &policy, &export)
             .await
             .expect("export config snippet");
     }
@@ -514,7 +503,7 @@ mod tests {
                 user_id: "@owner:hs".to_string(),
             }),
         };
-        handle_sites_command(&store, &policy, &add)
+        run_sites(&store, &policy, &add)
             .await
             .expect("add owner claim");
         assert_eq!(
@@ -532,7 +521,7 @@ mod tests {
                 user_id: "@owner:hs".to_string(),
             }),
         };
-        handle_sites_command(&store, &policy, &remove)
+        run_sites(&store, &policy, &remove)
             .await
             .expect("remove owner claim");
         assert!(
@@ -550,11 +539,7 @@ mod tests {
                 user_id: "@owner:hs".to_string(),
             }),
         };
-        assert!(
-            handle_sites_command(&store, &policy, &missing)
-                .await
-                .is_err()
-        );
+        assert!(run_sites(&store, &policy, &missing).await.is_err());
     }
 
     #[tokio::test]
@@ -582,7 +567,7 @@ mod tests {
                 table: false,
             }),
         };
-        handle_sites_command(&store, &policy, &list)
+        run_sites(&store, &policy, &list)
             .await
             .expect("list sites with config overlay");
     }
@@ -606,9 +591,7 @@ mod tests {
             }),
         };
         assert!(
-            handle_sites_command(&store, &policy, &unconfirmed)
-                .await
-                .is_err(),
+            run_sites(&store, &policy, &unconfirmed).await.is_err(),
             "retire must require --yes"
         );
 
@@ -619,7 +602,7 @@ mod tests {
                 wait: false,
             }),
         };
-        handle_sites_command(&store, &policy, &retire)
+        run_sites(&store, &policy, &retire)
             .await
             .expect("retire site");
 
