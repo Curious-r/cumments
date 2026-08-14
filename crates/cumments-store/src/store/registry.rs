@@ -66,6 +66,18 @@ impl RegistryStore for DbStore {
         Ok(rows.into_iter().map(|row| row.room_id).collect())
     }
 
+    async fn list_superseded_rooms(&self) -> Result<Vec<String>> {
+        let rows = room_registry::Entity::find()
+            .filter(
+                room_registry::COLUMN
+                    .status
+                    .eq(RoomStatus::Superseded.as_str()),
+            )
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.room_id).collect())
+    }
+
     async fn get_registered_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>> {
         let room = room_registry::Entity::find_by_id(room_id.to_owned())
             .one(&self.db)

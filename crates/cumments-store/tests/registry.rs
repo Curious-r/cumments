@@ -73,4 +73,11 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
         .expect("list all rooms for site");
     all.sort();
     assert_eq!(all, vec!["!new-room:hs", "!room:hs"]);
+
+    let mut superseded = store
+        .list_superseded_rooms()
+        .await
+        .expect("list superseded rooms");
+    superseded.sort();
+    assert_eq!(superseded, vec!["!new-room:hs"]);
 }

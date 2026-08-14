@@ -4,6 +4,7 @@ mod media;
 mod moderation;
 mod pass;
 mod posts;
+mod rooms;
 mod timeouts;
 mod updates;
 
@@ -169,6 +170,7 @@ impl Reconciler {
                 deps.clone(),
                 schedule.moderation,
             )),
+            Arc::new(rooms::RoomCleanupPass::new(deps.clone(), schedule.rooms)),
             Arc::new(decommission::DecommissionPass::new(
                 deps.clone(),
                 schedule.decommission,
@@ -207,6 +209,7 @@ struct PassSchedule {
     timeouts: PassConfig,
     claims: PassConfig,
     moderation: PassConfig,
+    rooms: PassConfig,
     decommission: PassConfig,
 }
 
@@ -234,6 +237,7 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
         timeouts: submission("timeouts"),
         claims: projection("claims"),
         moderation: projection("moderation"),
+        rooms: governance("rooms"),
         decommission: governance("decommission"),
     }
 }
@@ -331,6 +335,8 @@ mod tests {
             assert_eq!(config.interval, GOVERNANCE_PASS_INTERVAL);
             assert!(Arc::ptr_eq(&config.wakeup, &projection), "{}", config.name);
         }
+        assert_eq!(schedule.rooms.interval, GOVERNANCE_PASS_INTERVAL);
+        assert!(Arc::ptr_eq(&schedule.rooms.wakeup, &governance));
         assert_eq!(schedule.decommission.interval, GOVERNANCE_PASS_INTERVAL);
         assert!(Arc::ptr_eq(&schedule.decommission.wakeup, &governance));
     }

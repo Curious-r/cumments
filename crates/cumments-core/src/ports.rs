@@ -402,6 +402,10 @@ pub trait RegistryStore: Send + Sync {
     /// retired too.
     async fn list_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
 
+    /// Lists every superseded room. Used by the room-cleanup pass to retire
+    /// AS-managed memberships from rooms that were replaced.
+    async fn list_superseded_rooms(&self) -> Result<Vec<String>>;
+
     /// Looks up the Cumments identity registered for a room.
     ///
     /// Unlike [`Self::get_registered_room`] this is a reverse lookup by room ID,
