@@ -1094,8 +1094,8 @@
                 if (!pending) return;
                 const synced = comments.some((c) => {
                     if (
-                        pending.intentId != null &&
-                        c.intent_id === pending.intentId
+                        pending.submissionId != null &&
+                        c.submission_id === pending.submissionId
                     ) {
                         return true;
                     }
@@ -2055,18 +2055,18 @@
                                 },
                             );
                             if (!res.ok) throw new Error(await apiError(res));
-                            let intentId = null;
+                            let submissionId = null;
                             try {
                                 const accepted = await res.json();
-                                intentId = accepted && accepted.intent_id
-                                    ? accepted.intent_id
+                                submissionId = accepted && accepted.submission_id
+                                    ? accepted.submission_id
                                     : null;
                             } catch {
                                 // Older servers may return a plain 204; fall
                                 // back to public-key/content matching.
                             }
                             state.pendingComment = {
-                                intentId,
+                                submissionId,
                                 publicKey,
                                 content: geoUri,
                                 submittedAt: Date.now(),
@@ -2149,11 +2149,11 @@
                         },
                     );
                     if (!res.ok) throw new Error(await apiError(res));
-                    let intentId = null;
+                    let submissionId = null;
                     try {
                         const accepted = await res.json();
-                        intentId = accepted && accepted.intent_id
-                            ? accepted.intent_id
+                        submissionId = accepted && accepted.submission_id
+                            ? accepted.submission_id
                             : null;
                     } catch {
                         // Older servers may return a plain 202 body; fall back
@@ -2166,7 +2166,7 @@
                     state.replyingTo = null;
                     updateReplyBanner();
                     state.pendingComment = {
-                        intentId,
+                        submissionId,
                         publicKey,
                         content: signedContent,
                         submittedAt: Date.now(),
