@@ -683,8 +683,11 @@ paths:
       description: |
         Uploads raw bytes as the guest's virtual user. Query parameters carry
         the PoW challenge response and an Ed25519 signature over
-        `UPLOAD/site/post/mime/filename/sha256_hex(body)/challenge`.
+        `UPLOAD/site/post/mime/filename/sha256_hex(body)/challenge`. Requires
+        the same `Idempotency-Key` header as comment write submissions;
+        replays return the original URL with `Idempotent-Replayed: true`.
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - name: mime
           in: query
           required: true
@@ -720,6 +723,12 @@ paths:
       responses:
         "200":
           description: Uploaded media reference
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
@@ -741,6 +750,8 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
@@ -1256,12 +1267,13 @@ components:
       in: header
       required: true
       description: |
-        Mandatory for all write submissions. 8-255 printable ASCII characters,
-        scoped to the author's public key. Retrying an accepted request with
-        the same key and body returns the original `submission_id` with
+        Mandatory for all write submissions and guest media uploads. 8-255
+        printable ASCII characters, scoped to the author's public key.
+        Retrying an accepted request with the same key and body returns the
+        original result (`submission_id` or media URL) with
         `Idempotent-Replayed: true`; a different body with the same key
-        returns `409 code=idempotency-key-reused`. Keys are retained
-        for 24 hours.
+        returns `409 code=idempotency-key-reused`. Keys are retained for
+        24 hours.
       schema:
         type: string
         minLength: 8

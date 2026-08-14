@@ -4,8 +4,9 @@ use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
-    DeleteCommentRequest, LocationRequest, PaginatedResponse, PaginationMeta, PaginationQuery,
-    PostCommentRequest, ReactRequest, UpdateCommentRequest, VoteRequest,
+    DeleteCommentRequest, IDEMPOTENT_REPLAYED, LocationRequest, PaginatedResponse, PaginationMeta,
+    PaginationQuery, PostCommentRequest, ReactRequest, UpdateCommentRequest, VoteRequest,
+    extract_idempotency_key, request_fingerprint,
 };
 use axum::{
     Json,
@@ -17,7 +18,6 @@ use cumments_core::{
     commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
     identity::{post_signature_message, signature_message, verify_signature},
     models::{AuthorKind, Content, MediaKind, PostSlug, SiteId},
-    site_auth::sha256_hex,
     submissions::{IdempotencyInput, IdempotencyOutcome},
 };
 use ruma_common::EventId;
@@ -29,14 +29,6 @@ pub(crate) static QUERY_METHOD: std::sync::LazyLock<Method> =
 /// The Accept-Query response header (RFC 10008, Section 3).
 pub(crate) static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
     std::sync::LazyLock::new(|| HeaderName::from_static("accept-query"));
-
-/// Mandatory `Idempotency-Key` header for POST/PATCH/DELETE submissions.
-static IDEMPOTENCY_KEY_HEADER: std::sync::LazyLock<HeaderName> =
-    std::sync::LazyLock::new(|| HeaderName::from_static("idempotency-key"));
-
-/// Response header marking a replay of an already-accepted request.
-static IDEMPOTENT_REPLAYED: std::sync::LazyLock<HeaderName> =
-    std::sync::LazyLock::new(|| HeaderName::from_static("idempotent-replayed"));
 
 /// Build the CORS layer from a comma-separated origin list.
 pub(crate) fn challenge_prefix(challenge_response: &str) -> &str {
@@ -101,46 +93,6 @@ fn validate_comment_id_format(comment_id: &str) -> Result<(), &'static str> {
         return Err(COMMENT_ID_FORMAT_ERROR);
     }
     Ok(())
-}
-
-/// Reads and validates the mandatory `Idempotency-Key` header.
-///
-/// Keys are 8-255 printable ASCII characters. Validation failures return a
-/// 400 and never record the key, so the same key can be retried with a valid
-/// request.
-fn extract_idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {
-    let value = headers.get(&*IDEMPOTENCY_KEY_HEADER).ok_or_else(|| {
-        AppError::IdempotencyKeyRequired(
-            "Idempotency-Key header is required for write requests.".to_string(),
-        )
-    })?;
-    let value = value.to_str().map_err(|_| {
-        AppError::InvalidIdempotencyKey(
-            "Idempotency-Key must contain only printable ASCII characters.".to_string(),
-        )
-    })?;
-    if !(8..=255).contains(&value.len()) {
-        return Err(AppError::InvalidIdempotencyKey(
-            "Idempotency-Key must be 8-255 characters long.".to_string(),
-        ));
-    }
-    if !value.bytes().all(|b| (0x21..=0x7E).contains(&b)) {
-        return Err(AppError::InvalidIdempotencyKey(
-            "Idempotency-Key must contain only printable ASCII characters ".to_string()
-                + "(no spaces or control characters).",
-        ));
-    }
-    Ok(value.to_owned())
-}
-
-/// Canonical fingerprint of one write request.
-///
-/// `METHOD\npath\nsha256(body)` — the body is hashed first so the fingerprint
-/// stays compact for large payloads. The path is reconstructed from the
-/// validated route parameters rather than the raw URL, so equivalent
-/// percent-encoding choices still produce the same fingerprint.
-fn request_fingerprint(method: &str, path: &str, body: &str) -> String {
-    format!("{}\n{}\n{}", method, path, sha256_hex(body.as_bytes()))
 }
 
 /// Builds the `202 { submission_id }` response, marking replays explicitly.
@@ -317,7 +269,7 @@ pub(crate) async fn post_comment_handler(
     let fingerprint = request_fingerprint(
         "POST",
         &format!("/api/v1/sites/{}/posts/{}/comments", site_id, post_slug),
-        &body,
+        body.as_bytes(),
     );
 
     // 1. Validate input
@@ -527,7 +479,7 @@ async fn delete_comment_common(
     }
 
     let idempotency_key = extract_idempotency_key(&headers)?;
-    let fingerprint = request_fingerprint("DELETE", &path.fingerprint_path, &body);
+    let fingerprint = request_fingerprint("DELETE", &path.fingerprint_path, body.as_bytes());
 
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
@@ -711,7 +663,7 @@ async fn update_comment_common(
     }
 
     let idempotency_key = extract_idempotency_key(&headers)?;
-    let fingerprint = request_fingerprint("PATCH", &path.fingerprint_path, &body);
+    let fingerprint = request_fingerprint("PATCH", &path.fingerprint_path, body.as_bytes());
 
     // 1. Validate input
     req.validate().map_err(AppError::Validation)?;
@@ -1020,7 +972,7 @@ pub(crate) async fn location_handler(
     let fingerprint = request_fingerprint(
         "POST",
         &format!("/api/v1/sites/{}/posts/{}/location", site_id, post_slug),
-        &body,
+        body.as_bytes(),
     );
     req.validate().map_err(AppError::Validation)?;
     if !is_valid_geo_uri(&req.geo_uri) {
@@ -1110,6 +1062,7 @@ pub(crate) async fn location_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::request::IDEMPOTENCY_KEY_HEADER;
 
     #[test]
     fn reply_to_format_validation_accepts_event_ids_and_rejects_garbage() {
@@ -1162,13 +1115,19 @@ mod tests {
 
     #[test]
     fn request_fingerprint_is_stable_and_sensitive_to_method_and_body() {
-        let first = request_fingerprint("POST", "/api/v1/posts/p", "{}");
-        assert_eq!(first, request_fingerprint("POST", "/api/v1/posts/p", "{}"));
-        assert_ne!(first, request_fingerprint("POST", "/api/v1/posts/p", "{ }"));
-        assert_ne!(first, request_fingerprint("PATCH", "/api/v1/posts/p", "{}"));
+        let first = request_fingerprint("POST", "/api/v1/posts/p", b"{}");
+        assert_eq!(first, request_fingerprint("POST", "/api/v1/posts/p", b"{}"));
         assert_ne!(
             first,
-            request_fingerprint("POST", "/api/v1/posts/other", "{}")
+            request_fingerprint("POST", "/api/v1/posts/p", b"{ }")
+        );
+        assert_ne!(
+            first,
+            request_fingerprint("PATCH", "/api/v1/posts/p", b"{}")
+        );
+        assert_ne!(
+            first,
+            request_fingerprint("POST", "/api/v1/posts/other", b"{}")
         );
     }
 

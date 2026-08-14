@@ -9,6 +9,7 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
+use crate::request::{IDEMPOTENT_REPLAYED, extract_idempotency_key, request_fingerprint};
 use crate::routes::comments::challenge_prefix;
 use axum::{
     Json,
@@ -18,6 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cumments_core::identity::{signature_message, verify_signature};
+use cumments_core::media_upload::MediaUploadIdempotencyInput;
 use cumments_core::models::{Content, Message, PostSlug, SiteId};
 use cumments_core::site_auth::{constant_time_eq, sha256_hex};
 use hmac::{Hmac, KeyInit, Mac};
@@ -26,6 +28,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::StreamExt;
+use tracing::warn;
 
 /// Upper bound on a single proxied media response and on an uploaded file.
 ///
@@ -182,6 +185,59 @@ impl MediaProxy {
     }
 }
 
+fn media_upload_response(
+    url: String,
+    filename: String,
+    mimetype: String,
+    size: usize,
+    replayed: bool,
+) -> Response {
+    let kind = if mimetype.starts_with("image/") {
+        "image"
+    } else if mimetype.starts_with("video/") {
+        "video"
+    } else if mimetype.starts_with("audio/") {
+        "audio"
+    } else {
+        "file"
+    };
+    let mut response = (Json(serde_json::json!({
+        "url": url,
+        "filename": filename,
+        "mimetype": mimetype,
+        "size": size,
+        "voice": false,
+        "kind": kind,
+    })),)
+        .into_response();
+    if replayed {
+        response.headers_mut().insert(
+            IDEMPOTENT_REPLAYED.clone(),
+            HeaderValue::from_static("true"),
+        );
+    }
+    response
+}
+
+/// Best-effort rollback of a media upload that could not be recorded
+/// locally. A failed rollback leaves an untracked orphan on the homeserver;
+/// the warning carries the URL so an operator can clean it manually.
+async fn rollback_media_upload(state: &ApiState, url: &str) {
+    let Some(rest) = url.strip_prefix("mxc://") else {
+        return;
+    };
+    let Some((server, media_id)) = rest.split_once('/') else {
+        return;
+    };
+    if let Err(error) = state.driver.delete_media(server, media_id).await {
+        warn!(
+            url,
+            %error,
+            "failed to roll back media upload after local record failure"
+        );
+    }
+}
+
 /// Guest media upload: verifies PoW + author signature, then asks the
 /// `MatrixDriver` to upload as the author's virtual user. The driver is the
 /// only homeserver write seam.
@@ -213,6 +269,7 @@ pub(crate) async fn upload_media_handler(
             "media exceeds the size limit".to_string(),
         ));
     }
+    let idempotency_key = extract_idempotency_key(&headers)?;
     let author_public_key = query
         .get("author_public_key")
         .cloned()
@@ -242,6 +299,56 @@ pub(crate) async fn upload_media_handler(
             "unsupported upload media type {mimetype}"
         )));
     }
+
+    let fingerprint = format!(
+        "{}\n{}\n{}",
+        request_fingerprint(
+            "POST",
+            &format!(
+                "/api/v1/sites/{}/posts/{}/media",
+                site_id_val.as_str(),
+                post_slug_val.as_str()
+            ),
+            &body,
+        ),
+        mimetype,
+        filename,
+    );
+
+    // Idempotency replay short-circuits before PoW so a retry does not need
+    // a fresh proof of work. The Ed25519 signature is still verified so a
+    // guessed key cannot leak someone else's media URL.
+    if let Some(existing) = state
+        .store
+        .find_media_upload_idempotency(&author_public_key, &idempotency_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to check media idempotency: {e}")))?
+    {
+        if existing.request_fingerprint != fingerprint {
+            return Err(AppError::IdempotencyReused);
+        }
+        let challenge = challenge_prefix(&challenge_response);
+        let message = signature_message(&[
+            "UPLOAD",
+            site_id_val.as_str(),
+            post_slug_val.as_str(),
+            &mimetype,
+            &filename,
+            &sha256_hex(&body),
+            challenge,
+        ]);
+        if !verify_signature(&author_public_key, &message, &author_signature) {
+            return Err(AppError::InvalidSignature);
+        }
+        return Ok(media_upload_response(
+            existing.mxc_url,
+            filename,
+            mimetype,
+            body.len(),
+            true,
+        ));
+    }
+
     if !state.pow.verify(&challenge_response) {
         return Err(AppError::InvalidPoW);
     }
@@ -265,34 +372,44 @@ pub(crate) async fn upload_media_handler(
         .upload_media(body, &filename, &mimetype, &author_public_key, &site_id_val)
         .await
         .map_err(|e| AppError::Internal(format!("failed to upload media: {e}")))?;
-    state
+    let outcome = match state
         .store
-        .record_media_upload(
+        .save_media_upload_idempotent(
             &url,
             &author_public_key,
             site_id_val.as_str(),
             post_slug_val.as_str(),
+            &MediaUploadIdempotencyInput {
+                key: idempotency_key,
+                request_fingerprint: fingerprint,
+            },
         )
         .await
-        .map_err(|e| AppError::Internal(format!("failed to record media upload: {e}")))?;
-
-    let kind = if mimetype.starts_with("image/") {
-        "image"
-    } else if mimetype.starts_with("video/") {
-        "video"
-    } else if mimetype.starts_with("audio/") {
-        "audio"
-    } else {
-        "file"
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            rollback_media_upload(&state, &url).await;
+            return Err(AppError::Internal(format!(
+                "failed to record media upload: {e}"
+            )));
+        }
     };
-    Ok(Json(serde_json::json!({
-        "url": url,
-        "filename": filename,
-        "mimetype": mimetype,
-        "size": size,
-        "voice": false,
-        "kind": kind,
-    })))
+
+    match outcome {
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Created { mxc_url } => Ok(
+            media_upload_response(mxc_url, filename, mimetype, size, false),
+        ),
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Replayed { mxc_url } => {
+            rollback_media_upload(&state, &url).await;
+            Ok(media_upload_response(
+                mxc_url, filename, mimetype, size, true,
+            ))
+        }
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Reused => {
+            rollback_media_upload(&state, &url).await;
+            Err(AppError::IdempotencyReused)
+        }
+    }
 }
 
 /// Lists preset stickers guests may reference in sticker messages.

@@ -1819,7 +1819,10 @@
                         `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/media?${params.toString()}`,
                         {
                             method: "POST",
-                            headers: { "Content-Type": mime },
+                            headers: {
+                                "Content-Type": mime,
+                                "Idempotency-Key": newIdempotencyKey(),
+                            },
                             body: blob,
                         },
                     );

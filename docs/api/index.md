@@ -55,8 +55,10 @@ Authors come in two forms:
 
 ## Idempotent writes
 
-`POST`, `PATCH` and `DELETE` are asynchronous: they accept a submission and
-return `202 { "submission_id": ... }` before the comment actually lands in Matrix.
+`POST`, `PATCH`, `DELETE` and guest media uploads are writes: comment
+submissions accept a submission and return `202 { "submission_id": ... }`
+before the comment actually lands in Matrix, while media uploads return the
+`mxc://` URL synchronously.
 If the client loses the response (network failure, timeout, browser crash) it
 can retry the exact same request with the same `Idempotency-Key` header; the
 server detects the duplicate and returns the original `submission_id` again with
@@ -76,9 +78,10 @@ Rules:
   `400 code=idempotency-key-required` / `400 code=invalid-idempotency-key`).
 - Keys are scoped to `author_public_key + Idempotency-Key`; the same key from
   a different author is independent.
-- The request fingerprint is `METHOD\npath\nsha256(body)`. Reusing a key with
-  a different request returns `409 code=idempotency-key-reused`; the conflicting
-  request is not recorded and not queued.
+- The request fingerprint is `METHOD\npath\nsha256(body)` (media uploads also
+  include `mime` and `filename`). Reusing a key with a different request
+  returns `409 code=idempotency-key-reused`; the conflicting request is not
+  recorded and not queued.
 - Invalid requests (bad PoW, bad signature, not found, unauthorized, invalid
   JSON) do not consume the key.
 - Records are kept for 24 hours, aligned with Stripe's idempotency retention;

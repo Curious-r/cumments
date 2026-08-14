@@ -1,8 +1,60 @@
 //! Request and response DTOs for the Cumments API.
 
+use crate::error::AppError;
+use axum::http::{HeaderMap, HeaderName};
 use cumments_core::models::{CommentMedia, Message};
+use cumments_core::site_auth::sha256_hex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use validator::Validate;
+
+/// The `Idempotency-Key` request header used by all async write submissions.
+pub(crate) static IDEMPOTENCY_KEY_HEADER: LazyLock<HeaderName> =
+    LazyLock::new(|| HeaderName::from_static("idempotency-key"));
+
+/// Response header marking an idempotent replay.
+pub(crate) static IDEMPOTENT_REPLAYED: LazyLock<HeaderName> =
+    LazyLock::new(|| HeaderName::from_static("idempotent-replayed"));
+
+/// Reads and validates the mandatory `Idempotency-Key` header.
+///
+/// Keys are 8-255 printable ASCII characters. Validation failures return a
+/// 400 and never record the key, so the same key can be retried with a valid
+/// request.
+pub(crate) fn extract_idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {
+    let value = headers.get(&*IDEMPOTENCY_KEY_HEADER).ok_or_else(|| {
+        AppError::IdempotencyKeyRequired(
+            "Idempotency-Key header is required for write requests.".to_string(),
+        )
+    })?;
+    let value = value.to_str().map_err(|_| {
+        AppError::InvalidIdempotencyKey(
+            "Idempotency-Key must contain only printable ASCII characters.".to_string(),
+        )
+    })?;
+    if !(8..=255).contains(&value.len()) {
+        return Err(AppError::InvalidIdempotencyKey(
+            "Idempotency-Key must be 8-255 characters long.".to_string(),
+        ));
+    }
+    if !value.bytes().all(|b| (0x21..=0x7E).contains(&b)) {
+        return Err(AppError::InvalidIdempotencyKey(
+            "Idempotency-Key must contain only printable ASCII characters ".to_string()
+                + "(no spaces or control characters).",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+/// Canonical fingerprint of one write request.
+///
+/// `METHOD\npath\nsha256(body)` — the body is hashed first so the fingerprint
+/// stays compact for large payloads. The path is reconstructed from the
+/// validated route parameters rather than the raw URL, so equivalent
+/// percent-encoding choices still produce the same fingerprint.
+pub(crate) fn request_fingerprint(method: &str, path: &str, body: &[u8]) -> String {
+    format!("{}\n{}\n{}", method, path, sha256_hex(body))
+}
 
 /// The query parameters for pagination (sent as JSON body for QUERY method).
 #[derive(Debug, Deserialize, Validate)]
