@@ -103,6 +103,7 @@
                     guest_default: "访客",
                     matrix_user: "Matrix 用户",
                     guest_badge: "Cumments 访客",
+                    identity_tag_title: "同一访客的稳定身份标记；改名不会改变它",
                     role_owner: "站主",
                     role_co_manager: "协管员",
                     role_moderator: "版主",
@@ -258,6 +259,7 @@
                     guest_default: "Guest",
                     matrix_user: "Matrix user",
                     guest_badge: "Cumments guest",
+                    identity_tag_title: "Stable identity marker for the same guest; renaming does not change it",
                     role_owner: "Owner",
                     role_co_manager: "Co-manager",
                     role_moderator: "Moderator",
@@ -1168,6 +1170,17 @@
                 return author.public_key || author.mxid || comment.event_id;
             }
 
+            // Stable, short, deterministic tag for a guest identity. The
+            // display name may change freely; the public key never does, so
+            // this tag is how the UI shows "same person, different name".
+            function guestIdentityTag(publicKey) {
+                let hash = 0;
+                for (const ch of publicKey) {
+                    hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+                }
+                return "#" + hash.toString(16).padStart(6, "0").slice(0, 6);
+            }
+
             function mxidShort(mxid) {
                 return mxid.replace(/^@/, "").split(":")[0];
             }
@@ -1566,6 +1579,10 @@
                 const badge = isGuest
                     ? `<span class="text-[10px] font-medium text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">${t("guest_badge")}</span>`
                     : `<span class="text-[10px] font-medium text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">Matrix</span>`;
+                const identityTag =
+                    isGuest && comment.author.public_key
+                        ? `<span class="text-[10px] font-mono text-slate-400" title="${escapeHtml(t("identity_tag_title"))}">${escapeHtml(guestIdentityTag(comment.author.public_key))}</span>`
+                        : "";
 
                 el.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
@@ -1580,6 +1597,7 @@
                                         ${escapeHtml(authorName(comment))}
                                     </span>
                                     ${badge}
+                                    ${identityTag}
                                     ${governanceBadge(comment)}
                                 </div>
                                 <div class="text-xs text-slate-400 mt-0.5">${time}${edited}</div>
