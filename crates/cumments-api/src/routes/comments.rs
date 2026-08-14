@@ -196,7 +196,7 @@ pub(crate) async fn query_comments_handler(
     };
     query.validate().map_err(AppError::Validation)?;
 
-    tracing::info!(
+    tracing::debug!(
         "QUERY comments for site: {}, post: {} (page: {:?}, per_page: {:?})",
         site_id_val.as_str(),
         post_slug_val.as_str(),
@@ -419,7 +419,7 @@ pub(crate) async fn post_comment_handler(
         .await
     {
         Ok(IdempotencyOutcome::Accepted { submission_id }) => {
-            tracing::info!("Successfully saved a new a comment submission.");
+            tracing::debug!("Successfully saved a new a comment submission.");
             state.submission_notify.notify_one();
             Ok(accepted_response(submission_id, false))
         }
@@ -592,7 +592,7 @@ async fn delete_comment_common(
         .await
     {
         Ok(IdempotencyOutcome::Accepted { submission_id }) => {
-            tracing::info!("Successfully saved a delete a comment submission.");
+            tracing::debug!("Successfully saved a delete a comment submission.");
             state.submission_notify.notify_one();
             Ok(accepted_response(submission_id, false))
         }
@@ -779,7 +779,7 @@ async fn update_comment_common(
         .await
     {
         Ok(IdempotencyOutcome::Accepted { submission_id }) => {
-            tracing::info!("Successfully saved an update a comment submission.");
+            tracing::debug!("Successfully saved an update a comment submission.");
             state.submission_notify.notify_one();
             Ok(accepted_response(submission_id, false))
         }
@@ -1040,7 +1040,7 @@ pub(crate) async fn location_handler(
         .await
     {
         Ok(IdempotencyOutcome::Accepted { submission_id }) => {
-            tracing::info!("Successfully saved a new location submission.");
+            tracing::debug!("Successfully saved a new location submission.");
             state.submission_notify.notify_one();
             Ok(accepted_response(submission_id, false))
         }

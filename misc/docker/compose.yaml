@@ -77,7 +77,9 @@ services:
       CUMMENTS__MATRIX__APPSERVICE__AS_TOKEN: "<as_token>"
       CUMMENTS__MATRIX__APPSERVICE__HS_TOKEN: "<hs_token>"
       CUMMENTS__MATRIX__APPSERVICE__REGISTRATION_FILE: /etc/cumments/registration.yaml
-      RUST_LOG: info
+      # sqlx logs every statement (with full SQL text) at INFO; quiet it so
+      # container logs show Cumments' own INFO events instead of query noise.
+      RUST_LOG: info,sqlx=warn
     depends_on:
       - tuwunel
 

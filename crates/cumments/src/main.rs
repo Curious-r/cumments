@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
 
     // Logs go to stderr so machine-readable CLI output (e.g. the
     // registration YAML on stdout) stays clean when redirected.

@@ -53,8 +53,9 @@ WORKDIR /srv/cumments
 
 EXPOSE 7931 3001
 
-# Set default log level
-ENV RUST_LOG=info
+# Set default log level; sqlx is quieted because it logs every SQL statement
+# (including full statement text) at INFO.
+ENV RUST_LOG=info,sqlx=warn
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget -q -O /dev/null "http://127.0.0.1:${CUMMENTS__SERVER__PORT:-7931}/health" || exit 1
