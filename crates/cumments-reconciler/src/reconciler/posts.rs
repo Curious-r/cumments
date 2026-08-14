@@ -158,6 +158,7 @@ impl PostsPass {
                                 &command.author_signature,
                                 &command.author_challenge,
                                 Some(id),
+                                pending.force_new_txn,
                             )
                             .await
                     } else {
@@ -176,6 +177,7 @@ impl PostsPass {
                                 reply_to_body.as_deref(),
                                 reply_to_sender.as_deref(),
                                 Some(id),
+                                pending.force_new_txn,
                             )
                             .await
                     };

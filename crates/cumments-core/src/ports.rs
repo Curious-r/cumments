@@ -70,6 +70,12 @@ pub trait SubmissionStore: Send + Sync {
     /// many rows were recovered.
     async fn recover_expired_submission_leases(&self) -> Result<u64>;
 
+    /// Marks a post submission so its next send uses a fresh transaction ID.
+    /// Called when the timeout pass confirmed the recorded event is absent,
+    /// which otherwise would keep reusing a deterministic ID that points at
+    /// a ghost event.
+    async fn mark_post_submission_force_new_txn(&self, id: i64) -> Result<()>;
+
     /// Atomically claims up to `limit` due post submissions, oldest first,
     /// marking them `processing` with a lease expiring at `lease_until`.
     async fn claim_pending_post_submissions(
@@ -638,6 +644,10 @@ pub trait MatrixDriver: Send + Sync {
         // the projector can close the loop even if the push arrives before the
         // reconciler's write-back.
         submission_id: Option<i64>,
+        // When true, use a fresh random transaction ID even though a
+        // submission ID is available. Set after a timeout pass confirmed
+        // the deterministic ID points at an event absent from the homeserver.
+        force_new_txn: bool,
     ) -> Result<String>;
 
     /// Sends a reaction (`m.reaction`) as the guest's virtual user.
@@ -678,6 +688,8 @@ pub trait MatrixDriver: Send + Sync {
         author_signature: &str,
         author_challenge: &str,
         submission_id: Option<i64>,
+        // See [`Self::post_message`].
+        force_new_txn: bool,
     ) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.

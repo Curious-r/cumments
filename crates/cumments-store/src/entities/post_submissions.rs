@@ -32,6 +32,9 @@ pub struct Model {
     /// (network/homeserver errors). Dead-lettered after a threshold so
     /// submissions cannot sit in limbo forever.
     pub timeout_check_errors: i64,
+    /// Set when a previous send was confirmed absent on the homeserver; the
+    /// next attempt must use a fresh transaction ID.
+    pub force_new_txn: bool,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

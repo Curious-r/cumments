@@ -106,6 +106,7 @@ impl AppServiceMatrixDriver {
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
         submission_id: Option<i64>,
+        force_new_txn: bool,
     ) -> Result<String> {
         // 1. Resolve virtual user via the store (includes site_id)
         let virtual_user = self
@@ -147,7 +148,11 @@ impl AppServiceMatrixDriver {
             ),
         };
 
-        let txn_id = self.txn_id("post", submission_id);
+        let txn_id = if force_new_txn {
+            self.fresh_txn_id("post")
+        } else {
+            self.txn_id("post", submission_id)
+        };
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),
@@ -289,6 +294,7 @@ impl AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         submission_id: Option<i64>,
+        force_new_txn: bool,
     ) -> Result<String> {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
@@ -310,7 +316,11 @@ impl AppServiceMatrixDriver {
             &guest_id,
             submission_id,
         );
-        let txn_id = self.txn_id("locate", submission_id);
+        let txn_id = if force_new_txn {
+            self.fresh_txn_id("locate")
+        } else {
+            self.txn_id("locate", submission_id)
+        };
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),

@@ -206,6 +206,36 @@ async fn pending_submission_batch_is_limited() {
 }
 
 #[tokio::test]
+async fn force_new_txn_flag_is_claimed_with_the_submission() {
+    let store = DbStore::connect(&test_db_url("force-new-txn"))
+        .await
+        .expect("connect db");
+    let id = store
+        .save_post_submission(&post_command())
+        .await
+        .expect("save submission");
+    store
+        .mark_post_submission_force_new_txn(id)
+        .await
+        .expect("mark fresh txn");
+
+    let claimed = store
+        .claim_pending_post_submissions(100, lease(Duration::minutes(5)))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert!(
+        claimed[0].force_new_txn,
+        "timeout-confirmed-absent submissions must use a fresh transaction ID"
+    );
+
+    store
+        .mark_post_submission_waiting_for_sync(id, "$event:hs", "!room:hs")
+        .await
+        .expect("mark waiting for sync");
+}
+
+#[tokio::test]
 async fn failure_records_schedule_retry_then_dead_letters() {
     let store = DbStore::connect(&test_db_url("retry"))
         .await

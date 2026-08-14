@@ -112,6 +112,10 @@ impl TimeoutsPass {
                             .submission_store
                             .reset_post_timeout_confirmations(id)
                             .await?;
+                        self.deps
+                            .submission_store
+                            .mark_post_submission_force_new_txn(id)
+                            .await?;
                         let retrying = self
                             .deps
                             .submission_store

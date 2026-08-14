@@ -114,6 +114,12 @@ impl AppServiceMatrixDriver {
         format_txn_id(kind, submission_id)
     }
 
+    /// A fresh random transaction ID for retries after a confirmed-absent
+    /// event, so the homeserver does not keep returning the old ghost event.
+    fn fresh_txn_id(&self, kind: &str) -> String {
+        format_txn_id(kind, None)
+    }
+
     /// Make an authenticated CS API request with optional virtual user.
     fn request(
         &self,

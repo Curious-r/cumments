@@ -33,6 +33,9 @@ pub enum IdempotencyOutcome {
 pub struct PendingPostSubmission {
     pub id: i64,
     pub command: PostCommentCommand,
+    /// When true the previous send was confirmed absent on the homeserver
+    /// and the next attempt must use a fresh transaction ID.
+    pub force_new_txn: bool,
 }
 
 /// A delete submission together with its queue row id.

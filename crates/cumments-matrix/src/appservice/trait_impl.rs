@@ -76,6 +76,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
         submission_id: Option<i64>,
+        force_new_txn: bool,
     ) -> Result<String> {
         self.post_message_impl(
             room_id,
@@ -90,6 +91,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             reply_to_body,
             reply_to_sender,
             submission_id,
+            force_new_txn,
         )
         .await
     }
@@ -149,6 +151,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         submission_id: Option<i64>,
+        force_new_txn: bool,
     ) -> Result<String> {
         self.post_location_impl(
             room_id,
@@ -160,6 +163,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             submission_id,
+            force_new_txn,
         )
         .await
     }

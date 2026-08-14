@@ -125,6 +125,7 @@ impl SubmissionStore for DbStore {
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
+            force_new_txn: Set(false),
             author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -197,6 +198,7 @@ impl SubmissionStore for DbStore {
             timeout_confirmations: Set(0),
             timeout_check_errors: Set(0),
             last_timeout_confirmation_at: Set(None),
+            force_new_txn: Set(false),
             author_public_key: Set(Some(command.author_public_key.clone())),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -371,6 +373,27 @@ impl SubmissionStore for DbStore {
         Ok(recovered)
     }
 
+    async fn mark_post_submission_force_new_txn(&self, id: i64) -> Result<()> {
+        post_submissions::Entity::update_many()
+            .col_expr(
+                post_submissions::Column::ForceNewTxn,
+                sea_orm::sea_query::Expr::value(true),
+            )
+            .col_expr(
+                post_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(post_submissions::Column::Id.eq(id))
+            .filter(post_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
     async fn claim_pending_post_submissions(
         &self,
         limit: u64,
@@ -384,7 +407,11 @@ impl SubmissionStore for DbStore {
         let mut submissions = Vec::new();
         for m in models {
             match serde_json::from_str::<PostCommentCommand>(&m.payload) {
-                Ok(command) => submissions.push(PendingPostSubmission { id: m.id, command }),
+                Ok(command) => submissions.push(PendingPostSubmission {
+                    id: m.id,
+                    command,
+                    force_new_txn: m.force_new_txn,
+                }),
                 Err(e) => warn!(
                     "Skipping corrupt post command {} (will not block the batch): {:#}",
                     m.id, e
@@ -469,6 +496,10 @@ impl SubmissionStore for DbStore {
                         sea_orm::sea_query::Expr::value(
                             Option::<chrono::DateTime<chrono::Utc>>::None,
                         ),
+                    )
+                    .col_expr(
+                        post_submissions::COLUMN.force_new_txn,
+                        sea_orm::sea_query::Expr::value(false),
                     )
                     .filter(post_submissions::COLUMN.id.eq(id))
                     // Never regress an already-completed command: if the
@@ -1128,7 +1159,11 @@ impl DbStore {
         let mut submissions = Vec::new();
         for m in models {
             match serde_json::from_str::<PostCommentCommand>(&m.payload) {
-                Ok(command) => submissions.push(PendingPostSubmission { id: m.id, command }),
+                Ok(command) => submissions.push(PendingPostSubmission {
+                    id: m.id,
+                    command,
+                    force_new_txn: m.force_new_txn,
+                }),
                 Err(e) => warn!(
                     "Skipping corrupt post command {} (will not block the batch): {:#}",
                     m.id, e
