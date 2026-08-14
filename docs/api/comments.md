@@ -104,6 +104,11 @@ Successful writes are asynchronous and return `202` with the queue row ID:
 { "submission_id": 42 }
 ```
 
+The `202` acknowledges that the submission is durably stored in the local
+queue; it does not mean the comment exists in Matrix yet. See
+[Idempotent writes](index.md#idempotent-writes) for the exact durability
+semantics.
+
 The projected comment (list/SSE `message_created`) carries the same
 `submission_id` when it was submitted through the Cumments API, so clients can
 correlate the accepted request with the final comment. Matrix-native comments

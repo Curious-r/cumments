@@ -62,6 +62,14 @@ can retry the exact same request with the same `Idempotency-Key` header; the
 server detects the duplicate and returns the original `submission_id` again with
 `Idempotent-Replayed: true`, without queueing a second submission.
 
+`202` is a local queue acknowledgement: the submission is durably persisted
+in Cumments' SQLite database and will be converged to Matrix while that
+record survives. It is not proof that the comment exists in Matrix yet.
+Matrix becomes authoritative only when the event is written; if the local
+database is lost before then, the submission may be lost and `backfill`
+cannot recover it because no Matrix event was created. See
+[Architecture](../architecture.md#submission-durability).
+
 Rules:
 
 - The key is mandatory (missing or invalid values return

@@ -56,6 +56,19 @@ The deciding question for each is how strong the once-only guarantee must be:
 write-side idempotency keys for work that must not duplicate, natural
 idempotency for work that merely has to converge.
 
+### Submission durability
+
+`202 { "submission_id": ... }` means the submission row is durably recorded
+in the local SQLite queue and will be retried while that record survives. It
+does **not** mean the Matrix event exists yet. Matrix becomes the source of
+truth only when the event is written; until then the submission is local
+coordination state. If the local database is destroyed before the reconciler
+writes the event, the accepted submission can be lost, and `backfill` cannot
+recover it because no Matrix event was ever created. The practical contract
+is best-effort convergence from a locally durable queue, not at-least-once
+delivery across local-database loss. Idempotency keys protect against
+duplicate submissions while the local record survives.
+
 ### Boundaries to watch
 
 - The reconciler is a set of independent controllers, one task per pass, each
