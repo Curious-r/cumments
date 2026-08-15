@@ -160,3 +160,60 @@ async fn list_active_rooms_returns_room_ids() {
         .expect("list active rooms for site");
     assert_eq!(site_rooms, vec!["!room:hs"]);
 }
+
+#[tokio::test]
+async fn state_events_can_be_read_and_content_replaced_by_event_id() {
+    let store = DbStore::connect(&test_db_url("state-event-content"))
+        .await
+        .expect("connect db");
+    store
+        .save_state_event(&RoomStateEvent {
+            event_id: "$name:hs".to_string(),
+            room_id: "!room:hs".to_string(),
+            event_type: "m.room.name".to_string(),
+            state_key: String::new(),
+            sender: "@alice:hs".to_string(),
+            origin_server_ts: 100,
+            content_json: serde_json::json!({ "name": "old" }),
+        })
+        .await
+        .expect("save state event");
+
+    let stored = store
+        .get_state_event("$name:hs")
+        .await
+        .expect("get state event")
+        .expect("state event exists");
+    assert_eq!(stored.event_type, "m.room.name");
+    assert_eq!(stored.content_json["name"], "old");
+
+    // Redaction stripping replaces the content in place.
+    assert!(
+        store
+            .update_state_event_content("$name:hs", &serde_json::json!({}))
+            .await
+            .expect("update content")
+    );
+    let stripped = store
+        .get_state_event("$name:hs")
+        .await
+        .expect("get state event")
+        .expect("state event exists");
+    assert_eq!(stripped.content_json, serde_json::json!({}));
+    assert_eq!(stripped.sender, "@alice:hs", "other columns stay intact");
+
+    // Unknown events are a clean no-op.
+    assert!(
+        !store
+            .update_state_event_content("$missing:hs", &serde_json::json!({}))
+            .await
+            .expect("update missing")
+    );
+    assert!(
+        store
+            .get_state_event("$missing:hs")
+            .await
+            .expect("get missing")
+            .is_none()
+    );
+}

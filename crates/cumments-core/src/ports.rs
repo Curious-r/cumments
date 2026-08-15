@@ -369,6 +369,18 @@ pub trait RoomStore: Send + Sync {
     /// Stores one room state event (idempotent by event ID).
     async fn save_state_event(&self, event: &RoomStateEvent) -> Result<()>;
 
+    /// Looks up one stored state event by its Matrix event ID.
+    async fn get_state_event(&self, event_id: &str) -> Result<Option<RoomStateEvent>>;
+
+    /// Replaces the stored content of a state event (e.g. after a redaction
+    /// stripped it per the room-version algorithm). Returns `false` when the
+    /// event is not stored.
+    async fn update_state_event_content(
+        &self,
+        event_id: &str,
+        content: &serde_json::Value,
+    ) -> Result<bool>;
+
     /// Derives the current room metadata from the latest state events.
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<RoomMetadata>>;
 

@@ -95,6 +95,31 @@ impl RoomStore for DbStore {
         Ok(())
     }
 
+    async fn get_state_event(&self, event_id: &str) -> Result<Option<RoomStateEvent>> {
+        let model = room_state_events::Entity::find_by_id(event_id)
+            .one(&self.db)
+            .await?;
+        Ok(model.map(state_event_from_model))
+    }
+
+    async fn update_state_event_content(
+        &self,
+        event_id: &str,
+        content: &serde_json::Value,
+    ) -> Result<bool> {
+        let result = room_state_events::Entity::update_many()
+            .filter(room_state_events::Column::EventId.eq(event_id))
+            .col_expr(
+                room_state_events::Column::ContentJson,
+                sea_orm::sea_query::Expr::value(
+                    serde_json::to_string(content).unwrap_or_else(|_| "null".to_string()),
+                ),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
+    }
+
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<RoomMetadata>> {
         let events = room_state_events::Entity::find()
             .filter(room_state_events::Column::RoomId.eq(room_id))
