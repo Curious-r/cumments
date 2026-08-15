@@ -6,6 +6,7 @@
 //! `PushReceiver` (and any future transport) calls into these same
 //! functions.
 
+use crate::backfill::BackfillRequest;
 use crate::parsed::{
     ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction, ParsedRoomState,
     ParsedSpaceChild,
@@ -35,8 +36,7 @@ use cumments_core::{
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
-use tokio::sync::Mutex;
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tracing::{debug, info, instrument, warn};
 
 // ── Core processing functions ─────────────────────────────────────
@@ -58,6 +58,7 @@ pub struct EventProcessor {
     admin_mxids: Vec<String>,
     command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
     active_sites: Mutex<HashMap<String, String>>,
+    backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
@@ -82,6 +83,9 @@ pub struct EventProcessorDeps {
     pub driver: Option<Arc<dyn MatrixDriver>>,
     /// Instance operators for chat commands (from `security.admin_mxids`).
     pub admin_mxids: Vec<String>,
+    /// Optional bot-triggered backfill queue (set when the binary runs a
+    /// backfill worker).
+    pub backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
@@ -117,6 +121,7 @@ fn help_text() -> &'static str {
 !cumments site <id> retire --confirm
 !cumments rooms quarantined               （实例管理员）
 !cumments room <room_id> reinstate --confirm
+!cumments backfill [max_pages]            （实例管理员）
 破坏性命令需要 --confirm；敏感 token 只在本私聊显示。"
 }
 
@@ -137,6 +142,7 @@ impl EventProcessor {
             admin_mxids: deps.admin_mxids,
             command_rate: Mutex::new(HashMap::new()),
             active_sites: Mutex::new(HashMap::new()),
+            backfill_tx: deps.backfill_tx,
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
@@ -567,6 +573,13 @@ impl EventProcessor {
                 };
                 Ok(CommandOutcome::plain(reply))
             }
+            ["backfill"] => self.backfill_command(event, 500).await,
+            ["backfill", pages] => {
+                let pages: u32 = pages
+                    .parse()
+                    .map_err(|_| anyhow!("无效的 max_pages：{pages}"))?;
+                self.backfill_command(event, pages).await
+            }
             ["room", room_id, "reinstate"] => {
                 self.require_admin(event)?;
                 Ok(CommandOutcome {
@@ -587,6 +600,34 @@ impl EventProcessor {
                 })
             }
             _ => Ok(CommandOutcome::plain(help_text())),
+        }
+    }
+
+    async fn backfill_command(
+        &self,
+        event: &ParsedRoomMessage,
+        max_pages: u32,
+    ) -> Result<CommandOutcome> {
+        self.require_admin(event)?;
+        let Some(tx) = &self.backfill_tx else {
+            return Ok(CommandOutcome::plain(
+                "backfill 未启用（当前进程未运行 worker）；可用 CLI：cumments backfill",
+            ));
+        };
+        match tx.try_send(BackfillRequest {
+            actor_mxid: event.sender.clone(),
+            reply_room_id: event.room_id.clone(),
+            max_pages,
+        }) {
+            Ok(()) => Ok(CommandOutcome::plain(format!(
+                "backfill 已开始（每房间最多 {max_pages} 页），完成后会通知你。"
+            ))),
+            Err(mpsc::error::TrySendError::Full(_)) => Ok(CommandOutcome::plain(
+                "已有 backfill 正在运行，请稍后再试。",
+            )),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Ok(CommandOutcome::plain("backfill worker 已停止。"))
+            }
         }
     }
 

@@ -55,6 +55,15 @@ fn processor(
     members: Vec<String>,
     admin_mxids: Vec<String>,
 ) -> EventProcessor {
+    processor_with(store, members, admin_mxids, None)
+}
+
+fn processor_with(
+    store: Arc<DbStore>,
+    members: Vec<String>,
+    admin_mxids: Vec<String>,
+    backfill_tx: Option<tokio::sync::mpsc::Sender<cumments_projector::backfill::BackfillRequest>>,
+) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
     EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
@@ -71,6 +80,7 @@ fn processor(
         )),
         driver: Some(Arc::new(common::TestDriver::with_joined_members(members))),
         admin_mxids,
+        backfill_tx,
         event_bus: tx,
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
@@ -276,5 +286,54 @@ async fn commands_outside_private_channel_are_consumed_silently() {
             .await
             .expect("site")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn backfill_queues_for_admin_and_rejects_busy() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("backfill"))
+            .await
+            .expect("connect db"),
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let p = processor_with(
+        store.clone(),
+        private_members("@admin:hs"),
+        vec!["@admin:hs".to_string()],
+        Some(tx.clone()),
+    );
+    assert!(
+        p.process_bot_command(&command_message("@admin:hs", "!cumments backfill 10",))
+            .await
+            .expect("process")
+    );
+    // Channel is full while the worker is busy: the second command reports
+    // busy instead of queueing.
+    assert!(
+        p.process_bot_command(&command_message("@admin:hs", "!cumments backfill"))
+            .await
+            .expect("process")
+    );
+    let request = rx.try_recv().expect("exactly one backfill queued");
+    assert_eq!(request.actor_mxid, "@admin:hs");
+    assert_eq!(request.max_pages, 10);
+    assert!(
+        rx.try_recv().is_err(),
+        "busy backfill must not queue a second request"
+    );
+
+    // Non-admins are denied before touching the queue.
+    let denied = processor_with(
+        store.clone(),
+        private_members("@mallory:hs"),
+        Vec::new(),
+        Some(tx),
+    );
+    assert!(
+        denied
+            .process_bot_command(&command_message("@mallory:hs", "!cumments backfill",))
+            .await
+            .expect("process")
     );
 }

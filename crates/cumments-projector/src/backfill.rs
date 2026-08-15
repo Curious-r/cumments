@@ -20,6 +20,7 @@ use tracing::{debug, info, warn};
 use crate::event_processor::EventProcessor;
 use crate::parsed::parse_room_identity;
 use crate::push_receiver::{PushEvent, process_single_event};
+use tokio::sync::mpsc;
 
 const PAGE_SIZE: u32 = 100;
 const PAGE_DELAY: Duration = Duration::from_millis(50);
@@ -44,6 +45,75 @@ pub struct Backfiller {
 pub struct BackfillSummary {
     pub rooms: usize,
     pub events: usize,
+}
+
+/// A bot-triggered backfill request. The worker replies to `reply_room_id`
+/// (the private DM) when the run finishes.
+#[derive(Debug, Clone)]
+pub struct BackfillRequest {
+    pub actor_mxid: String,
+    pub reply_room_id: String,
+    pub max_pages: u32,
+}
+
+/// Sequential backfill worker: single-flight by construction (one receiver,
+/// one job at a time). Completion or failure is reported as a bot DM.
+pub struct BackfillWorker {
+    rx: mpsc::Receiver<BackfillRequest>,
+    driver: Arc<dyn MatrixDriver>,
+    processor: Arc<EventProcessor>,
+    site_store: Arc<dyn SiteStore>,
+    registry_store: Arc<dyn RegistryStore>,
+    cursor_store: Arc<dyn BackfillCursorStore>,
+}
+
+impl BackfillWorker {
+    pub fn new(
+        rx: mpsc::Receiver<BackfillRequest>,
+        driver: Arc<dyn MatrixDriver>,
+        processor: Arc<EventProcessor>,
+        site_store: Arc<dyn SiteStore>,
+        registry_store: Arc<dyn RegistryStore>,
+        cursor_store: Arc<dyn BackfillCursorStore>,
+    ) -> Self {
+        Self {
+            rx,
+            driver,
+            processor,
+            site_store,
+            registry_store,
+            cursor_store,
+        }
+    }
+
+    pub async fn run(mut self) {
+        while let Some(request) = self.rx.recv().await {
+            let backfiller = Backfiller::new(
+                self.driver.clone(),
+                self.processor.clone(),
+                self.site_store.clone(),
+                self.registry_store.clone(),
+                self.cursor_store.clone(),
+            );
+            let message = match backfiller.run(request.max_pages).await {
+                Ok(summary) => format!(
+                    "backfill 完成：{} 个房间 / {} 个事件",
+                    summary.rooms, summary.events
+                ),
+                Err(error) => format!("backfill 失败：{:#}", error),
+            };
+            if let Err(error) = self
+                .driver
+                .send_bot_message(&request.reply_room_id, &message)
+                .await
+            {
+                warn!(
+                    "backfill completion DM to {} failed: {:#}",
+                    request.actor_mxid, error
+                );
+            }
+        }
+    }
 }
 
 /// A joined room that participates in backfill.

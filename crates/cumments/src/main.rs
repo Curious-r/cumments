@@ -92,6 +92,7 @@ async fn main() -> Result<()> {
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
     let admin_token_hash = config::admin_token_hash(&settings.security)?;
     let admin_mxids = config::validate_admin_mxids(&settings.security)?;
+    let (backfill_tx, backfill_rx) = tokio::sync::mpsc::channel(1);
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
     {
@@ -249,6 +250,7 @@ async fn main() -> Result<()> {
             site_service: site_service.clone(),
             driver: Some(driver.clone()),
             admin_mxids: admin_mxids.clone(),
+            backfill_tx: Some(backfill_tx),
             event_bus: event_bus.clone(),
             projection_notify: projection_notify.clone(),
             server_name: settings
@@ -259,6 +261,18 @@ async fn main() -> Result<()> {
         },
     ));
     tracing::info!("EventProcessor initialized.");
+
+    // Bot-triggered backfill runs in a single worker: one job at a time,
+    // completion reported back as a DM to the requester.
+    let backfill_worker = cumments_projector::backfill::BackfillWorker::new(
+        backfill_rx,
+        driver.clone(),
+        event_processor.clone(),
+        db_store.clone(),
+        db_store.clone(),
+        db_store.clone(),
+    );
+    tokio::spawn(backfill_worker.run());
 
     // ─────────────────────────────────────────────────────────────
     // 7b. Handle the backfill subcommand (needs driver + processor)
