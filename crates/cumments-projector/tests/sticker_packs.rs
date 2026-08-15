@@ -1,4 +1,5 @@
 use cumments_core::ports::{SiteStore, StickerPackStore};
+use cumments_projector::backfill::Backfiller;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{ParsedRoomRedaction, ParsedRoomState};
 use cumments_store::DbStore;
@@ -305,4 +306,156 @@ async fn redacting_an_old_version_keeps_the_current_pack() {
         .expect("get pack")
         .expect("pack exists");
     assert_eq!(current.event_id, "$v2");
+}
+
+async fn backfill_processor(
+    store: Arc<DbStore>,
+    driver: Arc<common::TestDriver>,
+) -> EventProcessor {
+    let (tx, _rx) = broadcast::channel(16);
+    EventProcessor::new(EventProcessorDeps {
+        site_store: store.clone(),
+        registry_store: store.clone(),
+        message_store: store.clone(),
+        room_store: store.clone(),
+        governance_store: store.clone(),
+        sticker_pack_store: store.clone(),
+        role_claim_store: store.clone(),
+        submission_store: store.clone(),
+        audit_store: store.clone(),
+        site_auth_store: store.clone(),
+        site_auth_policy: common::test_policy(),
+        site_service: Arc::new(cumments_core::site_service::SiteService::new(
+            store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+        )),
+        driver: Some(driver),
+        operator_mxids: Vec::new(),
+        backfill_tx: None,
+        event_bus: tx,
+        governance_notify: Arc::new(tokio::sync::Notify::new()),
+        projection_notify: Arc::new(tokio::sync::Notify::new()),
+        server_name: Some("hs".to_string()),
+    })
+}
+
+fn raw_state_event(
+    event_id: &str,
+    ts: i64,
+    state_key: &str,
+    content: serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "type": "m.room.image_pack",
+        "event_id": event_id,
+        "room_id": "!space:hs",
+        "sender": "@owner:hs",
+        "origin_server_ts": ts,
+        "state_key": state_key,
+        "content": content,
+    })
+}
+
+fn raw_redaction_event(event_id: &str, ts: i64, redacts: &str) -> serde_json::Value {
+    json!({
+        "type": "m.room.redaction",
+        "event_id": event_id,
+        "room_id": "!space:hs",
+        "sender": "@owner:hs",
+        "origin_server_ts": ts,
+        "redacts": redacts,
+        "content": {},
+    })
+}
+
+#[tokio::test]
+async fn backfill_replays_packs_and_redactions_in_order() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("backfill"))
+            .await
+            .expect("connect db"),
+    );
+    let driver = Arc::new(
+        common::TestDriver::with_joined_rooms(vec!["!space:hs".to_string()])
+            .with_room_metadata("!space:hs", json!({"site_id": "my-blog"}))
+            .with_room_events(
+                "!space:hs",
+                vec![
+                    raw_state_event(
+                        "$v1",
+                        100,
+                        "default",
+                        json!({"images": {"cat": {"url": "mxc://hs/1"}}}),
+                    ),
+                    raw_state_event(
+                        "$v2",
+                        200,
+                        "default",
+                        json!({"images": {"dog": {"url": "mxc://hs/2"}}}),
+                    ),
+                    raw_redaction_event("$red", 300, "$v2"),
+                ],
+            ),
+    );
+    let processor = backfill_processor(store.clone(), driver.clone()).await;
+
+    let summary = Backfiller::new(
+        driver.clone(),
+        Arc::new(processor),
+        store.clone(),
+        store.clone(),
+        store.clone(),
+    )
+    .run(10)
+    .await
+    .expect("backfill");
+
+    assert_eq!(summary.rooms, 1);
+    // Redaction of the current pack removes it; the previous version does
+    // not become current again (spec: redacted state keeps its slot empty).
+    assert!(
+        store
+            .list_site_packs("my-blog")
+            .await
+            .expect("list packs")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn backfill_restores_packs_after_db_reset() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("backfill-restore"))
+            .await
+            .expect("connect db"),
+    );
+    let driver = Arc::new(
+        common::TestDriver::with_joined_rooms(vec!["!space:hs".to_string()])
+            .with_room_metadata("!space:hs", json!({"site_id": "my-blog"}))
+            .with_room_events(
+                "!space:hs",
+                vec![raw_state_event(
+                    "$v1",
+                    100,
+                    "default",
+                    json!({"images": {"cat": {"url": "mxc://hs/1"}}}),
+                )],
+            ),
+    );
+    let processor = backfill_processor(store.clone(), driver.clone()).await;
+
+    Backfiller::new(
+        driver.clone(),
+        Arc::new(processor),
+        store.clone(),
+        store.clone(),
+        store.clone(),
+    )
+    .run(10)
+    .await
+    .expect("backfill");
+
+    let packs = store.list_site_packs("my-blog").await.expect("list packs");
+    assert_eq!(packs.len(), 1);
+    assert_eq!(packs[0].pack.state_key, "default");
+    assert_eq!(packs[0].pack.content.images[0].shortcode, "cat");
 }

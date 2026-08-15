@@ -5,6 +5,7 @@
 
 mod matrix;
 
+use std::collections::HashMap;
 use tokio::sync::Mutex;
 
 /// In-memory [`MatrixDriver`] double that records the calls each test
@@ -20,6 +21,9 @@ pub struct TestDriver {
     pub left_as: Mutex<Vec<(String, String)>>,
     pub replies: Mutex<Vec<(String, String)>>,
     pub deleted: Mutex<Vec<(String, String)>>,
+    pub joined_rooms: Mutex<Vec<String>>,
+    pub room_events: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    pub room_metadata: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl TestDriver {
@@ -31,6 +35,9 @@ impl TestDriver {
             left_as: Mutex::new(Vec::new()),
             replies: Mutex::new(Vec::new()),
             deleted: Mutex::new(Vec::new()),
+            joined_rooms: Mutex::new(Vec::new()),
+            room_events: Mutex::new(HashMap::new()),
+            room_metadata: Mutex::new(HashMap::new()),
         }
     }
 
@@ -39,6 +46,33 @@ impl TestDriver {
             joined_members: Mutex::new(members),
             ..Self::new()
         }
+    }
+
+    pub fn with_joined_rooms(rooms: Vec<String>) -> Self {
+        Self {
+            joined_rooms: Mutex::new(rooms),
+            ..Self::new()
+        }
+    }
+
+    pub fn with_room_events(
+        mut self,
+        room_id: impl Into<String>,
+        events: Vec<serde_json::Value>,
+    ) -> Self {
+        self.room_events.get_mut().insert(room_id.into(), events);
+        self
+    }
+
+    pub fn with_room_metadata(
+        mut self,
+        room_id: impl Into<String>,
+        metadata: serde_json::Value,
+    ) -> Self {
+        self.room_metadata
+            .get_mut()
+            .insert(room_id.into(), metadata);
+        self
     }
 }
 

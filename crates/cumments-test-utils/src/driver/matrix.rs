@@ -54,7 +54,7 @@ impl MatrixDriver for TestDriver {
         Ok(())
     }
     async fn get_joined_rooms(&self) -> anyhow::Result<Vec<String>> {
-        unimplemented!("not used in this test")
+        Ok(self.joined_rooms.lock().await.clone())
     }
     async fn get_joined_members(&self, _room_id: &str) -> anyhow::Result<Vec<String>> {
         Ok(self.joined_members.lock().await.clone())
@@ -183,17 +183,27 @@ impl MatrixDriver for TestDriver {
 
     async fn get_room_events(
         &self,
-        _room_id: &str,
+        room_id: &str,
         _from: Option<&str>,
         _limit: u32,
     ) -> anyhow::Result<RoomEventPage> {
-        unimplemented!("not used in this test")
+        Ok(RoomEventPage {
+            events: self
+                .room_events
+                .lock()
+                .await
+                .get(room_id)
+                .cloned()
+                .unwrap_or_default(),
+            next_token: None,
+            has_more: false,
+        })
     }
-    async fn get_room_metadata(&self, _room_id: &str) -> anyhow::Result<Option<serde_json::Value>> {
-        unimplemented!("not used in this test")
+    async fn get_room_metadata(&self, room_id: &str) -> anyhow::Result<Option<serde_json::Value>> {
+        Ok(self.room_metadata.lock().await.get(room_id).cloned())
     }
     async fn get_room_canonical_alias(&self, _room_id: &str) -> anyhow::Result<Option<String>> {
-        unimplemented!("not used in this test")
+        Ok(None)
     }
     async fn event_exists(&self, _room_id: &str, _event_id: &str) -> anyhow::Result<bool> {
         unimplemented!("not used in this test")
