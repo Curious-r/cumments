@@ -4,6 +4,8 @@
 //! site's Space. This module only contains pure helpers that shape and
 //! validate that content; persistence and Matrix access live elsewhere.
 
+use crate::models::SiteId;
+use crate::ports::{MatrixDriver, SiteStore, StickerPackStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -84,6 +86,21 @@ pub enum StickerPackError {
     InvalidMetadata(String),
 }
 
+/// Errors from the site sticker-pack use cases shared by API and bot.
+#[derive(Debug, Error)]
+pub enum StickerPackUseCaseError {
+    #[error("invalid sticker pack input: {0}")]
+    Invalid(#[from] StickerPackError),
+    #[error("site {0} not found")]
+    SiteNotFound(String),
+    #[error("site {0} has no Matrix Space")]
+    SiteWithoutSpace(String),
+    #[error("sticker pack `{0}` not found")]
+    PackNotFound(String),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Whether a shortcode satisfies the MSC2545 grammar (`[a-zA-Z0-9-_]+`,
 /// at most 100 bytes).
 pub fn validate_shortcode(shortcode: &str) -> Result<(), StickerPackError> {
@@ -119,6 +136,251 @@ pub fn parse_mxc_url(url: &str) -> Result<(&str, &str), StickerPackError> {
 /// usages per MSC2545.
 pub fn is_sticker_usage(usage: &[String]) -> bool {
     usage.is_empty() || usage.iter().any(|u| u == "sticker")
+}
+
+/// Validates a pack id for the API/bot write paths (a path segment and a
+/// Matrix `state_key` that stays URL-friendly).
+pub fn validate_pack_id(pack_id: &str) -> Result<(), StickerPackError> {
+    if pack_id.is_empty()
+        || pack_id.len() > 100
+        || !pack_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err(StickerPackError::InvalidMetadata(format!(
+            "invalid pack id `{pack_id}`"
+        )));
+    }
+    Ok(())
+}
+
+/// Serializes normalized pack content back into the `m.room.image_pack`
+/// content object Cumments writes to Matrix.
+pub fn sticker_pack_content_to_value(content: &StickerPackContent) -> Value {
+    let images = content
+        .images
+        .iter()
+        .map(|image| {
+            let mut object = serde_json::Map::new();
+            object.insert("url".to_string(), Value::String(image.url.clone()));
+            if let Some(body) = &image.body {
+                object.insert("body".to_string(), Value::String(body.clone()));
+            }
+            if let Some(info) = &image.info {
+                object.insert("info".to_string(), info.clone());
+            }
+            (image.shortcode.clone(), Value::Object(object))
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    let mut pack = serde_json::Map::new();
+    if let Some(name) = &content.display_name {
+        pack.insert("display_name".to_string(), Value::String(name.clone()));
+    }
+    if let Some(avatar) = &content.avatar_url {
+        pack.insert("avatar_url".to_string(), Value::String(avatar.clone()));
+    }
+    if !content.usage.is_empty() {
+        pack.insert(
+            "usage".to_string(),
+            Value::Array(
+                content
+                    .usage
+                    .iter()
+                    .map(|u| Value::String(u.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(attribution) = &content.attribution {
+        pack.insert(
+            "attribution".to_string(),
+            Value::String(attribution.clone()),
+        );
+    }
+
+    let mut root = serde_json::Map::new();
+    root.insert("images".to_string(), Value::Object(images));
+    root.insert("pack".to_string(), Value::Object(pack));
+    Value::Object(root)
+}
+
+/// Lists the projected sticker packs of one site.
+pub async fn list_site_sticker_packs(
+    store: &dyn StickerPackStore,
+    site_id: &str,
+) -> Result<Vec<StickerPackProjection>, StickerPackUseCaseError> {
+    Ok(store.list_site_packs(site_id).await?)
+}
+
+/// Input for [`add_site_sticker`].
+pub struct AddStickerInput<'a> {
+    pub site_id: &'a str,
+    pub pack_id: &'a str,
+    pub shortcode: &'a str,
+    pub url: &'a str,
+    pub body: Option<String>,
+    pub info: Option<Value>,
+}
+
+/// Adds or replaces one sticker image in a site's pack (read-modify-write of
+/// the full `m.room.image_pack` state event). Creating a new pack is
+/// implicit; the pack is marked as a sticker pack.
+pub async fn add_site_sticker(
+    sites: &dyn SiteStore,
+    driver: &dyn MatrixDriver,
+    input: AddStickerInput<'_>,
+) -> Result<StickerPackProjection, StickerPackUseCaseError> {
+    let AddStickerInput {
+        site_id,
+        pack_id,
+        shortcode,
+        url,
+        body,
+        info,
+    } = input;
+    SiteId::new(site_id.to_string())
+        .map_err(|_| StickerPackError::InvalidMetadata("invalid site id".into()))?;
+    validate_pack_id(pack_id)?;
+    validate_shortcode(shortcode)?;
+    parse_mxc_url(url)?;
+    if let Some(ref body) = body
+        && (body.is_empty() || body.len() > 2048)
+    {
+        return Err(StickerPackError::InvalidMetadata("body is empty or too long".into()).into());
+    }
+    if let Some(ref info) = info
+        && !info.is_object()
+    {
+        return Err(StickerPackError::InvalidMetadata("info must be an object".into()).into());
+    }
+
+    let (space_id, mut content) =
+        resolve_pack_content(sites, driver, site_id, pack_id, true).await?;
+    if content.usage.is_empty() {
+        content.usage = vec!["sticker".to_string()];
+    }
+    if content.display_name.is_none() && content.images.is_empty() {
+        content.display_name = Some(pack_id.to_string());
+    }
+    if let Some(existing) = content.images.iter_mut().find(|i| i.shortcode == shortcode) {
+        existing.url = url.to_string();
+        existing.body = body.clone();
+        existing.info = info.clone();
+    } else {
+        content.images.push(StickerImage {
+            shortcode: shortcode.to_string(),
+            url: url.to_string(),
+            body,
+            info,
+        });
+        content.images.sort_by(|a, b| a.shortcode.cmp(&b.shortcode));
+    }
+
+    write_pack(driver, site_id, &space_id, pack_id, content).await
+}
+
+/// Removes one sticker image from a site's pack. Idempotent: removing a
+/// shortcode that is not present still rewrites the current state unchanged.
+pub async fn remove_site_sticker(
+    sites: &dyn SiteStore,
+    driver: &dyn MatrixDriver,
+    site_id: &str,
+    pack_id: &str,
+    shortcode: &str,
+) -> Result<StickerPackProjection, StickerPackUseCaseError> {
+    SiteId::new(site_id.to_string())
+        .map_err(|_| StickerPackError::InvalidMetadata("invalid site id".into()))?;
+    validate_pack_id(pack_id)?;
+    validate_shortcode(shortcode)?;
+
+    let (space_id, mut content) =
+        resolve_pack_content(sites, driver, site_id, pack_id, false).await?;
+    content.images.retain(|image| image.shortcode != shortcode);
+    write_pack(driver, site_id, &space_id, pack_id, content).await
+}
+
+/// Reads the current pack content (or an empty default for a new pack) for a
+/// site's Space.
+async fn resolve_pack_content(
+    sites: &dyn SiteStore,
+    driver: &dyn MatrixDriver,
+    site_id: &str,
+    pack_id: &str,
+    allow_create: bool,
+) -> Result<(String, StickerPackContent), StickerPackUseCaseError> {
+    let site = sites
+        .get_site(
+            &SiteId::new(site_id.to_string())
+                .map_err(|_| StickerPackError::InvalidMetadata("invalid site id".into()))?,
+        )
+        .await?
+        .ok_or_else(|| StickerPackUseCaseError::SiteNotFound(site_id.to_string()))?;
+    if site.matrix_space_id.is_empty() {
+        return Err(StickerPackUseCaseError::SiteWithoutSpace(
+            site_id.to_string(),
+        ));
+    }
+    let space_id = site.matrix_space_id;
+    let current = driver
+        .get_room_state(&space_id, IMAGE_PACK_EVENT_TYPE, pack_id)
+        .await?;
+    let content = match current.as_ref() {
+        None if allow_create => StickerPackContent::default(),
+        None => {
+            return Err(StickerPackUseCaseError::PackNotFound(pack_id.to_string()));
+        }
+        Some(current) => match parse_image_pack_content(&space_id, site_id, pack_id, current) {
+            Ok(Some(pack)) => pack.content,
+            Ok(None) => {
+                return Err(StickerPackError::InvalidMetadata(format!(
+                    "pack `{pack_id}` does not target stickers"
+                ))
+                .into());
+            }
+            Err(error) if allow_create => {
+                warn!(
+                    "Replacing malformed sticker pack {site_id}/{pack_id} during a write: {error}"
+                );
+                StickerPackContent::default()
+            }
+            Err(error) => {
+                return Err(StickerPackError::InvalidMetadata(format!(
+                    "existing pack `{pack_id}` is malformed: {error}"
+                ))
+                .into());
+            }
+        },
+    };
+    Ok((space_id, content))
+}
+
+/// Validates and writes the full pack state, returning the projection.
+async fn write_pack(
+    driver: &dyn MatrixDriver,
+    site_id: &str,
+    space_id: &str,
+    pack_id: &str,
+    content: StickerPackContent,
+) -> Result<StickerPackProjection, StickerPackUseCaseError> {
+    let value = sticker_pack_content_to_value(&content);
+    if value.to_string().len() > MAX_PACK_EVENT_BYTES {
+        return Err(StickerPackError::PackTooLarge.into());
+    }
+    let event_id = driver
+        .set_room_state(space_id, IMAGE_PACK_EVENT_TYPE, pack_id, &value)
+        .await?;
+    Ok(StickerPackProjection {
+        pack: StickerPack {
+            room_id: space_id.to_string(),
+            site_id: site_id.to_string(),
+            state_key: pack_id.to_string(),
+            content,
+        },
+        event_id,
+        sender: driver.sender_user_id().unwrap_or_default(),
+        origin_server_ts: chrono::Utc::now().timestamp_millis(),
+    })
 }
 
 /// Parses and validates an `m.room.image_pack` content object.

@@ -1,4 +1,8 @@
 use cumments_core::ports::{SiteStore, StickerPackStore};
+use cumments_core::sticker_packs::AddStickerInput;
+use cumments_core::sticker_packs::{
+    IMAGE_PACK_EVENT_TYPE, StickerPackUseCaseError, add_site_sticker, remove_site_sticker,
+};
 use cumments_projector::backfill::Backfiller;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{ParsedRoomRedaction, ParsedRoomState};
@@ -458,4 +462,106 @@ async fn backfill_restores_packs_after_db_reset() {
     assert_eq!(packs.len(), 1);
     assert_eq!(packs[0].pack.state_key, "default");
     assert_eq!(packs[0].pack.content.images[0].shortcode, "cat");
+}
+
+#[tokio::test]
+async fn use_cases_read_modify_write_pack_state() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("use-cases"))
+            .await
+            .expect("connect db"),
+    );
+    setup_site(&store).await;
+    let driver = Arc::new(common::TestDriver::new());
+
+    add_site_sticker(
+        store.as_ref(),
+        driver.as_ref(),
+        AddStickerInput {
+            site_id: "my-blog",
+            pack_id: "default",
+            shortcode: "cat",
+            url: "mxc://hs/1",
+            body: Some("a cat".to_string()),
+            info: None,
+        },
+    )
+    .await
+    .expect("add cat");
+
+    let state = || async {
+        driver
+            .room_state
+            .lock()
+            .await
+            .get(&(
+                "!space:hs".to_string(),
+                IMAGE_PACK_EVENT_TYPE.to_string(),
+                "default".to_string(),
+            ))
+            .cloned()
+            .expect("pack state written")
+    };
+    let written = state().await;
+    assert_eq!(written["pack"]["usage"][0], "sticker");
+    assert_eq!(written["images"]["cat"]["url"], "mxc://hs/1");
+
+    add_site_sticker(
+        store.as_ref(),
+        driver.as_ref(),
+        AddStickerInput {
+            site_id: "my-blog",
+            pack_id: "default",
+            shortcode: "dog",
+            url: "mxc://hs/2",
+            body: None,
+            info: None,
+        },
+    )
+    .await
+    .expect("add dog");
+    remove_site_sticker(store.as_ref(), driver.as_ref(), "my-blog", "default", "cat")
+        .await
+        .expect("remove cat");
+
+    let written = state().await;
+    assert!(written["images"].get("cat").is_none());
+    assert!(written["images"].get("dog").is_some());
+    assert_eq!(
+        driver.state_writes.lock().await.len(),
+        3,
+        "every add/remove rewrites the full state"
+    );
+}
+
+#[tokio::test]
+async fn use_cases_validate_input_and_missing_packs() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("use-case-errors"))
+            .await
+            .expect("connect db"),
+    );
+    setup_site(&store).await;
+    let driver = Arc::new(common::TestDriver::new());
+
+    let missing = remove_site_sticker(store.as_ref(), driver.as_ref(), "my-blog", "default", "cat")
+        .await
+        .expect_err("missing pack must fail");
+    assert!(matches!(missing, StickerPackUseCaseError::PackNotFound(_)));
+
+    let invalid = add_site_sticker(
+        store.as_ref(),
+        driver.as_ref(),
+        AddStickerInput {
+            site_id: "my-blog",
+            pack_id: "default",
+            shortcode: "bad!",
+            url: "mxc://hs/1",
+            body: None,
+            info: None,
+        },
+    )
+    .await
+    .expect_err("invalid shortcode must fail");
+    assert!(matches!(invalid, StickerPackUseCaseError::Invalid(_)));
 }
