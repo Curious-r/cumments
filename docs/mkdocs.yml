@@ -45,7 +45,7 @@ nav:
           - Comments: api/comments.md
           - Sites: api/sites.md
           - Governance: api/governance.md
-          - Admin: api/admin.md
+          - Operator: api/operator.md
           - Media: api/media.md
       - Configuration: configuration.md
       - CLI: cli.md

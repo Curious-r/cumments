@@ -152,17 +152,17 @@ pub fn operator_token_hash(security: &Security) -> Result<Option<String>> {
 }
 
 /// Validates and normalizes the chat-channel instance operators.
-pub fn validate_admin_mxids(security: &Security) -> Result<Vec<String>> {
-    let mut admins = Vec::with_capacity(security.operator_mxids.len());
+pub fn validate_operator_mxids(security: &Security) -> Result<Vec<String>> {
+    let mut operators = Vec::with_capacity(security.operator_mxids.len());
     for raw in &security.operator_mxids {
         let mxid = validate_governance_user_id(raw)
             .map_err(|e| anyhow::anyhow!("invalid operator_mxids entry `{raw}`: {e}"))?;
         if is_as_managed_user(&mxid) {
             bail!("operator_mxids must not contain Cumments service accounts: {mxid}");
         }
-        admins.push(mxid);
+        operators.push(mxid);
     }
-    Ok(admins)
+    Ok(operators)
 }
 
 /// Known example/placeholder secrets shipped in the repository. They are
@@ -392,7 +392,7 @@ mod tests {
             site_verification: SiteVerificationPolicy::Optional,
             operator_token: None,
             operator_mxids: vec![
-                "@admin:example.org".to_string(),
+                "@operator:example.org".to_string(),
                 "@_cumments_bot:example.org".to_string(),
             ],
             allow_private_verification_origins: false,
@@ -400,7 +400,7 @@ mod tests {
             media_sign_key: None,
         };
         assert!(
-            validate_admin_mxids(&invalid).is_err(),
+            validate_operator_mxids(&invalid).is_err(),
             "service accounts must not be instance operators"
         );
 
@@ -409,14 +409,14 @@ mod tests {
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
             operator_token: None,
-            operator_mxids: vec!["@admin:example.org".to_string()],
+            operator_mxids: vec!["@operator:example.org".to_string()],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
         };
         assert_eq!(
-            validate_admin_mxids(&valid).expect("valid admins"),
-            vec!["@admin:example.org".to_string()]
+            validate_operator_mxids(&valid).expect("valid operators"),
+            vec!["@operator:example.org".to_string()]
         );
     }
 }

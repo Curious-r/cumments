@@ -383,7 +383,7 @@ paths:
     x-cumments-query:
       tags: [Operator]
       summary: List managed sites (QUERY)
-      operationId: listAdminSites
+      operationId: listOperatorSites
       description: |
         Sent as `QUERY /api/v1/operator/sites` with an optional JSON body
         carrying pagination and the `site_id` filter.
@@ -394,14 +394,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AdminListQuery"
+              $ref: "#/components/schemas/OperatorListQuery"
       responses:
         "200":
           description: Paginated sites
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminSitePage"
+                $ref: "#/components/schemas/OperatorSitePage"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -412,7 +412,7 @@ paths:
     delete:
       tags: [Operator]
       summary: Retire a site (operator)
-      operationId: adminRetireSite
+      operationId: operatorRetireSite
       security:
         - operatorToken: []
       responses:
@@ -449,7 +449,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminSite"
+                $ref: "#/components/schemas/OperatorSite"
         "400":
           $ref: "#/components/responses/Error"
   /api/v1/operator/sites/{site_id}/secret/rotate:
@@ -545,14 +545,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AdminListQuery"
+              $ref: "#/components/schemas/OperatorListQuery"
       responses:
         "200":
           description: Paginated quarantined rooms
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminQuarantinedRoomPage"
+                $ref: "#/components/schemas/OperatorQuarantinedRoomPage"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1110,7 +1110,7 @@ paths:
     post:
       tags: [Operator]
       summary: Register or add a site owner (operator)
-      operationId: adminAddSiteOwner
+      operationId: operatorAddSiteOwner
       security:
         - operatorToken: []
       requestBody:
@@ -1137,7 +1137,7 @@ paths:
     delete:
       tags: [Operator]
       summary: Remove a site owner (operator)
-      operationId: adminRemoveSiteOwner
+      operationId: operatorRemoveSiteOwner
       security:
         - operatorToken: []
       parameters:
@@ -1163,7 +1163,7 @@ paths:
     post:
       tags: [Operator]
       summary: Add a site co-manager (operator)
-      operationId: adminAddSiteCoManager
+      operationId: operatorAddSiteCoManager
       security:
         - operatorToken: []
       requestBody:
@@ -1190,7 +1190,7 @@ paths:
     delete:
       tags: [Operator]
       summary: Remove a site co-manager (operator)
-      operationId: adminRemoveSiteCoManager
+      operationId: operatorRemoveSiteCoManager
       security:
         - operatorToken: []
       parameters:
@@ -1741,7 +1741,7 @@ components:
           type: string
         secret:
           type: string
-    AdminOrigin:
+    OperatorOrigin:
       type: object
       required: [origin, source]
       properties:
@@ -1750,7 +1750,7 @@ components:
         source:
           type: string
           enum: [config, verified]
-    AdminSite:
+    OperatorSite:
       type: object
       required: [site_id, lifecycle, auth_mode, verification_status, origins]
       properties:
@@ -1768,7 +1768,7 @@ components:
         origins:
           type: array
           items:
-            $ref: "#/components/schemas/AdminOrigin"
+            $ref: "#/components/schemas/OperatorOrigin"
         verified_at:
           type: string
           format: date-time
@@ -1781,17 +1781,17 @@ components:
           type: string
           format: date-time
           nullable: true
-    AdminSitePage:
+    OperatorSitePage:
       type: object
       required: [data, meta]
       properties:
         data:
           type: array
           items:
-            $ref: "#/components/schemas/AdminSite"
+            $ref: "#/components/schemas/OperatorSite"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
-    AdminListQuery:
+    OperatorListQuery:
       type: object
       properties:
         page:
@@ -1805,7 +1805,7 @@ components:
           default: 20
         site_id:
           type: string
-    AdminQuarantinedRoom:
+    OperatorQuarantinedRoom:
       type: object
       required:
         - room_id
@@ -1833,14 +1833,14 @@ components:
           type: string
           format: date-time
           nullable: true
-    AdminQuarantinedRoomPage:
+    OperatorQuarantinedRoomPage:
       type: object
       required: [data, meta]
       properties:
         data:
           type: array
           items:
-            $ref: "#/components/schemas/AdminQuarantinedRoom"
+            $ref: "#/components/schemas/OperatorQuarantinedRoom"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
     RevokeOriginRequest:

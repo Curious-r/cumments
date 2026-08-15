@@ -51,7 +51,7 @@ site_verification = "optional"
 # operator_token = "change-me"
 # Matrix chat-channel instance operators (fully qualified MXIDs). Empty by
 # default: the bot's platform-level commands are disabled.
-# operator_mxids = ["@admin:your-matrix-domain"]
+# operator_mxids = ["@operator:your-matrix-domain"]
 
 # Allow verification against loopback/private/link-local IP-literal origins.
 # Keep false in production: verification confirm makes outbound HTTP/DNS

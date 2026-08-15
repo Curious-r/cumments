@@ -158,7 +158,7 @@ pub(crate) async fn list_operator_sites_handler(
     if method != *QUERY_METHOD {
         return Err(AppError::MethodNotAllowed);
     }
-    let query = parse_admin_list_query(&body)?;
+    let query = parse_operator_list_query(&body)?;
 
     let effective = cumments_core::management::list_effective_sites(
         state.store.as_ref(),
@@ -221,7 +221,7 @@ pub(crate) async fn list_quarantined_rooms_handler(
     if method != *QUERY_METHOD {
         return Err(AppError::MethodNotAllowed);
     }
-    let query = parse_admin_list_query(&body)?;
+    let query = parse_operator_list_query(&body)?;
 
     let mut rooms = state
         .store
@@ -282,7 +282,7 @@ pub(crate) async fn reinstate_room_handler(
 }
 
 /// Parses the optional QUERY body; an empty body means default pagination.
-fn parse_admin_list_query(body: &str) -> Result<OperatorListQuery, AppError> {
+fn parse_operator_list_query(body: &str) -> Result<OperatorListQuery, AppError> {
     if body.is_empty() {
         return Ok(OperatorListQuery {
             page: None,

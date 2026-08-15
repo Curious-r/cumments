@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read configuration: {e}"))?;
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
     let operator_token_hash = config::operator_token_hash(&settings.security)?;
-    let operator_mxids = config::validate_admin_mxids(&settings.security)?;
+    let operator_mxids = config::validate_operator_mxids(&settings.security)?;
     let (backfill_tx, backfill_rx) = tokio::sync::mpsc::channel(1);
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)

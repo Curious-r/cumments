@@ -352,7 +352,7 @@ async fn backfill_queues_for_operator_and_rejects_busy() {
         "busy backfill must not queue a second request"
     );
 
-    // Non-admins are denied before touching the queue.
+    // Non-operators are denied before touching the queue.
     let denied = processor_with(
         store.clone(),
         private_members("@mallory:hs"),
