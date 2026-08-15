@@ -1,6 +1,6 @@
 use cumments_core::ports::{SiteStore, StickerPackStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
-use cumments_projector::parsed::ParsedRoomState;
+use cumments_projector::parsed::{ParsedRoomRedaction, ParsedRoomState};
 use cumments_store::DbStore;
 use serde_json::json;
 use std::sync::Arc;
@@ -61,6 +61,19 @@ fn pack_state(event_id: &str, ts: i64, content: serde_json::Value) -> ParsedRoom
         state_key: "default".to_string(),
         origin_server_ts: ts,
         content,
+    }
+}
+
+fn redaction(event_id: &str, ts: i64, redacts: &str) -> ParsedRoomRedaction {
+    ParsedRoomRedaction {
+        room_id: "!space:hs".to_string(),
+        event_id: event_id.to_string(),
+        sender: Some("@owner:hs".to_string()),
+        origin_server_ts: ts,
+        redacts: Some(redacts.to_string()),
+        proof: None,
+        submission_id: None,
+        room_identity: None,
     }
 }
 
@@ -200,4 +213,96 @@ async fn usage_change_or_malformed_state_removes_the_projection() {
             .expect("list")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn redacting_current_pack_removes_it_and_tombstones_replay() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("redact-current"))
+            .await
+            .expect("connect db"),
+    );
+    setup_site(&store).await;
+    let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(pack_state(
+            "$v1",
+            100,
+            json!({"images": {"cat": {"url": "mxc://hs/1"}}}),
+        ))
+        .await
+        .expect("process v1");
+    assert_eq!(
+        store.list_site_packs("my-blog").await.expect("list").len(),
+        1
+    );
+
+    processor
+        .process_room_redaction(redaction("$red", 200, "$v1"))
+        .await
+        .expect("process redaction");
+    assert!(
+        store
+            .list_site_packs("my-blog")
+            .await
+            .expect("list")
+            .is_empty()
+    );
+
+    // Re-delivering the original event (push retry / resumed backfill) must
+    // not resurrect the redacted pack.
+    processor
+        .process_room_state(pack_state(
+            "$v1",
+            100,
+            json!({"images": {"cat": {"url": "mxc://hs/1"}}}),
+        ))
+        .await
+        .expect("re-deliver v1");
+    assert!(
+        store
+            .list_site_packs("my-blog")
+            .await
+            .expect("list")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn redacting_an_old_version_keeps_the_current_pack() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("redact-old"))
+            .await
+            .expect("connect db"),
+    );
+    setup_site(&store).await;
+    let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(pack_state(
+            "$v1",
+            100,
+            json!({"images": {"cat": {"url": "mxc://hs/1"}}}),
+        ))
+        .await
+        .expect("process v1");
+    processor
+        .process_room_state(pack_state(
+            "$v2",
+            200,
+            json!({"images": {"dog": {"url": "mxc://hs/2"}}}),
+        ))
+        .await
+        .expect("process v2");
+
+    processor
+        .process_room_redaction(redaction("$red", 300, "$v1"))
+        .await
+        .expect("process old redaction");
+
+    let current = store
+        .get_site_pack("my-blog", "default")
+        .await
+        .expect("get pack")
+        .expect("pack exists");
+    assert_eq!(current.event_id, "$v2");
 }
