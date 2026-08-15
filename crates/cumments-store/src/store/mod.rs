@@ -16,6 +16,7 @@ pub mod registry;
 pub mod role_claims;
 pub mod rooms;
 pub mod site_auth;
+pub mod sticker_packs;
 pub mod submissions;
 
 /// Whether a SeaORM error is a SQLite unique/primary-key constraint

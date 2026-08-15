@@ -34,7 +34,7 @@ use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
         GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteAuthStore, SiteStore, SubmissionStore, VirtualUserStore,
+        SiteAuthStore, SiteStore, StickerPackStore, SubmissionStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -64,6 +64,7 @@ pub trait ApiStore:
     + RegistryStore
     + RoomStore
     + GovernanceStore
+    + StickerPackStore
     + RoleClaimStore
     + VirtualUserStore
     + Send
@@ -78,6 +79,7 @@ impl<
         + RegistryStore
         + RoomStore
         + GovernanceStore
+        + StickerPackStore
         + RoleClaimStore
         + VirtualUserStore
         + Send
