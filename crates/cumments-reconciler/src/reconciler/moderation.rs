@@ -9,7 +9,7 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::governance::{
-    RoleEntry, SITE_ROLE_MIN_LEVEL, ensure_role_lock, reconcile_site_roles, role_entries,
+    RoleEntry, SITE_ROLE_MIN_LEVEL, ensure_governance_locks, reconcile_site_roles, role_entries,
     set_role_level,
 };
 use cumments_core::models::SiteId;
@@ -183,7 +183,7 @@ impl ModerationPass {
             };
 
             // Normalize legacy Spaces that predate the governance lock.
-            let locked = ensure_role_lock(&space_power_levels);
+            let locked = ensure_governance_locks(&space_power_levels);
             if locked != space_power_levels {
                 self.deps
                     .driver
