@@ -52,22 +52,16 @@ pub struct EventProcessor {
     governance_store: Arc<dyn GovernanceStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     submission_store: Arc<dyn SubmissionStore>,
-    audit_store: Arc<dyn CommandAuditStore>,
-    site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
-    site_auth_policy: Arc<SiteAuthPolicy>,
-    site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
-    operator_mxids: Vec<String>,
-    command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
-    active_sites: Mutex<HashMap<String, String>>,
-    backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
-    governance_notify: Arc<Notify>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
     /// the periodic reconcile tick.
     projection_notify: Arc<Notify>,
     server_name: Option<String>,
+    /// Routes `!cumments` chat commands; kept separate so projection does not
+    /// carry command-only state.
+    command_router: BotCommandRouter,
 }
 
 /// Dependencies of the [`EventProcessor`], kept as one struct so the growing
@@ -97,6 +91,44 @@ pub struct EventProcessorDeps {
     pub governance_notify: Arc<Notify>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
+}
+
+/// Chat command router: owns the command-only state and executes `!cumments`
+/// commands. Kept separate from projection so `EventProcessor` only routes.
+pub struct BotCommandRouter {
+    registry_store: Arc<dyn RegistryStore>,
+    governance_store: Arc<dyn GovernanceStore>,
+    role_claim_store: Arc<dyn RoleClaimStore>,
+    audit_store: Arc<dyn CommandAuditStore>,
+    site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
+    site_auth_policy: Arc<SiteAuthPolicy>,
+    site_service: Arc<cumments_core::site_service::SiteService>,
+    driver: Option<Arc<dyn MatrixDriver>>,
+    operator_mxids: Vec<String>,
+    command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
+    active_sites: Mutex<HashMap<String, String>>,
+    backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
+    governance_notify: Arc<Notify>,
+}
+
+impl BotCommandRouter {
+    pub fn new(deps: &EventProcessorDeps) -> Self {
+        Self {
+            registry_store: deps.registry_store.clone(),
+            governance_store: deps.governance_store.clone(),
+            role_claim_store: deps.role_claim_store.clone(),
+            audit_store: deps.audit_store.clone(),
+            site_auth_store: deps.site_auth_store.clone(),
+            site_auth_policy: deps.site_auth_policy.clone(),
+            site_service: deps.site_service.clone(),
+            driver: deps.driver.clone(),
+            operator_mxids: deps.operator_mxids.clone(),
+            command_rate: Mutex::new(HashMap::new()),
+            active_sites: Mutex::new(HashMap::new()),
+            backfill_tx: deps.backfill_tx.clone(),
+            governance_notify: deps.governance_notify.clone(),
+        }
+    }
 }
 
 /// Result of one chat command: the reply text plus the resolved site id for
@@ -143,118 +175,34 @@ fn help_text() -> &'static str {
 破坏性命令需要 --confirm；敏感 token 只在本私聊显示。"
 }
 
-impl EventProcessor {
-    pub fn new(deps: EventProcessorDeps) -> Self {
-        Self {
-            site_store: deps.site_store,
-            registry_store: deps.registry_store,
-            message_store: deps.message_store,
-            room_store: deps.room_store,
-            governance_store: deps.governance_store,
-            role_claim_store: deps.role_claim_store,
-            submission_store: deps.submission_store,
-            audit_store: deps.audit_store,
-            site_auth_store: deps.site_auth_store,
-            site_auth_policy: deps.site_auth_policy,
-            site_service: deps.site_service,
-            driver: deps.driver,
-            operator_mxids: deps.operator_mxids,
-            command_rate: Mutex::new(HashMap::new()),
-            active_sites: Mutex::new(HashMap::new()),
-            backfill_tx: deps.backfill_tx,
-            event_bus: deps.event_bus,
-            governance_notify: deps.governance_notify,
-            projection_notify: deps.projection_notify,
-            server_name: deps.server_name,
-        }
-    }
-
-    /// Look up the site ID associated with a Matrix Space room ID.
-    /// Returns `None` if the space is not in our local database.
-    pub async fn get_site_id_by_space_id(&self, space_id: &str) -> Result<Option<String>> {
-        self.site_store
-            .get_site_by_space_id(space_id)
-            .await
-            .map(|site| site.map(|s| s.id))
-    }
-
-    /// Attempts to match a plain-text message against a pending token-DM role
-    /// claim. Returns `true` when the message activated a claim and therefore
-    /// must not be projected as a comment.
-    pub async fn process_claim_dm(&self, event: &ParsedRoomMessage) -> Result<bool> {
-        if event.is_virtual_user_sender {
-            return Ok(false);
-        }
-        let Content::Text(text) = &event.content else {
-            return Ok(false);
-        };
-        if text.style != TextStyle::Normal
-            || event.relates_to.is_some()
-            || event.reply_to.is_some()
-            || event.thread_root.is_some()
-        {
-            return Ok(false);
-        }
-        let Some(token) = text.body.trim().strip_prefix(CLAIM_MESSAGE_PREFIX) else {
-            return Ok(false);
-        };
-        let token = token.trim();
-        if token.is_empty() {
-            return Ok(false);
-        }
-
-        // Claim tokens are capabilities: activate them only in a verified
-        // private channel (exactly the bot and the sender). Fail closed when
-        // the channel cannot be verified.
-        if !self.is_private_channel(event).await? {
+/// Whether the room is a verified private channel: exactly the bot and
+/// the sender are joined. Fails closed when it cannot be verified.
+async fn is_private_channel(
+    event: &ParsedRoomMessage,
+    driver: &Option<Arc<dyn MatrixDriver>>,
+) -> Result<bool> {
+    let Some(driver) = driver else {
+        return Ok(false);
+    };
+    let Some(bot) = driver.sender_user_id() else {
+        return Ok(false);
+    };
+    let members = match driver.get_joined_members(&event.room_id).await {
+        Ok(members) => members,
+        Err(error) => {
             warn!(
-                "Rejecting claim from {} in {}: not a verified private channel",
-                event.sender, event.room_id,
+                "private channel check failed for {}: {:#}",
+                event.room_id, error
             );
             return Ok(false);
         }
+    };
+    Ok(members.len() == 2
+        && members.iter().any(|m| m == &event.sender)
+        && members.iter().any(|m| m == &bot))
+}
 
-        let presented_hash = sha256_hex(token.as_bytes());
-        for claim in self
-            .role_claim_store
-            .pending_claims_for_user(&event.sender)
-            .await?
-        {
-            if constant_time_eq(claim.token_hash.as_bytes(), presented_hash.as_bytes())
-                && self.role_claim_store.mark_claim_activated(claim.id).await?
-            {
-                info!("Activated role claim {} for {}", claim.id, claim.user_id);
-                self.projection_notify.notify_one();
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// Whether the room is a verified private channel: exactly the bot and
-    /// the sender are joined. Fails closed when it cannot be verified.
-    async fn is_private_channel(&self, event: &ParsedRoomMessage) -> Result<bool> {
-        let Some(driver) = &self.driver else {
-            return Ok(false);
-        };
-        let Some(bot) = driver.sender_user_id() else {
-            return Ok(false);
-        };
-        let members = match driver.get_joined_members(&event.room_id).await {
-            Ok(members) => members,
-            Err(error) => {
-                warn!(
-                    "private channel check failed for {}: {:#}",
-                    event.room_id, error
-                );
-                return Ok(false);
-            }
-        };
-        Ok(members.len() == 2
-            && members.iter().any(|m| m == &event.sender)
-            && members.iter().any(|m| m == &bot))
-    }
-
+impl BotCommandRouter {
     const COMMAND_RATE_LIMIT: usize = 10;
     const COMMAND_RATE_WINDOW: StdDuration = StdDuration::from_secs(60);
     const COMMAND_RATE_MAX_USERS: usize = 10_000;
@@ -346,7 +294,7 @@ impl EventProcessor {
 
         // Commands only act inside a verified private channel; elsewhere the
         // message is consumed silently so it never becomes a comment.
-        if !self.is_private_channel(event).await? {
+        if !is_private_channel(event, &self.driver).await? {
             debug!(
                 "Ignoring !cumments from {} outside a private channel",
                 event.sender
@@ -816,6 +764,94 @@ impl EventProcessor {
         self.driver
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("当前模式没有 Matrix driver"))
+    }
+}
+
+impl EventProcessor {
+    pub fn new(deps: EventProcessorDeps) -> Self {
+        let command_router = BotCommandRouter::new(&deps);
+        Self {
+            site_store: deps.site_store,
+            registry_store: deps.registry_store,
+            message_store: deps.message_store,
+            room_store: deps.room_store,
+            governance_store: deps.governance_store,
+            role_claim_store: deps.role_claim_store,
+            submission_store: deps.submission_store,
+            driver: deps.driver,
+            event_bus: deps.event_bus,
+            projection_notify: deps.projection_notify,
+            server_name: deps.server_name,
+            command_router,
+        }
+    }
+
+    /// Look up the site ID associated with a Matrix Space room ID.
+    /// Returns `None` if the space is not in our local database.
+    pub async fn get_site_id_by_space_id(&self, space_id: &str) -> Result<Option<String>> {
+        self.site_store
+            .get_site_by_space_id(space_id)
+            .await
+            .map(|site| site.map(|s| s.id))
+    }
+
+    /// Attempts to match a plain-text message against a pending token-DM role
+    /// claim. Returns `true` when the message activated a claim and therefore
+    /// must not be projected as a comment.
+    pub async fn process_claim_dm(&self, event: &ParsedRoomMessage) -> Result<bool> {
+        if event.is_virtual_user_sender {
+            return Ok(false);
+        }
+        let Content::Text(text) = &event.content else {
+            return Ok(false);
+        };
+        if text.style != TextStyle::Normal
+            || event.relates_to.is_some()
+            || event.reply_to.is_some()
+            || event.thread_root.is_some()
+        {
+            return Ok(false);
+        }
+        let Some(token) = text.body.trim().strip_prefix(CLAIM_MESSAGE_PREFIX) else {
+            return Ok(false);
+        };
+        let token = token.trim();
+        if token.is_empty() {
+            return Ok(false);
+        }
+
+        // Claim tokens are capabilities: activate them only in a verified
+        // private channel (exactly the bot and the sender). Fail closed when
+        // the channel cannot be verified.
+        if !is_private_channel(event, &self.driver).await? {
+            warn!(
+                "Rejecting claim from {} in {}: not a verified private channel",
+                event.sender, event.room_id,
+            );
+            return Ok(false);
+        }
+
+        let presented_hash = sha256_hex(token.as_bytes());
+        for claim in self
+            .role_claim_store
+            .pending_claims_for_user(&event.sender)
+            .await?
+        {
+            if constant_time_eq(claim.token_hash.as_bytes(), presented_hash.as_bytes())
+                && self.role_claim_store.mark_claim_activated(claim.id).await?
+            {
+                info!("Activated role claim {} for {}", claim.id, claim.user_id);
+                self.projection_notify.notify_one();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Handles `!cumments ...` messages. Returns `true` when the message was
+    /// consumed as a command (and must not be projected as a comment).
+    pub async fn process_bot_command(&self, event: &ParsedRoomMessage) -> Result<bool> {
+        self.command_router.process_bot_command(event).await
     }
 
     /// Resolve the Cumments identity of a room from the local registry.
