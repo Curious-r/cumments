@@ -96,6 +96,7 @@ pub struct EventProcessorDeps {
 struct CommandOutcome {
     reply: String,
     site_id: Option<String>,
+    invalid: bool,
 }
 
 impl CommandOutcome {
@@ -103,6 +104,15 @@ impl CommandOutcome {
         Self {
             reply: reply.into(),
             site_id: None,
+            invalid: false,
+        }
+    }
+
+    fn invalid(reply: impl Into<String>) -> Self {
+        Self {
+            reply: reply.into(),
+            site_id: None,
+            invalid: true,
         }
     }
 }
@@ -228,18 +238,33 @@ impl EventProcessor {
 
     const COMMAND_RATE_LIMIT: usize = 10;
     const COMMAND_RATE_WINDOW: StdDuration = StdDuration::from_secs(60);
+    const COMMAND_RATE_MAX_USERS: usize = 10_000;
+    const ACTIVE_SITES_MAX_USERS: usize = 10_000;
 
     /// Per-sender sliding-window command rate limit.
     async fn command_rate_allowed(&self, sender: &str) -> bool {
         let now = Instant::now();
         let mut rates = self.command_rate.lock().await;
-        let queue = rates.entry(sender.to_string()).or_default();
-        while queue
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > Self::COMMAND_RATE_WINDOW)
-        {
-            queue.pop_front();
+        let expired = {
+            let Some(queue) = rates.get_mut(sender) else {
+                return true;
+            };
+            while queue
+                .front()
+                .is_some_and(|t| now.duration_since(*t) > Self::COMMAND_RATE_WINDOW)
+            {
+                queue.pop_front();
+            }
+            queue.is_empty()
+        };
+        if expired {
+            rates.remove(sender);
+            return true;
         }
+        if rates.len() >= Self::COMMAND_RATE_MAX_USERS {
+            rates.clear();
+        }
+        let queue = rates.entry(sender.to_string()).or_default();
         if queue.len() >= Self::COMMAND_RATE_LIMIT {
             return false;
         }
@@ -327,7 +352,12 @@ impl EventProcessor {
         match self.run_command(event, &tokens).await {
             Ok(outcome) => {
                 self.reply(event, &outcome.reply).await;
-                self.record_audit(event, line, outcome.site_id, CommandAuditStatus::Ok, None)
+                let status = if outcome.invalid {
+                    CommandAuditStatus::Invalid
+                } else {
+                    CommandAuditStatus::Ok
+                };
+                self.record_audit(event, line, outcome.site_id, status, None)
                     .await;
             }
             Err(e) => {
@@ -371,11 +401,15 @@ impl EventProcessor {
             }
             ["site", "use", id] => {
                 SiteId::new(id.to_string())?;
-                self.active_sites
-                    .lock()
-                    .await
-                    .insert(event.sender.clone(), id.to_string());
+                let mut active = self.active_sites.lock().await;
+                if !active.contains_key(&event.sender)
+                    && active.len() >= Self::ACTIVE_SITES_MAX_USERS
+                {
+                    active.clear();
+                }
+                active.insert(event.sender.clone(), id.to_string());
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("当前站点已设为 {id}"),
                     site_id: Some(id.to_string()),
                 })
@@ -385,6 +419,7 @@ impl EventProcessor {
                 self.site_status(&id).await.map(|reply| CommandOutcome {
                     reply,
                     site_id: Some(id),
+                    invalid: false,
                 })
             }
             ["site", id, "status"] => {
@@ -392,6 +427,7 @@ impl EventProcessor {
                 self.site_status(id).await.map(|reply| CommandOutcome {
                     reply,
                     site_id: Some(id.to_string()),
+                    invalid: false,
                 })
             }
             ["site", "register", id] => {
@@ -401,6 +437,7 @@ impl EventProcessor {
                     .register_site(site_id.as_str(), &token_hash(&token), true)
                     .await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "站点 {id} 已注册。claim token（只显示一次，请勿转发）：\n{token}"
                     ),
@@ -418,6 +455,7 @@ impl EventProcessor {
                 )
                 .await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "已为 {mxid} 创建协管员认领。请对方给 bot 发送：\ncumments-claim:{}",
                         pending.verify_token
@@ -428,6 +466,7 @@ impl EventProcessor {
             ["site", id, "co-manager", "remove", mxid] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "确认移除 {id} 的协管员 {mxid}？请回复：\n!cumments site {id} co-manager remove {mxid} --confirm"
                     ),
@@ -448,6 +487,7 @@ impl EventProcessor {
                 )
                 .await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("已移除 {id} 的协管员 {mxid}。"),
                     site_id: Some(id.to_string()),
                 })
@@ -470,6 +510,7 @@ impl EventProcessor {
                 )
                 .await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "已为 {mxid} 创建版主认领。请对方给 bot 发送：\ncumments-claim:{}",
                         pending.verify_token
@@ -480,6 +521,7 @@ impl EventProcessor {
             ["site", id, "post", slug, "moderator", "remove", mxid] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments site {id} post {slug} moderator remove {mxid} --confirm"
                     ),
@@ -514,6 +556,7 @@ impl EventProcessor {
                 )
                 .await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("已移除 {id}/{slug} 的版主 {mxid}。"),
                     site_id: Some(id.to_string()),
                 })
@@ -527,6 +570,7 @@ impl EventProcessor {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("新 claim token（只显示一次，请勿转发）：\n{token}"),
                     site_id: Some(id.to_string()),
                 })
@@ -538,6 +582,7 @@ impl EventProcessor {
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("HMAC secret（只显示一次，请勿转发）：\n{secret}"),
                     site_id: Some(id.to_string()),
                 })
@@ -545,6 +590,7 @@ impl EventProcessor {
             ["site", id, "retire"] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "确认退役站点 {id}？此操作不可撤销。请回复：\n!cumments site {id} retire --confirm"
                     ),
@@ -559,6 +605,7 @@ impl EventProcessor {
                     return Err(anyhow::anyhow!("站点不存在或已退役"));
                 }
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("站点 {id} 已标记退役，后台正在处理。"),
                     site_id: Some(id.to_string()),
                 })
@@ -587,6 +634,7 @@ impl EventProcessor {
             ["room", room_id, "reinstate"] => {
                 self.require_admin(event)?;
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!(
                         "确认恢复房间 {room_id}？请回复：\n!cumments room {room_id} reinstate --confirm"
                     ),
@@ -599,11 +647,12 @@ impl EventProcessor {
                     return Err(anyhow::anyhow!("房间不在 registry 中"));
                 }
                 Ok(CommandOutcome {
+                    invalid: false,
                     reply: format!("房间 {room_id} 已恢复。"),
                     site_id: None,
                 })
             }
-            _ => Ok(CommandOutcome::plain(help_text())),
+            _ => Ok(CommandOutcome::invalid(help_text())),
         }
     }
 

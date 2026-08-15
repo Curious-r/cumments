@@ -98,13 +98,19 @@ async fn unknown_command_replies_with_help() {
             .await
             .expect("connect db"),
     );
-    let p = processor(store, private_members("@alice:hs"), Vec::new());
+    let p = processor(store.clone(), private_members("@alice:hs"), Vec::new());
     assert!(
         p.process_bot_command(&command_message("@alice:hs", "!cumments nope"))
             .await
             .expect("process"),
         "command must be consumed"
     );
+    let audit = store
+        .list_command_audit(Some("@alice:hs"), 10)
+        .await
+        .expect("audit");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].status, CommandAuditStatus::Invalid);
 }
 
 #[tokio::test]
