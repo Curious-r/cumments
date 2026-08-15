@@ -20,6 +20,7 @@ use cumments_core::{
     governance::{
         CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, RoleEntry, validate_governance_user_id,
     },
+    management::ManagementError,
     models::{PostSlug, SiteId},
     site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, token_hash},
 };
@@ -172,6 +173,22 @@ fn site_roles_response(roles: Vec<RoleEntry>) -> SiteRolesResponse {
     }
 }
 
+/// Maps shared management failures onto HTTP problem responses. Infra errors
+/// stay internal; the remaining variants are caller mistakes or state
+/// conflicts that deserve a 4xx status.
+fn map_management_error(error: ManagementError) -> AppError {
+    match error {
+        ManagementError::InvalidUserId(message) | ManagementError::InvalidSiteId(message) => {
+            AppError::BadRequest(message)
+        }
+        ManagementError::RoleNotFound => AppError::NotFound(error.to_string()),
+        ManagementError::SiteLevelRoleConflict => AppError::Conflict(error.to_string()),
+        ManagementError::Infra(error) => {
+            AppError::Internal(format!("management operation failed: {error}"))
+        }
+    }
+}
+
 /// Creates (or rotates) a pending token-DM claim for a role.
 async fn create_role_claim(
     state: &ApiState,
@@ -188,7 +205,7 @@ async fn create_role_claim(
         level,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("failed to store role claim: {e}")))?;
+    .map_err(map_management_error)?;
     Ok(PendingRoleResponse {
         pending: true,
         user_id: pending.user_id,
@@ -233,7 +250,7 @@ pub(crate) async fn remove_owner_handler(
         OWNER_LEVEL,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("failed to remove owner: {e}")))?;
+    .map_err(map_management_error)?;
     if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
         state.governance_notify.notify_one();
     }
@@ -287,7 +304,7 @@ pub(crate) async fn remove_co_manager_handler(
         CO_MANAGER_LEVEL,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("failed to remove co-manager: {e}")))?;
+    .map_err(map_management_error)?;
     if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
         state.governance_notify.notify_one();
     }
@@ -337,7 +354,7 @@ pub(crate) async fn remove_room_moderator_handler(
         &user_id,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("failed to remove moderator: {e}")))?;
+    .map_err(map_management_error)?;
     if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
         state.governance_notify.notify_one();
     }
@@ -392,7 +409,7 @@ pub(crate) async fn retire_site_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let marked = cumments_core::management::retire_site(state.store.as_ref(), site_id.as_str())
         .await
-        .map_err(|e| AppError::Internal(format!("failed to retire site: {e}")))?;
+        .map_err(map_management_error)?;
     if !marked {
         return Err(AppError::NotFound(
             "site not found or already decommissioned".to_string(),

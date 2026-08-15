@@ -187,6 +187,12 @@ impl From<cumments_core::site_auth::SiteServiceError> for CommandError {
     }
 }
 
+impl From<cumments_core::management::ManagementError> for CommandError {
+    fn from(error: cumments_core::management::ManagementError) -> Self {
+        Self::error(error)
+    }
+}
+
 impl From<anyhow::Error> for CommandError {
     fn from(error: anyhow::Error) -> Self {
         Self::error(error.to_string())
