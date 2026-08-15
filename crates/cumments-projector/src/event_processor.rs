@@ -247,11 +247,12 @@ impl EventProcessor {
         true
     }
 
-    async fn reply(&self, event: &ParsedRoomMessage, body: &str) -> Result<()> {
-        if let Some(driver) = &self.driver {
-            driver.send_bot_message(&event.room_id, body).await?;
+    async fn reply(&self, event: &ParsedRoomMessage, body: &str) {
+        if let Some(driver) = &self.driver
+            && let Err(error) = driver.send_bot_message(&event.room_id, body).await
+        {
+            warn!("bot reply to {} failed: {:#}", event.room_id, error);
         }
-        Ok(())
     }
 
     async fn record_audit(
@@ -261,8 +262,9 @@ impl EventProcessor {
         site_id: Option<String>,
         status: CommandAuditStatus,
         error: Option<String>,
-    ) -> Result<()> {
-        self.audit_store
+    ) {
+        if let Err(e) = self
+            .audit_store
             .record_command_audit(&NewCommandAuditEntry {
                 actor_mxid: event.sender.clone(),
                 room_id: event.room_id.clone(),
@@ -271,8 +273,10 @@ impl EventProcessor {
                 status,
                 error,
             })
-            .await?;
-        Ok(())
+            .await
+        {
+            warn!("command audit write failed for {}: {:#}", event.sender, e);
+        }
     }
 
     /// Handles `!cumments ...` messages. Returns `true` when the message was
@@ -307,24 +311,24 @@ impl EventProcessor {
         }
         if !self.command_rate_allowed(&event.sender).await {
             let msg = "命令过于频繁，请稍后再试。";
-            self.reply(event, msg).await?;
+            self.reply(event, msg).await;
             self.record_audit(event, line, None, CommandAuditStatus::RateLimited, None)
-                .await?;
+                .await;
             return Ok(true);
         }
         if line.is_empty() {
-            self.reply(event, help_text()).await?;
+            self.reply(event, help_text()).await;
             self.record_audit(event, line, None, CommandAuditStatus::Invalid, None)
-                .await?;
+                .await;
             return Ok(true);
         }
 
         let tokens: Vec<&str> = line.split_whitespace().collect();
         match self.run_command(event, &tokens).await {
             Ok(outcome) => {
-                self.reply(event, &outcome.reply).await?;
+                self.reply(event, &outcome.reply).await;
                 self.record_audit(event, line, outcome.site_id, CommandAuditStatus::Ok, None)
-                    .await?;
+                    .await;
             }
             Err(e) => {
                 let text = e.to_string();
@@ -336,9 +340,9 @@ impl EventProcessor {
                 };
                 let msg = text.strip_prefix("denied:").unwrap_or(&text);
                 let msg = format!("错误：{msg}");
-                self.reply(event, &msg).await?;
+                self.reply(event, &msg).await;
                 self.record_audit(event, line, None, status, Some(text))
-                    .await?;
+                    .await;
             }
         }
         Ok(true)
