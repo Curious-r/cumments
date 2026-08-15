@@ -307,3 +307,16 @@ the backup command.
 - `m.space.child` events only refresh rooms already known to the local
   registry; unknown rooms linked through a Space are picked up by the
   reconciler or `backfill` instead of being auto-registered.
+- Room upgrades are not actively processed: `m.room.tombstone` is stored but
+  not acted on. After an upgrade, the new room converges through alias
+  recovery and the superseded-room cleanup; image-pack handling across room
+  upgrades (MSC4433) is not implemented.
+- State resolution is approximated with latest-wins on
+  `(origin_server_ts, event_id)`. This is fine on a single homeserver but is
+  not a full DAG/mainline state resolution, so forked or federated rooms may
+  diverge from the homeserver's resolved state.
+- Redaction of state events follows the room-version 11+ algorithm in the
+  projector (protected keys are kept, other content is emptied in place);
+  membership, redaction acceptance and state resolution themselves are
+  delegated to the homeserver and have only been verified against a
+  single-server tuwunel deployment.
