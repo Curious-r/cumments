@@ -265,6 +265,26 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.write_power_levels(room_id, content).await
     }
 
+    async fn get_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        self.read_state(room_id, event_type, state_key).await
+    }
+
+    async fn set_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        content: &serde_json::Value,
+    ) -> Result<String> {
+        self.write_state(room_id, event_type, state_key, content)
+            .await
+    }
+
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         self.invite_user_impl(room_id, user_id).await
     }

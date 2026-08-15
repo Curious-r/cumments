@@ -24,6 +24,8 @@ pub struct TestDriver {
     pub joined_rooms: Mutex<Vec<String>>,
     pub room_events: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     pub room_metadata: Mutex<HashMap<String, serde_json::Value>>,
+    pub room_state: Mutex<HashMap<(String, String, String), serde_json::Value>>,
+    pub state_writes: Mutex<Vec<(String, String, String)>>,
 }
 
 impl TestDriver {
@@ -38,6 +40,8 @@ impl TestDriver {
             joined_rooms: Mutex::new(Vec::new()),
             room_events: Mutex::new(HashMap::new()),
             room_metadata: Mutex::new(HashMap::new()),
+            room_state: Mutex::new(HashMap::new()),
+            state_writes: Mutex::new(Vec::new()),
         }
     }
 
@@ -72,6 +76,20 @@ impl TestDriver {
         self.room_metadata
             .get_mut()
             .insert(room_id.into(), metadata);
+        self
+    }
+
+    pub fn with_room_state(
+        mut self,
+        room_id: impl Into<String>,
+        event_type: impl Into<String>,
+        state_key: impl Into<String>,
+        content: serde_json::Value,
+    ) -> Self {
+        self.room_state.get_mut().insert(
+            (room_id.into(), event_type.into(), state_key.into()),
+            content,
+        );
         self
     }
 }

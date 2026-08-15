@@ -294,6 +294,30 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
+    async fn get_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        info!("LOGGING: Read state {event_type}/{state_key} for {room_id} (no-op)");
+        Ok(None)
+    }
+
+    async fn set_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        content: &serde_json::Value,
+    ) -> Result<String> {
+        info!(
+            "LOGGING: Set state {event_type}/{state_key} for {room_id}: {}",
+            serde_json::to_string(content).unwrap_or_default()
+        );
+        Ok("$logging:state".to_string())
+    }
+
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         info!("LOGGING: Invite {user_id} to {room_id} (no-op)");
         Ok(())

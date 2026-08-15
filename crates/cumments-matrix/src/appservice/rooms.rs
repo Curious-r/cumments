@@ -328,6 +328,80 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Read one room state event's current content (`404` -> `None`).
+    pub(super) async fn read_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/{}/{}",
+            percent_encode(room_id),
+            percent_encode(event_type),
+            percent_encode(state_key)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, None)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to query room state {event_type}/{state_key}: {e}"))?;
+
+        if resp.status().is_success() {
+            Ok(Some(resp.json().await?))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(None)
+        } else {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            Err(anyhow!(
+                "Failed to query room state {event_type}/{state_key} ({}): {}",
+                status,
+                error_body
+            ))
+        }
+    }
+
+    /// Write one room state event as the AS sender (full-state replacement)
+    /// and return the new event ID.
+    pub(super) async fn write_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        content: &serde_json::Value,
+    ) -> Result<String> {
+        #[derive(Deserialize)]
+        struct SendResponse {
+            event_id: String,
+        }
+
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/state/{}/{}",
+            percent_encode(room_id),
+            percent_encode(event_type),
+            percent_encode(state_key)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, None)
+            .json(content)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to set room state {event_type}/{state_key}: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to set room state {event_type}/{state_key} ({}): {}",
+                status,
+                error_body
+            ));
+        }
+        let response: SendResponse = resp.json().await?;
+        Ok(response.event_id)
+    }
+
     /// Whether the AS sender is a room creator under the v12+ implicit-power
     /// rules and is currently joined to the room.
     async fn sender_has_implicit_creator_power(
@@ -1034,6 +1108,72 @@ mod tests {
 
         let driver = test_driver(&server);
         assert!(!driver.is_space_room(ROOM_ID).await.unwrap());
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn read_state_returns_content_and_none_on_404() {
+        let state_path =
+            "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.image_pack/default";
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(state_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"images": {}})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let driver = test_driver(&server);
+        let content = driver
+            .read_state(ROOM_ID, "m.room.image_pack", "default")
+            .await
+            .expect("read state");
+        assert_eq!(content, Some(json!({"images": {}})));
+        server.verify().await;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(state_path))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let driver = test_driver(&server);
+        assert!(
+            driver
+                .read_state(ROOM_ID, "m.room.image_pack", "default")
+                .await
+                .expect("read missing state")
+                .is_none()
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn write_state_puts_content_and_returns_event_id() {
+        let server = MockServer::start().await;
+        let state_path =
+            "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.image_pack/pack%20id";
+        Mock::given(method("PUT"))
+            .and(path(state_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "event_id": "$pack:example.com"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let event_id = driver
+            .write_state(
+                ROOM_ID,
+                "m.room.image_pack",
+                "pack id",
+                &json!({"images": {}}),
+            )
+            .await
+            .expect("write state");
+        assert_eq!(event_id, "$pack:example.com");
         server.verify().await;
     }
 }

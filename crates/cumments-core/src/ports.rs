@@ -891,6 +891,24 @@ pub trait MatrixDriver: Send + Sync {
     async fn set_room_power_levels(&self, room_id: &str, content: &serde_json::Value)
     -> Result<()>;
 
+    /// Read one room state event's current content (`404` -> `None`).
+    async fn get_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> Result<Option<serde_json::Value>>;
+
+    /// Write one room state event as the AppService sender (full-state
+    /// replacement) and return the new event ID.
+    async fn set_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        content: &serde_json::Value,
+    ) -> Result<String>;
+
     /// Invites a user to a room as the AS sender. Already-joined users are a
     /// successful no-op.
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()>;

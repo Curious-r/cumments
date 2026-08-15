@@ -221,4 +221,40 @@ impl MatrixDriver for TestDriver {
     ) -> anyhow::Result<()> {
         unimplemented!("not used in this test")
     }
+
+    async fn get_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        Ok(self
+            .room_state
+            .lock()
+            .await
+            .get(&(
+                room_id.to_string(),
+                event_type.to_string(),
+                state_key.to_string(),
+            ))
+            .cloned())
+    }
+
+    async fn set_room_state(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+        content: &serde_json::Value,
+    ) -> anyhow::Result<String> {
+        let key = (
+            room_id.to_string(),
+            event_type.to_string(),
+            state_key.to_string(),
+        );
+        self.state_writes.lock().await.push(key.clone());
+        let id = format!("$state-{}", self.state_writes.lock().await.len());
+        self.room_state.lock().await.insert(key, content.clone());
+        Ok(id)
+    }
 }
