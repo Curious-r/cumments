@@ -143,6 +143,30 @@ async fn main() -> Result<()> {
     // ─────────────────────────────────────────────────────────────
     let site_service = Arc::new(SiteService::new(db_store.clone()));
 
+    // DB-only site commands run here; only applied-role removal needs the
+    // Matrix driver and is deferred until after driver setup.
+    let sites_deferred = if let Some(cli::Commands::Sites(sites_args)) = &args.command {
+        let needs_driver = matches!(
+            &sites_args.command,
+            cli::SitesCommand::RemoveOwner(_) | cli::SitesCommand::RemoveCoManager(_)
+        );
+        if !needs_driver {
+            let logging = cumments_matrix::LoggingMatrixDriver;
+            cli::handle_sites_command(
+                &db_store,
+                &logging,
+                &site_service,
+                &site_auth_policy,
+                sites_args,
+            )
+            .await?;
+            return Ok(());
+        }
+        true
+    } else {
+        false
+    };
+
     // ─────────────────────────────────────────────────────────────
     // 4. Initialize Event Bus for real-time updates (SSE)
     // ─────────────────────────────────────────────────────────────
@@ -221,7 +245,7 @@ async fn main() -> Result<()> {
 
     // CLI site commands need the driver for applied-role removal; they run
     // after driver setup instead of the early database-only phase.
-    if let Some(cli::Commands::Sites(sites_args)) = &args.command {
+    if sites_deferred && let Some(cli::Commands::Sites(sites_args)) = &args.command {
         cli::handle_sites_command(
             &db_store,
             driver.as_ref(),
