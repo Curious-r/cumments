@@ -120,6 +120,23 @@ impl RoomStore for DbStore {
         Ok(result.rows_affected > 0)
     }
 
+    async fn get_latest_state_event(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> Result<Option<RoomStateEvent>> {
+        let model = room_state_events::Entity::find()
+            .filter(room_state_events::Column::RoomId.eq(room_id))
+            .filter(room_state_events::Column::EventType.eq(event_type))
+            .filter(room_state_events::Column::StateKey.eq(state_key))
+            .order_by_desc(room_state_events::Column::OriginServerTs)
+            .order_by_desc(room_state_events::Column::EventId)
+            .one(&self.db)
+            .await?;
+        Ok(model.map(state_event_from_model))
+    }
+
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<RoomMetadata>> {
         let events = room_state_events::Entity::find()
             .filter(room_state_events::Column::RoomId.eq(room_id))

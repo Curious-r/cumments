@@ -31,6 +31,7 @@ use cumments_core::{
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
+    redaction::redact_state_content,
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, constant_time_eq, generate_token, sha256_hex, token_hash,
     },
@@ -1832,6 +1833,93 @@ impl EventProcessor {
                 .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
                 .await?;
             info!("Successfully redacted sticker pack {site_id}/{state_key} ({target_event_id})");
+            return Ok(());
+        }
+
+        // 0b. Generic state-event targets (name, topic, avatar, power levels,
+        // membership, ...). Redaction strips the event's content per the
+        // room-version algorithm while keeping the state slot; the raw row is
+        // updated in place so live pushes and backfill replay agree. Derived
+        // projections are recomputed when the redacted event is the latest
+        // version of its slot.
+        if let Some(state) = self.room_store.get_state_event(&target_event_id).await? {
+            if state.room_id != event.room_id {
+                warn!(
+                    "Ignoring redaction for {} in {}: state event lives in {}",
+                    target_event_id, event.room_id, state.room_id
+                );
+                return Ok(());
+            }
+            let stripped = redact_state_content(&state.event_type, &state.content_json);
+            self.room_store
+                .update_state_event_content(&target_event_id, &stripped)
+                .await?;
+            self.message_store
+                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                .await?;
+
+            let latest = self
+                .room_store
+                .get_latest_state_event(&state.room_id, &state.event_type, &state.state_key)
+                .await?;
+            if latest
+                .as_ref()
+                .is_some_and(|latest| latest.event_id == target_event_id)
+            {
+                match state.event_type.as_str() {
+                    "m.room.member" => {
+                        self.room_store
+                            .save_member(&RoomMember {
+                                room_id: state.room_id.clone(),
+                                user_id: state.state_key.clone(),
+                                display_name: stripped
+                                    .get("displayname")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string),
+                                avatar_url: stripped
+                                    .get("avatar_url")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string),
+                                membership: stripped
+                                    .get("membership")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                updated_at: chrono::DateTime::from_timestamp_millis(
+                                    event.origin_server_ts,
+                                )
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+                            })
+                            .await?;
+                    }
+                    POWER_LEVELS_EVENT_TYPE => {
+                        let roles: Vec<RoleEntry> = role_entries(&stripped, MODERATOR_LEVEL)
+                            .into_iter()
+                            .filter(|role| !is_as_managed_user(&role.user_id))
+                            .collect();
+                        if let Some(site) =
+                            self.site_store.get_site_by_space_id(&state.room_id).await?
+                        {
+                            self.governance_store
+                                .replace_site_roles(&site.id, &roles)
+                                .await?;
+                            self.projection_notify.notify_one();
+                        } else if matches!(
+                            self.registry_store.get_room_status(&state.room_id).await?,
+                            Some(RoomStatus::Active)
+                        ) {
+                            self.governance_store
+                                .replace_room_roles(&state.room_id, &roles)
+                                .await?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            info!(
+                "Successfully redacted state event {target_event_id} ({} in {})",
+                state.event_type, state.room_id
+            );
             return Ok(());
         }
 

@@ -381,6 +381,14 @@ pub trait RoomStore: Send + Sync {
         content: &serde_json::Value,
     ) -> Result<bool>;
 
+    /// The latest stored state event for a `(room, type, state_key)` slot.
+    async fn get_latest_state_event(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        state_key: &str,
+    ) -> Result<Option<RoomStateEvent>>;
+
     /// Derives the current room metadata from the latest state events.
     async fn get_room_metadata(&self, room_id: &str) -> Result<Option<RoomMetadata>>;
 

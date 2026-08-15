@@ -13,6 +13,7 @@ pub mod operator;
 pub mod ports;
 pub mod projector_events;
 pub mod protocol;
+pub mod redaction;
 pub mod site_auth;
 pub mod site_service;
 pub mod sticker_packs;

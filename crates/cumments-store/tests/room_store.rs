@@ -217,3 +217,36 @@ async fn state_events_can_be_read_and_content_replaced_by_event_id() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn latest_state_event_orders_by_timestamp_then_event_id() {
+    let store = DbStore::connect(&test_db_url("latest-state-event"))
+        .await
+        .expect("connect db");
+    for (event_id, ts, name) in [
+        ("$v1:hs", 100, "old"),
+        ("$v2:hs", 200, "newer"),
+        ("$v3:hs", 200, "tie"), // same ts, later event id wins
+    ] {
+        store
+            .save_state_event(&RoomStateEvent {
+                event_id: event_id.to_string(),
+                room_id: "!room:hs".to_string(),
+                event_type: "m.room.name".to_string(),
+                state_key: String::new(),
+                sender: "@alice:hs".to_string(),
+                origin_server_ts: ts,
+                content_json: serde_json::json!({ "name": name }),
+            })
+            .await
+            .expect("save state event");
+    }
+
+    let latest = store
+        .get_latest_state_event("!room:hs", "m.room.name", "")
+        .await
+        .expect("get latest")
+        .expect("latest exists");
+    assert_eq!(latest.event_id, "$v3:hs");
+    assert_eq!(latest.content_json["name"], "tie");
+}
