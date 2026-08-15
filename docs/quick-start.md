@@ -88,7 +88,7 @@ initialized.`, and `Server listening on 0.0.0.0:7931`.
 ## 5. Create an account and register the site owner
 
 The first account registered on tuwunel is granted homeserver admin
-privileges, but Cumments no longer reads a fixed "admin" account from
+privileges. Cumments itself does not read a fixed admin account from
 configuration. Create an account for whoever will run the site:
 
 ```bash

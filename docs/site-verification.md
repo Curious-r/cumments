@@ -207,5 +207,5 @@ tighten the instance:
 2. Check the Operator API for stragglers:
    `GET /api/v1/operator/sites` (with the operator token).
 3. Flip the policy to `"required"` and restart. Unverified sites now receive
-   `403 code=site-verification-required` on writes, and legacy auto-creation is
-   disabled entirely.
+   `403 code=site-verification-required` on writes, and auto-creation of
+   sites on first comment is disabled entirely.

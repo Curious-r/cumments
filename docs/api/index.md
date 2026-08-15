@@ -195,8 +195,8 @@ DELETEs. DELETE targets therefore travel as query parameters
 **Registration before writes.** A `site_id` must be registered through the
 site API/CLI or declared in `[sites]` before it can receive comments, in
 every verification policy. This keeps an unknown id from provisioning a
-Matrix Space on its first comment — the old lazy auto-creation amplified an
-open registration endpoint into unbounded homeserver resource use. See
+Matrix Space on its first comment, which would turn an open registration
+endpoint into unbounded homeserver resource use. See
 [Site trust](../site-trust.md). Caller-chosen ids add one more requirement:
 in `optional` mode they must verify an origin before writes, so a readable
 alias has to be backed by a real domain; the same applies to any row without

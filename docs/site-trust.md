@@ -97,8 +97,7 @@ start verification for that site — which prevents a squatter from claiming a
 victim's id and verifying it with a domain they control. Operator-configured
 sites skip the claim step. Registration is mandatory in every policy: a site
 must be operator-configured or registered through the API/CLI before it can
-be written to, and legacy auto-creation of sites on first comment is gone.
-Chosen ids carry a further obligation: they only become writable after an
+be written to. Chosen ids carry a further obligation: they only become writable after an
 origin is verified (see above), so a "pretty name" must be backed by a real
 domain.
 
@@ -196,7 +195,7 @@ allowed_origins = [
 
 Validation is fail-fast at startup:
 
-- the removed `cors_origins` key is rejected as an unknown field instead of
+- unknown keys (including a legacy `cors_origins`) are rejected instead of
   being silently accepted;
 - origins are parsed and normalized; only `http(s)` schemes are allowed,
   without path/query/fragment, and the only wildcard is

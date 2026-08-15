@@ -99,9 +99,9 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
 - The schema is strict: unknown keys are rejected, so old flat field names
   (`matrix.homeserver_url`, `matrix.server_name`, ...) fail fast instead of
   being silently ignored.
-- `server.cors_origins` has been **removed**: CORS headers are now derived
-  from the site registry (see below). A config file that still contains the
-  key fails startup because unknown keys are rejected.
+- CORS headers are derived from the site registry (see below); the legacy
+  `server.cors_origins` key is not part of the schema and fails startup like
+  any unknown key.
 - `security.operator_token` enables the Operator API (see [API](api/index.md)).
   Placeholder values and tokens shorter than 32 characters are rejected at
   startup.

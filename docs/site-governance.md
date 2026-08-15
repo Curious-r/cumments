@@ -8,14 +8,10 @@ tables for API visibility; it never enforces a separate local roster.
 
 ## Why this design
 
-Earlier releases pinned moderation to one instance-level
-`matrix.moderation.admin_id`: the platform operator's own Matrix account was
-invited into every comment room with power 100 and a periodic sweep kept it
-there. That conflated "platform operator" with "owner of every site", which
-is wrong for a multi-site, multi-owner deployment, and left each site owner
-with a foreign high-privilege account permanently resident in their Space.
-
-The current model removes `admin_id` entirely:
+Governance must not conflate the platform operator with the owner of every
+site: a multi-site, multi-owner deployment would otherwise leave each site
+owner with a foreign high-privilege account permanently resident in their
+Space. Cumments keeps the two apart:
 
 - the AppService sender is the room creator and therefore the platform's
   backstop — it is never represented as a role;
@@ -182,7 +178,3 @@ drive it. To hand a site over, the operator rotates the claim token
 (`POST /api/v1/operator/sites/{site_id}/claim-token/rotate`), gives it to the new
 owner, and registers the new owner's Matrix ID via the operator mirror of the
 owners endpoint.
-
-The old `matrix.moderation.admin_id` configuration was removed. Rooms created
-before this change may still carry that account's 100-level entry; registering
-the site owner rewrites the site-managed entries and drops stale ones.
