@@ -94,7 +94,7 @@ Body:
 ```
 
 When `media` is present (an object returned by
-[Guest media upload](media.md#guest-media-upload), or a preset sticker
+[Guest media upload](media.md#guest-media-upload), or a site sticker pack
 reference with `"kind": "sticker"`), the signature covers `media.url` instead
 of `content`; `content` then only serves as the fallback filename/text.
 

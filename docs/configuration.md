@@ -35,14 +35,13 @@ site_verification = "optional"
 # Operator token for the Operator API (optional, at least 32 chars); unset
 # disables the operator routes. Prefer the environment variable:
 # CUMMENTS__SECURITY__OPERATOR_TOKEN=...
-# Preset stickers guests may attach (list of mxc:// URIs served by your
-# homeserver). The API rejects sticker references outside this list; the
-# demo fetches them from GET /api/v1/sites/{site}/posts/{post}/stickers.
-preset_stickers = []
 # Independent HMAC key for signed media-proxy URLs. When unset, the
 # AppService token is used and rotating it invalidates outstanding media
 # URLs; set a stable random value for production.
 # media_sign_key = "change-me"
+# Allow the media proxy to fetch loopback/private/link-local server names.
+# Keep false in production: the proxy is an SSRF surface.
+# media_proxy_allow_private_servers = false
 
 [sites."my-blog"]
 # "origin" (browser Origin, default) or "secret" (HMAC via edge function)

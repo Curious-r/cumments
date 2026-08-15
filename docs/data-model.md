@@ -166,7 +166,7 @@ before trusting the projection.
 |---|---|---|
 | Text | Supported | `m.text` with reply/edit/delete, queued as a submission |
 | Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; orphaned uploads are garbage-collected |
-| Sticker | Supported | Choose from the deployment's preset sticker list; the API sends the reference, guests cannot upload stickers |
+| Sticker | Supported | Choose from the site's sticker packs (`m.room.image_pack` on the site Space); the API validates the reference and fills metadata, guests cannot upload stickers |
 | Location | Supported | `m.location` (MSC3488), queued like a comment |
 | Poll | Supported | API proxies `m.poll.start` / `m.poll.response` with proof |
 | Reaction | Supported | API proxies `m.reaction` with proof; deduplicated per sender + key |

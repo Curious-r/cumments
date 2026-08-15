@@ -57,6 +57,9 @@ site_verification = "optional"
 # Keep false in production: verification confirm makes outbound HTTP/DNS
 # probes. Enable only for tests or intentionally internal deployments.
 # allow_private_verification_origins = false
+# Allow the media proxy to fetch loopback/private/link-local server names.
+# Keep false in production: the proxy is an SSRF surface.
+# media_proxy_allow_private_servers = false
 
 # ── Operator-declared sites ─────────────────────────────────────
 # Sites listed here are trusted without online verification. This is the

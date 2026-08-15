@@ -755,31 +755,148 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/stickers:
+  /api/v1/sites/{site_id}/stickers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
     get:
       tags: [Public]
-      summary: List preset stickers
+      summary: List site sticker packs
       operationId: listStickers
       responses:
         "200":
-          description: Preset stickers
+          description: Site sticker packs
           content:
             application/json:
               schema:
-                type: array
-                items:
+                type: object
+                required: [packs]
+                properties:
+                  packs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StickerPack"
+  /api/v1/sites/{site_id}/packs/{pack_id}/stickers:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - name: pack_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Governance]
+      summary: Add or replace a sticker in a site pack
+      operationId: addSiteSticker
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shortcode, url]
+              properties:
+                shortcode:
+                  type: string
+                url:
+                  type: string
+                body:
+                  type: string
+                info:
                   type: object
-                  required: [url, proxy_url, alt]
-                  properties:
-                    url:
-                      type: string
-                    proxy_url:
-                      type: string
-                    alt:
-                      type: string
+      responses:
+        "200":
+          description: Updated sticker pack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StickerPack"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Governance]
+      summary: Remove a sticker from a site pack
+      operationId: removeSiteSticker
+      parameters:
+        - name: shortcode
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated sticker pack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StickerPack"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - name: pack_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Operator]
+      summary: Add or replace a sticker in a site pack (operator fallback)
+      operationId: operatorAddSiteSticker
+      requestBody:
+        $ref: "#/components/requestBodies/AddSticker"
+      responses:
+        "200":
+          description: Updated sticker pack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StickerPack"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Operator]
+      summary: Remove a sticker from a site pack (operator fallback)
+      operationId: operatorRemoveSiteSticker
+      parameters:
+        - name: shortcode
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated sticker pack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StickerPack"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1946,3 +2063,54 @@ components:
           type: array
           items:
             type: string
+    StickerPack:
+      type: object
+      required: [pack_id, images]
+      properties:
+        pack_id:
+          type: string
+          description: Matrix `m.room.image_pack` state key.
+        display_name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+        images:
+          type: array
+          items:
+            type: object
+            required: [shortcode, url, proxy_url]
+            properties:
+              shortcode:
+                type: string
+              url:
+                type: string
+                description: MXC URL referenced when posting a sticker comment.
+              proxy_url:
+                type: string
+                description: Signed preview URL served by the media proxy.
+              body:
+                type: string
+                nullable: true
+              info:
+                type: object
+                nullable: true
+                description: Matrix ImageInfo (`w`/`h`, `mimetype`, `size`, ...).
+  requestBodies:
+    AddSticker:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [shortcode, url]
+            properties:
+              shortcode:
+                type: string
+              url:
+                type: string
+              body:
+                type: string
+              info:
+                type: object

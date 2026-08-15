@@ -28,12 +28,36 @@ second copy; keys are retained for 24 hours like comment write keys. The
 returned `url` is then used in a POST comment request with `media` (the
 signature covers the media URL instead of text content).
 
-## Preset stickers
+## Site sticker packs
 
-`GET /api/v1/sites/{site_id}/posts/{post_slug}/stickers`
+Sticker packs are Matrix-native `m.room.image_pack` state events on the
+site's Space (MSC2545). Site owners and co-managers manage them in any
+Matrix client; the bot commands and the endpoints below are the scripted
+equivalents, and the public read endpoint serves the projected packs to
+guests.
 
-Returns the deployment's preset stickers as
-`[{ "url", "proxy_url", "alt" }]` (`url` is the `mxc://` reference used when
-posting, `proxy_url` is the signed preview URL). Guests send a sticker by
-posting a comment with `media.kind = "sticker"` referencing one of these
-`url` values; the API rejects stickers outside the preset list.
+`GET /api/v1/sites/{site_id}/stickers` (public)
+
+Returns `{ "packs": [{ "pack_id", "display_name", "avatar_url", "images": [
+{ "shortcode", "url", "proxy_url", "body", "info" } ] }] }`. `url` is the
+`mxc://` reference used when posting; `proxy_url` is the signed preview URL
+(cross-server MXC included). Guests send a sticker by posting a comment with
+`media.kind = "sticker"` referencing one of these `url` values; the API
+validates it against the site's packs and fills the `m.sticker` metadata
+from the pack.
+
+`POST /api/v1/sites/{site_id}/packs/{pack_id}/stickers` (site governance,
+claim token)
+
+Body: `{ "shortcode", "url", "body"?, "info"? }`. Adds or replaces one image
+in the pack (creating the pack implicitly). Returns the updated pack.
+
+`DELETE /api/v1/sites/{site_id}/packs/{pack_id}/stickers?shortcode=...`
+(site governance, claim token)
+
+Removes one image from the pack. Returns the updated pack; removing a
+missing shortcode is a successful no-op.
+
+Operator fallbacks mirror both writes under
+`/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers` with the
+operator token.

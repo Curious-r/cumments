@@ -11,8 +11,8 @@ The endpoint reference is split by resource area:
 - [Governance](governance.md) — owners, co-managers, room moderators and the
   projected rosters.
 - [Operator](operator.md) — operator-only endpoints.
-- [Media](media.md) — the public media proxy, guest uploads and preset
-  stickers.
+- [Media](media.md) — the public media proxy, guest uploads and site sticker
+  packs.
 
 The sections below describe the primitives shared by every endpoint.
 
