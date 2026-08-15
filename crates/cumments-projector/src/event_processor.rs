@@ -17,7 +17,7 @@ use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
         CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry,
-        can_send_state_event, is_as_managed_user, role_entries,
+        SITE_ROLE_MIN_LEVEL, can_send_state_event, is_as_managed_user, role_entries,
     },
     identity::{post_signature_message, signature_message},
     models::{
@@ -1689,14 +1689,19 @@ impl EventProcessor {
             );
         }
         if event.event_type == POWER_LEVELS_EVENT_TYPE {
-            let roles: Vec<RoleEntry> = role_entries(&event.content, MODERATOR_LEVEL)
+            let site = self.site_store.get_site_by_space_id(&event.room_id).await?;
+            // A site Space's power levels define site roles (>= co-manager);
+            // comment rooms additionally carry per-room moderators (>= 50).
+            let min_level = if site.is_some() {
+                SITE_ROLE_MIN_LEVEL
+            } else {
+                MODERATOR_LEVEL
+            };
+            let roles: Vec<RoleEntry> = role_entries(&event.content, min_level)
                 .into_iter()
                 .filter(|role| !is_as_managed_user(&role.user_id))
                 .collect();
-            // A site Space's power levels define the site roles; a comment
-            // room's power levels define its room roles. Other rooms (or
-            // unregistered rooms) carry no governance meaning.
-            if let Some(site) = self.site_store.get_site_by_space_id(&event.room_id).await? {
+            if let Some(site) = site {
                 self.governance_store
                     .replace_site_roles(&site.id, &roles)
                     .await?;
@@ -1893,13 +1898,17 @@ impl EventProcessor {
                             .await?;
                     }
                     POWER_LEVELS_EVENT_TYPE => {
-                        let roles: Vec<RoleEntry> = role_entries(&stripped, MODERATOR_LEVEL)
+                        let site = self.site_store.get_site_by_space_id(&state.room_id).await?;
+                        let min_level = if site.is_some() {
+                            SITE_ROLE_MIN_LEVEL
+                        } else {
+                            MODERATOR_LEVEL
+                        };
+                        let roles: Vec<RoleEntry> = role_entries(&stripped, min_level)
                             .into_iter()
                             .filter(|role| !is_as_managed_user(&role.user_id))
                             .collect();
-                        if let Some(site) =
-                            self.site_store.get_site_by_space_id(&state.room_id).await?
-                        {
+                        if let Some(site) = site {
                             self.governance_store
                                 .replace_site_roles(&site.id, &roles)
                                 .await?;

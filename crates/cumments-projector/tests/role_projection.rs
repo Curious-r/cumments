@@ -114,6 +114,7 @@ async fn power_levels_project_site_and_room_roles() {
                     "@owner:hs": 100,
                     "@co:hs": 75,
                     "@_cumments_bot:hs": 100,
+                    "@space-mod:hs": 50,
                     "@plain-member:hs": 0,
                 }
             }),
