@@ -17,7 +17,7 @@ tags:
     description: Comment reads, writes, and live events
   - name: Sites
     description: Site registration and origin verification
-  - name: Admin
+  - name: Operator
     description: Operator-only management endpoints
   - name: Meta
     description: Infrastructure endpoints
@@ -379,16 +379,16 @@ paths:
                 $ref: "#/components/schemas/IssueSecretResponse"
         "400":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites:
+  /api/v1/operator/sites:
     x-cumments-query:
-      tags: [Admin]
+      tags: [Operator]
       summary: List managed sites (QUERY)
       operationId: listAdminSites
       description: |
-        Sent as `QUERY /api/v1/admin/sites` with an optional JSON body
+        Sent as `QUERY /api/v1/operator/sites` with an optional JSON body
         carrying pagination and the `site_id` filter.
       security:
-        - adminToken: []
+        - operatorToken: []
       requestBody:
         required: false
         content:
@@ -406,15 +406,15 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites/{site_id}:
+  /api/v1/operator/sites/{site_id}:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     delete:
-      tags: [Admin]
+      tags: [Operator]
       summary: Retire a site (operator)
       operationId: adminRetireSite
       security:
-        - adminToken: []
+        - operatorToken: []
       responses:
         "200":
           description: Site marked retiring; background decommission scheduled
@@ -428,15 +428,15 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites/{site_id}/origins/revoke:
+  /api/v1/operator/sites/{site_id}/origins/revoke:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
-      tags: [Admin]
+      tags: [Operator]
       summary: Revoke a verified origin
       operationId: revokeVerifiedOrigin
       security:
-        - adminToken: []
+        - operatorToken: []
       requestBody:
         required: true
         content:
@@ -452,15 +452,15 @@ paths:
                 $ref: "#/components/schemas/AdminSite"
         "400":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites/{site_id}/secret/rotate:
+  /api/v1/operator/sites/{site_id}/secret/rotate:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
-      tags: [Admin]
+      tags: [Operator]
       summary: Rotate HMAC secret
       operationId: rotateSecret
       security:
-        - adminToken: []
+        - operatorToken: []
       responses:
         "200":
           description: New secret issued once
@@ -470,15 +470,15 @@ paths:
                 $ref: "#/components/schemas/RotateSecretResponse"
         "400":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites/{site_id}/secret:
+  /api/v1/operator/sites/{site_id}/secret:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     delete:
-      tags: [Admin]
+      tags: [Operator]
       summary: Revoke HMAC secret
       operationId: revokeSecret
       security:
-        - adminToken: []
+        - operatorToken: []
       responses:
         "200":
           description: Secret revoked
@@ -490,15 +490,15 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites/{site_id}/config-snippet:
+  /api/v1/operator/sites/{site_id}/config-snippet:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     get:
-      tags: [Admin]
+      tags: [Operator]
       summary: Export config snippet
       operationId: configSnippet
       security:
-        - adminToken: []
+        - operatorToken: []
       responses:
         "200":
           description: TOML config snippet
@@ -510,15 +510,15 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/sites/{site_id}/claim-token/rotate:
+  /api/v1/operator/sites/{site_id}/claim-token/rotate:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
-      tags: [Admin]
+      tags: [Operator]
       summary: Rotate claim token
       operationId: rotateClaimToken
       security:
-        - adminToken: []
+        - operatorToken: []
       responses:
         "200":
           description: New claim token issued once
@@ -530,16 +530,16 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/rooms/quarantined:
+  /api/v1/operator/rooms/quarantined:
     x-cumments-query:
-      tags: [Admin]
+      tags: [Operator]
       summary: List quarantined rooms (QUERY)
       operationId: listQuarantinedRooms
       description: |
-        Sent as `QUERY /api/v1/admin/rooms/quarantined` with an optional JSON
+        Sent as `QUERY /api/v1/operator/rooms/quarantined` with an optional JSON
         body carrying pagination and the `site_id` filter.
       security:
-        - adminToken: []
+        - operatorToken: []
       requestBody:
         required: false
         content:
@@ -557,15 +557,15 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/admin/rooms/quarantined/{room_id}:
+  /api/v1/operator/rooms/quarantined/{room_id}:
     parameters:
       - $ref: "#/components/parameters/RoomId"
     delete:
-      tags: [Admin]
+      tags: [Operator]
       summary: Reinstate a room
       operationId: reinstateQuarantinedRoom
       security:
-        - adminToken: []
+        - operatorToken: []
       responses:
         "204":
           description: Room reinstated (idempotent)
@@ -1104,15 +1104,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SiteRolesResponse"
-  /api/v1/admin/sites/{site_id}/owners:
+  /api/v1/operator/sites/{site_id}/owners:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
-      tags: [Admin]
+      tags: [Operator]
       summary: Register or add a site owner (operator)
       operationId: adminAddSiteOwner
       security:
-        - adminToken: []
+        - operatorToken: []
       requestBody:
         required: true
         content:
@@ -1135,11 +1135,11 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
     delete:
-      tags: [Admin]
+      tags: [Operator]
       summary: Remove a site owner (operator)
       operationId: adminRemoveSiteOwner
       security:
-        - adminToken: []
+        - operatorToken: []
       parameters:
         - $ref: "#/components/parameters/UserIdQuery"
       responses:
@@ -1157,15 +1157,15 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/admin/sites/{site_id}/co-managers:
+  /api/v1/operator/sites/{site_id}/co-managers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
-      tags: [Admin]
+      tags: [Operator]
       summary: Add a site co-manager (operator)
       operationId: adminAddSiteCoManager
       security:
-        - adminToken: []
+        - operatorToken: []
       requestBody:
         required: true
         content:
@@ -1188,11 +1188,11 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
     delete:
-      tags: [Admin]
+      tags: [Operator]
       summary: Remove a site co-manager (operator)
       operationId: adminRemoveSiteCoManager
       security:
-        - adminToken: []
+        - operatorToken: []
       parameters:
         - $ref: "#/components/parameters/UserIdQuery"
       responses:
@@ -1212,7 +1212,7 @@ paths:
           $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
-    adminToken:
+    operatorToken:
       type: http
       scheme: bearer
     claimToken:
