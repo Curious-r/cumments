@@ -63,6 +63,7 @@ pub struct EventProcessor {
     active_sites: Mutex<HashMap<String, String>>,
     backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
+    governance_notify: Arc<Notify>,
     /// Wakes the reconciler after a site Space's power levels are projected,
     /// so client-side governance edits propagate to rooms without waiting for
     /// the periodic reconcile tick.
@@ -92,6 +93,9 @@ pub struct EventProcessorDeps {
     /// backfill worker).
     pub backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
+    /// Wakes governance reconcile passes (decommission, role propagation)
+    /// after bot-driven governance writes, mirroring the API.
+    pub governance_notify: Arc<Notify>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
 }
@@ -160,6 +164,7 @@ impl EventProcessor {
             active_sites: Mutex::new(HashMap::new()),
             backfill_tx: deps.backfill_tx,
             event_bus: deps.event_bus,
+            governance_notify: deps.governance_notify,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
         }
@@ -492,7 +497,7 @@ impl EventProcessor {
             ["site", id, "co-manager", "remove", mxid, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let driver = self.require_driver()?;
-                cumments_core::management::remove_site_role(
+                let removal = cumments_core::management::remove_site_role(
                     self.role_claim_store.as_ref(),
                     self.governance_store.as_ref(),
                     driver,
@@ -502,6 +507,9 @@ impl EventProcessor {
                     CO_MANAGER_LEVEL,
                 )
                 .await?;
+                if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+                    self.governance_notify.notify_one();
+                }
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("已移除 {id} 的协管员 {mxid}。"),
@@ -562,7 +570,7 @@ impl EventProcessor {
                     .get_registered_room(&site_id, &post_slug)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("没有为 {id}/{slug} 注册的房间"))?;
-                cumments_core::management::remove_room_moderator(
+                let removal = cumments_core::management::remove_room_moderator(
                     self.role_claim_store.as_ref(),
                     self.governance_store.as_ref(),
                     self.require_driver()?,
@@ -571,6 +579,9 @@ impl EventProcessor {
                     mxid,
                 )
                 .await?;
+                if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+                    self.governance_notify.notify_one();
+                }
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("已移除 {id}/{slug} 的版主 {mxid}。"),
@@ -620,6 +631,7 @@ impl EventProcessor {
                 {
                     return Err(anyhow::anyhow!("站点不存在或已退役"));
                 }
+                self.governance_notify.notify_one();
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("站点 {id} 已标记退役，后台正在处理。"),

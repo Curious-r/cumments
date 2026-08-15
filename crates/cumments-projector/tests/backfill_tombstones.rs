@@ -56,6 +56,7 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
         admin_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
+        governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: Arc::new(tokio::sync::Notify::new()),
         server_name: server_name.map(|s| s.to_string()),
     })

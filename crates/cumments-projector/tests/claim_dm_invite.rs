@@ -58,6 +58,7 @@ fn processor(store: Arc<DbStore>, driver: Arc<TestDriver>) -> EventProcessor {
         admin_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
+        governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
     })

@@ -277,6 +277,7 @@ async fn main() -> Result<()> {
             admin_mxids: admin_mxids.clone(),
             backfill_tx: Some(backfill_tx),
             event_bus: event_bus.clone(),
+            governance_notify: governance_notify.clone(),
             projection_notify: projection_notify.clone(),
             server_name: settings
                 .matrix
