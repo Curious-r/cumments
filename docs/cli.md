@@ -45,7 +45,8 @@ cumments
 │   └── retire SITE_ID --yes [--wait]
 ├── rooms
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
-│   └── reinstate ROOM_ID
+│   ├── reinstate ROOM_ID
+│   └── upgrade ROOM_ID VERSION
 └── completions SHELL
 ```
 
@@ -62,6 +63,8 @@ cumments
 - `rooms reinstate` prints `{"room_id","status":"active"}`. This is a CLI-side
   enhancement of the Operator API, which returns an empty `204`: the CLI has no
   body-free "no content" convention, so it reports the affected resource.
+- `rooms upgrade` prints `{"room_id","new_version","replacement_room"}`,
+  matching the Operator API response.
 - Exit codes: `0` success, `1` runtime error, `2` usage error (clap).
 
 ## Examples
@@ -78,6 +81,12 @@ List quarantined rooms and reinstate one:
 ```bash
 cumments rooms list-quarantined
 cumments rooms reinstate '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
+```
+
+Upgrade a comment room to room version 12:
+
+```bash
+cumments rooms upgrade '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE' 12
 ```
 
 List the chat command audit log (newest first), optionally filtered by actor:

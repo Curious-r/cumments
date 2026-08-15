@@ -88,6 +88,19 @@ active room for the same post is superseded). The operation is idempotent:
 reinstating an already-active room also returns `204`; an unknown room
 returns `404`.
 
+## Upgrade a comment room
+
+`POST /api/v1/operator/rooms/{room_id}/upgrade`
+
+Body: `{"new_version": "12"}`. Upgrades a registered active comment room via
+the homeserver's native `/upgrade` and converges the replacement: metadata is
+repaired, the room is re-linked into its site Space (the old child's `via` is
+cleared best-effort), site roles are re-invited, and the new room becomes the
+registry's active room (the old one is superseded and cleaned up). The
+operation is idempotent: an existing `m.room.tombstone` is reused. Spaces,
+unknown rooms, non-active rooms and invalid versions are rejected with a
+`4xx` problem response.
+
 ## Governance fallback
 
 The operator can act on a site's behalf for site-level roles:

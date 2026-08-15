@@ -225,6 +225,84 @@ Backfill is also available to operators as `!cumments backfill [max_pages]`;
 it queues a worker request and the bot replies in the DM when the worker
 finishes.
 
+### Room upgrades
+
+Comment rooms can be upgraded to a new room version through the homeserver's
+native `/upgrade`. The operation is available to instance operators only:
+`cumments rooms upgrade ROOM_ID VERSION`, `POST /api/v1/operator/rooms/{room_id}/upgrade`,
+or `!cumments room ROOM_ID upgrade VERSION --confirm` in a private DM. The
+driver is idempotent: an existing `m.room.tombstone` is reused, and a failed
+request re-reads the tombstone before reporting an error, so a lost response
+cannot mint a second replacement room.
+
+#### Governance attribution: site-level motivation, instance-level execution
+
+The room belongs to a site and the site owner (level 100) is its highest
+governance role, so "upgrade my room" is usually a site-level request. The
+execution and authorization stay instance-level:
+
+- In room version 12 the caller of `/upgrade` becomes the new room's creator
+  with immutable infinite power. A site owner upgrading directly would
+  escalate from governance level 100 to creator power and could lock the bot
+  out of the replacement room. With the bot as the caller, the bot remains
+  the creator and the owner keeps level 100.
+- An upgrade mutates instance-wide invariants: the alias moves, the registry
+  switches to a single active room (the old one is superseded), the old room
+  is cleaned up, and the Space child is re-linked. This is the same class of
+  operation as quarantine/reinstate and backfill.
+- Every upgrade mints a new room; repeated upgrades create orphaned
+  replacements and role re-invites, an instance resource cost that site
+  self-service should not be able to trigger freely.
+
+If site-level self-service is ever added, the bot must remain the `/upgrade`
+caller (so it stays creator) and the request path needs a separate abuse
+review.
+
+#### Convergence design
+
+The native upgrade does not fully converge a Cumments room, so the management
+use case owns these writes:
+
+- **Metadata**: the spec says not to transfer sender-sensitive non-Matrix
+  state; `host.curious.cumments.metadata` is therefore re-written during
+  adoption of the replacement room.
+- **Space graph**: `/upgrade` does not update references in other rooms, and
+  MSC4168 (still open) is only partially implemented by homeservers —
+  tuwunel copies `m.space.parent`/`m.space.child` into the new room but does
+  not update the parent Space. Cumments re-links the Space child to the
+  replacement and best-effort clears the old child's `via` so clients stop
+  treating the tombstoned room as part of the Space.
+- **Membership**: memberships are not transferred. Site roles (>= 75) from
+  the Space power levels are re-invited; per-room moderators and ordinary
+  users can join the public replacement room themselves.
+- **Registry**: registering the replacement as active automatically
+  supersedes the old room; the room-cleanup pass then retires the old room's
+  AS-managed memberships.
+
+#### Tombstone threshold
+
+Initial power levels lock `m.room.tombstone` to 100 (owner level) and the
+moderation pass normalizes existing rooms. This blocks 50-level moderators
+while keeping the owner able to tombstone in Matrix. Because upgrades are
+executed by the bot, the v12 "upgrade = inherit creator power" escalation
+does not apply. Raising the threshold to 150 (the v12 recommended value)
+would shrink the surface further but would also remove the site owner's
+ability to tombstone a room directly; that semantic change is a separate
+decision.
+
+#### Standard tracking
+
+These open standards shape this design; revisit it when they land:
+
+| Standard | Status (2026-08) | Impact when merged |
+|---|---|---|
+| MSC4168: update `m.space.*` on room upgrade | open; tuwunel implements the copy half only | homeservers update child/parent references themselves; convergence can shrink to idempotent re-check plus old-child `via` clearing |
+| MSC4433: image-pack migration on upgrade | open | comment-room upgrades unaffected (packs live in the site Space); revisit for Space upgrades |
+| Room Upgrades module | stable in v1.19 | re-check the recommended transfer list on every spec upgrade; new copied types may simplify convergence |
+
+Policy: once a formal, complete standard exists, revise this design to follow
+it instead of keeping the manual convergence.
+
 ### Logging mode (local development)
 
 The `LoggingMatrixDriver` logs actions instead of talking to a homeserver.
