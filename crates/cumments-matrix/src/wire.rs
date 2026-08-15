@@ -235,10 +235,10 @@ pub(crate) fn build_media_body(
         info.insert("size".to_string(), serde_json::json!(size));
     }
     if let Some(width) = media.width {
-        info.insert("width".to_string(), serde_json::json!(width));
+        info.insert("w".to_string(), serde_json::json!(width));
     }
     if let Some(height) = media.height {
-        info.insert("height".to_string(), serde_json::json!(height));
+        info.insert("h".to_string(), serde_json::json!(height));
     }
     if !info.is_empty() {
         message_body["info"] = serde_json::Value::Object(info);
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(body["body"], "cat.png");
         assert_eq!(body["url"], "mxc://hs/abc");
         assert_eq!(body["info"]["mimetype"], "image/png");
-        assert_eq!(body["info"]["width"], 100);
+        assert_eq!(body["info"]["w"], 100);
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "mxc://hs/abc");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["submission_id"], 7);
         assert!(body.get("org.matrix.msc3245.voice").is_none());

@@ -363,8 +363,8 @@ fn media_content(kind: MediaKind, content: &serde_json::Value, body: &str) -> Co
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         size: info.and_then(|i| i.get("size")).and_then(|v| v.as_u64()),
-        width: dimension("width"),
-        height: dimension("height"),
+        width: dimension("w").or_else(|| dimension("width")),
+        height: dimension("h").or_else(|| dimension("height")),
         thumbnail_url: content
             .get("thumbnail_url")
             .and_then(|v| v.as_str())
