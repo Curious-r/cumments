@@ -16,9 +16,16 @@ pub const POWER_LEVELS_EVENT_TYPE: &str = "m.room.power_levels";
 
 /// Matrix state event type carrying the tombstone that marks a room as
 /// upgraded. Room version 12 requires its power level to be explicitly
-/// higher than `state_default`; Cumments locks it to the owner level so a
-/// 50-level moderator cannot upgrade a room and inherit creator powers.
+/// higher than `state_default`.
 pub const TOMBSTONE_EVENT_TYPE: &str = "m.room.tombstone";
+
+/// The power level required to send `m.room.tombstone`. Cumments uses the
+/// room version 12 recommended value 150: only the room creator (the AS bot,
+/// who has infinite power in v12) or a user explicitly boosted to 150 can
+/// upgrade a room. Site owners stay at 100 and therefore cannot self-upgrade
+/// from a Matrix client — doing so would make them the replacement room's
+/// creator with immutable infinite power.
+pub const TOMBSTONE_LOCK_LEVEL: i64 = 150;
 
 /// Level ladder for site governance roles.
 pub const OWNER_LEVEL: i64 = 100;
@@ -200,7 +207,7 @@ pub fn role_entries(power_levels: &Value, min_level: i64) -> Vec<RoleEntry> {
 /// Initial power levels for a site Space: the creator entry (pre-v12 rooms)
 /// plus the governance locks. `state_default` is lowered to the moderator
 /// level so site co-managers can manage Space structure, but the power-levels
-/// event and the tombstone stay owner-only.
+/// event stays owner-only and the tombstone stays bot-only (150).
 pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) -> Value {
     let mut users = Map::new();
     if include_sender {
@@ -210,7 +217,7 @@ pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) ->
         "users": users,
         "events": {
             POWER_LEVELS_EVENT_TYPE: ROLE_LOCK_LEVEL,
-            TOMBSTONE_EVENT_TYPE: ROLE_LOCK_LEVEL,
+            TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
         },
         "state_default": MODERATOR_LEVEL,
     })
@@ -218,8 +225,8 @@ pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) ->
 
 /// Initial power levels for a comment room, seeded from the site Space: every
 /// site-managed entry (owner and co-managers) is replicated, per-room
-/// moderators start empty, and the power-levels event plus the tombstone are
-/// locked to the owner level.
+/// moderators start empty, and the power-levels event is owner-locked while
+/// the tombstone is bot-only (150).
 pub fn initial_comment_room_power_levels(
     space_power_levels: &Value,
     sender_user_id: &str,
@@ -238,7 +245,7 @@ pub fn initial_comment_room_power_levels(
         "users": users,
         "events": {
             POWER_LEVELS_EVENT_TYPE: ROLE_LOCK_LEVEL,
-            TOMBSTONE_EVENT_TYPE: ROLE_LOCK_LEVEL,
+            TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
         },
     })
 }
@@ -267,10 +274,12 @@ pub fn reconcile_site_roles(
     ensure_governance_locks(&updated)
 }
 
-/// Guarantees that `m.room.power_levels` and `m.room.tombstone` are locked
-/// to the owner level. Room version 12 requires the tombstone threshold to
-/// be explicit and above `state_default`; without this, a 50-level member
-/// could tombstone/upgrade a room.
+/// Guarantees that `m.room.power_levels` is owner-locked and
+/// `m.room.tombstone` is bot-only (150). Room version 12 requires the
+/// tombstone threshold to be explicit and above `state_default`; without
+/// this, a 50-level member could tombstone/upgrade a room, and with only
+/// owner level a 100-level site owner could self-upgrade and inherit creator
+/// power.
 pub fn ensure_governance_locks(power_levels: &Value) -> Value {
     let mut updated = power_levels.clone();
     let events = updated
@@ -286,7 +295,7 @@ pub fn ensure_governance_locks(power_levels: &Value) -> Value {
     );
     events.insert(
         TOMBSTONE_EVENT_TYPE.to_string(),
-        Value::from(ROLE_LOCK_LEVEL),
+        Value::from(TOMBSTONE_LOCK_LEVEL),
     );
     updated
 }
@@ -405,14 +414,14 @@ mod tests {
         assert_eq!(seeded["users"]["@co:hs"], 75);
         assert_eq!(seeded["users"]["@bot:hs"], 100);
         assert_eq!(seeded["events"][POWER_LEVELS_EVENT_TYPE], 100);
-        assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], 100);
+        assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
     }
 
     #[test]
     fn space_seeding_locks_tombstone_above_state_default() {
         let seeded = initial_space_power_levels("@bot:hs", true);
         assert_eq!(seeded["events"][POWER_LEVELS_EVENT_TYPE], 100);
-        assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], 100);
+        assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
         assert!(
             seeded["events"][TOMBSTONE_EVENT_TYPE].as_i64().unwrap()
                 > seeded["state_default"].as_i64().unwrap()
@@ -447,7 +456,7 @@ mod tests {
                 },
                 "events": {
                     POWER_LEVELS_EVENT_TYPE: 100,
-                    TOMBSTONE_EVENT_TYPE: 100,
+                    TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
                 },
             })
         );
@@ -461,7 +470,7 @@ mod tests {
             "state_default": 50,
         });
         let locked = ensure_governance_locks(&legacy);
-        assert_eq!(locked["events"][TOMBSTONE_EVENT_TYPE], 100);
+        assert_eq!(locked["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
         // Idempotent: re-running keeps both locks.
         assert_eq!(ensure_governance_locks(&locked), locked);
     }
@@ -529,12 +538,14 @@ mod tests {
             "@anyone:hs",
             "m.room.image_pack"
         ));
-        // A 50-level moderator cannot send the tombstone; the owner can.
+        // A 50-level moderator and a 100-level site owner cannot send the
+        // tombstone; only a user at the 150 lock level (the bot creator, or
+        // someone explicitly boosted) can.
         let locked = json!({
-            "users": { "@owner:hs": 100, "@mod:hs": 50 },
+            "users": { "@owner:hs": 100, "@mod:hs": 50, "@elevated:hs": 150 },
             "events": {
                 POWER_LEVELS_EVENT_TYPE: 100,
-                TOMBSTONE_EVENT_TYPE: 100,
+                TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
             },
             "state_default": 50,
         });
@@ -543,9 +554,14 @@ mod tests {
             "@mod:hs",
             TOMBSTONE_EVENT_TYPE
         ));
-        assert!(can_send_state_event(
+        assert!(!can_send_state_event(
             &locked,
             "@owner:hs",
+            TOMBSTONE_EVENT_TYPE
+        ));
+        assert!(can_send_state_event(
+            &locked,
+            "@elevated:hs",
             TOMBSTONE_EVENT_TYPE
         ));
     }

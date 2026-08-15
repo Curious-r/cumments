@@ -45,6 +45,14 @@ async fn test_fixture(name: &str) -> (DbStore, TestDriver, SiteService) {
         .expect("save site");
 
     let driver = TestDriver::new();
+    driver.room_state.lock().await.insert(
+        (
+            "!old:hs".to_string(),
+            "m.room.create".to_string(),
+            String::new(),
+        ),
+        json!({ "room_version": "12" }),
+    );
     driver.power_levels.lock().await.insert(
         "!space:hs".to_string(),
         json!({
@@ -166,4 +174,25 @@ async fn upgrade_comment_room_rejects_unknown_rooms_and_bad_versions() {
         .await
         .expect_err("invalid version must be rejected");
     assert!(matches!(error, ManagementError::InvalidRoomVersion(_)));
+}
+
+#[tokio::test]
+async fn upgrade_comment_room_rejects_pre_v12_rooms() {
+    let (store, driver, site_service) = test_fixture("pre-v12").await;
+    driver.room_state.lock().await.insert(
+        (
+            "!old:hs".to_string(),
+            "m.room.create".to_string(),
+            String::new(),
+        ),
+        json!({ "room_version": "11" }),
+    );
+
+    let error = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "12")
+        .await
+        .expect_err("pre-v12 room must be rejected");
+    assert!(matches!(
+        error,
+        ManagementError::PreV12RoomNotUpgradable(_, _)
+    ));
 }

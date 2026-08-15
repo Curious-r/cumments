@@ -44,6 +44,10 @@ pub enum ManagementError {
     InvalidRoomVersion(String),
     #[error("invalid post slug `{0}`")]
     InvalidPostSlug(String),
+    #[error("room {0} runs room version {1}; only v12+ rooms can be upgraded")]
+    PreV12RoomNotUpgradable(String, String),
+    #[error("room {0} has no m.room.create event")]
+    RoomWithoutCreateEvent(String),
     #[error(transparent)]
     Infra(#[from] anyhow::Error),
 }
@@ -67,7 +71,9 @@ pub fn is_valid_room_version(value: &str) -> bool {
 /// those writes: adoption + metadata repair, Space child re-link, old-child
 /// `via` clearing (best-effort), site-role re-invites, and registry
 /// activation (which supersedes the old room). Returns the replacement room
-/// ID.
+/// ID. Only room version 12+ rooms are upgradable: the tombstone is locked
+/// to 150, and in pre-v12 rooms the bot (listed at 100) would not have the
+/// power to send it.
 pub async fn upgrade_comment_room(
     driver: &dyn MatrixDriver,
     registry: &dyn RegistryStore,
@@ -84,6 +90,24 @@ pub async fn upgrade_comment_room(
         .ok_or_else(|| ManagementError::RoomNotRegistered(room_id.to_string()))?;
     if registry.get_room_status(room_id).await? != Some(RoomStatus::Active) {
         return Err(ManagementError::RoomNotActive(room_id.to_string()));
+    }
+    let create = driver
+        .get_room_state(room_id, "m.room.create", "")
+        .await?
+        .ok_or_else(|| ManagementError::RoomWithoutCreateEvent(room_id.to_string()))?;
+    let version = create
+        .get("room_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1");
+    let major = version
+        .split(['.', '-'])
+        .next()
+        .and_then(|v| v.parse::<u32>().ok());
+    if major.is_none_or(|v| v < 12) {
+        return Err(ManagementError::PreV12RoomNotUpgradable(
+            room_id.to_string(),
+            version.to_string(),
+        ));
     }
     let site_id = SiteId::new(identity.site_id.clone())
         .map_err(|e| ManagementError::InvalidSiteId(e.to_string()))?;

@@ -281,14 +281,15 @@ use case owns these writes:
 
 #### Tombstone threshold
 
-Initial power levels lock `m.room.tombstone` to 100 (owner level) and the
-moderation pass normalizes existing rooms. This blocks 50-level moderators
-while keeping the owner able to tombstone in Matrix. Because upgrades are
-executed by the bot, the v12 "upgrade = inherit creator power" escalation
-does not apply. Raising the threshold to 150 (the v12 recommended value)
-would shrink the surface further but would also remove the site owner's
-ability to tombstone a room directly; that semantic change is a separate
-decision.
+Initial power levels lock `m.room.tombstone` to 150 (the room version 12
+recommended value) and the moderation pass normalizes existing rooms. This
+blocks both 50-level moderators and 100-level site owners from sending a
+tombstone in a Matrix client, so only the room creator (the AS bot, who has
+infinite power in v12) can upgrade. A client-side upgrade by a site owner
+would otherwise make them the replacement room's creator with immutable
+infinite power, bypassing the convergence loop. Only v12+ rooms are
+upgradable through Cumments: in pre-v12 rooms the bot is listed at 100 and
+would not have the power to send the tombstone itself.
 
 #### Standard tracking
 

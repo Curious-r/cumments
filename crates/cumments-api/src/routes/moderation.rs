@@ -183,6 +183,8 @@ fn map_management_error(error: ManagementError) -> AppError {
         }
         ManagementError::InvalidRoomVersion(message)
         | ManagementError::InvalidPostSlug(message) => AppError::BadRequest(message),
+        ManagementError::PreV12RoomNotUpgradable(message, _) => AppError::Conflict(message),
+        ManagementError::RoomWithoutCreateEvent(message) => AppError::NotFound(message),
         ManagementError::RoleNotFound => AppError::NotFound(error.to_string()),
         ManagementError::SiteLevelRoleConflict => AppError::Conflict(error.to_string()),
         ManagementError::RoomNotRegistered(message) => AppError::NotFound(message),
