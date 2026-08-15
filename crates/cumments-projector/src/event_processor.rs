@@ -1655,21 +1655,37 @@ impl EventProcessor {
                     }
                 }
             }
+            let display_name = event
+                .content
+                .get("displayname")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let avatar_url = event
+                .content
+                .get("avatar_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            // Leave events usually omit the profile; keep the last known one
+            // instead of wiping it from the member snapshot.
+            let (display_name, avatar_url) = if membership == "leave" {
+                let existing = self
+                    .room_store
+                    .get_member(&event.room_id, &event.state_key)
+                    .await?;
+                (
+                    display_name.or_else(|| existing.as_ref().and_then(|m| m.display_name.clone())),
+                    avatar_url.or_else(|| existing.as_ref().and_then(|m| m.avatar_url.clone())),
+                )
+            } else {
+                (display_name, avatar_url)
+            };
             self.room_store
                 .save_member(&RoomMember {
                     room_id: event.room_id.clone(),
                     // `m.room.member` state key is the member's user ID.
                     user_id: event.state_key.clone(),
-                    display_name: event
-                        .content
-                        .get("displayname")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    avatar_url: event
-                        .content
-                        .get("avatar_url")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
+                    display_name,
+                    avatar_url,
                     membership,
                     updated_at: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                         .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),

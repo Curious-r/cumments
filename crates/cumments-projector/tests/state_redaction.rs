@@ -264,3 +264,52 @@ async fn redacting_member_keeps_membership_and_drops_profile() {
     assert_eq!(member.display_name, None);
     assert_eq!(member.avatar_url, None);
 }
+
+#[tokio::test]
+async fn leaving_member_keeps_the_last_known_profile() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("leave-profile"))
+            .await
+            .expect("connect db"),
+    );
+    let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(state(
+            "!room:hs",
+            "$join:hs",
+            100,
+            "m.room.member",
+            "@alice:hs",
+            json!({
+                "membership": "join",
+                "displayname": "Alice",
+                "avatar_url": "mxc://hs/a",
+            }),
+        ))
+        .await
+        .expect("save join");
+    processor
+        .process_room_state(state(
+            "!room:hs",
+            "$leave:hs",
+            200,
+            "m.room.member",
+            "@alice:hs",
+            json!({ "membership": "leave" }),
+        ))
+        .await
+        .expect("save leave");
+
+    let member = store
+        .get_member("!room:hs", "@alice:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(member.membership, "leave");
+    assert_eq!(
+        member.display_name.as_deref(),
+        Some("Alice"),
+        "leave events must not wipe the last known profile"
+    );
+    assert_eq!(member.avatar_url.as_deref(), Some("mxc://hs/a"));
+}
