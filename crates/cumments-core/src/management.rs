@@ -4,15 +4,16 @@
 //! operation is implemented exactly once here on top of the core ports.
 
 use crate::governance::{
-    CO_MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, role_entries, set_role_level,
-    validate_governance_user_id,
+    CO_MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, SITE_ROLE_MIN_LEVEL, role_entries,
+    set_role_level, validate_governance_user_id,
 };
-use crate::models::SiteId;
-use crate::ports::{GovernanceStore, MatrixDriver, RoleClaimStore, SiteAuthStore};
+use crate::models::{PostSlug, RoomStatus, SiteId};
+use crate::ports::{GovernanceStore, MatrixDriver, RegistryStore, RoleClaimStore, SiteAuthStore};
 use crate::site_auth::{SiteAuthPolicy, generate_token, token_hash};
 use crate::site_service::SiteService;
 use chrono::{Duration, Utc};
 use std::collections::HashSet;
+use tracing::warn;
 
 /// How long an unverified role claim stays valid.
 pub const ROLE_CLAIM_TTL_HOURS: i64 = 24;
@@ -35,8 +36,96 @@ pub enum ManagementError {
         "this user holds a site-level role; manage them through the owners or co-managers endpoint"
     )]
     SiteLevelRoleConflict,
+    #[error("room {0} is not in the registry")]
+    RoomNotRegistered(String),
+    #[error("room {0} is not active (quarantined or superseded)")]
+    RoomNotActive(String),
+    #[error("invalid Matrix room version `{0}`")]
+    InvalidRoomVersion(String),
+    #[error("invalid post slug `{0}`")]
+    InvalidPostSlug(String),
     #[error(transparent)]
     Infra(#[from] anyhow::Error),
+}
+
+/// Whether `value` is a syntactically valid Matrix room version identifier
+/// (1-32 chars from a-z, 0-9, '.', '-'), mirroring the config validator.
+pub fn is_valid_room_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 32
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-'))
+}
+
+/// Upgrades one registered active comment room through the homeserver's
+/// native `/upgrade` and converges the replacement into Cumments.
+///
+/// The native upgrade does not copy our metadata, does not update external
+/// Space references (MSC4168 is open and tuwunel only copies space state into
+/// the new room), and does not transfer membership, so this use case owns
+/// those writes: adoption + metadata repair, Space child re-link, old-child
+/// `via` clearing (best-effort), site-role re-invites, and registry
+/// activation (which supersedes the old room). Returns the replacement room
+/// ID.
+pub async fn upgrade_comment_room(
+    driver: &dyn MatrixDriver,
+    registry: &dyn RegistryStore,
+    site_service: &SiteService,
+    room_id: &str,
+    new_version: &str,
+) -> Result<String, ManagementError> {
+    if !is_valid_room_version(new_version) {
+        return Err(ManagementError::InvalidRoomVersion(new_version.to_string()));
+    }
+    let identity = registry
+        .get_registered_room_identity(room_id)
+        .await?
+        .ok_or_else(|| ManagementError::RoomNotRegistered(room_id.to_string()))?;
+    if registry.get_room_status(room_id).await? != Some(RoomStatus::Active) {
+        return Err(ManagementError::RoomNotActive(room_id.to_string()));
+    }
+    let site_id = SiteId::new(identity.site_id.clone())
+        .map_err(|e| ManagementError::InvalidSiteId(e.to_string()))?;
+    let post_slug = PostSlug::new(identity.post_slug.clone())
+        .map_err(|e| ManagementError::InvalidPostSlug(e.to_string()))?;
+    let space_id = site_service.ensure_space(&site_id, driver).await?;
+
+    let replacement = driver.upgrade_room(room_id, new_version).await?;
+
+    driver
+        .adopt_room(&replacement, &site_id, Some(&post_slug), false)
+        .await?;
+    driver.link_room_to_space(&space_id, &replacement).await?;
+
+    // Best-effort: clear the old child's `via` so clients stop treating the
+    // tombstoned room as part of the Space (MSC4168 semantics).
+    if let Err(e) = driver
+        .set_room_state(&space_id, "m.space.child", room_id, &serde_json::json!({}))
+        .await
+    {
+        warn!("failed to clear old Space child {room_id}: {e:#}");
+    }
+
+    let sender = driver.sender_user_id().unwrap_or_default();
+    if let Some(space_power_levels) = driver.get_room_power_levels(&space_id).await? {
+        for role in role_entries(&space_power_levels, SITE_ROLE_MIN_LEVEL) {
+            if role.user_id == sender {
+                continue;
+            }
+            if let Err(e) = driver.invite_user(&replacement, &role.user_id).await {
+                warn!(
+                    "failed to re-invite {} to upgraded room: {e:#}",
+                    role.user_id
+                );
+            }
+        }
+    }
+
+    registry
+        .register_room(&replacement, &site_id, &post_slug)
+        .await?;
+    Ok(replacement)
 }
 
 /// A pending token-DM role claim created by [`create_role_claim`].

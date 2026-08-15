@@ -937,6 +937,21 @@ pub trait MatrixDriver: Send + Sync {
     /// returned instead of creating a second one.
     async fn upgrade_room(&self, room_id: &str, new_version: &str) -> Result<String>;
 
+    /// Validates and repairs a room so Cumments can treat it as canonical:
+    /// the AS sender must be able to govern it, and the Cumments metadata
+    /// state is written when missing or mismatched.
+    async fn adopt_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+        require_space: bool,
+    ) -> Result<()>;
+
+    /// Idempotently links a comment room into a Space (`m.space.child` on
+    /// the Space, `m.space.parent` on the room).
+    async fn link_room_to_space(&self, space_id: &str, room_id: &str) -> Result<()>;
+
     /// Invites a user to a room as the AS sender. Already-joined users are a
     /// successful no-op.
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()>;

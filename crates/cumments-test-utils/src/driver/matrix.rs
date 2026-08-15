@@ -62,8 +62,12 @@ impl MatrixDriver for TestDriver {
     fn sender_user_id(&self) -> Option<String> {
         Some("@_cumments_bot:hs".to_string())
     }
-    async fn invite_user(&self, _room_id: &str, _user_id: &str) -> anyhow::Result<()> {
-        unimplemented!("not used in this test")
+    async fn invite_user(&self, room_id: &str, user_id: &str) -> anyhow::Result<()> {
+        self.invites
+            .lock()
+            .await
+            .push((room_id.to_string(), user_id.to_string()));
+        Ok(())
     }
 
     // ── Content writes and bot replies ───────────────────────────────
@@ -288,5 +292,32 @@ impl MatrixDriver for TestDriver {
             .await
             .insert(key, serde_json::json!({ "replacement_room": replacement }));
         Ok(replacement)
+    }
+
+    async fn adopt_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+        _require_space: bool,
+    ) -> anyhow::Result<()> {
+        self.adoptions.lock().await.push(room_id.to_string());
+        let mut metadata = serde_json::json!({ "site_id": site_id.as_str() });
+        if let Some(slug) = post_slug {
+            metadata["post_slug"] = serde_json::json!(slug.as_str());
+        }
+        self.room_metadata
+            .lock()
+            .await
+            .insert(room_id.to_string(), metadata);
+        Ok(())
+    }
+
+    async fn link_room_to_space(&self, space_id: &str, room_id: &str) -> anyhow::Result<()> {
+        self.space_links
+            .lock()
+            .await
+            .push((space_id.to_string(), room_id.to_string()));
+        Ok(())
     }
 }

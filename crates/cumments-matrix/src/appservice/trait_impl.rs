@@ -289,6 +289,21 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.upgrade_room_impl(room_id, new_version).await
     }
 
+    async fn adopt_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+        require_space: bool,
+    ) -> Result<()> {
+        self.adopt_room(room_id, site_id, post_slug, require_space)
+            .await
+    }
+
+    async fn link_room_to_space(&self, space_id: &str, room_id: &str) -> Result<()> {
+        self.link_room_to_space(space_id, room_id).await
+    }
+
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         self.invite_user_impl(room_id, user_id).await
     }

@@ -28,6 +28,9 @@ pub struct TestDriver {
     pub state_writes: Mutex<Vec<(String, String, String)>>,
     pub power_levels: Mutex<HashMap<String, serde_json::Value>>,
     pub upgrades: Mutex<Vec<(String, String)>>,
+    pub adoptions: Mutex<Vec<String>>,
+    pub space_links: Mutex<Vec<(String, String)>>,
+    pub invites: Mutex<Vec<(String, String)>>,
 }
 
 impl TestDriver {
@@ -46,6 +49,9 @@ impl TestDriver {
             state_writes: Mutex::new(Vec::new()),
             power_levels: Mutex::new(HashMap::new()),
             upgrades: Mutex::new(Vec::new()),
+            adoptions: Mutex::new(Vec::new()),
+            space_links: Mutex::new(Vec::new()),
+            invites: Mutex::new(Vec::new()),
         }
     }
 

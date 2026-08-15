@@ -323,6 +323,26 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok("!logging-upgraded:hs".to_string())
     }
 
+    async fn adopt_room(
+        &self,
+        room_id: &str,
+        site_id: &SiteId,
+        post_slug: Option<&PostSlug>,
+        _require_space: bool,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Adopt {room_id} for {} ({}) (no real homeserver)",
+            site_id.as_str(),
+            post_slug.as_ref().map(|s| s.as_str()).unwrap_or("-")
+        );
+        Ok(())
+    }
+
+    async fn link_room_to_space(&self, space_id: &str, room_id: &str) -> Result<()> {
+        info!("LOGGING: Link {room_id} under {space_id} (no-op)");
+        Ok(())
+    }
+
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         info!("LOGGING: Invite {user_id} to {room_id} (no-op)");
         Ok(())

@@ -181,8 +181,12 @@ fn map_management_error(error: ManagementError) -> AppError {
         ManagementError::InvalidUserId(message) | ManagementError::InvalidSiteId(message) => {
             AppError::BadRequest(message)
         }
+        ManagementError::InvalidRoomVersion(message)
+        | ManagementError::InvalidPostSlug(message) => AppError::BadRequest(message),
         ManagementError::RoleNotFound => AppError::NotFound(error.to_string()),
         ManagementError::SiteLevelRoleConflict => AppError::Conflict(error.to_string()),
+        ManagementError::RoomNotRegistered(message) => AppError::NotFound(message),
+        ManagementError::RoomNotActive(message) => AppError::Conflict(message),
         ManagementError::Infra(error) => {
             AppError::Internal(format!("management operation failed: {error}"))
         }
