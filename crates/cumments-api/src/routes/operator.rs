@@ -7,7 +7,6 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
-use crate::request::PaginationMeta;
 use crate::routes::comments::{ACCEPT_QUERY, QUERY_METHOD};
 use axum::extract::Request;
 use axum::{
@@ -17,65 +16,17 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, Utc};
 use cumments_core::models::SiteId;
-use cumments_core::site_auth::{
-    SiteAuthInfo, SiteAuthMode, SiteLifecycle, SitePolicyEntry, SiteVerificationStatus,
-    constant_time_eq, generate_token, token_hash,
+use cumments_core::operator::{
+    OperatorListQuery, OperatorSite, config_snippet_toml, list_operator_quarantined_rooms,
+    list_operator_sites, operator_site,
 };
+use cumments_core::site_auth::{SiteAuthMode, constant_time_eq, generate_token, token_hash};
 use serde::{Deserialize, Serialize};
-
-// ---------------------------------------------------------------------------
-// DTOs
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-pub struct OperatorPage<T> {
-    pub data: Vec<T>,
-    pub meta: PaginationMeta,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OperatorQuarantinedRoom {
-    pub room_id: String,
-    pub site_id: String,
-    pub post_slug: String,
-    pub quarantine_reason: String,
-    pub quarantined_at: DateTime<Utc>,
-    pub adoption_failures: u32,
-    pub next_attempt_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OperatorSite {
-    pub site_id: String,
-    pub lifecycle: SiteLifecycle,
-    pub auth_mode: SiteAuthMode,
-    pub verification_status: SiteVerificationStatus,
-    pub origins: Vec<OperatorOrigin>,
-    pub verified_at: Option<DateTime<Utc>>,
-    pub has_secret: bool,
-    pub has_claim_token: bool,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OperatorOrigin {
-    pub origin: String,
-    /// `config` (operator-declared) or `verified` (self-service proof).
-    pub source: &'static str,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct RevokeOriginRequest {
     pub origin: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct OperatorListQuery {
-    pub page: Option<i64>,
-    pub per_page: Option<i64>,
-    pub site_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,56 +111,12 @@ pub(crate) async fn list_operator_sites_handler(
     }
     let query = parse_operator_list_query(&body)?;
 
-    let effective = cumments_core::management::list_effective_sites(
-        state.store.as_ref(),
-        &state.site_auth_policy,
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("failed to list sites: {e}")))?;
-
-    let mut sites = Vec::with_capacity(effective.len());
-    for site in effective {
-        if site.from_config {
-            let config = state
-                .site_auth_policy
-                .entry(&site.site_id)
-                .expect("effective config site has an entry");
-            sites.push(operator_site_from_config(&site.site_id, config));
-        } else {
-            let info = state
-                .store
-                .get_site_auth(&site.site_id)
-                .await
-                .map_err(|e| AppError::Internal(format!("failed to load site: {e}")))?
-                .ok_or_else(|| AppError::NotFound("site not found".to_string()))?;
-            sites.push(operator_site(
-                &info,
-                state.site_auth_policy.entry(&site.site_id),
-            ));
-        }
-    }
-    sites.sort_by(|a, b| a.site_id.cmp(&b.site_id));
-    if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
-        sites.retain(|site| site.site_id == site_id);
-    }
-
-    let (page, per_page) = operator_page_bounds(&query);
-    let total = sites.len() as i64;
-    let start = ((page - 1) * per_page) as usize;
-    let data = sites
-        .into_iter()
-        .skip(start)
-        .take(per_page as usize)
-        .collect();
+    let page = list_operator_sites(state.store.as_ref(), &state.site_auth_policy, &query)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list sites: {e}")))?;
     Ok((
         [(ACCEPT_QUERY.clone(), "application/json")],
-        (
-            StatusCode::OK,
-            Json(OperatorPage {
-                data,
-                meta: operator_meta(total, page, per_page),
-            }),
-        ),
+        (StatusCode::OK, Json(page)),
     ))
 }
 
@@ -223,41 +130,12 @@ pub(crate) async fn list_quarantined_rooms_handler(
     }
     let query = parse_operator_list_query(&body)?;
 
-    let mut rooms = state
-        .store
-        .get_quarantined_rooms()
+    let page = list_operator_quarantined_rooms(state.store.as_ref(), &query)
         .await
         .map_err(|e| AppError::Internal(format!("failed to list quarantined rooms: {e}")))?;
-    rooms.sort_by(|a, b| a.site_id.cmp(&b.site_id).then(a.room_id.cmp(&b.room_id)));
-    if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
-        rooms.retain(|room| room.site_id == site_id);
-    }
-    let (page, per_page) = operator_page_bounds(&query);
-    let total = rooms.len() as i64;
-    let start = ((page - 1) * per_page) as usize;
-    let data = rooms
-        .into_iter()
-        .skip(start)
-        .take(per_page as usize)
-        .map(|room| OperatorQuarantinedRoom {
-            room_id: room.room_id,
-            site_id: room.site_id,
-            post_slug: room.post_slug,
-            quarantine_reason: room.quarantine_reason,
-            quarantined_at: room.quarantined_at,
-            adoption_failures: room.adoption_failures,
-            next_attempt_at: room.next_attempt_at,
-        })
-        .collect();
     Ok((
         [(ACCEPT_QUERY.clone(), "application/json")],
-        (
-            StatusCode::OK,
-            Json(OperatorPage {
-                data,
-                meta: operator_meta(total, page, per_page),
-            }),
-        ),
+        (StatusCode::OK, Json(page)),
     ))
 }
 
@@ -292,26 +170,6 @@ fn parse_operator_list_query(body: &str) -> Result<OperatorListQuery, AppError> 
     }
     serde_json::from_str(body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))
-}
-
-pub fn operator_page_bounds(query: &OperatorListQuery) -> (i64, i64) {
-    let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
-    (page, per_page)
-}
-
-pub fn operator_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
-    let total_pages = if total > 0 {
-        (total + per_page - 1) / per_page
-    } else {
-        0
-    };
-    PaginationMeta {
-        total,
-        page,
-        per_page,
-        total_pages,
-    }
 }
 
 pub(crate) async fn revoke_verified_origin_handler(
@@ -462,108 +320,4 @@ pub(crate) async fn config_snippet_handler(
         site_id: site_id.as_str().to_string(),
         toml: config_snippet_toml(site_id.as_str(), &db_info, config_entry),
     }))
-}
-
-/// Builds the TOML block for adopting a database-tracked site into `[sites]`.
-///
-/// Shared by the Operator API and the CLI so both produce identical output.
-pub fn config_snippet_toml(
-    site_id: &str,
-    db_info: &SiteAuthInfo,
-    config_entry: Option<&SitePolicyEntry>,
-) -> String {
-    let mut origins = db_info
-        .verified_origins
-        .iter()
-        .map(|origin| format!("\"{}\"", origin.as_str()))
-        .collect::<Vec<_>>();
-    if let Some(entry) = config_entry {
-        origins.extend(
-            entry
-                .allowed_origins
-                .iter()
-                .map(|pattern| format!("\"{}\"", pattern.as_pattern_string())),
-        );
-    }
-    origins.sort();
-    origins.dedup();
-
-    let auth_mode = config_entry
-        .and_then(|entry| entry.auth_mode)
-        .unwrap_or(db_info.auth_mode);
-    let mut toml = format!("[sites.\"{}\"]\n", site_id);
-    toml.push_str(&format!("auth_mode = \"{}\"\n", auth_mode.as_str()));
-    if !origins.is_empty() {
-        toml.push_str(&format!("allowed_origins = [{}]\n", origins.join(", ")));
-    }
-    if auth_mode == SiteAuthMode::Secret {
-        toml.push_str(&format!(
-            "# Set the secret via environment instead of this file:\n\
-             # CUMMENTS__SITES__{}__SECRET=...\n",
-            site_id
-        ));
-    }
-    toml
-}
-
-// ---------------------------------------------------------------------------
-// View helpers
-// ---------------------------------------------------------------------------
-
-pub fn operator_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> OperatorSite {
-    let mut origins = info
-        .verified_origins
-        .iter()
-        .map(|origin| OperatorOrigin {
-            origin: origin.as_str().to_string(),
-            source: "verified",
-        })
-        .collect::<Vec<_>>();
-    if let Some(entry) = config {
-        origins.extend(entry.allowed_origins.iter().map(|pattern| OperatorOrigin {
-            origin: pattern.as_pattern_string(),
-            source: "config",
-        }));
-    }
-    origins.sort_by(|a, b| a.origin.cmp(&b.origin));
-    origins.dedup_by(|a, b| a.origin == b.origin);
-
-    OperatorSite {
-        site_id: info.site_id.clone(),
-        lifecycle: info.lifecycle,
-        auth_mode: config
-            .and_then(|entry| entry.auth_mode)
-            .unwrap_or(info.auth_mode),
-        verification_status: if config.is_some() {
-            SiteVerificationStatus::Verified
-        } else {
-            info.verification_status
-        },
-        origins,
-        verified_at: info.verified_at,
-        has_secret: config.is_some_and(|entry| entry.secret.is_some()) || info.secret.is_some(),
-        has_claim_token: info.claim_token_hash.is_some(),
-        updated_at: info.updated_at,
-    }
-}
-
-pub fn operator_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> OperatorSite {
-    OperatorSite {
-        site_id: site_id.to_string(),
-        lifecycle: SiteLifecycle::Active,
-        auth_mode: entry.auth_mode.unwrap_or(SiteAuthMode::Origin),
-        verification_status: SiteVerificationStatus::Verified,
-        origins: entry
-            .allowed_origins
-            .iter()
-            .map(|pattern| OperatorOrigin {
-                origin: pattern.as_pattern_string(),
-                source: "config",
-            })
-            .collect(),
-        verified_at: None,
-        has_secret: entry.secret.is_some(),
-        has_claim_token: false,
-        updated_at: None,
-    }
 }

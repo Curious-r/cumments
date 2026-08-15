@@ -476,6 +476,15 @@ pub struct QuarantinedRoom {
     pub next_attempt_at: Option<DateTime<Utc>>,
 }
 
+/// Pagination metadata shared by operator and comment listings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaginationMeta {
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+    pub total_pages: i64,
+}
+
 /// One page of projected messages for a site/post.
 #[derive(Debug, Clone, Default)]
 pub struct MessagePage {

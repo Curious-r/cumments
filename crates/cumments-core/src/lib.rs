@@ -9,6 +9,7 @@ pub mod management;
 pub mod matrix_error;
 pub mod media_upload;
 pub mod models;
+pub mod operator;
 pub mod ports;
 pub mod projector_events;
 pub mod protocol;

@@ -73,13 +73,7 @@ pub struct PaginatedResponse {
     pub meta: PaginationMeta,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PaginationMeta {
-    pub total: i64,
-    pub page: i64,
-    pub per_page: i64,
-    pub total_pages: i64,
-}
+pub use cumments_core::models::PaginationMeta;
 
 /// Request DTO for registering a site.
 ///
