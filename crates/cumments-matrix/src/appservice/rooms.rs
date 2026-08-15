@@ -3,15 +3,15 @@
 
 use super::*;
 use crate::wire::{
-    comment_room_alias, comment_room_alias_localpart, has_redact_power, has_state_power,
-    is_implicit_creator, metadata_matches, percent_encode, room_requires_explicit_creator,
-    site_space_alias, site_space_alias_localpart,
+    comment_room_alias, comment_room_alias_localpart, has_redact_power, is_implicit_creator,
+    metadata_matches, percent_encode, room_requires_explicit_creator, site_space_alias,
+    site_space_alias_localpart,
 };
 use anyhow::{Result, anyhow};
 use cumments_core::{
     governance::{
-        SITE_ROLE_MIN_LEVEL, initial_comment_room_power_levels, initial_space_power_levels,
-        role_entries,
+        SITE_ROLE_MIN_LEVEL, can_send_state_event, initial_comment_room_power_levels,
+        initial_space_power_levels, role_entries,
     },
     models::{PostSlug, SiteId},
     protocol::ROOM_METADATA_EVENT_TYPE,
@@ -431,7 +431,11 @@ impl AppServiceMatrixDriver {
             return Ok(true);
         }
         Ok(match self.get_power_levels(room_id).await? {
-            Some(power_levels) => has_state_power(&power_levels, &self.sender_user_id()),
+            Some(power_levels) => can_send_state_event(
+                &power_levels,
+                &self.sender_user_id(),
+                ROOM_METADATA_EVENT_TYPE,
+            ),
             // No power-levels event: Matrix defaults apply and leave the
             // sender below the state-writing threshold, so treat as unable.
             None => false,

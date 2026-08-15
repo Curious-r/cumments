@@ -5,7 +5,7 @@
 //! and testable on its own.
 
 use cumments_core::models::{CommentMedia, MediaKind};
-use cumments_core::protocol::{MESSAGE_CONTENT_KEY, ROOM_METADATA_EVENT_TYPE};
+use cumments_core::protocol::MESSAGE_CONTENT_KEY;
 
 /// Preferred alias localpart prefix. The Matrix spec recommends exclusive
 /// user and alias namespaces begin with `_` after the sigil, e.g.
@@ -75,26 +75,6 @@ pub(crate) fn is_implicit_creator(
         && (create_sender == user_id
             || additional_creators
                 .is_some_and(|creators| creators.iter().any(|creator| creator.as_str() == user_id)))
-}
-
-/// Whether `sender_user_id` can send state events in a room, according to its
-/// `m.room.power_levels` content: the sender's explicit `users` entry (or
-/// `users_default`) against the event-specific requirement for our metadata
-/// event type (or `state_default`).
-pub(crate) fn has_state_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
-    let user_power = power_levels
-        .get("users")
-        .and_then(|u| u.get(sender_user_id))
-        .and_then(|v| v.as_i64())
-        .or_else(|| power_levels.get("users_default").and_then(|v| v.as_i64()))
-        .unwrap_or(0);
-    let required = power_levels
-        .get("events")
-        .and_then(|e| e.get(ROOM_METADATA_EVENT_TYPE))
-        .and_then(|v| v.as_i64())
-        .or_else(|| power_levels.get("state_default").and_then(|v| v.as_i64()))
-        .unwrap_or(50);
-    user_power >= required
 }
 
 /// Whether `sender_user_id` meets the room's `redact` threshold. Redactions
@@ -431,45 +411,6 @@ mod tests {
         assert!(metadata_matches(&meta, "my-blog", Some("hello-world")));
         assert!(!metadata_matches(&meta, "my-blog", None));
         assert!(!metadata_matches(&meta, "my-blog", Some("other")));
-    }
-
-    #[test]
-    fn state_power_explicit_admin_can_write_state() {
-        let pl = json!({
-            "users": { "@_cumments_bot:example.com": 100 },
-            "state_default": 50
-        });
-        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
-    }
-
-    #[test]
-    fn state_power_default_member_cannot_write_state() {
-        let pl = json!({ "state_default": 50 });
-        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
-    }
-
-    #[test]
-    fn state_power_users_default_can_write_state() {
-        let pl = json!({ "users_default": 50, "state_default": 50 });
-        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
-    }
-
-    #[test]
-    fn state_power_event_specific_override_is_respected() {
-        let pl = json!({
-            "users": { "@_cumments_bot:example.com": 50 },
-            "state_default": 50,
-            "events": { ROOM_METADATA_EVENT_TYPE: 100 }
-        });
-        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
-    }
-
-    #[test]
-    fn state_power_missing_fields_fall_back_to_defaults() {
-        let pl = json!({ "users": { "@_cumments_bot:example.com": 49 } });
-        assert!(!has_state_power(&pl, "@_cumments_bot:example.com"));
-        let pl = json!({ "users": { "@_cumments_bot:example.com": 50 } });
-        assert!(has_state_power(&pl, "@_cumments_bot:example.com"));
     }
 
     #[test]
