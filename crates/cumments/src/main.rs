@@ -267,6 +267,7 @@ async fn main() -> Result<()> {
             message_store: db_store.clone(),
             room_store: db_store.clone(),
             governance_store: db_store.clone(),
+            sticker_pack_store: db_store.clone(),
             role_claim_store: db_store.clone(),
             submission_store: db_store.clone(),
             audit_store: db_store.clone(),

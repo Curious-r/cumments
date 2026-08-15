@@ -56,6 +56,7 @@ pub(crate) async fn process_single_event(
         | "m.room.guest_access"
         | "m.room.encryption"
         | "m.room.pinned_events"
+        | "m.room.image_pack"
         | "m.room.create" => {
             if let Some(parsed) = parse_push_state(event) {
                 processor.process_room_state(parsed).await?;

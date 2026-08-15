@@ -27,13 +27,14 @@ use cumments_core::{
     },
     ports::{
         CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, RegistryStore,
-        RoleClaimStore, RoomStore, SiteStore, SubmissionStore,
+        RoleClaimStore, RoomStore, SiteStore, StickerPackStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, constant_time_eq, generate_token, sha256_hex, token_hash,
     },
+    sticker_packs::{IMAGE_PACK_EVENT_TYPE, StickerPackProjection, parse_image_pack_content},
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -50,6 +51,7 @@ pub struct EventProcessor {
     message_store: Arc<dyn MessageStore>,
     room_store: Arc<dyn RoomStore>,
     governance_store: Arc<dyn GovernanceStore>,
+    sticker_pack_store: Arc<dyn StickerPackStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     submission_store: Arc<dyn SubmissionStore>,
     driver: Option<Arc<dyn MatrixDriver>>,
@@ -72,6 +74,7 @@ pub struct EventProcessorDeps {
     pub message_store: Arc<dyn MessageStore>,
     pub room_store: Arc<dyn RoomStore>,
     pub governance_store: Arc<dyn GovernanceStore>,
+    pub sticker_pack_store: Arc<dyn StickerPackStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub submission_store: Arc<dyn SubmissionStore>,
     pub audit_store: Arc<dyn CommandAuditStore>,
@@ -819,6 +822,7 @@ impl EventProcessor {
             message_store: deps.message_store,
             room_store: deps.room_store,
             governance_store: deps.governance_store,
+            sticker_pack_store: deps.sticker_pack_store,
             role_claim_store: deps.role_claim_store,
             submission_store: deps.submission_store,
             driver: deps.driver,
@@ -1534,6 +1538,10 @@ impl EventProcessor {
             }
         }
 
+        if event.event_type == IMAGE_PACK_EVENT_TYPE {
+            self.project_image_pack(&event).await?;
+        }
+
         self.room_store
             .save_state_event(&RoomStateEvent {
                 event_id: event.event_id,
@@ -1548,6 +1556,69 @@ impl EventProcessor {
         Ok(())
     }
 
+    /// Projects one `m.room.image_pack` state event into the sticker-pack
+    /// read model. Packs live on site Spaces only; anything else is ignored.
+    ///
+    /// A well-formed pack whose `usage` no longer includes stickers, or a
+    /// malformed pack, replaces (removes) any previous projection for the
+    /// same site + state key: the current Matrix state is authoritative.
+    async fn project_image_pack(&self, event: &ParsedRoomState) -> Result<()> {
+        // A redaction was already observed for this event (push retry or a
+        // resumed backfill replay); never resurrect the pack.
+        if self
+            .message_store
+            .has_backfill_tombstone(&event.event_id, &event.room_id)
+            .await?
+        {
+            debug!(
+                "Ignoring tombstoned image pack event {} in {}",
+                event.event_id, event.room_id
+            );
+            return Ok(());
+        }
+
+        let Some(site) = self.site_store.get_site_by_space_id(&event.room_id).await? else {
+            debug!("Ignoring image pack in non-space room {}", event.room_id);
+            return Ok(());
+        };
+
+        match parse_image_pack_content(&event.room_id, &site.id, &event.state_key, &event.content) {
+            Ok(Some(pack)) => {
+                self.sticker_pack_store
+                    .save_site_pack(&StickerPackProjection {
+                        pack,
+                        event_id: event.event_id.clone(),
+                        sender: event.sender.clone(),
+                        origin_server_ts: event.origin_server_ts,
+                    })
+                    .await?;
+                info!(
+                    "Projected sticker pack {}/{} from {}",
+                    site.id, event.state_key, event.event_id
+                );
+            }
+            Ok(None) => {
+                warn!(
+                    "Image pack {}/{} no longer targets stickers; removing projection",
+                    site.id, event.state_key
+                );
+                self.sticker_pack_store
+                    .delete_site_pack(&site.id, &event.state_key)
+                    .await?;
+            }
+            Err(error) => {
+                warn!(
+                    "Dropping malformed image pack {}/{}: {error}",
+                    site.id, event.state_key
+                );
+                self.sticker_pack_store
+                    .delete_site_pack(&site.id, &event.state_key)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Process a redaction event (comment deletion).
     #[instrument(skip(self))]
     pub async fn process_room_redaction(&self, event: ParsedRoomRedaction) -> Result<()> {
@@ -1558,6 +1629,39 @@ impl EventProcessor {
                 return Ok(());
             }
         };
+
+        // 0. Sticker-pack state targets live on site Spaces, which are not in
+        // the comment-room registry, so they are handled before the registry
+        // gate below. Redacting the *current* pack event removes the pack
+        // (redacted state keeps its slot with empty content per the spec).
+        if let Some((site_id, state_key)) = self
+            .sticker_pack_store
+            .find_pack_by_event_id(&target_event_id)
+            .await?
+        {
+            let Some(pack) = self
+                .sticker_pack_store
+                .get_site_pack(&site_id, &state_key)
+                .await?
+            else {
+                return Ok(());
+            };
+            if pack.pack.room_id != event.room_id {
+                warn!(
+                    "Ignoring redaction for {} in {}: pack lives in {}",
+                    target_event_id, event.room_id, pack.pack.room_id
+                );
+                return Ok(());
+            }
+            self.sticker_pack_store
+                .delete_site_pack(&site_id, &state_key)
+                .await?;
+            self.message_store
+                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                .await?;
+            info!("Successfully redacted sticker pack {site_id}/{state_key} ({target_event_id})");
+            return Ok(());
+        }
 
         // Same registry gate as message processing: ignore redactions from
         // deactivated or unregistered rooms so tombstoned rooms cannot keep
