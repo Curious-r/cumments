@@ -25,7 +25,7 @@ history with `cumments backfill`.
 - **Site governance** — owner (100), co-manager (75) and per-room moderator
   (50) roles encoded in Matrix power levels; owners manage everything from a
   Matrix client, the API writes to the same state.
-- **Admin API + local CLI** — sites, secrets, roles, quarantined rooms,
+- **Operator API + local CLI** — sites, secrets, roles, quarantined rooms,
   backups and shell completions.
 - **Rebuildable read model** — `cumments backfill` reconstructs SQLite from
   Matrix history.

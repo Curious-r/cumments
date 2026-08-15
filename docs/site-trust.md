@@ -85,10 +85,10 @@ The effective trust rule set for a site is the **union** of two sources:
   trust. This is declarative, version-controlled and human-reviewed, and the
   operator can skip the self-service verification flow entirely.
 - **Database rows**: runtime state created by self-service registration and
-  verification. These carry provenance (`config` or `verified`) so the admin
+  verification. These carry provenance (`config` or `verified`) so the Operator
   API can show where every allowed origin came from.
 
-Configuration is never written back to by the API or the admin tooling.
+Configuration is never written back to by the API or the operator tooling.
 
 The public registration endpoint accepts an **optional, first-come
 `site_id`**; without one the server generates an unguessable random id. Every
@@ -158,7 +158,7 @@ be shared between Cumments instances.
   HMAC requires the key itself (unlike claim and verification tokens, which
   are stored only as SHA-256 hashes). Protect the database file like any
   other credential store.
-- Keys can be rotated or revoked through the admin API, and can also be
+- Keys can be rotated or revoked through the Operator API, and can also be
   declared directly in `[sites."<id>"]` with environment-variable injection.
 
 Secret-mode sites do not accept browser preflights: a browser cannot call the
@@ -181,8 +181,8 @@ public.
 ```toml
 [security]
 site_verification = "optional"   # disabled | optional | required
-# Operator token for the admin API (at least 32 chars); unset disables it.
-# admin_token = "<random>"
+# Operator token for the Operator API (at least 32 chars); unset disables it.
+# operator_token = "<random>"
 
 [sites."test-blog"]
 auth_mode = "origin"             # origin (default) | secret
@@ -204,15 +204,15 @@ Validation is fail-fast at startup:
 - `auth_mode = "secret"` requires a non-empty, non-placeholder secret of at
   least 32 characters;
 - `allowed_origins` is ignored (with a warning) when `auth_mode = "secret"`;
-- `security.admin_token`, when set, must be at least 32 characters and not a
+- `security.operator_token`, when set, must be at least 32 characters and not a
   known placeholder.
 
 See [configuration.md](configuration.md) for the full reference.
 
-## Admin operations
+## Operator operations
 
-Database-tracked sites can be managed through the admin API, authenticated
-with `security.admin_token` sent as `Authorization: Bearer <token>`:
+Database-tracked sites can be managed through the Operator API, authenticated
+with `security.operator_token` sent as `Authorization: Bearer <token>`:
 
 - list sites with origin provenance;
 - revoke a verified origin;
@@ -220,7 +220,7 @@ with `security.admin_token` sent as `Authorization: Bearer <token>`:
 - export a TOML snippet to adopt a database-tracked site into `[sites]`.
 
 Operator-configured origins and secrets cannot be changed through the API —
-edit the configuration file instead. Admin routes are rate limited to 60
+edit the configuration file instead. Operator routes are rate limited to 60
 requests per minute per client.
 
 ## Security notes

@@ -2,9 +2,9 @@
 
 Site-owner operations authenticate with the claim token returned at site
 registration (`X-Cumments-Claim-Token`). Operator fallbacks with the same
-handlers live under `/api/v1/admin/sites/{site_id}/owners` and
-`/api/v1/admin/sites/{site_id}/co-managers` (admin token) — see
-[Admin API](admin.md#governance-fallback).
+handlers live under `/api/v1/operator/sites/{site_id}/owners` and
+`/api/v1/operator/sites/{site_id}/co-managers` (operator token) — see
+[Operator API](operator.md#governance-fallback).
 
 Every role registration starts as a **pending claim**: the POST response
 returns a one-time `verify_token`, and the target Matrix account must send

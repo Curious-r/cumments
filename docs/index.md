@@ -32,7 +32,7 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 
 - [API](api/index.md) — shared primitives, then per-area references for
   [comments](api/comments.md), [sites](api/sites.md),
-  [governance](api/governance.md), [admin](api/admin.md) and
+  [governance](api/governance.md), [operator](api/operator.md) and
   [media](api/media.md).
 - [Problem types](problems/index.md) — the RFC 9457 error registry.
 - [CLI](cli.md) — local administration of sites, rooms, roles and backups.

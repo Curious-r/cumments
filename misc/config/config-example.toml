@@ -46,12 +46,12 @@ pow_difficulty = 4
 # or "required" (unverified sites cannot receive comments).
 site_verification = "optional"
 
-# Operator token for the admin API (optional). Unset disables admin routes.
-# Prefer the CUMMENTS__SECURITY__ADMIN_TOKEN environment variable.
-# admin_token = "change-me"
+# Operator token for the Operator API (optional). Unset disables operator routes.
+# Prefer the CUMMENTS__SECURITY__OPERATOR_TOKEN environment variable.
+# operator_token = "change-me"
 # Matrix chat-channel instance operators (fully qualified MXIDs). Empty by
 # default: the bot's platform-level commands are disabled.
-# admin_mxids = ["@admin:your-matrix-domain"]
+# operator_mxids = ["@admin:your-matrix-domain"]
 
 # Allow verification against loopback/private/link-local IP-literal origins.
 # Keep false in production: verification confirm makes outbound HTTP/DNS
@@ -114,7 +114,7 @@ mode = "logging"
 # registration = { requests = 10,  window = "1h" }
 # verification  = { requests = 20,  window = "1h" }
 # confirm       = { requests = 30,  window = "1h" }
-# admin         = { requests = 60,  window = "1m" }
+# operator      = { requests = 60,  window = "1m" }
 # write         = { requests = 120, window = "1h" }
 # sse           = { requests = 20,  window = "1h" }
 # media         = { requests = 120, window = "1h" }

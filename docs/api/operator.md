@@ -1,13 +1,13 @@
-# Admin API
+# Operator API
 
-Enabled by setting `security.admin_token`. All admin routes require
+Enabled by setting `security.operator_token`. All operator routes require
 `Authorization: Bearer <token>`.
 
-Admin routes are rate limited (60 requests/minute per client key).
+Operator routes are rate limited (60 requests/minute per client key).
 
 ## List sites
 
-`QUERY /api/v1/admin/sites`
+`QUERY /api/v1/operator/sites`
 
 Optional JSON body (an empty body means default pagination):
 
@@ -23,24 +23,24 @@ Returns every database-tracked site merged with the operator-declared
 
 ## Revoke a verified origin
 
-`POST /api/v1/admin/sites/{site_id}/origins/revoke`
+`POST /api/v1/operator/sites/{site_id}/origins/revoke`
 
 Body: `{ "origin": "https://blog.example.com" }`. Origins declared in the
 config file cannot be revoked here — edit the config instead.
 
 ## Rotate / revoke the HMAC secret
 
-`POST /api/v1/admin/sites/{site_id}/secret/rotate` — returns the new secret
+`POST /api/v1/operator/sites/{site_id}/secret/rotate` — returns the new secret
 exactly once.
 
-`DELETE /api/v1/admin/sites/{site_id}/secret` — removes the secret and falls
+`DELETE /api/v1/operator/sites/{site_id}/secret` — removes the secret and falls
 back to origin auth.
 
 Both refuse to touch sites whose secret is declared in the config file.
 
 ## Export an adoption snippet
 
-`GET /api/v1/admin/sites/{site_id}/config-snippet`
+`GET /api/v1/operator/sites/{site_id}/config-snippet`
 
 Returns `{ "site_id": "...", "toml": "..." }`; `toml` is the block to paste
 into `[sites]` when the operator wants to move a database-tracked site into
@@ -48,14 +48,14 @@ declarative config.
 
 ## Rotate the claim token
 
-`POST /api/v1/admin/sites/{site_id}/claim-token/rotate`
+`POST /api/v1/operator/sites/{site_id}/claim-token/rotate`
 
 Returns a new `claim_token` exactly once and invalidates the previous token.
 Use this when a claim token may have leaked.
 
 ## Retire a site
 
-`DELETE /api/v1/admin/sites/{site_id}`
+`DELETE /api/v1/operator/sites/{site_id}`
 
 Operator mirror of the claim-token retire endpoint: marks the site
 `retiring` immediately (writes get `410 code=site-retired`) and lets the
@@ -65,7 +65,7 @@ declared in `[sites]` cannot be retired this way.
 
 ## List quarantined rooms
 
-`QUERY /api/v1/admin/rooms/quarantined`
+`QUERY /api/v1/operator/rooms/quarantined`
 
 Optional JSON body with the same `page` / `per_page` / `site_id` fields as
 [List sites](#list-sites).
@@ -81,7 +81,7 @@ pagination/filter fields and `{ "data", "meta" }` shape apply.
 
 ## Reinstate a room
 
-`DELETE /api/v1/admin/rooms/quarantined/{room_id}`
+`DELETE /api/v1/operator/rooms/quarantined/{room_id}`
 
 Clears a room's quarantine and makes it the canonical room again (any other
 active room for the same post is superseded). The operation is idempotent:
@@ -92,10 +92,10 @@ returns `404`.
 
 The operator can act on a site's behalf for site-level roles:
 
-- `POST /api/v1/admin/sites/{site_id}/owners` /
-  `DELETE /api/v1/admin/sites/{site_id}/owners?user_id=...`
-- `POST /api/v1/admin/sites/{site_id}/co-managers` /
-  `DELETE /api/v1/admin/sites/{site_id}/co-managers?user_id=...`
+- `POST /api/v1/operator/sites/{site_id}/owners` /
+  `DELETE /api/v1/operator/sites/{site_id}/owners?user_id=...`
+- `POST /api/v1/operator/sites/{site_id}/co-managers` /
+  `DELETE /api/v1/operator/sites/{site_id}/co-managers?user_id=...`
 
 These use the same handlers and response shapes as the claim-token
 [Governance](governance.md) endpoints, including the pending-claim

@@ -121,7 +121,7 @@ the Matrix Space and every comment room one by one — renaming them
 sender — before clearing the local projections and the site row.
 
 The operator mirror is
-`DELETE /api/v1/admin/sites/{site_id}` (admin token). Sites declared in the
+`DELETE /api/v1/operator/sites/{site_id}` (operator token). Sites declared in the
 `[sites]` configuration cannot be retired through the API; remove them from
 the config file instead. The CLI equivalent is
 `cumments sites retire <id> --yes [--wait]`.

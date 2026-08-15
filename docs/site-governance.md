@@ -21,7 +21,7 @@ The current model removes `admin_id` entirely:
   backstop — it is never represented as a role;
 - each site has its own **owner**, **co-manager** and per-room
   **moderator** roles, encoded purely in Matrix power levels;
-- day-to-day management happens in a Matrix client; the API and admin API
+- day-to-day management happens in a Matrix client; the API and Operator API
   are just other writers to the same Matrix state;
 - the backend projects power levels into `site_roles` / `room_roles` and
   reconciles them, but never enforces a local copy.
@@ -144,14 +144,14 @@ ignored. The bot never replies, so there is no forged callback surface.
 - The token is 32 random bytes, hex-encoded, one-time and short-lived (24 h).
 - `sender == target MXID` is guaranteed by the homeserver; Cumments cannot
   be tricked into activating a claim for another account.
-- Claim creation stays behind the site's claim token (or admin token) and the
+- Claim creation stays behind the site's claim token (or operator token) and the
   governance rate limiter, and the number of pending claims is bounded.
 
 ## API
 
 Site-owner operations authenticate with the claim token returned at site
 registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
-`/api/v1/admin/sites/{site_id}/...` and use the admin token.
+`/api/v1/operator/sites/{site_id}/...` and use the operator token.
 
 | Endpoint | Method | Payload | Effect |
 |---|---|---|---|
@@ -172,15 +172,15 @@ The CLI mirrors the owner and co-manager operations locally
 `remove-co-manager`): `add-*` stores a pending claim and prints the
 `verify_token`, while `remove-*` revokes a pending claim. The CLI never
 writes power levels, so an already-applied role must be removed from a
-Matrix client or the admin API (see [CLI](cli.md)).
+Matrix client or the Operator API (see [CLI](cli.md)).
 
 ## Platform ownership and recovery
 
 The Cumments operator never needs a personal Matrix account: the AppService
-sender is the creator of every Space and room, and the admin API / CLI can
+sender is the creator of every Space and room, and the Operator API / CLI can
 drive it. To hand a site over, the operator rotates the claim token
-(`POST /api/v1/admin/sites/{site_id}/claim-token/rotate`), gives it to the new
-owner, and registers the new owner's Matrix ID via the admin mirror of the
+(`POST /api/v1/operator/sites/{site_id}/claim-token/rotate`), gives it to the new
+owner, and registers the new owner's Matrix ID via the operator mirror of the
 owners endpoint.
 
 The old `matrix.moderation.admin_id` configuration was removed. Rooms created

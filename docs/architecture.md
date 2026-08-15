@@ -268,7 +268,7 @@ the backup command.
 - Distributed/global rate limiting, multi-instance/Postgres support, and
   operational monitoring are not implemented yet. In-process rate limits
   cover site registration/verification, verification confirm, comment
-  writes, SSE connections, and the admin API.
+  writes, SSE connections, and the Operator API.
 - Matrix-native comments bypass the API's PoW by design; spam in that path is
   governed by Matrix room moderation (power levels, bans, etc.).
 - `m.space.child` events only refresh rooms already known to the local

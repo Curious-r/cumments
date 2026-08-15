@@ -10,7 +10,7 @@ The endpoint reference is split by resource area:
   secret issuance.
 - [Governance](governance.md) — owners, co-managers, room moderators and the
   projected rosters.
-- [Admin](admin.md) — operator-only endpoints.
+- [Operator](operator.md) — operator-only endpoints.
 - [Media](media.md) — the public media proxy, guest uploads and preset
   stickers.
 
@@ -152,7 +152,7 @@ governance writes are limited to 60/hour. Every budget is configurable under
 `[rate_limit]` and applied at startup; see
 [Configuration](../configuration.md#rate-limits).
 Every `429` response carries a `Retry-After` header set to the endpoint's
-fixed limit window (3600 seconds for hourly limits, 60 seconds for the admin
+fixed limit window (3600 seconds for hourly limits, 60 seconds for the operator
 API). It is a conservative constant, not the exact remaining time for the
 requesting client.
 SSE reconnects within 30 seconds of a disconnect do not consume the hourly
@@ -208,7 +208,7 @@ sites.
 mismatches, and unauthorized writes return `403` with a stable problem
 `code`, not `401`. Site authentication is origin/HMAC based rather than HTTP
 authentication, so there is no `WWW-Authenticate` challenge to advertise and
-clients must not prompt for credentials. Admin token failures use `403` the
+clients must not prompt for credentials. Operator token failures use `403` the
 same way, so the API never emits `401`.
 
 **Constant `Retry-After` windows.** Rate limiters are in-memory, per-client
@@ -226,6 +226,6 @@ public key, 24-hour retention) to make retries safe.
 
 **Mutations return the affected resource.** Write endpoints return the
 affected resource as JSON (the updated site, the pending role claim, the
-revoked role). `DELETE /api/v1/admin/rooms/quarantined/{room_id}` is the
+revoked role). `DELETE /api/v1/operator/rooms/quarantined/{room_id}` is the
 single exception and returns `204`: the quarantine row is gone, so there is
 no surviving resource to serialize.

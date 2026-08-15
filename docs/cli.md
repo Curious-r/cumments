@@ -2,11 +2,11 @@
 
 The `cumments` binary doubles as a local administration CLI. It operates
 directly on the same SQLite database the server uses, so **whoever can read
-and write the database is an administrator** — there is no separate admin
-token on the CLI path. Use the admin HTTP API when managing a remote
+and write the database is an operator** — there is no separate operator
+token on the CLI path. Use the Operator HTTP API when managing a remote
 instance.
 
-The CLI mirrors the admin API: anything the admin API can do, the CLI can do
+The CLI mirrors the Operator API: anything the Operator API can do, the CLI can do
 locally.
 
 ## Global flags
@@ -52,15 +52,15 @@ cumments
 ## Output conventions
 
 - Machine-readable data (site lists, quarantined rooms, secrets, tokens) goes to
-  **stdout as JSON**, matching the admin API response shape. `--table` on
+  **stdout as JSON**, matching the Operator API response shape. `--table` on
   list commands switches to a human-readable table.
 - Human notes and warnings go to **stderr**, so stdout stays script-friendly.
 - Secrets and claim tokens are printed **exactly once**; the CLI refuses to
   show them again.
 - `export-config` prints the `{"site_id","toml"}` wrapper returned by the
-  admin API; `--raw` prints only the TOML block for shell redirection.
+  Operator API; `--raw` prints only the TOML block for shell redirection.
 - `rooms reinstate` prints `{"room_id","status":"active"}`. This is a CLI-side
-  enhancement of the admin API, which returns an empty `204`: the CLI has no
+  enhancement of the Operator API, which returns an empty `204`: the CLI has no
   body-free "no content" convention, so it reports the affected resource.
 - Exit codes: `0` success, `1` runtime error, `2` usage error (clap).
 
@@ -152,4 +152,4 @@ cumments completions bash > ~/.local/share/bash-completion/completions/cumments
   changes the site's write path.
 - `backup --output` refuses to overwrite an existing file.
 - Origins and secrets declared in `[sites]` cannot be changed through the CLI
-  (or the admin API): edit the configuration file instead.
+  (or the Operator API): edit the configuration file instead.

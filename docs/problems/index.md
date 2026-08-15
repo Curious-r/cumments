@@ -107,7 +107,7 @@ The request conflicts with the current state of the resource.
 The per-client budget for this operation is exhausted. Wait and retry later;
 do not keep retrying with the same `Idempotency-Key` expecting acceptance.
 The response carries a `Retry-After` header set to the endpoint's fixed
-window (3600 seconds for hourly limits, 60 seconds for the admin API).
+window (3600 seconds for hourly limits, 60 seconds for the Operator API).
 
 ## Idempotency-Key required {#idempotency-key-required}
 

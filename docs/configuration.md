@@ -32,9 +32,9 @@ pow_secret = "pow_secret_key"
 pow_difficulty = 4
 # "disabled" | "optional" | "required"
 site_verification = "optional"
-# Operator token for the admin API (optional, at least 32 chars); unset
-# disables the admin routes. Prefer the environment variable:
-# CUMMENTS__SECURITY__ADMIN_TOKEN=...
+# Operator token for the Operator API (optional, at least 32 chars); unset
+# disables the operator routes. Prefer the environment variable:
+# CUMMENTS__SECURITY__OPERATOR_TOKEN=...
 # Preset stickers guests may attach (list of mxc:// URIs served by your
 # homeserver). The API rejects sticker references outside this list; the
 # demo fetches them from GET /api/v1/sites/{site}/posts/{post}/stickers.
@@ -103,7 +103,7 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
 - `server.cors_origins` has been **removed**: CORS headers are now derived
   from the site registry (see below). A config file that still contains the
   key fails startup because unknown keys are rejected.
-- `security.admin_token` enables the admin API (see [API](api/index.md)).
+- `security.operator_token` enables the Operator API (see [API](api/index.md)).
   Placeholder values and tokens shorter than 32 characters are rejected at
   startup.
 - SQLite files are created automatically, but the parent directory must exist
@@ -203,7 +203,7 @@ default to the historical hardcoded budgets:
 registration = { requests = 10,  window = "1h" }
 verification  = { requests = 20,  window = "1h" }
 confirm       = { requests = 30,  window = "1h" }
-admin         = { requests = 60,  window = "1m" }
+operator         = { requests = 60,  window = "1m" }
 write         = { requests = 120, window = "1h" }
 sse           = { requests = 20,  window = "1h" }
 media         = { requests = 120, window = "1h" }
