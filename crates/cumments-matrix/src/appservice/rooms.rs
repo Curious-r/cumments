@@ -54,6 +54,26 @@ struct RoomCreateEventContent {
     additional_creators: Option<Vec<String>>,
 }
 
+/// Builds the CS API path for one room state event. An empty `state_key`
+/// omits the trailing path segment (e.g. `.../state/m.room.tombstone`),
+/// matching how homeservers route state events with an empty state key.
+fn state_path(room_id: &str, event_type: &str, state_key: &str) -> String {
+    if state_key.is_empty() {
+        format!(
+            "_matrix/client/v3/rooms/{}/state/{}",
+            percent_encode(room_id),
+            percent_encode(event_type)
+        )
+    } else {
+        format!(
+            "_matrix/client/v3/rooms/{}/state/{}/{}",
+            percent_encode(room_id),
+            percent_encode(event_type),
+            percent_encode(state_key)
+        )
+    }
+}
+
 impl AppServiceMatrixDriver {
     /// Set Cumments metadata on a room (state event
     /// `host.curious.cumments.metadata`). Returns an error when the
@@ -335,12 +355,7 @@ impl AppServiceMatrixDriver {
         event_type: &str,
         state_key: &str,
     ) -> Result<Option<serde_json::Value>> {
-        let path = format!(
-            "_matrix/client/v3/rooms/{}/state/{}/{}",
-            percent_encode(room_id),
-            percent_encode(event_type),
-            percent_encode(state_key)
-        );
+        let path = state_path(room_id, event_type, state_key);
         let resp = self
             .request(reqwest::Method::GET, &path, None)
             .send()
@@ -376,12 +391,7 @@ impl AppServiceMatrixDriver {
             event_id: String,
         }
 
-        let path = format!(
-            "_matrix/client/v3/rooms/{}/state/{}/{}",
-            percent_encode(room_id),
-            percent_encode(event_type),
-            percent_encode(state_key)
-        );
+        let path = state_path(room_id, event_type, state_key);
         let resp = self
             .request(reqwest::Method::PUT, &path, None)
             .json(content)
@@ -400,6 +410,89 @@ impl AppServiceMatrixDriver {
         }
         let response: SendResponse = resp.json().await?;
         Ok(response.event_id)
+    }
+
+    /// Upgrade a room through the homeserver's native `/upgrade` endpoint.
+    ///
+    /// `/upgrade` has no transaction ID, so a lost response must not be
+    /// blindly retried: this method first reuses an existing tombstone and,
+    /// after any failed request, re-reads the tombstone before reporting the
+    /// error. The caller (management layer) owns `new_version` validation.
+    pub(super) async fn upgrade_room_impl(
+        &self,
+        room_id: &str,
+        new_version: &str,
+    ) -> Result<String> {
+        if let Some(replacement) = self
+            .read_state(room_id, "m.room.tombstone", "")
+            .await?
+            .and_then(|content| {
+                content
+                    .get("replacement_room")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+        {
+            return Ok(replacement);
+        }
+
+        #[derive(Deserialize)]
+        struct UpgradeResponse {
+            replacement_room: String,
+        }
+
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/upgrade",
+            percent_encode(room_id)
+        );
+        let body = serde_json::json!({ "new_version": new_version });
+        let resp = match self
+            .request(reqwest::Method::POST, &path, None)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                return self
+                    .replacement_after_failed_upgrade(room_id)
+                    .await
+                    .ok_or_else(|| anyhow!("Failed to upgrade room {room_id}: {e}"));
+            }
+        };
+
+        if resp.status().is_success() {
+            let data: UpgradeResponse = resp
+                .json()
+                .await
+                .map_err(|e| anyhow!("Failed to parse upgrade response: {e}"))?;
+            return Ok(data.replacement_room);
+        }
+
+        let status = resp.status();
+        let error_body = resp.text().await.unwrap_or_default();
+        match self.replacement_after_failed_upgrade(room_id).await {
+            Some(replacement) => Ok(replacement),
+            None => Err(anyhow!(
+                "Failed to upgrade room {room_id} ({status}): {error_body}"
+            )),
+        }
+    }
+
+    /// Re-reads the tombstone after a failed `/upgrade` request. The server
+    /// may have committed the upgrade and lost only the response; returning
+    /// that replacement makes the driver idempotent across retries.
+    async fn replacement_after_failed_upgrade(&self, room_id: &str) -> Option<String> {
+        self.read_state(room_id, "m.room.tombstone", "")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|content| {
+                content
+                    .get("replacement_room")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
     }
 
     /// Whether the AS sender is a room creator under the v12+ implicit-power
@@ -942,6 +1035,7 @@ impl AppServiceMatrixDriver {
 mod tests {
     use super::super::test_support::*;
     use super::*;
+    use cumments_core::ports::MatrixDriver;
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1112,6 +1206,93 @@ mod tests {
 
         let driver = test_driver(&server);
         assert!(!driver.is_space_room(ROOM_ID).await.unwrap());
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn upgrade_room_posts_new_version_and_returns_replacement() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(TOMBSTONE_STATE_PATH))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(UPGRADE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "replacement_room": "!new:example.com"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let replacement = driver
+            .upgrade_room(ROOM_ID, "12")
+            .await
+            .expect("upgrade must return replacement");
+        assert_eq!(replacement, "!new:example.com");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn upgrade_room_reuses_existing_tombstone() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(TOMBSTONE_STATE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "replacement_room": "!new:example.com"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(UPGRADE_PATH))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let replacement = driver
+            .upgrade_room(ROOM_ID, "12")
+            .await
+            .expect("existing tombstone must be reused");
+        assert_eq!(replacement, "!new:example.com");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn upgrade_room_recovers_replacement_after_lost_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(TOMBSTONE_STATE_PATH))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(UPGRADE_PATH))
+            .respond_with(ResponseTemplate::new(500).set_body_string("response lost"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(TOMBSTONE_STATE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "replacement_room": "!new:example.com"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let replacement = driver
+            .upgrade_room(ROOM_ID, "12")
+            .await
+            .expect("failed upgrade must recover the committed replacement");
+        assert_eq!(replacement, "!new:example.com");
         server.verify().await;
     }
 

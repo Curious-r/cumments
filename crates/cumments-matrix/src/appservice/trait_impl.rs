@@ -285,6 +285,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
             .await
     }
 
+    async fn upgrade_room(&self, room_id: &str, new_version: &str) -> Result<String> {
+        self.upgrade_room_impl(room_id, new_version).await
+    }
+
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         self.invite_user_impl(room_id, user_id).await
     }

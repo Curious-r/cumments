@@ -17,6 +17,9 @@ pub(crate) const POWER_LEVELS_PATH: &str =
     "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.power_levels";
 pub(crate) const CREATE_STATE_PATH: &str =
     "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.create";
+pub(crate) const TOMBSTONE_STATE_PATH: &str =
+    "/_matrix/client/v3/rooms/%21room%3Aexample.com/state/m.room.tombstone";
+pub(crate) const UPGRADE_PATH: &str = "/_matrix/client/v3/rooms/%21room%3Aexample.com/upgrade";
 
 pub(crate) struct StubVirtualUserStore;
 

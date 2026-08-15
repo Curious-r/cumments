@@ -929,6 +929,14 @@ pub trait MatrixDriver: Send + Sync {
         content: &serde_json::Value,
     ) -> Result<String>;
 
+    /// Upgrades a room to `new_version` through the homeserver's native
+    /// `/upgrade` endpoint and returns the replacement room ID.
+    ///
+    /// Idempotent: when the room already carries an `m.room.tombstone` (or
+    /// one appears after a failed request), the existing replacement room is
+    /// returned instead of creating a second one.
+    async fn upgrade_room(&self, room_id: &str, new_version: &str) -> Result<String>;
+
     /// Invites a user to a room as the AS sender. Already-joined users are a
     /// successful no-op.
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()>;

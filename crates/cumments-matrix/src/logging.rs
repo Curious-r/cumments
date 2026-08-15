@@ -318,6 +318,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok("$logging:state".to_string())
     }
 
+    async fn upgrade_room(&self, room_id: &str, new_version: &str) -> Result<String> {
+        info!("LOGGING: Upgrade {room_id} to {new_version} (no real homeserver)");
+        Ok("!logging-upgraded:hs".to_string())
+    }
+
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         info!("LOGGING: Invite {user_id} to {room_id} (no-op)");
         Ok(())

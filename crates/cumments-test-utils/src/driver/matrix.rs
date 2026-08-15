@@ -261,4 +261,32 @@ impl MatrixDriver for TestDriver {
         self.room_state.lock().await.insert(key, content.clone());
         Ok(id)
     }
+
+    async fn upgrade_room(&self, room_id: &str, new_version: &str) -> anyhow::Result<String> {
+        let index = {
+            let mut upgrades = self.upgrades.lock().await;
+            upgrades.push((room_id.to_string(), new_version.to_string()));
+            upgrades.len()
+        };
+        // Simulate the homeserver's idempotency: an existing tombstone wins,
+        // otherwise the upgrade writes one for the new replacement room.
+        let key = (
+            room_id.to_string(),
+            "m.room.tombstone".to_string(),
+            String::new(),
+        );
+        if let Some(content) = self.room_state.lock().await.get(&key).cloned() {
+            return Ok(content
+                .get("replacement_room")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string());
+        }
+        let replacement = format!("!upgraded-{index}:hs");
+        self.room_state
+            .lock()
+            .await
+            .insert(key, serde_json::json!({ "replacement_room": replacement }));
+        Ok(replacement)
+    }
 }
