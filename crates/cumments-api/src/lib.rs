@@ -1,8 +1,3 @@
-use crate::routes::admin::{
-    config_snippet_handler, list_admin_sites_handler, list_quarantined_rooms_handler,
-    reinstate_room_handler, require_admin, revoke_secret_handler, revoke_verified_origin_handler,
-    rotate_claim_token_handler, rotate_secret_handler,
-};
 use crate::routes::comments::{
     delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
@@ -15,6 +10,11 @@ use crate::routes::moderation::{
     add_co_manager_handler, add_owner_handler, add_room_moderator_handler,
     list_room_moderators_handler, list_site_roles_handler, remove_co_manager_handler,
     remove_owner_handler, remove_room_moderator_handler, require_claim_token, retire_site_handler,
+};
+use crate::routes::operator::{
+    config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
+    reinstate_room_handler, require_operator, revoke_secret_handler,
+    revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
 };
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -102,14 +102,14 @@ pub struct ApiState {
     /// Instance-wide site verification policy plus the operator-declared
     /// per-site overlay.
     pub site_auth_policy: Arc<SiteAuthPolicy>,
-    /// SHA-256 hash of the operator admin token, when enabled.
-    pub admin_token_hash: Option<String>,
+    /// SHA-256 hash of the operator operator token, when enabled.
+    pub operator_token_hash: Option<String>,
     /// Anti-spam limiter for open site registration.
     pub registration_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-spam limiter for verification token issuance.
     pub verification_limiter: Arc<rate_limit::RateLimiter>,
-    /// Anti-brute-force limiter for the admin API.
-    pub admin_limiter: Arc<rate_limit::RateLimiter>,
+    /// Anti-brute-force limiter for the Operator API.
+    pub operator_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-abuse limiter for verification confirm (outbound probes).
     pub confirm_limiter: Arc<rate_limit::RateLimiter>,
     /// Reverse proxies trusted to set `X-Forwarded-For` for rate limiting.
@@ -260,64 +260,67 @@ pub fn build_router(state: ApiState) -> Router {
             require_claim_token,
         ));
 
-    let admin_router = Router::new()
+    let operator_router = Router::new()
         .route(
-            "/api/v1/admin/sites",
-            axum::routing::get(method_not_allowed_handler).fallback(list_admin_sites_handler),
+            "/api/v1/operator/sites",
+            axum::routing::get(method_not_allowed_handler).fallback(list_operator_sites_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}/origins/revoke",
+            "/api/v1/operator/sites/{site_id}/origins/revoke",
             axum::routing::post(revoke_verified_origin_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}/secret/rotate",
+            "/api/v1/operator/sites/{site_id}/secret/rotate",
             axum::routing::post(rotate_secret_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}/secret",
+            "/api/v1/operator/sites/{site_id}/secret",
             axum::routing::delete(revoke_secret_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}/config-snippet",
+            "/api/v1/operator/sites/{site_id}/config-snippet",
             axum::routing::get(config_snippet_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}/claim-token/rotate",
+            "/api/v1/operator/sites/{site_id}/claim-token/rotate",
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}",
+            "/api/v1/operator/sites/{site_id}",
             axum::routing::delete(retire_site_handler).fallback(method_not_allowed_handler),
         )
         // Operator fallback for site ownership takeover.
         .route(
-            "/api/v1/admin/sites/{site_id}/owners",
+            "/api/v1/operator/sites/{site_id}/owners",
             axum::routing::post(add_owner_handler)
                 .delete(remove_owner_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/sites/{site_id}/co-managers",
+            "/api/v1/operator/sites/{site_id}/co-managers",
             axum::routing::post(add_co_manager_handler)
                 .delete(remove_co_manager_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/admin/rooms/quarantined",
+            "/api/v1/operator/rooms/quarantined",
             axum::routing::get(method_not_allowed_handler).fallback(list_quarantined_rooms_handler),
         )
         .route(
-            "/api/v1/admin/rooms/quarantined/{room_id}",
+            "/api/v1/operator/rooms/quarantined/{room_id}",
             axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
         )
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_operator,
+        ));
 
     Router::new()
         .merge(comment_router)
         .merge(moderation_router)
         .merge(public_router)
-        .merge(admin_router)
+        .merge(operator_router)
         .fallback(not_found_handler)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

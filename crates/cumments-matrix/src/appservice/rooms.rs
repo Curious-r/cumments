@@ -424,7 +424,7 @@ impl AppServiceMatrixDriver {
 
     /// Unified adoption gate for every recovery path. Always verifies the AS
     /// sender can govern the room before accepting it, then repairs metadata
-    /// when necessary and ensures the operator admin has power.
+    /// when necessary and ensures the operator has power.
     async fn adopt_room(
         &self,
         room_id: &str,

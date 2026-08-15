@@ -1,4 +1,4 @@
-//! Building and validating the site-auth policy and PoW/admin secrets.
+//! Building and validating the site-auth policy and PoW/operator secrets.
 
 use super::settings::{Mode, Security, SiteConfig};
 use anyhow::{Result, anyhow, bail};
@@ -134,31 +134,31 @@ fn warn_http_non_loopback(site_id: &str, pattern: &OriginPattern) {
     }
 }
 
-/// Validates the admin token and returns its SHA-256 hash for comparison.
-pub fn admin_token_hash(security: &Security) -> Result<Option<String>> {
-    let Some(token) = &security.admin_token else {
+/// Validates the operator token and returns its SHA-256 hash for comparison.
+pub fn operator_token_hash(security: &Security) -> Result<Option<String>> {
+    let Some(token) = &security.operator_token else {
         return Ok(None);
     };
     if token.trim().is_empty() {
-        bail!("`security.admin_token` must not be empty");
+        bail!("`security.operator_token` must not be empty");
     }
     if token.len() < 32 {
-        bail!("`security.admin_token` must be at least 32 characters");
+        bail!("`security.operator_token` must be at least 32 characters");
     }
-    if matches!(token.as_str(), "change-me" | "admin-token") {
-        bail!("`security.admin_token` uses a known example value; generate a real random token");
+    if matches!(token.as_str(), "change-me" | "operator-token") {
+        bail!("`security.operator_token` uses a known example value; generate a real random token");
     }
     Ok(Some(cumments_core::site_auth::token_hash(token)))
 }
 
 /// Validates and normalizes the chat-channel instance operators.
 pub fn validate_admin_mxids(security: &Security) -> Result<Vec<String>> {
-    let mut admins = Vec::with_capacity(security.admin_mxids.len());
-    for raw in &security.admin_mxids {
+    let mut admins = Vec::with_capacity(security.operator_mxids.len());
+    for raw in &security.operator_mxids {
         let mxid = validate_governance_user_id(raw)
-            .map_err(|e| anyhow::anyhow!("invalid admin_mxids entry `{raw}`: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("invalid operator_mxids entry `{raw}`: {e}"))?;
         if is_as_managed_user(&mxid) {
-            bail!("admin_mxids must not contain Cumments service accounts: {mxid}");
+            bail!("operator_mxids must not contain Cumments service accounts: {mxid}");
         }
         admins.push(mxid);
     }
@@ -212,8 +212,8 @@ mod tests {
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
-            admin_token: None,
-            admin_mxids: vec![],
+            operator_token: None,
+            operator_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -258,8 +258,8 @@ mod tests {
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Required,
-            admin_token: None,
-            admin_mxids: vec![],
+            operator_token: None,
+            operator_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -297,8 +297,8 @@ mod tests {
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
-            admin_token: None,
-            admin_mxids: vec![],
+            operator_token: None,
+            operator_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
@@ -350,48 +350,48 @@ mod tests {
     }
 
     #[test]
-    fn admin_token_hash_validates_and_hashes() {
+    fn operator_token_hash_validates_and_hashes() {
         let security = Security {
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
-            admin_token: None,
-            admin_mxids: vec![],
+            operator_token: None,
+            operator_mxids: vec![],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,
         };
         assert!(
-            admin_token_hash(&security)
+            operator_token_hash(&security)
                 .expect("no token yields none")
                 .is_none()
         );
 
         let mut security = security;
-        security.admin_token = Some("short".to_string());
-        assert!(admin_token_hash(&security).is_err());
+        security.operator_token = Some("short".to_string());
+        assert!(operator_token_hash(&security).is_err());
 
-        security.admin_token = Some("change-me".to_string());
-        assert!(admin_token_hash(&security).is_err());
+        security.operator_token = Some("change-me".to_string());
+        assert!(operator_token_hash(&security).is_err());
 
-        security.admin_token = Some("a-very-long-admin-token-0123456789".to_string());
-        let hash = admin_token_hash(&security)
+        security.operator_token = Some("a-very-long-operator-token-0123456789".to_string());
+        let hash = operator_token_hash(&security)
             .expect("valid token")
             .expect("some hash");
         assert_eq!(
             hash,
-            cumments_core::site_auth::token_hash("a-very-long-admin-token-0123456789")
+            cumments_core::site_auth::token_hash("a-very-long-operator-token-0123456789")
         );
     }
 
     #[test]
-    fn admin_mxids_validate_and_reject_service_accounts() {
+    fn operator_mxids_validate_and_reject_service_accounts() {
         let invalid = Security {
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
-            admin_token: None,
-            admin_mxids: vec![
+            operator_token: None,
+            operator_mxids: vec![
                 "@admin:example.org".to_string(),
                 "@_cumments_bot:example.org".to_string(),
             ],
@@ -408,8 +408,8 @@ mod tests {
             pow_secret: "secret".to_string(),
             pow_difficulty: 4,
             site_verification: SiteVerificationPolicy::Optional,
-            admin_token: None,
-            admin_mxids: vec!["@admin:example.org".to_string()],
+            operator_token: None,
+            operator_mxids: vec!["@admin:example.org".to_string()],
             allow_private_verification_origins: false,
             preset_stickers: Vec::new(),
             media_sign_key: None,

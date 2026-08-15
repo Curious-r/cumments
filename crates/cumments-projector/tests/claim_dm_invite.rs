@@ -55,7 +55,7 @@ fn processor(store: Arc<DbStore>, driver: Arc<TestDriver>) -> EventProcessor {
             store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
         )),
         driver: Some(driver),
-        admin_mxids: Vec::new(),
+        operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
         governance_notify: Arc::new(tokio::sync::Notify::new()),

@@ -53,7 +53,7 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
             store.clone() as Arc<dyn cumments_core::ports::SiteStore>
         )),
         driver: None,
-        admin_mxids: Vec::new(),
+        operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
         governance_notify: Arc::new(tokio::sync::Notify::new()),
@@ -232,7 +232,7 @@ async fn reaction_redaction_removes_it_and_prevents_resurrection() {
         .process_room_redaction(ParsedRoomRedaction {
             room_id: "!room:hs".to_string(),
             event_id: "$redaction:hs".to_string(),
-            sender: Some("@admin:hs".to_string()),
+            sender: Some(":hs".to_string()),
             origin_server_ts: 300,
             redacts: Some("$reaction:hs".to_string()),
             proof: None,
@@ -334,7 +334,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
         .process_room_redaction(ParsedRoomRedaction {
             room_id: "!room:hs".to_string(),
             event_id: "$redaction:hs".to_string(),
-            sender: Some("@admin:hs".to_string()),
+            sender: Some(":hs".to_string()),
             origin_server_ts: 300,
             redacts: Some("$vote:hs".to_string()),
             proof: None,
@@ -390,7 +390,7 @@ async fn redaction_seen_before_target_prevents_resurrection() {
         .process_room_redaction(ParsedRoomRedaction {
             room_id: "!room:hs".to_string(),
             event_id: "$redaction:hs".to_string(),
-            sender: Some("@admin:hs".to_string()),
+            sender: Some(":hs".to_string()),
             origin_server_ts: 100,
             redacts: Some("$target:hs".to_string()),
             proof: None,

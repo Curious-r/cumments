@@ -90,8 +90,8 @@ async fn main() -> Result<()> {
     let settings = config::get_configuration(args.config.as_deref())
         .map_err(|e| anyhow::anyhow!("failed to read configuration: {e}"))?;
     config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
-    let admin_token_hash = config::admin_token_hash(&settings.security)?;
-    let admin_mxids = config::validate_admin_mxids(&settings.security)?;
+    let operator_token_hash = config::operator_token_hash(&settings.security)?;
+    let operator_mxids = config::validate_admin_mxids(&settings.security)?;
     let (backfill_tx, backfill_rx) = tokio::sync::mpsc::channel(1);
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
@@ -274,7 +274,7 @@ async fn main() -> Result<()> {
             site_auth_policy: site_auth_policy.clone(),
             site_service: site_service.clone(),
             driver: Some(driver.clone()),
-            admin_mxids: admin_mxids.clone(),
+            operator_mxids: operator_mxids.clone(),
             backfill_tx: Some(backfill_tx),
             event_bus: event_bus.clone(),
             governance_notify: governance_notify.clone(),
@@ -439,7 +439,7 @@ async fn main() -> Result<()> {
         submission_notify,
         governance_notify,
         site_auth_policy,
-        admin_token_hash,
+        operator_token_hash,
         registration_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.registration.requests,
             rate_limits.registration.window,
@@ -448,9 +448,9 @@ async fn main() -> Result<()> {
             rate_limits.verification.requests,
             rate_limits.verification.window,
         )),
-        admin_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            rate_limits.admin.requests,
-            rate_limits.admin.window,
+        operator_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            rate_limits.operator.requests,
+            rate_limits.operator.window,
         )),
         confirm_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.confirm.requests,

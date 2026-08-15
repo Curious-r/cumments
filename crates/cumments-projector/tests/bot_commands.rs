@@ -56,22 +56,22 @@ fn command_message(sender: &str, body: &str) -> ParsedRoomMessage {
 fn processor(
     store: Arc<DbStore>,
     members: Vec<String>,
-    admin_mxids: Vec<String>,
+    operator_mxids: Vec<String>,
 ) -> EventProcessor {
-    processor_with(store, members, admin_mxids, None, common::test_policy())
+    processor_with(store, members, operator_mxids, None, common::test_policy())
 }
 
 fn processor_with(
     store: Arc<DbStore>,
     members: Vec<String>,
-    admin_mxids: Vec<String>,
+    operator_mxids: Vec<String>,
     backfill_tx: Option<tokio::sync::mpsc::Sender<cumments_projector::backfill::BackfillRequest>>,
     policy: std::sync::Arc<cumments_core::site_auth::SiteAuthPolicy>,
 ) -> EventProcessor {
     processor_with_driver(
         store,
         Arc::new(common::TestDriver::with_joined_members(members)),
-        admin_mxids,
+        operator_mxids,
         backfill_tx,
         policy,
     )
@@ -80,7 +80,7 @@ fn processor_with(
 fn processor_with_driver(
     store: Arc<DbStore>,
     driver: Arc<common::TestDriver>,
-    admin_mxids: Vec<String>,
+    operator_mxids: Vec<String>,
     backfill_tx: Option<tokio::sync::mpsc::Sender<cumments_projector::backfill::BackfillRequest>>,
     policy: std::sync::Arc<cumments_core::site_auth::SiteAuthPolicy>,
 ) -> EventProcessor {
@@ -100,7 +100,7 @@ fn processor_with_driver(
             store.clone() as Arc<dyn cumments_core::ports::SiteStore>
         )),
         driver: Some(driver),
-        admin_mxids,
+        operator_mxids,
         backfill_tx,
         event_bus: tx,
         governance_notify: Arc::new(tokio::sync::Notify::new()),
@@ -136,7 +136,7 @@ async fn unknown_command_replies_with_help() {
 }
 
 #[tokio::test]
-async fn admin_sites_list_works_and_unknown_user_is_denied() {
+async fn operator_sites_list_works_and_unknown_user_is_denied() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("sites-list"))
             .await
@@ -149,14 +149,14 @@ async fn admin_sites_list_works_and_unknown_user_is_denied() {
 
     let p = processor(
         store.clone(),
-        private_members("@admin:hs"),
-        vec!["@admin:hs".to_string()],
+        private_members(":hs"),
+        vec![":hs".to_string()],
     );
     assert!(
-        p.process_bot_command(&command_message("@admin:hs", "!cumments sites list"))
+        p.process_bot_command(&command_message(":hs", "!cumments sites list"))
             .await
             .expect("process"),
-        "admin command consumed"
+        "operator command consumed"
     );
 
     let denied = processor(store.clone(), private_members("@stranger:hs"), Vec::new());
@@ -318,7 +318,7 @@ async fn commands_outside_private_channel_are_consumed_silently() {
 }
 
 #[tokio::test]
-async fn backfill_queues_for_admin_and_rejects_busy() {
+async fn backfill_queues_for_operator_and_rejects_busy() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("backfill"))
             .await
@@ -327,25 +327,25 @@ async fn backfill_queues_for_admin_and_rejects_busy() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let p = processor_with(
         store.clone(),
-        private_members("@admin:hs"),
-        vec!["@admin:hs".to_string()],
+        private_members(":hs"),
+        vec![":hs".to_string()],
         Some(tx.clone()),
         common::test_policy(),
     );
     assert!(
-        p.process_bot_command(&command_message("@admin:hs", "!cumments backfill 10",))
+        p.process_bot_command(&command_message(":hs", "!cumments backfill 10",))
             .await
             .expect("process")
     );
     // Channel is full while the worker is busy: the second command reports
     // busy instead of queueing.
     assert!(
-        p.process_bot_command(&command_message("@admin:hs", "!cumments backfill"))
+        p.process_bot_command(&command_message(":hs", "!cumments backfill"))
             .await
             .expect("process")
     );
     let request = rx.try_recv().expect("exactly one backfill queued");
-    assert_eq!(request.actor_mxid, "@admin:hs");
+    assert_eq!(request.actor_mxid, ":hs");
     assert_eq!(request.max_pages, 10);
     assert!(
         rx.try_recv().is_err(),
@@ -369,7 +369,7 @@ async fn backfill_queues_for_admin_and_rejects_busy() {
 }
 
 #[tokio::test]
-async fn admin_sites_list_includes_config_only_sites() {
+async fn operator_sites_list_includes_config_only_sites() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("config-sites"))
             .await
@@ -393,17 +393,11 @@ async fn admin_sites_list_includes_config_only_sites() {
         .collect(),
     });
     let driver = Arc::new(common::TestDriver::with_joined_members(private_members(
-        "@admin:hs",
+        ":hs",
     )));
-    let p = processor_with_driver(
-        store,
-        driver.clone(),
-        vec!["@admin:hs".to_string()],
-        None,
-        policy,
-    );
+    let p = processor_with_driver(store, driver.clone(), vec![":hs".to_string()], None, policy);
     assert!(
-        p.process_bot_command(&command_message("@admin:hs", "!cumments sites list"))
+        p.process_bot_command(&command_message(":hs", "!cumments sites list"))
             .await
             .expect("process")
     );

@@ -1,7 +1,7 @@
 //! Shared stdout helpers for CLI commands.
 
 use anyhow::Result;
-use cumments_api::routes::admin::{AdminQuarantinedRoom, AdminSite};
+use cumments_api::routes::operator::{OperatorQuarantinedRoom, OperatorSite};
 use serde::Serialize;
 
 /// Prints one JSON document to stdout (machine-readable CLI output).
@@ -11,7 +11,7 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
 }
 
 /// Human-readable table for `sites list --table`.
-pub(super) fn print_site_table(sites: &[AdminSite]) {
+pub(super) fn print_site_table(sites: &[OperatorSite]) {
     println!(
         "{:<16} {:<10} {:<12} ORIGINS",
         "SITE_ID", "AUTH_MODE", "STATUS"
@@ -34,7 +34,7 @@ pub(super) fn print_site_table(sites: &[AdminSite]) {
 }
 
 /// Human-readable table for `rooms list-quarantined --table`.
-pub(super) fn print_room_table(rooms: &[AdminQuarantinedRoom]) {
+pub(super) fn print_room_table(rooms: &[OperatorQuarantinedRoom]) {
     println!(
         "{:<44} {:<16} {:<16} {:<8} {:<20} REASON",
         "ROOM_ID", "SITE_ID", "POST_SLUG", "FAILURES", "NEXT ATTEMPT"

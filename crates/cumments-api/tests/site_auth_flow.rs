@@ -1,5 +1,5 @@
 //! Router-level integration tests for write-path site authentication, the
-//! admin API, and the well-known verification flow.
+//! Operator API, and the well-known verification flow.
 
 use axum::{
     Router,
@@ -38,7 +38,7 @@ fn test_db_url(name: &str) -> String {
 async fn test_state(
     name: &str,
     policy: SiteVerificationPolicy,
-    admin_token: Option<&str>,
+    operator_token: Option<&str>,
 ) -> (ApiState, DbStore) {
     let store = DbStore::connect(&test_db_url(name))
         .await
@@ -57,10 +57,10 @@ async fn test_state(
             verification: policy,
             sites: Default::default(),
         }),
-        admin_token_hash: admin_token.map(token_hash),
+        operator_token_hash: operator_token.map(token_hash),
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        admin_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
+        operator_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
         confirm_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         trusted_proxies: Arc::new(Default::default()),
         // The existing integration test verifies against 127.0.0.1.
@@ -578,11 +578,11 @@ async fn preflight_and_queries_are_public() {
 }
 
 #[tokio::test]
-async fn admin_lifecycle_and_well_known_verification() {
+async fn operator_lifecycle_and_well_known_verification() {
     let (state, _) = test_state(
-        "admin",
+        "operator",
         SiteVerificationPolicy::Required,
-        Some("test-admin-token"),
+        Some("test-operator-token"),
     )
     .await;
     let router = cumments_api::build_router(state);
@@ -599,10 +599,10 @@ async fn admin_lifecycle_and_well_known_verification() {
     let site_id = registered_json["site_id"].as_str().unwrap().to_string();
     let claim_token = registered_json["claim_token"].as_str().unwrap().to_string();
 
-    // Admin list requires the token.
+    // Operator list requires the token.
     let unauthorized = router
         .clone()
-        .oneshot(request(query_method(), "/api/v1/admin/sites", None, &[]))
+        .oneshot(request(query_method(), "/api/v1/operator/sites", None, &[]))
         .await
         .expect("call router");
     assert_eq!(unauthorized.status(), StatusCode::FORBIDDEN);
@@ -611,9 +611,9 @@ async fn admin_lifecycle_and_well_known_verification() {
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/admin/sites",
+            "/api/v1/operator/sites",
             None,
-            &[("authorization", "Bearer test-admin-token".to_string())],
+            &[("authorization", "Bearer test-operator-token".to_string())],
         ))
         .await
         .expect("call router");
@@ -707,14 +707,14 @@ async fn admin_lifecycle_and_well_known_verification() {
         body_text(confirmed).await
     );
 
-    // Admin: rotate, export a config snippet, revoke secret, revoke origin.
+    // Operator: rotate, export a config snippet, revoke secret, revoke origin.
     let rotated = router
         .clone()
         .oneshot(request(
             Method::POST,
-            &format!("/api/v1/admin/sites/{site_id}/secret/rotate"),
+            &format!("/api/v1/operator/sites/{site_id}/secret/rotate"),
             None,
-            &[("authorization", "Bearer test-admin-token".to_string())],
+            &[("authorization", "Bearer test-operator-token".to_string())],
         ))
         .await
         .expect("call router");
@@ -729,9 +729,9 @@ async fn admin_lifecycle_and_well_known_verification() {
         .clone()
         .oneshot(request(
             Method::GET,
-            &format!("/api/v1/admin/sites/{site_id}/config-snippet"),
+            &format!("/api/v1/operator/sites/{site_id}/config-snippet"),
             None,
-            &[("authorization", "Bearer test-admin-token".to_string())],
+            &[("authorization", "Bearer test-operator-token".to_string())],
         ))
         .await
         .expect("call router");
@@ -742,9 +742,9 @@ async fn admin_lifecycle_and_well_known_verification() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            &format!("/api/v1/admin/sites/{site_id}/secret"),
+            &format!("/api/v1/operator/sites/{site_id}/secret"),
             None,
-            &[("authorization", "Bearer test-admin-token".to_string())],
+            &[("authorization", "Bearer test-operator-token".to_string())],
         ))
         .await
         .expect("call router");
@@ -755,9 +755,9 @@ async fn admin_lifecycle_and_well_known_verification() {
         .oneshot(
             request(
                 Method::POST,
-                &format!("/api/v1/admin/sites/{site_id}/origins/revoke"),
+                &format!("/api/v1/operator/sites/{site_id}/origins/revoke"),
                 None,
-                &[("authorization", "Bearer test-admin-token".to_string())],
+                &[("authorization", "Bearer test-operator-token".to_string())],
             )
             .map(|_| Body::from(serde_json::json!({ "origin": origin }).to_string())),
         )
@@ -813,7 +813,7 @@ async fn private_verification_origins_rejected_by_default() {
 }
 
 #[tokio::test]
-async fn admin_can_rotate_claim_token() {
+async fn operator_can_rotate_claim_token() {
     let (state, _) = test_state(
         "rotate-claim",
         SiteVerificationPolicy::Disabled,
@@ -836,7 +836,7 @@ async fn admin_can_rotate_claim_token() {
         .clone()
         .oneshot(request(
             Method::POST,
-            &format!("/api/v1/admin/sites/{site_id}/claim-token/rotate"),
+            &format!("/api/v1/operator/sites/{site_id}/claim-token/rotate"),
             None,
             &[("authorization", "Bearer token".to_string())],
         ))
@@ -897,7 +897,7 @@ async fn admin_can_rotate_claim_token() {
 }
 
 #[tokio::test]
-async fn admin_lists_quarantined_rooms() {
+async fn operator_lists_quarantined_rooms() {
     let (state, store) = test_state(
         "quarantined-rooms",
         SiteVerificationPolicy::Disabled,
@@ -920,7 +920,7 @@ async fn admin_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/admin/rooms/quarantined",
+            "/api/v1/operator/rooms/quarantined",
             None,
             &[("authorization", "Bearer token".to_string())],
         ))
@@ -943,7 +943,7 @@ async fn admin_lists_quarantined_rooms() {
         .clone()
         .oneshot(request_with_body(
             query_method(),
-            "/api/v1/admin/rooms/quarantined",
+            "/api/v1/operator/rooms/quarantined",
             None,
             &[("authorization", "Bearer token".to_string())],
             r#"{"site_id":"other"}"#,
@@ -962,7 +962,7 @@ async fn admin_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/rooms/quarantined/!room:hs",
+            "/api/v1/operator/rooms/quarantined/!room:hs",
             None,
             &auth,
         ))
@@ -974,7 +974,7 @@ async fn admin_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/rooms/quarantined/!room:hs",
+            "/api/v1/operator/rooms/quarantined/!room:hs",
             None,
             &auth,
         ))
@@ -986,7 +986,7 @@ async fn admin_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/rooms/quarantined/!unknown:hs",
+            "/api/v1/operator/rooms/quarantined/!unknown:hs",
             None,
             &auth,
         ))
@@ -998,7 +998,7 @@ async fn admin_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/admin/rooms/quarantined",
+            "/api/v1/operator/rooms/quarantined",
             None,
             &auth,
         ))
@@ -1298,7 +1298,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     let (state, store) = test_state(
         "governance",
         SiteVerificationPolicy::Required,
-        Some("test-admin-token"),
+        Some("test-operator-token"),
     )
     .await;
     let site_id = "gov-flow-123";
@@ -1388,15 +1388,15 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         assert_eq!(bad.status(), StatusCode::BAD_REQUEST, "{label}");
     }
 
-    // The admin mirror works without a claim token.
-    let co_uri = format!("/api/v1/admin/sites/{site_id}/co-managers");
+    // The operator mirror works without a claim token.
+    let co_uri = format!("/api/v1/operator/sites/{site_id}/co-managers");
     let added_co = router
         .clone()
         .oneshot(request_with_body(
             Method::POST,
             &co_uri,
             None,
-            &[("authorization", "Bearer test-admin-token".to_string())],
+            &[("authorization", "Bearer test-operator-token".to_string())],
             &serde_json::json!({ "user_id": "@co:hs" }).to_string(),
         ))
         .await
@@ -1470,7 +1470,7 @@ async fn applied_owner_revocation_marks_the_claim_revoked() {
     let (state, store) = test_state(
         "applied-revoke",
         SiteVerificationPolicy::Required,
-        Some("test-admin-token"),
+        Some("test-operator-token"),
     )
     .await;
     let site_id = "applied-revoke-site";
@@ -1776,7 +1776,7 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
     let (state, store) = test_state(
         "retire-site",
         SiteVerificationPolicy::Disabled,
-        Some("test-admin-token"),
+        Some("test-operator-token"),
     )
     .await;
     store
@@ -1841,21 +1841,21 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
         .expect("call router");
     assert_eq!(again.status(), StatusCode::FORBIDDEN);
 
-    // The admin mirror works for another site.
+    // The operator mirror works for another site.
     store
-        .register_site("admin-retire", &token_hash("claim"), false)
+        .register_site("operator-retire", &token_hash("claim"), false)
         .await
         .expect("register site");
-    let admin = router
+    let operator = router
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/admin/sites/admin-retire",
+            "/api/v1/operator/sites/operator-retire",
             None,
-            &[("authorization", "Bearer test-admin-token".to_string())],
+            &[("authorization", "Bearer test-operator-token".to_string())],
         ))
         .await
         .expect("call router");
-    assert_eq!(admin.status(), StatusCode::OK);
-    assert!(body_text(admin).await.contains("retiring"));
+    assert_eq!(operator.status(), StatusCode::OK);
+    assert!(body_text(operator).await.contains("retiring"));
 }

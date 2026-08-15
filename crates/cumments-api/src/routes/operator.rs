@@ -1,7 +1,7 @@
-//! Operator-only admin routes for database-tracked sites.
+//! Operator-only operator routes for database-tracked sites.
 //!
-//! Protected by a static bearer token (`security.admin_token`). Configuration
-//! remains the operator's declarative surface: admin endpoints never write
+//! Protected by a static bearer token (`security.operator_token`). Configuration
+//! remains the operator's declarative surface: operator endpoints never write
 //! config files, they manage runtime state and print adoption snippets.
 
 use crate::ApiState;
@@ -30,13 +30,13 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
-pub struct AdminPage<T> {
+pub struct OperatorPage<T> {
     pub data: Vec<T>,
     pub meta: PaginationMeta,
 }
 
 #[derive(Debug, Serialize)]
-pub struct AdminQuarantinedRoom {
+pub struct OperatorQuarantinedRoom {
     pub room_id: String,
     pub site_id: String,
     pub post_slug: String,
@@ -47,12 +47,12 @@ pub struct AdminQuarantinedRoom {
 }
 
 #[derive(Debug, Serialize)]
-pub struct AdminSite {
+pub struct OperatorSite {
     pub site_id: String,
     pub lifecycle: SiteLifecycle,
     pub auth_mode: SiteAuthMode,
     pub verification_status: SiteVerificationStatus,
-    pub origins: Vec<AdminOrigin>,
+    pub origins: Vec<OperatorOrigin>,
     pub verified_at: Option<DateTime<Utc>>,
     pub has_secret: bool,
     pub has_claim_token: bool,
@@ -60,7 +60,7 @@ pub struct AdminSite {
 }
 
 #[derive(Debug, Serialize)]
-pub struct AdminOrigin {
+pub struct OperatorOrigin {
     pub origin: String,
     /// `config` (operator-declared) or `verified` (self-service proof).
     pub source: &'static str,
@@ -72,7 +72,7 @@ pub struct RevokeOriginRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AdminListQuery {
+pub struct OperatorListQuery {
     pub page: Option<i64>,
     pub per_page: Option<i64>,
     pub site_id: Option<String>,
@@ -106,7 +106,7 @@ pub struct ConfigSnippetResponse {
 // Middleware
 // ---------------------------------------------------------------------------
 
-pub async fn require_admin(
+pub async fn require_operator(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     req: Request,
@@ -120,7 +120,7 @@ pub async fn require_admin(
 
     // A valid operator token bypasses the limiter entirely, so flood traffic
     // can never starve the real operator's access.
-    if let (Some(expected), Some(token)) = (&state.admin_token_hash, presented)
+    if let (Some(expected), Some(token)) = (&state.operator_token_hash, presented)
         && constant_time_eq(expected.as_bytes(), token_hash(token).as_bytes())
     {
         return next.run(req).await;
@@ -130,27 +130,27 @@ pub async fn require_admin(
     // Keying by the presented token here would let an attacker mint a fresh
     // quota by simply rotating the token on every attempt.
     let key = client_key(req.headers(), Some(addr), &state.trusted_proxies);
-    if !state.admin_limiter.allow(&key) {
+    if !state.operator_limiter.allow(&key) {
         return AppError::TooManyRequests {
-            detail: "admin API is rate limited; try again later".to_string(),
-            retry_after_seconds: state.admin_limiter.window().as_secs(),
+            detail: "Operator API is rate limited; try again later".to_string(),
+            retry_after_seconds: state.operator_limiter.window().as_secs(),
         }
         .into_response();
     }
-    if state.admin_token_hash.is_none() {
+    if state.operator_token_hash.is_none() {
         return AppError::Unauthorized(
-            "admin API is not enabled; set `security.admin_token`".to_string(),
+            "Operator API is not enabled; set `security.operator_token`".to_string(),
         )
         .into_response();
     }
-    AppError::Unauthorized("invalid admin token".to_string()).into_response()
+    AppError::Unauthorized("invalid operator token".to_string()).into_response()
 }
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn list_admin_sites_handler(
+pub(crate) async fn list_operator_sites_handler(
     method: Method,
     State(state): State<ApiState>,
     body: String,
@@ -174,7 +174,7 @@ pub(crate) async fn list_admin_sites_handler(
                 .site_auth_policy
                 .entry(&site.site_id)
                 .expect("effective config site has an entry");
-            sites.push(admin_site_from_config(&site.site_id, config));
+            sites.push(operator_site_from_config(&site.site_id, config));
         } else {
             let info = state
                 .store
@@ -182,7 +182,7 @@ pub(crate) async fn list_admin_sites_handler(
                 .await
                 .map_err(|e| AppError::Internal(format!("failed to load site: {e}")))?
                 .ok_or_else(|| AppError::NotFound("site not found".to_string()))?;
-            sites.push(admin_site(
+            sites.push(operator_site(
                 &info,
                 state.site_auth_policy.entry(&site.site_id),
             ));
@@ -193,7 +193,7 @@ pub(crate) async fn list_admin_sites_handler(
         sites.retain(|site| site.site_id == site_id);
     }
 
-    let (page, per_page) = admin_page_bounds(&query);
+    let (page, per_page) = operator_page_bounds(&query);
     let total = sites.len() as i64;
     let start = ((page - 1) * per_page) as usize;
     let data = sites
@@ -205,9 +205,9 @@ pub(crate) async fn list_admin_sites_handler(
         [(ACCEPT_QUERY.clone(), "application/json")],
         (
             StatusCode::OK,
-            Json(AdminPage {
+            Json(OperatorPage {
                 data,
-                meta: admin_meta(total, page, per_page),
+                meta: operator_meta(total, page, per_page),
             }),
         ),
     ))
@@ -232,14 +232,14 @@ pub(crate) async fn list_quarantined_rooms_handler(
     if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
         rooms.retain(|room| room.site_id == site_id);
     }
-    let (page, per_page) = admin_page_bounds(&query);
+    let (page, per_page) = operator_page_bounds(&query);
     let total = rooms.len() as i64;
     let start = ((page - 1) * per_page) as usize;
     let data = rooms
         .into_iter()
         .skip(start)
         .take(per_page as usize)
-        .map(|room| AdminQuarantinedRoom {
+        .map(|room| OperatorQuarantinedRoom {
             room_id: room.room_id,
             site_id: room.site_id,
             post_slug: room.post_slug,
@@ -253,9 +253,9 @@ pub(crate) async fn list_quarantined_rooms_handler(
         [(ACCEPT_QUERY.clone(), "application/json")],
         (
             StatusCode::OK,
-            Json(AdminPage {
+            Json(OperatorPage {
                 data,
-                meta: admin_meta(total, page, per_page),
+                meta: operator_meta(total, page, per_page),
             }),
         ),
     ))
@@ -282,9 +282,9 @@ pub(crate) async fn reinstate_room_handler(
 }
 
 /// Parses the optional QUERY body; an empty body means default pagination.
-fn parse_admin_list_query(body: &str) -> Result<AdminListQuery, AppError> {
+fn parse_admin_list_query(body: &str) -> Result<OperatorListQuery, AppError> {
     if body.is_empty() {
-        return Ok(AdminListQuery {
+        return Ok(OperatorListQuery {
             page: None,
             per_page: None,
             site_id: None,
@@ -294,13 +294,13 @@ fn parse_admin_list_query(body: &str) -> Result<AdminListQuery, AppError> {
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))
 }
 
-pub fn admin_page_bounds(query: &AdminListQuery) -> (i64, i64) {
+pub fn operator_page_bounds(query: &OperatorListQuery) -> (i64, i64) {
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     (page, per_page)
 }
 
-pub fn admin_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
+pub fn operator_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
     let total_pages = if total > 0 {
         (total + per_page - 1) / per_page
     } else {
@@ -318,7 +318,7 @@ pub(crate) async fn revoke_verified_origin_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     body: String,
-) -> Result<Json<AdminSite>, AppError> {
+) -> Result<Json<OperatorSite>, AppError> {
     let req: RevokeOriginRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
@@ -355,7 +355,7 @@ pub(crate) async fn revoke_verified_origin_handler(
         .await
         .map_err(|e| AppError::Internal(format!("failed to reload site: {e}")))?
         .ok_or_else(|| AppError::NotFound("site not found".to_string()))?;
-    Ok(Json(admin_site(
+    Ok(Json(operator_site(
         &info,
         state.site_auth_policy.entry(site_id.as_str()),
     )))
@@ -466,7 +466,7 @@ pub(crate) async fn config_snippet_handler(
 
 /// Builds the TOML block for adopting a database-tracked site into `[sites]`.
 ///
-/// Shared by the admin API and the CLI so both produce identical output.
+/// Shared by the Operator API and the CLI so both produce identical output.
 pub fn config_snippet_toml(
     site_id: &str,
     db_info: &SiteAuthInfo,
@@ -510,17 +510,17 @@ pub fn config_snippet_toml(
 // View helpers
 // ---------------------------------------------------------------------------
 
-pub fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> AdminSite {
+pub fn operator_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> OperatorSite {
     let mut origins = info
         .verified_origins
         .iter()
-        .map(|origin| AdminOrigin {
+        .map(|origin| OperatorOrigin {
             origin: origin.as_str().to_string(),
             source: "verified",
         })
         .collect::<Vec<_>>();
     if let Some(entry) = config {
-        origins.extend(entry.allowed_origins.iter().map(|pattern| AdminOrigin {
+        origins.extend(entry.allowed_origins.iter().map(|pattern| OperatorOrigin {
             origin: pattern.as_pattern_string(),
             source: "config",
         }));
@@ -528,7 +528,7 @@ pub fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> Admi
     origins.sort_by(|a, b| a.origin.cmp(&b.origin));
     origins.dedup_by(|a, b| a.origin == b.origin);
 
-    AdminSite {
+    OperatorSite {
         site_id: info.site_id.clone(),
         lifecycle: info.lifecycle,
         auth_mode: config
@@ -547,8 +547,8 @@ pub fn admin_site(info: &SiteAuthInfo, config: Option<&SitePolicyEntry>) -> Admi
     }
 }
 
-pub fn admin_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> AdminSite {
-    AdminSite {
+pub fn operator_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> OperatorSite {
+    OperatorSite {
         site_id: site_id.to_string(),
         lifecycle: SiteLifecycle::Active,
         auth_mode: entry.auth_mode.unwrap_or(SiteAuthMode::Origin),
@@ -556,7 +556,7 @@ pub fn admin_site_from_config(site_id: &str, entry: &SitePolicyEntry) -> AdminSi
         origins: entry
             .allowed_origins
             .iter()
-            .map(|pattern| AdminOrigin {
+            .map(|pattern| OperatorOrigin {
                 origin: pattern.as_pattern_string(),
                 source: "config",
             })

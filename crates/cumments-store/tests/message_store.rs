@@ -165,7 +165,7 @@ async fn redact_message_marks_status_and_keeps_row() {
     let now = Utc::now();
     assert!(
         store
-            .redact_message("$event:hs", "!room:hs", now, "@admin:hs")
+            .redact_message("$event:hs", "!room:hs", now, ":hs")
             .await
             .expect("redact message")
     );
@@ -175,11 +175,11 @@ async fn redact_message_marks_status_and_keeps_row() {
         .expect("get message")
         .expect("message exists");
     assert_eq!(stored.status, MessageStatus::Redacted);
-    assert_eq!(stored.redacted_by.as_deref(), Some("@admin:hs"));
+    assert_eq!(stored.redacted_by.as_deref(), Some(":hs"));
 
     assert!(
         !store
-            .redact_message("$missing:hs", "!room:hs", now, "@admin:hs")
+            .redact_message("$missing:hs", "!room:hs", now, ":hs")
             .await
             .expect("missing target")
     );
@@ -363,7 +363,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
 
     assert!(
         store
-            .redact_poll_vote("$vote-bob:hs", Utc::now(), "@admin:hs")
+            .redact_poll_vote("$vote-bob:hs", Utc::now(), ":hs")
             .await
             .expect("redact bob vote")
     );

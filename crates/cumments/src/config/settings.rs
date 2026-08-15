@@ -59,7 +59,7 @@ pub struct RateLimits {
     pub registration: RateLimitBucket,
     pub verification: RateLimitBucket,
     pub confirm: RateLimitBucket,
-    pub admin: RateLimitBucket,
+    pub operator: RateLimitBucket,
     pub write: RateLimitBucket,
     pub sse: RateLimitBucket,
     pub media: RateLimitBucket,
@@ -72,7 +72,7 @@ impl Default for RateLimits {
             registration: RateLimitBucket::new(10, "1h"),
             verification: RateLimitBucket::new(20, "1h"),
             confirm: RateLimitBucket::new(30, "1h"),
-            admin: RateLimitBucket::new(60, "1m"),
+            operator: RateLimitBucket::new(60, "1m"),
             write: RateLimitBucket::new(120, "1h"),
             sse: RateLimitBucket::new(20, "1h"),
             media: RateLimitBucket::new(120, "1h"),
@@ -106,7 +106,7 @@ pub struct ResolvedRateLimits {
     pub registration: ResolvedRateLimit,
     pub verification: ResolvedRateLimit,
     pub confirm: ResolvedRateLimit,
-    pub admin: ResolvedRateLimit,
+    pub operator: ResolvedRateLimit,
     pub write: ResolvedRateLimit,
     pub sse: ResolvedRateLimit,
     pub media: ResolvedRateLimit,
@@ -128,7 +128,7 @@ impl RateLimits {
             registration: self.registration.resolved("rate_limit.registration")?,
             verification: self.verification.resolved("rate_limit.verification")?,
             confirm: self.confirm.resolved("rate_limit.confirm")?,
-            admin: self.admin.resolved("rate_limit.admin")?,
+            operator: self.operator.resolved("rate_limit.operator")?,
             write: self.write.resolved("rate_limit.write")?,
             sse: self.sse.resolved("rate_limit.sse")?,
             media: self.media.resolved("rate_limit.media")?,
@@ -162,13 +162,13 @@ pub struct Security {
     /// Instance-wide policy for site verification.
     #[serde(default)]
     pub site_verification: SiteVerificationPolicy,
-    /// Operator token for the admin API. When unset, admin routes return 403.
+    /// Operator token for the operator API. When unset, operator routes return 403.
     #[serde(default)]
-    pub admin_token: Option<String>,
+    pub operator_token: Option<String>,
     /// Instance operators for the Matrix chat channel (fully qualified MXIDs).
     /// Empty by default: the bot's platform commands are disabled.
     #[serde(default)]
-    pub admin_mxids: Vec<String>,
+    pub operator_mxids: Vec<String>,
     /// Allow verification of IP-literal origins in loopback/private/link-local
     /// address space. Off by default because confirm performs outbound probes.
     #[serde(default)]
@@ -616,8 +616,8 @@ mode = "logging"
         let resolved = settings.rate_limit.resolved().expect("resolved limits");
         assert_eq!(resolved.registration.requests, 10);
         assert_eq!(resolved.registration.window, Duration::from_secs(3600));
-        assert_eq!(resolved.admin.requests, 60);
-        assert_eq!(resolved.admin.window, Duration::from_secs(60));
+        assert_eq!(resolved.operator.requests, 60);
+        assert_eq!(resolved.operator.window, Duration::from_secs(60));
         assert_eq!(resolved.write.requests, 120);
     }
 

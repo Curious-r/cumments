@@ -3,8 +3,8 @@
 use super::args::{RoomsArgs, RoomsCommand};
 use super::output::{print_json, print_room_table};
 use anyhow::{Result, bail};
-use cumments_api::routes::admin::{
-    AdminListQuery, AdminPage, AdminQuarantinedRoom, admin_meta, admin_page_bounds,
+use cumments_api::routes::operator::{
+    OperatorListQuery, OperatorPage, OperatorQuarantinedRoom, operator_meta, operator_page_bounds,
 };
 use cumments_core::ports::RegistryStore;
 
@@ -17,19 +17,19 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
             if let Some(site_id) = list_args.site_id.as_deref().filter(|s| !s.is_empty()) {
                 rooms.retain(|room| room.site_id == site_id);
             }
-            let query = AdminListQuery {
+            let query = OperatorListQuery {
                 page: Some(list_args.page),
                 per_page: Some(list_args.per_page),
                 site_id: list_args.site_id.clone(),
             };
-            let (page, per_page) = admin_page_bounds(&query);
+            let (page, per_page) = operator_page_bounds(&query);
             let total = rooms.len() as i64;
             let start = ((page - 1) * per_page) as usize;
             let data = rooms
                 .into_iter()
                 .skip(start)
                 .take(per_page as usize)
-                .map(|room| AdminQuarantinedRoom {
+                .map(|room| OperatorQuarantinedRoom {
                     room_id: room.room_id,
                     site_id: room.site_id,
                     post_slug: room.post_slug,
@@ -39,9 +39,9 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
                     next_attempt_at: room.next_attempt_at,
                 })
                 .collect::<Vec<_>>();
-            let page = AdminPage {
+            let page = OperatorPage {
                 data,
-                meta: admin_meta(total, page, per_page),
+                meta: operator_meta(total, page, per_page),
             };
             if list_args.table {
                 print_room_table(&page.data);

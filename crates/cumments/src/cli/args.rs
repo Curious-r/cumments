@@ -117,7 +117,7 @@ pub struct RegisterSiteArgs {
     pub site_id: Option<String>,
 }
 
-/// Arguments for listing sites (mirrors `QUERY /api/v1/admin/sites`).
+/// Arguments for listing sites (mirrors `QUERY /api/v1/operator/sites`).
 #[derive(clap::Args, Debug)]
 pub struct SiteListArgs {
     /// Only show this site id
@@ -200,7 +200,7 @@ pub enum RoomsCommand {
 }
 
 /// Arguments for listing quarantined rooms (mirrors
-/// `QUERY /api/v1/admin/rooms/quarantined`).
+/// `QUERY /api/v1/operator/rooms/quarantined`).
 #[derive(clap::Args, Debug)]
 pub struct QuarantinedListArgs {
     /// Only show rooms for this site

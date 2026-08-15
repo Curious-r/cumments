@@ -4,9 +4,9 @@ use super::args::{ExportConfigArgs, RetireSiteArgs, SiteUserIdArg, SitesArgs, Si
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
-use cumments_api::routes::admin::{
-    AdminListQuery, AdminPage, AdminSite, admin_meta, admin_page_bounds, admin_site,
-    admin_site_from_config, config_snippet_toml,
+use cumments_api::routes::operator::{
+    OperatorListQuery, OperatorPage, OperatorSite, config_snippet_toml, operator_meta,
+    operator_page_bounds, operator_site, operator_site_from_config,
 };
 use cumments_core::governance::{CO_MANAGER_LEVEL, OWNER_LEVEL};
 use cumments_core::models::SiteId;
@@ -49,12 +49,12 @@ pub async fn handle_sites_command(
             Ok(())
         }
         SitesCommand::List(list_args) => {
-            let query = AdminListQuery {
+            let query = OperatorListQuery {
                 page: Some(list_args.page),
                 per_page: Some(list_args.per_page),
                 site_id: list_args.site_id.clone(),
             };
-            let page = list_admin_sites(store, policy, &query).await?;
+            let page = list_operator_sites(store, policy, &query).await?;
             if list_args.table {
                 print_site_table(&page.data);
             } else {
@@ -86,7 +86,7 @@ pub async fn handle_sites_command(
                 .get_site_auth(site_id.as_str())
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("site not found"))?;
-            print_json(&admin_site(&info, policy.entry(site_id.as_str())))?;
+            print_json(&operator_site(&info, policy.entry(site_id.as_str())))?;
             Ok(())
         }
         SitesCommand::RotateSecret(args) => {
@@ -309,16 +309,16 @@ async fn retire_site(
 }
 
 /// Lists managed sites, merging database rows with the `[sites]` overlay —
-/// the same view the admin API returns.
-async fn list_admin_sites(
+/// the same view the Operator API returns.
+async fn list_operator_sites(
     store: &cumments_store::DbStore,
     policy: &SiteAuthPolicy,
-    query: &AdminListQuery,
-) -> Result<AdminPage<AdminSite>> {
+    query: &OperatorListQuery,
+) -> Result<OperatorPage<OperatorSite>> {
     let db_sites = store.list_site_auth().await?;
     let mut sites = db_sites
         .iter()
-        .map(|info| admin_site(info, policy.entry(&info.site_id)))
+        .map(|info| operator_site(info, policy.entry(&info.site_id)))
         .collect::<Vec<_>>();
     let known = sites
         .iter()
@@ -326,14 +326,14 @@ async fn list_admin_sites(
         .collect::<HashSet<_>>();
     for (site_id, entry) in &policy.sites {
         if !known.contains(site_id) {
-            sites.push(admin_site_from_config(site_id, entry));
+            sites.push(operator_site_from_config(site_id, entry));
         }
     }
     sites.sort_by(|a, b| a.site_id.cmp(&b.site_id));
     if let Some(site_id) = query.site_id.as_deref().filter(|s| !s.is_empty()) {
         sites.retain(|site| site.site_id == site_id);
     }
-    let (page, per_page) = admin_page_bounds(query);
+    let (page, per_page) = operator_page_bounds(query);
     let total = sites.len() as i64;
     let start = ((page - 1) * per_page) as usize;
     let data = sites
@@ -341,9 +341,9 @@ async fn list_admin_sites(
         .skip(start)
         .take(per_page as usize)
         .collect();
-    Ok(AdminPage {
+    Ok(OperatorPage {
         data,
-        meta: admin_meta(total, page, per_page),
+        meta: operator_meta(total, page, per_page),
     })
 }
 

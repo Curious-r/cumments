@@ -57,7 +57,7 @@ pub struct EventProcessor {
     site_auth_policy: Arc<SiteAuthPolicy>,
     site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
-    admin_mxids: Vec<String>,
+    operator_mxids: Vec<String>,
     command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
     active_sites: Mutex<HashMap<String, String>>,
     backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
@@ -86,8 +86,8 @@ pub struct EventProcessorDeps {
     pub site_auth_policy: Arc<SiteAuthPolicy>,
     pub site_service: Arc<cumments_core::site_service::SiteService>,
     pub driver: Option<Arc<dyn MatrixDriver>>,
-    /// Instance operators for chat commands (from `security.admin_mxids`).
-    pub admin_mxids: Vec<String>,
+    /// Instance operators for chat commands (from `security.operator_mxids`).
+    pub operator_mxids: Vec<String>,
     /// Optional bot-triggered backfill queue (set when the binary runs a
     /// backfill worker).
     pub backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
@@ -158,7 +158,7 @@ impl EventProcessor {
             site_auth_policy: deps.site_auth_policy,
             site_service: deps.site_service,
             driver: deps.driver,
-            admin_mxids: deps.admin_mxids,
+            operator_mxids: deps.operator_mxids,
             command_rate: Mutex::new(HashMap::new()),
             active_sites: Mutex::new(HashMap::new()),
             backfill_tx: deps.backfill_tx,
@@ -405,7 +405,7 @@ impl EventProcessor {
         match tokens {
             ["help"] => Ok(CommandOutcome::plain(help_text())),
             ["sites", "list"] => {
-                self.require_admin(event)?;
+                self.require_operator(event)?;
                 let sites = cumments_core::management::list_effective_sites(
                     self.site_auth_store.as_ref(),
                     &self.site_auth_policy,
@@ -597,7 +597,7 @@ impl EventProcessor {
                 })
             }
             ["site", id, "claim-token", "rotate"] => {
-                self.require_admin(event)?;
+                self.require_operator(event)?;
                 let token = cumments_core::management::rotate_claim_token(
                     self.site_auth_store.as_ref(),
                     id,
@@ -647,7 +647,7 @@ impl EventProcessor {
                 })
             }
             ["rooms", "quarantined"] => {
-                self.require_admin(event)?;
+                self.require_operator(event)?;
                 let rooms = self.registry_store.get_quarantined_rooms().await?;
                 let reply = if rooms.is_empty() {
                     "没有隔离房间。".to_string()
@@ -668,7 +668,7 @@ impl EventProcessor {
                 self.backfill_command(event, pages).await
             }
             ["room", room_id, "reinstate"] => {
-                self.require_admin(event)?;
+                self.require_operator(event)?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
@@ -678,7 +678,7 @@ impl EventProcessor {
                 })
             }
             ["room", room_id, "reinstate", "--confirm"] => {
-                self.require_admin(event)?;
+                self.require_operator(event)?;
                 if !self.registry_store.reinstate_room(room_id).await? {
                     return Err(anyhow::anyhow!("房间不在 registry 中"));
                 }
@@ -697,7 +697,7 @@ impl EventProcessor {
         event: &ParsedRoomMessage,
         max_pages: u32,
     ) -> Result<CommandOutcome> {
-        self.require_admin(event)?;
+        self.require_operator(event)?;
         let Some(tx) = &self.backfill_tx else {
             return Ok(CommandOutcome::plain(
                 "backfill 未启用（当前进程未运行 worker）；可用 CLI：cumments backfill",
@@ -720,8 +720,8 @@ impl EventProcessor {
         }
     }
 
-    fn require_admin(&self, event: &ParsedRoomMessage) -> Result<()> {
-        if self.admin_mxids.iter().any(|m| m == &event.sender) {
+    fn require_operator(&self, event: &ParsedRoomMessage) -> Result<()> {
+        if self.operator_mxids.iter().any(|m| m == &event.sender) {
             Ok(())
         } else {
             Err(anyhow::anyhow!("denied: 此命令仅限实例管理员"))
@@ -729,7 +729,7 @@ impl EventProcessor {
     }
 
     async fn require_site_access(&self, event: &ParsedRoomMessage, site_id: &str) -> Result<()> {
-        if self.admin_mxids.iter().any(|m| m == &event.sender) {
+        if self.operator_mxids.iter().any(|m| m == &event.sender) {
             return Ok(());
         }
         let owner = self

@@ -187,7 +187,7 @@ async fn duplicate_site_registration_is_a_clean_conflict() {
 }
 
 #[tokio::test]
-async fn admin_operations_list_revoke_and_clear_secret() {
+async fn operator_operations_list_revoke_and_clear_secret() {
     let store = DbStore::connect(&test_db_url("site-auth-admin"))
         .await
         .expect("connect db");
