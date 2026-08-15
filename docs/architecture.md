@@ -238,25 +238,33 @@ cannot mint a second replacement room.
 #### Governance attribution: site-level motivation, instance-level execution
 
 The room belongs to a site and the site owner (level 100) is its highest
-governance role, so "upgrade my room" is usually a site-level request. The
-execution and authorization stay instance-level:
+governance role, so upgrading one of the site's rooms is a **site-level
+operation** with an operator mirror, exactly like retiring the site: the
+owner triggers it through the claim-token API or the bot, and the instance
+operator can act as a fallback. The reasons for the split are:
 
 - In room version 12 the caller of `/upgrade` becomes the new room's creator
   with immutable infinite power. A site owner upgrading directly would
   escalate from governance level 100 to creator power and could lock the bot
   out of the replacement room. With the bot as the caller, the bot remains
   the creator and the owner keeps level 100.
-- An upgrade mutates instance-wide invariants: the alias moves, the registry
-  switches to a single active room (the old one is superseded), the old room
-  is cleaned up, and the Space child is re-linked. This is the same class of
-  operation as quarantine/reinstate and backfill.
+- An upgrade mutates shared invariants (alias, registry single-active
+  supersede, cleanup, Space re-link); they stay inside the shared management
+  seam and the operator mirror exists for fallback, but the owner's own
+  rooms are not an adoption-trust matter like quarantine/reinstate.
 - Every upgrade mints a new room; repeated upgrades create orphaned
-  replacements and role re-invites, an instance resource cost that site
-  self-service should not be able to trigger freely.
+  replacements and role re-invites, bounded by the site owner's own scope.
 
-If site-level self-service is ever added, the bot must remain the `/upgrade`
-caller (so it stays creator) and the request path needs a separate abuse
-review.
+Implemented entry points:
+
+- Site owner: `POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
+  (claim token) and `!cumments site <id> post <slug> upgrade <version>
+  --confirm` (private DM, site-owner permission).
+- Operator mirror: `POST /api/v1/operator/rooms/{room_id}/upgrade`
+  (operator token) and `!cumments room <id> upgrade <version> --confirm`.
+
+The bot is always the `/upgrade` caller in every path, so it stays the
+replacement room's creator.
 
 #### Convergence design
 

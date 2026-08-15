@@ -152,6 +152,31 @@ pub async fn upgrade_comment_room(
     Ok(replacement)
 }
 
+/// Site-owner entry point for [`upgrade_comment_room`]: resolves the active
+/// room for `(site_id, post_slug)` from the registry, then runs the same
+/// upgrade and convergence. Shared by the claim-token API and the bot's
+/// site-level command; the operator mirror continues to take a raw room ID.
+pub async fn upgrade_site_post_room(
+    driver: &dyn MatrixDriver,
+    registry: &dyn RegistryStore,
+    site_service: &SiteService,
+    site_id: &SiteId,
+    post_slug: &PostSlug,
+    new_version: &str,
+) -> Result<String, ManagementError> {
+    let room_id = registry
+        .get_registered_room(site_id, post_slug)
+        .await?
+        .ok_or_else(|| {
+            ManagementError::RoomNotRegistered(format!(
+                "{}/{}",
+                site_id.as_str(),
+                post_slug.as_str()
+            ))
+        })?;
+    upgrade_comment_room(driver, registry, site_service, &room_id, new_version).await
+}
+
 /// A pending token-DM role claim created by [`create_role_claim`].
 #[derive(Debug, Clone)]
 pub struct PendingRoleClaim {

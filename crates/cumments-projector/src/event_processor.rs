@@ -225,6 +225,7 @@ fn help_text() -> &'static str {
 !cumments site <id> status               站点状态
 !cumments site <id> co-manager add|remove <mxid>
 !cumments site <id> post <slug> moderator add|remove <mxid>
+!cumments site <id> post <slug> upgrade <version>（站主）
 !cumments site <id> stickers list
 !cumments site <id> sticker add <pack_id> <shortcode> <mxc> [body...]
 !cumments site <id> sticker remove <pack_id> <shortcode> --confirm
@@ -601,6 +602,36 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("已移除 {id}/{slug} 的版主 {mxid}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "post", slug, "upgrade", version] => {
+                self.require_site_access(event, id).await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!(
+                        "确认升级 {id}/{slug} 到 {version}？请回复：\n!cumments site {id} post {slug} upgrade {version} --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "post", slug, "upgrade", version, "--confirm"] => {
+                self.require_site_access(event, id).await?;
+                let driver = self.require_driver()?;
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let replacement = cumments_core::management::upgrade_site_post_room(
+                    driver,
+                    self.registry_store.as_ref(),
+                    self.site_service.as_ref(),
+                    &site_id,
+                    &post_slug,
+                    version,
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("房间 {id}/{slug} 已升级到 {version}，新房间：{replacement}"),
                     site_id: Some(id.to_string()),
                 })
             }

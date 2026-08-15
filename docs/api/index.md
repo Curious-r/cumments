@@ -8,8 +8,8 @@ The endpoint reference is split by resource area:
   locations and room info.
 - [Sites](sites.md) — self-service registration, verification and HMAC
   secret issuance.
-- [Governance](governance.md) — owners, co-managers, room moderators and the
-  projected rosters.
+- [Governance](governance.md) — owners, co-managers, room moderators, room
+  upgrades and the projected rosters.
 - [Operator](operator.md) — operator-only endpoints.
 - [Media](media.md) — the public media proxy, guest uploads and site sticker
   packs.

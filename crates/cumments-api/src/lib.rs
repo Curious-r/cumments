@@ -11,6 +11,7 @@ use crate::routes::moderation::{
     add_co_manager_handler, add_owner_handler, add_room_moderator_handler,
     list_room_moderators_handler, list_site_roles_handler, remove_co_manager_handler,
     remove_owner_handler, remove_room_moderator_handler, require_claim_token, retire_site_handler,
+    upgrade_post_room_handler,
 };
 use crate::routes::operator::{
     config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
@@ -260,6 +261,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}",
             axum::routing::delete(retire_site_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}/upgrade",
+            axum::routing::post(upgrade_post_room_handler).fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

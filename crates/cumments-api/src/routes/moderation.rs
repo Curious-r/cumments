@@ -39,6 +39,19 @@ pub struct SiteRolesResponse {
     pub co_managers: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpgradePostRoomRequest {
+    pub new_version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpgradePostRoomResponse {
+    pub site_id: String,
+    pub post_slug: String,
+    pub new_version: String,
+    pub replacement_room: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RoomModeratorsResponse {
     pub room_id: String,
@@ -425,6 +438,38 @@ pub(crate) async fn retire_site_handler(
     Ok(Json(RetireSiteResponse {
         site_id: site_id.as_str().to_string(),
         status: "retiring",
+    }))
+}
+
+/// Site-owner entry point for upgrading one of the site's comment rooms.
+///
+/// The room is resolved from the registry by `(site_id, post_slug)`, so the
+/// claim token's site scope is the whole authorization boundary. The upgrade
+/// itself is executed by the AS bot (the `/upgrade` caller), keeping the bot
+/// as the replacement room's creator; the operator mirror accepts a raw
+/// room ID and lives under `/api/v1/operator/rooms/{room_id}/upgrade`.
+pub(crate) async fn upgrade_post_room_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
+    Json(body): Json<UpgradePostRoomRequest>,
+) -> Result<Json<UpgradePostRoomResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let replacement_room = cumments_core::management::upgrade_site_post_room(
+        state.driver.as_ref(),
+        state.store.as_ref(),
+        &state.site_service,
+        &site_id,
+        &post_slug,
+        &body.new_version,
+    )
+    .await
+    .map_err(map_management_error)?;
+    Ok(Json(UpgradePostRoomResponse {
+        site_id: site_id.as_str().to_string(),
+        post_slug: post_slug.as_str().to_string(),
+        new_version: body.new_version,
+        replacement_room,
     }))
 }
 

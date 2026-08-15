@@ -4,7 +4,9 @@ Site-owner operations authenticate with the claim token returned at site
 registration (`X-Cumments-Claim-Token`). Operator fallbacks with the same
 handlers live under `/api/v1/operator/sites/{site_id}/owners` and
 `/api/v1/operator/sites/{site_id}/co-managers` (operator token) — see
-[Operator API](operator.md#governance-fallback).
+[Operator API](operator.md#governance-fallback). Room upgrades follow the
+same pattern: the site-level endpoint below, plus an operator mirror in the
+Operator API.
 
 Every role registration starts as a **pending claim**: the POST response
 returns a one-time `verify_token`, and the target Matrix account must send
@@ -54,6 +56,21 @@ revoked shape.
 
 `GET /api/v1/sites/{site_id}/posts/{post_slug}/moderators` →
 `{ "room_id": "...", "moderators": [...] }`
+
+## Upgrade a comment room
+
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
+
+Body: `{"new_version": "12"}`. Upgrades the site's active comment room for
+this post through the homeserver's native `/upgrade` and converges the
+replacement: metadata is repaired, the room is re-linked into the site
+Space (the old child's `via` is cleared best-effort), site roles are
+re-invited, and the new room becomes the registry's active room (the old one
+is superseded and cleaned up). The operation is idempotent: an existing
+`m.room.tombstone` is reused. The upgrade itself is executed by the AS bot,
+so the bot remains the replacement room's creator. Only v12+ rooms are
+upgradable; the operator mirror for raw room IDs is
+`POST /api/v1/operator/rooms/{room_id}/upgrade`.
 
 Reads come from the projected read model and are eventually consistent with
 Matrix power levels.
