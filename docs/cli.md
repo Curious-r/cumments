@@ -29,6 +29,7 @@ cumments
 │   └── generate-registration [--url ...] [--server-name ...] [--output FILE]
 ├── backfill [--max-pages N]
 ├── backup --output FILE
+├── audit [--actor MXID] [--limit N]
 ├── sites
 │   ├── register [--site-id ID]
 │   ├── list [--site-id ID] [--page N] [--per-page N] [--table]
@@ -79,6 +80,13 @@ cumments rooms list-quarantined
 cumments rooms reinstate '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
 ```
 
+List the chat command audit log (newest first), optionally filtered by actor:
+
+```bash
+cumments audit
+cumments audit --actor '@alice:example.com' --limit 20
+```
+
 Rotate a site's HMAC secret (printed once) or revoke it (destructive, needs
 `--yes`):
 
@@ -106,9 +114,10 @@ cumments sites remove-owner my-blog '@alice:example.com'
 cumments sites add-co-manager my-blog '@bob:example.com'
 ```
 
-`remove-*` cancels a pending claim. A role that has already been applied is
-Matrix state, so remove it from the Space power levels in a Matrix client (or
-through the admin API) instead.
+`remove-*` cancels a pending claim; a role that has already been applied is
+removed from the Space power levels directly. In `matrix.mode = "logging"`
+there is no real homeserver, so the local claim row is updated but Matrix
+state is not actually changed.
 
 Retire a site (destructive, needs `--yes`). The command marks the site
 `retiring` — writes stop immediately — and the **running server's**

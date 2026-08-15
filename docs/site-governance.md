@@ -85,7 +85,8 @@ time (owner + co-managers, moderators start empty).
    verification token because a Matrix ID cannot be provisioned ahead of
    time and the ID must be proven to belong to the registrant.
 2. The target Matrix account sends `cumments-claim:<token>` as a direct
-   message to the AppService bot. Once the homeserver pushes that DM,
+   message to the AppService bot in a 1:1 DM (the only two members are the
+   bot and the sender). Once the homeserver pushes that DM,
    Cumments activates the claim and writes the role into Matrix power levels.
 3. Everything after that happens in a Matrix client: edit the Space's power
    levels to add/remove co-managers, and edit a comment room's power levels
@@ -103,8 +104,9 @@ normal projection brings the applied role back into the read model.
 
 Every role registration — including the first owner — starts as a **pending
 claim** with a 24-hour expiry. The claim does not affect Matrix until the
-target MXID proves ownership by DMing the exact text
-`cumments-claim:<token>` to the AppService bot.
+target MXID proves ownership by sending the exact text
+`cumments-claim:<token>` to the AppService bot in a 1:1 DM (the only two
+members are the bot and the sender).
 
 ### Claim lifecycle
 

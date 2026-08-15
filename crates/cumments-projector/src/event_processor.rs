@@ -57,7 +57,6 @@ pub struct EventProcessor {
     site_auth_policy: Arc<SiteAuthPolicy>,
     site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
-    #[allow(dead_code)] // read by the chat command router (next slice)
     admin_mxids: Vec<String>,
     command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
     active_sites: Mutex<HashMap<String, String>>,
@@ -241,7 +240,16 @@ impl EventProcessor {
         let Some(bot) = driver.sender_user_id() else {
             return Ok(false);
         };
-        let members = driver.get_joined_members(&event.room_id).await?;
+        let members = match driver.get_joined_members(&event.room_id).await {
+            Ok(members) => members,
+            Err(error) => {
+                warn!(
+                    "private channel check failed for {}: {:#}",
+                    event.room_id, error
+                );
+                return Ok(false);
+            }
+        };
         Ok(members.len() == 2
             && members.iter().any(|m| m == &event.sender)
             && members.iter().any(|m| m == &bot))

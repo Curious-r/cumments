@@ -7,8 +7,9 @@ handlers live under `/api/v1/admin/sites/{site_id}/owners` and
 [Admin API](admin.md#governance-fallback).
 
 Every role registration starts as a **pending claim**: the POST response
-returns a one-time `verify_token`, and the target Matrix account must DM
-`cumments-claim:<token>` to the AppService bot before the role is written to
+returns a one-time `verify_token`, and the target Matrix account must send
+`cumments-claim:<token>` in a 1:1 DM with the AppService bot (a room whose
+only two members are the bot and the sender) before the role is written to
 Matrix power levels. The full role model and verification flow are documented
 in [Site governance](../site-governance.md).
 
