@@ -44,8 +44,8 @@ pub enum ManagementError {
     InvalidRoomVersion(String),
     #[error("invalid post slug `{0}`")]
     InvalidPostSlug(String),
-    #[error("room {0} runs room version {1}; only v12+ rooms can be upgraded")]
-    PreV12RoomNotUpgradable(String, String),
+    #[error("target room version {1} is not newer than the current version {0}")]
+    RoomVersionNotNewer(String, String),
     #[error("room {0} has no m.room.create event")]
     RoomWithoutCreateEvent(String),
     #[error(transparent)]
@@ -71,9 +71,11 @@ pub fn is_valid_room_version(value: &str) -> bool {
 /// those writes: adoption + metadata repair, Space child re-link, old-child
 /// `via` clearing (best-effort), site-role re-invites, and registry
 /// activation (which supersedes the old room). Returns the replacement room
-/// ID. Only room version 12+ rooms are upgradable: the tombstone is locked
-/// to 150, and in pre-v12 rooms the bot (listed at 100) would not have the
-/// power to send it.
+/// ID. The target version must be newer than the current version (Matrix
+/// itself does not forbid downgrades, so this is an application policy).
+/// Pre-v12 rooms are supported when the bot holds tombstone power: new
+/// Cumments rooms grant the bot 150, while legacy pre-v12 rooms whose bot is
+/// only 100 cannot be upgraded and are an accepted breaking change.
 pub async fn upgrade_comment_room(
     driver: &dyn MatrixDriver,
     registry: &dyn RegistryStore,
@@ -99,14 +101,24 @@ pub async fn upgrade_comment_room(
         .get("room_version")
         .and_then(|v| v.as_str())
         .unwrap_or("1");
-    let major = version
+    let Some(current_major) = version
         .split(['.', '-'])
         .next()
-        .and_then(|v| v.parse::<u32>().ok());
-    if major.is_none_or(|v| v < 12) {
-        return Err(ManagementError::PreV12RoomNotUpgradable(
-            room_id.to_string(),
+        .and_then(|v| v.parse::<u32>().ok())
+    else {
+        return Err(ManagementError::InvalidRoomVersion(version.to_string()));
+    };
+    let Some(target_major) = new_version
+        .split(['.', '-'])
+        .next()
+        .and_then(|v| v.parse::<u32>().ok())
+    else {
+        return Err(ManagementError::InvalidRoomVersion(new_version.to_string()));
+    };
+    if target_major <= current_major {
+        return Err(ManagementError::RoomVersionNotNewer(
             version.to_string(),
+            new_version.to_string(),
         ));
     }
     let site_id = SiteId::new(identity.site_id.clone())

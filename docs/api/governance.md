@@ -68,8 +68,10 @@ Space (the old child's `via` is cleared best-effort), site roles are
 re-invited, and the new room becomes the registry's active room (the old one
 is superseded and cleaned up). The operation is idempotent: an existing
 `m.room.tombstone` is reused. The upgrade itself is executed by the AS bot,
-so the bot remains the replacement room's creator. Only v12+ rooms are
-upgradable; the operator mirror for raw room IDs is
+so the bot remains the replacement room's creator. Pre-v12 rooms are
+upgradable when the bot holds tombstone power (new Cumments rooms grant it
+150); the target version must be newer than the room's current version. The
+operator mirror for raw room IDs is
 `POST /api/v1/operator/rooms/{room_id}/upgrade`.
 
 Reads come from the projected read model and are eventually consistent with

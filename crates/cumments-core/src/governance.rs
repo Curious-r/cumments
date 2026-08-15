@@ -207,11 +207,17 @@ pub fn role_entries(power_levels: &Value, min_level: i64) -> Vec<RoleEntry> {
 /// Initial power levels for a site Space: the creator entry (pre-v12 rooms)
 /// plus the governance locks. `state_default` is lowered to the moderator
 /// level so site co-managers can manage Space structure, but the power-levels
-/// event stays owner-only and the tombstone stays bot-only (150).
+/// event stays owner-only and the tombstone stays bot-only (150). In
+/// pre-v12 rooms (where the bot has no implicit creator power) the sender
+/// entry is set to the tombstone lock level so the bot can later upgrade the
+/// room; v12 rooms omit the entry and rely on implicit creator power.
 pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) -> Value {
     let mut users = Map::new();
     if include_sender {
-        users.insert(sender_user_id.to_string(), Value::from(ROLE_LOCK_LEVEL));
+        users.insert(
+            sender_user_id.to_string(),
+            Value::from(TOMBSTONE_LOCK_LEVEL),
+        );
     }
     serde_json::json!({
         "users": users,
@@ -226,7 +232,8 @@ pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) ->
 /// Initial power levels for a comment room, seeded from the site Space: every
 /// site-managed entry (owner and co-managers) is replicated, per-room
 /// moderators start empty, and the power-levels event is owner-locked while
-/// the tombstone is bot-only (150).
+/// the tombstone is bot-only (150). The sender entry (pre-v12 rooms) is the
+/// tombstone lock level so the bot can upgrade the room later.
 pub fn initial_comment_room_power_levels(
     space_power_levels: &Value,
     sender_user_id: &str,
@@ -234,7 +241,10 @@ pub fn initial_comment_room_power_levels(
 ) -> Value {
     let mut users = Map::new();
     if include_sender {
-        users.insert(sender_user_id.to_string(), Value::from(ROLE_LOCK_LEVEL));
+        users.insert(
+            sender_user_id.to_string(),
+            Value::from(TOMBSTONE_LOCK_LEVEL),
+        );
     }
     for entry in role_entries(space_power_levels, SITE_ROLE_MIN_LEVEL) {
         if entry.user_id != sender_user_id {
@@ -412,7 +422,10 @@ mod tests {
         let seeded = initial_comment_room_power_levels(&space(), "@bot:hs", true);
         assert_eq!(seeded["users"]["@owner:hs"], 100);
         assert_eq!(seeded["users"]["@co:hs"], 75);
-        assert_eq!(seeded["users"]["@bot:hs"], 100);
+        assert_eq!(
+            seeded["users"]["@bot:hs"], TOMBSTONE_LOCK_LEVEL,
+            "pre-v12 rooms must give the bot tombstone power"
+        );
         assert_eq!(seeded["events"][POWER_LEVELS_EVENT_TYPE], 100);
         assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
     }

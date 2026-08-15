@@ -153,11 +153,17 @@ environment, or request v12 per room with
 `CUMMENTS__MATRIX__APPSERVICE__ROOM_VERSION: "12"` (see
 [configuration.md](configuration.md)).
 
-Existing comment rooms can be upgraded without recreating the site:
+Existing comment rooms on an older room version can be upgraded without
+recreating the site (the target version must be newer than the room's
+current version):
 
 ```bash
 docker compose exec cumments cumments rooms upgrade <room_id> 12
 ```
+
+Pre-v12 rooms work too: new Cumments rooms give the bot explicit tombstone
+power (150) so it can perform the upgrade. Legacy pre-v12 rooms whose bot is
+only 100 have no in-product upgrade path.
 
 The homeserver moves the room alias to the replacement, Cumments re-adopts
 the new room, re-links it into the site Space, re-invites site roles, and

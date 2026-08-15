@@ -295,9 +295,13 @@ blocks both 50-level moderators and 100-level site owners from sending a
 tombstone in a Matrix client, so only the room creator (the AS bot, who has
 infinite power in v12) can upgrade. A client-side upgrade by a site owner
 would otherwise make them the replacement room's creator with immutable
-infinite power, bypassing the convergence loop. Only v12+ rooms are
-upgradable through Cumments: in pre-v12 rooms the bot is listed at 100 and
-would not have the power to send the tombstone itself.
+infinite power, bypassing the convergence loop. In v12 rooms the bot's
+creator power is implicit; in pre-v12 rooms the initial power levels give
+the bot an explicit 150 entry so it can still upgrade. Legacy pre-v12 rooms
+created before this policy (where the bot is only 100) have no in-product
+upgrade path and are an accepted breaking change. The target version must
+be newer than the room's current version: Matrix itself does not forbid
+downgrades, so Cumments enforces this at the use-case level.
 
 #### Standard tracking
 

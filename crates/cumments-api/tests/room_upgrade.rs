@@ -81,7 +81,7 @@ async fn test_fixture(name: &str) -> (DbStore, TestDriver, SiteService) {
 async fn upgrade_comment_room_converges_the_replacement() {
     let (store, driver, site_service) = test_fixture("converge").await;
 
-    let replacement = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "12")
+    let replacement = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "13")
         .await
         .expect("upgrade must succeed");
     assert_eq!(replacement, "!upgraded-1:hs");
@@ -89,7 +89,7 @@ async fn upgrade_comment_room_converges_the_replacement() {
     // The native upgrade was requested with the explicit target version.
     assert_eq!(
         *driver.upgrades.lock().await,
-        vec![("!old:hs".to_string(), "12".to_string())]
+        vec![("!old:hs".to_string(), "13".to_string())]
     );
 
     // Convergence: adoption repairs metadata, the Space child is re-linked,
@@ -147,7 +147,7 @@ async fn upgrade_comment_room_reuses_an_existing_replacement() {
         json!({ "replacement_room": "!already-upgraded:hs" }),
     );
 
-    let replacement = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "12")
+    let replacement = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "13")
         .await
         .expect("idempotent upgrade must succeed");
     assert_eq!(replacement, "!already-upgraded:hs");
@@ -156,7 +156,7 @@ async fn upgrade_comment_room_reuses_an_existing_replacement() {
     // no second replacement room was minted.
     assert_eq!(
         *driver.upgrades.lock().await,
-        vec![("!old:hs".to_string(), "12".to_string())]
+        vec![("!old:hs".to_string(), "13".to_string())]
     );
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
     let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
@@ -185,7 +185,7 @@ async fn upgrade_comment_room_rejects_unknown_rooms_and_bad_versions() {
 }
 
 #[tokio::test]
-async fn upgrade_comment_room_rejects_pre_v12_rooms() {
+async fn upgrade_comment_room_supports_pre_v12_rooms() {
     let (store, driver, site_service) = test_fixture("pre-v12").await;
     driver.room_state.lock().await.insert(
         (
@@ -196,13 +196,25 @@ async fn upgrade_comment_room_rejects_pre_v12_rooms() {
         json!({ "room_version": "11" }),
     );
 
+    let replacement = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "12")
+        .await
+        .expect("pre-v12 room upgrade must succeed when the bot can tombstone");
+    assert_eq!(replacement, "!upgraded-1:hs");
+}
+
+#[tokio::test]
+async fn upgrade_comment_room_rejects_downgrade_and_same_version() {
+    let (store, driver, site_service) = test_fixture("not-newer").await;
+
+    let error = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "11")
+        .await
+        .expect_err("downgrade must be rejected");
+    assert!(matches!(error, ManagementError::RoomVersionNotNewer(_, _)));
+
     let error = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "12")
         .await
-        .expect_err("pre-v12 room must be rejected");
-    assert!(matches!(
-        error,
-        ManagementError::PreV12RoomNotUpgradable(_, _)
-    ));
+        .expect_err("same-version upgrade must be rejected");
+    assert!(matches!(error, ManagementError::RoomVersionNotNewer(_, _)));
 }
 
 #[tokio::test]
@@ -212,7 +224,7 @@ async fn upgrade_site_post_room_resolves_registry_then_upgrades() {
     let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
 
     let replacement =
-        upgrade_site_post_room(&driver, &store, &site_service, &site_id, &post_slug, "12")
+        upgrade_site_post_room(&driver, &store, &site_service, &site_id, &post_slug, "13")
             .await
             .expect("site-post upgrade must succeed");
     assert_eq!(replacement, "!upgraded-1:hs");
@@ -323,7 +335,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
             Method::POST,
             uri,
             None,
-            r#"{"new_version":"12"}"#,
+            r#"{"new_version":"13"}"#,
         ))
         .await
         .expect("call router");
@@ -334,7 +346,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
             Method::POST,
             uri,
             Some("claim"),
-            r#"{"new_version":"12"}"#,
+            r#"{"new_version":"13"}"#,
         ))
         .await
         .expect("call router");

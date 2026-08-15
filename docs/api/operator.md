@@ -98,8 +98,9 @@ repaired, the room is re-linked into its site Space (the old child's `via` is
 cleared best-effort), site roles are re-invited, and the new room becomes the
 registry's active room (the old one is superseded and cleaned up). The
 operation is idempotent: an existing `m.room.tombstone` is reused. Spaces,
-unknown rooms, non-active rooms and invalid versions are rejected with a
-`4xx` problem response. This endpoint is the operator mirror of the
+unknown rooms, non-active rooms, invalid versions and versions that are not
+newer than the room's current version are rejected with a `4xx` problem
+response. This endpoint is the operator mirror of the
 site-level `POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
 (claim token); both execute through the AS bot.
 
