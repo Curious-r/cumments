@@ -191,7 +191,7 @@
                     upload_media_failed: "媒体上传失败：",
                     stickers: "贴纸",
                     attach_file: "文件",
-                    no_stickers: "暂无预置贴纸",
+                    no_stickers: "站点暂无贴纸",
                     reaction_submitted: "已发送回应",
                     vote_submitted: "投票已提交",
                     location: "位置",
@@ -351,7 +351,7 @@
                     upload_media_failed: "Media upload failed: ",
                     stickers: "Stickers",
                     attach_file: "File",
-                    no_stickers: "No preset stickers",
+                    no_stickers: "No stickers in the site's packs",
                     reaction_submitted: "Reaction sent",
                     vote_submitted: "Vote submitted",
                     location: "Location",
@@ -1892,10 +1892,16 @@
                 const cfg = getSettings();
                 try {
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/stickers`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/stickers`,
                     );
                     if (!res.ok) return;
-                    state.stickers = await res.json();
+                    const data = await res.json();
+                    state.stickers = (data.packs || []).flatMap((pack) =>
+                        (pack.images || []).map((image) => ({
+                            ...image,
+                            alt: image.body || image.shortcode,
+                        })),
+                    );
                 } catch {
                     state.stickers = [];
                 }
@@ -1936,10 +1942,10 @@
                         state.draftMedia = {
                             url: sticker.url,
                             filename: sticker.alt,
-                            mimetype: "image/png",
-                            size: null,
-                            width: null,
-                            height: null,
+                            mimetype: sticker.info?.mimetype ?? null,
+                            size: sticker.info?.size ?? null,
+                            width: sticker.info?.w ?? null,
+                            height: sticker.info?.h ?? null,
                             voice: false,
                             kind: "sticker",
                         };
