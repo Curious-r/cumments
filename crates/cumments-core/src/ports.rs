@@ -12,6 +12,7 @@ use crate::models::{
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
 };
+use crate::sticker_packs::StickerPackProjection;
 use crate::submissions::{
     IdempotencyInput, IdempotencyOutcome, PendingDeleteSubmission, PendingPostSubmission,
     PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission, StuckUpdateSubmission,
@@ -494,6 +495,34 @@ pub trait GovernanceStore: Send + Sync {
 
     /// The projected roles of one comment room, ordered by user ID.
     async fn list_room_roles(&self, room_id: &str) -> Result<Vec<RoleEntry>>;
+}
+
+/// Port for the projected sticker-pack read model.
+///
+/// The authoritative data lives in `m.room.image_pack` state events on a
+/// site's Space; these rows are a disposable projection rebuilt by pushes
+/// and `cumments backfill`.
+#[async_trait]
+pub trait StickerPackStore: Send + Sync {
+    /// Upserts one site pack (latest state event wins per site + state key).
+    async fn save_site_pack(&self, pack: &StickerPackProjection) -> Result<()>;
+
+    /// All projected packs for one site, ordered by pack id.
+    async fn list_site_packs(&self, site_id: &str) -> Result<Vec<StickerPackProjection>>;
+
+    /// One projected pack by site and pack id (state key).
+    async fn get_site_pack(
+        &self,
+        site_id: &str,
+        state_key: &str,
+    ) -> Result<Option<StickerPackProjection>>;
+
+    /// Removes the projected pack (e.g. its state event was redacted).
+    async fn delete_site_pack(&self, site_id: &str, state_key: &str) -> Result<()>;
+
+    /// Finds the (site, pack id) projected from a given Matrix event id,
+    /// used to decide whether a redaction affects the current pack.
+    async fn find_pack_by_event_id(&self, event_id: &str) -> Result<Option<(String, String)>>;
 }
 
 /// Port for token-DM role claims: short-lived process state between role

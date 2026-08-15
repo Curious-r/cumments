@@ -15,4 +15,5 @@ pub mod projector_events;
 pub mod protocol;
 pub mod site_auth;
 pub mod site_service;
+pub mod sticker_packs;
 pub mod submissions;
