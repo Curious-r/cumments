@@ -1,4 +1,4 @@
-//! Guest media upload, preset stickers, and the public read-only media
+//! Guest media upload, site sticker packs, and the public read-only media
 //! proxy for Matrix MXC media.
 //!
 //! The read model stores `mxc://` references; browsers cannot download them
@@ -11,6 +11,7 @@ use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{IDEMPOTENT_REPLAYED, extract_idempotency_key, request_fingerprint};
 use crate::routes::comments::challenge_prefix;
+use crate::routes::moderation::rate_limited;
 use axum::{
     Json,
     body::{Body, Bytes},
@@ -21,11 +22,16 @@ use axum::{
 use cumments_core::identity::{signature_message, verify_signature};
 use cumments_core::media_upload::MediaUploadIdempotencyInput;
 use cumments_core::models::{Content, Message, PostSlug, SiteId};
-use cumments_core::site_auth::{constant_time_eq, sha256_hex};
+use cumments_core::site_auth::{constant_time_eq, is_private_ip_addr, sha256_hex};
+use cumments_core::sticker_packs::{
+    AddStickerInput, StickerPackUseCaseError, add_site_sticker, list_site_sticker_packs,
+    pack_response_shape, remove_site_sticker,
+};
 use hmac::{Hmac, KeyInit, Mac};
+use serde::Deserialize;
 use sha2::Sha256;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::StreamExt;
 use tracing::warn;
@@ -58,35 +64,38 @@ type HmacSha256 = Hmac<Sha256>;
 /// Server-side media proxy configuration.
 pub struct MediaProxy {
     homeserver_url: String,
-    server_name: String,
     as_token: String,
     /// HMAC key for signed media URLs, independent of `as_token` so AS token
     /// rotation does not invalidate outstanding proxy URLs.
     sign_key: String,
+    /// Allow fetching loopback/private/link-local media servers. Off by
+    /// default because the proxy is an SSRF surface.
+    allow_private_servers: bool,
     http_client: reqwest::Client,
 }
 
 impl MediaProxy {
     pub fn new(
         homeserver_url: String,
-        server_name: String,
         as_token: String,
         sign_key: String,
+        allow_private_servers: bool,
     ) -> anyhow::Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
         Ok(Self {
             homeserver_url,
-            server_name,
             as_token,
             sign_key,
+            allow_private_servers,
             http_client,
         })
     }
 
-    /// Converts an `mxc://server/media_id` reference into a short-lived signed
-    /// proxy URL, or `None` when the media is not served by our homeserver.
+    /// Converts an `mxc://server/media_id` reference into a short-lived
+    /// signed proxy URL. Any syntactically valid, policy-allowed server is
+    /// proxied; `None` is returned for malformed or blocked servers.
     pub fn proxify(&self, url: &str) -> Option<String> {
         self.proxify_inner(url, false)
     }
@@ -100,7 +109,13 @@ impl MediaProxy {
     fn proxify_inner(&self, url: &str, thumbnail: bool) -> Option<String> {
         let rest = url.strip_prefix("mxc://")?;
         let (server, media_id) = rest.split_once('/')?;
-        if server != self.server_name {
+        if !is_valid_media_server(server) {
+            return None;
+        }
+        if !self.allow_private_servers
+            && let Ok(ip) = server.parse::<IpAddr>()
+            && is_private_ip_addr(ip)
+        {
             return None;
         }
         let expires = now_epoch_seconds() + MEDIA_URL_TTL_SECONDS;
@@ -141,7 +156,13 @@ impl MediaProxy {
 
     /// Verifies an HMAC-signed media URL without revealing the token.
     pub fn verify(&self, server: &str, media_id: &str, expires: i64, signature: &str) -> bool {
-        if server != self.server_name {
+        if !is_valid_media_server(server) || media_id.is_empty() || media_id.contains('/') {
+            return false;
+        }
+        if !self.allow_private_servers
+            && let Ok(ip) = server.parse::<IpAddr>()
+            && is_private_ip_addr(ip)
+        {
             return false;
         }
         let now = now_epoch_seconds();
@@ -159,6 +180,28 @@ impl MediaProxy {
         media_id: &str,
         thumbnail: bool,
     ) -> anyhow::Result<reqwest::Response> {
+        if !is_valid_media_server(server) || media_id.is_empty() || media_id.contains('/') {
+            anyhow::bail!("invalid mxc server/media id in media proxy request");
+        }
+        if !self.allow_private_servers {
+            if let Ok(ip) = server.parse::<IpAddr>() {
+                if is_private_ip_addr(ip) {
+                    anyhow::bail!("media proxy refuses private server {server}");
+                }
+            } else {
+                let resolver = hickory_resolver::TokioResolver::builder_tokio()
+                    .and_then(|builder| builder.build())
+                    .map_err(|e| anyhow::anyhow!("failed to initialize DNS resolver: {e}"))?;
+                let lookup = resolver.lookup_ip(server.to_string()).await.map_err(|e| {
+                    anyhow::anyhow!("failed to resolve media server `{server}`: {e}")
+                })?;
+                if lookup.iter().any(is_private_ip_addr) {
+                    anyhow::bail!(
+                        "media proxy refuses server {server}: resolves to a private address"
+                    );
+                }
+            }
+        }
         let path = if thumbnail {
             format!("_matrix/media/v3/thumbnail/{server}/{media_id}?width=320&height=320")
         } else {
@@ -183,6 +226,26 @@ impl MediaProxy {
         mac.update(expires.to_string().as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
+}
+
+/// Whether a Matrix server name is syntactically acceptable for media
+/// proxying: an IP literal or a DNS hostname.
+fn is_valid_media_server(server: &str) -> bool {
+    if server.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    if server.is_empty() || server.len() > 253 || server.starts_with('.') || server.ends_with('.') {
+        return false;
+    }
+    server.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
 }
 
 fn media_upload_response(
@@ -412,25 +475,119 @@ pub(crate) async fn upload_media_handler(
     }
 }
 
-/// Lists preset stickers guests may reference in sticker messages.
+/// Lists a site's projected sticker packs for guests.
 pub(crate) async fn list_stickers_handler(
     State(state): State<ApiState>,
-    Path(_): Path<(String, String)>,
-) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let stickers = state
-        .preset_stickers
+    Path(site_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let packs = list_site_sticker_packs(state.store.as_ref(), site_id.as_str())
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list sticker packs: {e}")))?;
+    let packs = packs
         .iter()
-        .map(|url| {
-            let proxy_url = state
-                .media_proxy
-                .as_ref()
-                .and_then(|proxy| proxy.proxify(url))
-                .unwrap_or_else(|| url.clone());
-            let alt = url.rsplit('/').next().unwrap_or(url).to_string();
-            serde_json::json!({ "url": url, "proxy_url": proxy_url, "alt": alt })
+        .map(|projection| {
+            pack_response_shape(&projection.pack, |url| {
+                state
+                    .media_proxy
+                    .as_ref()
+                    .and_then(|proxy| proxy.proxify(url))
+            })
         })
-        .collect();
-    Ok(Json(stickers))
+        .collect::<Vec<_>>();
+    Ok(Json(serde_json::json!({ "packs": packs })))
+}
+
+/// Body of `POST .../packs/{pack_id}/stickers`.
+#[derive(Debug, Deserialize)]
+pub struct AddStickerRequest {
+    pub shortcode: String,
+    pub url: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub info: Option<serde_json::Value>,
+}
+
+/// Adds or replaces one sticker image in a site's pack (site governance,
+/// claim-token authenticated; operator fallback uses the same handler).
+pub(crate) async fn add_site_sticker_handler(
+    State(state): State<ApiState>,
+    Path((site_id, pack_id)): Path<(String, String)>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<AddStickerRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    rate_limited(&state, &headers, Some(connect.0))?;
+    let projection = add_site_sticker(
+        state.store.as_ref(),
+        state.driver.as_ref(),
+        AddStickerInput {
+            site_id: &site_id,
+            pack_id: &pack_id,
+            shortcode: &req.shortcode,
+            url: &req.url,
+            body: req.body,
+            info: req.info,
+        },
+    )
+    .await
+    .map_err(map_sticker_use_case_error)?;
+    Ok(Json(pack_response_shape(&projection.pack, |url| {
+        state
+            .media_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.proxify(url))
+    })))
+}
+
+/// Removes one sticker image from a site's pack.
+pub(crate) async fn remove_site_sticker_handler(
+    State(state): State<ApiState>,
+    Path((site_id, pack_id)): Path<(String, String)>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    rate_limited(&state, &headers, Some(connect.0))?;
+    let shortcode = query
+        .get("shortcode")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("shortcode query parameter is required".to_string()))?;
+    let projection = remove_site_sticker(
+        state.store.as_ref(),
+        state.driver.as_ref(),
+        &site_id,
+        &pack_id,
+        &shortcode,
+    )
+    .await
+    .map_err(map_sticker_use_case_error)?;
+    Ok(Json(pack_response_shape(&projection.pack, |url| {
+        state
+            .media_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.proxify(url))
+    })))
+}
+
+fn map_sticker_use_case_error(error: StickerPackUseCaseError) -> AppError {
+    match error {
+        StickerPackUseCaseError::Invalid(message) => AppError::BadRequest(message.to_string()),
+        StickerPackUseCaseError::SiteNotFound(site_id) => {
+            AppError::NotFound(format!("site {site_id} not found"))
+        }
+        StickerPackUseCaseError::SiteWithoutSpace(site_id) => {
+            AppError::NotFound(format!("site {site_id} has no Matrix Space"))
+        }
+        StickerPackUseCaseError::PackNotFound(pack_id) => {
+            AppError::NotFound(format!("sticker pack {pack_id} not found"))
+        }
+        StickerPackUseCaseError::Other(error) => {
+            AppError::Internal(format!("sticker pack operation failed: {error}"))
+        }
+    }
 }
 
 /// Serves one media file to a public reader.
@@ -569,9 +726,9 @@ mod tests {
     fn proxy() -> MediaProxy {
         MediaProxy::new(
             "http://hs".to_string(),
-            "hs".to_string(),
             "token".to_string(),
             "sign-key".to_string(),
+            false,
         )
         .expect("build proxy")
     }
@@ -598,9 +755,36 @@ mod tests {
     }
 
     #[test]
-    fn proxify_rejects_foreign_servers() {
+    fn proxify_serves_foreign_servers() {
         let p = proxy();
-        assert!(p.proxify("mxc://other/abc").is_none());
+        let url = p.proxify("mxc://other/abc").expect("foreign proxify");
+        assert!(url.starts_with("/api/v1/media/other/abc?expires="));
+        let params = query_params(&url);
+        let expires: i64 = params["expires"].parse().expect("expires");
+        assert!(
+            p.verify("other", "abc", expires, &params["sig"]),
+            "foreign-server URLs must verify"
+        );
+    }
+
+    #[test]
+    fn proxify_rejects_private_and_malformed_servers() {
+        let p = proxy();
+        assert!(p.proxify("mxc://127.0.0.1/abc").is_none());
+        assert!(p.proxify("mxc://10.0.0.1/abc").is_none());
+        assert!(p.proxify("mxc://::1/abc").is_none());
+        assert!(p.proxify("mxc://bad server/abc").is_none());
+        assert!(p.proxify("mxc://-bad/abc").is_none());
+        assert!(p.proxify("mxc://bad-/abc").is_none());
+
+        let open = MediaProxy::new(
+            "http://hs".to_string(),
+            "token".to_string(),
+            "sign-key".to_string(),
+            true,
+        )
+        .expect("build open proxy");
+        assert!(open.proxify("mxc://127.0.0.1/abc").is_some());
     }
 
     #[test]
@@ -610,7 +794,10 @@ mod tests {
         let expires: i64 = params["expires"].parse().expect("expires");
         assert!(!p.verify("hs", "abc", expires, "deadbeef"));
         assert!(!p.verify("hs", "abc", expires - 1000, &params["sig"]));
+        // The signature covers the server, so a URL minted for another
+        // server cannot be replayed against it.
         assert!(!p.verify("other", "abc", expires, &params["sig"]));
+        assert!(!p.verify("hs", "abc", expires, "not-a-signature"));
     }
 
     #[test]

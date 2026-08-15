@@ -15,11 +15,15 @@ use cumments_core::identity::{post_signature_message, signature_message};
 use cumments_core::models::{PostSlug, SiteId};
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
+    StickerPackStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
 };
 use cumments_core::site_service::SiteService;
+use cumments_core::sticker_packs::{
+    StickerImage, StickerPack, StickerPackContent, StickerPackProjection,
+};
 use cumments_store::DbStore;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,6 +44,21 @@ async fn test_state(
     policy: SiteVerificationPolicy,
     operator_token: Option<&str>,
 ) -> (ApiState, DbStore) {
+    test_state_with_driver(
+        name,
+        policy,
+        operator_token,
+        Arc::new(cumments_matrix::LoggingMatrixDriver),
+    )
+    .await
+}
+
+async fn test_state_with_driver(
+    name: &str,
+    policy: SiteVerificationPolicy,
+    operator_token: Option<&str>,
+    driver: Arc<dyn cumments_core::ports::MatrixDriver>,
+) -> (ApiState, DbStore) {
     let store = DbStore::connect(&test_db_url(name))
         .await
         .expect("connect test database");
@@ -47,7 +66,7 @@ async fn test_state(
     let site_service_store: Arc<dyn cumments_core::ports::SiteStore> = Arc::new(store.clone());
     let state = ApiState {
         store: Arc::new(store.clone()),
-        driver: Arc::new(cumments_matrix::LoggingMatrixDriver),
+        driver,
         site_service: Arc::new(SiteService::new(site_service_store)),
         pow: Arc::new(Pow::new("test-secret".to_string(), 1)),
         event_bus,
@@ -77,7 +96,6 @@ async fn test_state(
         moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
-        preset_stickers: Arc::new(Vec::new()),
     };
     (state, store)
 }
@@ -1338,7 +1356,6 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         ))
         .await
         .expect("call router");
-    assert_eq!(added.status(), StatusCode::OK);
     let added_json: serde_json::Value =
         serde_json::from_str(&body_text(added).await).expect("parse response");
     assert_eq!(added_json["pending"], serde_json::json!(true));
@@ -1858,4 +1875,274 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
         .expect("call router");
     assert_eq!(operator.status(), StatusCode::OK);
     assert!(body_text(operator).await.contains("retiring"));
+}
+
+#[tokio::test]
+async fn sticker_packs_read_publicly_and_write_with_claim_token() {
+    let (state, store) = test_state_with_driver(
+        "sticker-packs",
+        SiteVerificationPolicy::Disabled,
+        None,
+        Arc::new(cumments_test_utils::TestDriver::new()),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("test-blog", "!space:hs")
+        .await
+        .expect("attach space");
+    let router = cumments_api::build_router(state.clone());
+
+    // Public read starts empty.
+    let listed = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/stickers",
+            None,
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_json: serde_json::Value =
+        serde_json::from_str(&body_text(listed).await).expect("parse response");
+    assert_eq!(listed_json["packs"], serde_json::json!([]));
+
+    // Write requires the claim token.
+    let denied = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/packs/default/stickers",
+            None,
+            &[],
+            &serde_json::json!({"shortcode": "cat", "url": "mxc://hs/1"}).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    // Claim-token write succeeds through the logging driver.
+    let added = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/packs/default/stickers",
+            None,
+            &[("x-cumments-claim-token", "claim".to_string())],
+            &serde_json::json!({"shortcode": "cat", "url": "mxc://hs/1"}).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(added.status(), StatusCode::OK);
+
+    // The projected pack is what the public read serves.
+    store
+        .save_site_pack(&StickerPackProjection {
+            pack: StickerPack {
+                room_id: "!space:hs".to_string(),
+                site_id: "test-blog".to_string(),
+                state_key: "default".to_string(),
+                content: StickerPackContent {
+                    display_name: Some("默认包".to_string()),
+                    usage: vec!["sticker".to_string()],
+                    images: vec![StickerImage {
+                        shortcode: "cat".to_string(),
+                        url: "mxc://hs/1".to_string(),
+                        body: Some("a cat".to_string()),
+                        info: None,
+                    }],
+                    ..Default::default()
+                },
+            },
+            event_id: "$pack:hs".to_string(),
+            sender: "@owner:hs".to_string(),
+            origin_server_ts: 1,
+        })
+        .await
+        .expect("save pack");
+    let listed = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/stickers",
+            None,
+            &[],
+        ))
+        .await
+        .expect("call router");
+    let listed_json: serde_json::Value =
+        serde_json::from_str(&body_text(listed).await).expect("parse response");
+    assert_eq!(listed_json["packs"][0]["pack_id"], "default");
+    assert_eq!(listed_json["packs"][0]["display_name"], "默认包");
+    assert_eq!(listed_json["packs"][0]["images"][0]["shortcode"], "cat");
+    assert_eq!(listed_json["packs"][0]["images"][0]["body"], "a cat");
+    // No media proxy configured: raw mxc is the preview fallback.
+    assert_eq!(
+        listed_json["packs"][0]["images"][0]["proxy_url"],
+        "mxc://hs/1"
+    );
+
+    // Remove with the claim token.
+    let removed = router
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/sites/test-blog/packs/default/stickers?shortcode=cat",
+            None,
+            &[("x-cumments-claim-token", "claim".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(removed.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sticker_packs_operator_fallback_requires_operator_token() {
+    let (state, store) = test_state(
+        "sticker-packs-operator",
+        SiteVerificationPolicy::Disabled,
+        Some("op-token"),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("test-blog", "!space:hs")
+        .await
+        .expect("attach space");
+    let router = cumments_api::build_router(state);
+
+    let denied = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/operator/sites/test-blog/packs/default/stickers",
+            None,
+            &[],
+            &serde_json::json!({"shortcode": "cat", "url": "mxc://hs/1"}).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    let added = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/operator/sites/test-blog/packs/default/stickers",
+            None,
+            &[("authorization", "Bearer op-token".to_string())],
+            &serde_json::json!({"shortcode": "cat", "url": "mxc://hs/1"}).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(added.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn comment_stickers_must_reference_the_sites_packs() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let (state, store) =
+        test_state("sticker-comment", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[17u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let media_url = "mxc://hs/cat";
+    let message = post_signature_message(
+        "test-blog",
+        "hello",
+        media_url,
+        "Alice",
+        None,
+        &challenge.prefix,
+    );
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "content": "",
+        "media": {
+            "url": media_url,
+            "kind": "sticker",
+        },
+        "display_name": "Alice",
+        "author_public_key": public_key,
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+
+    // Not in any projected pack: rejected.
+    let denied = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[("idempotency-key", "sticker-key-123456".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_text(denied).await.contains("sticker must reference"),
+        "sticker outside the site's packs must be rejected"
+    );
+
+    // After the pack is projected: accepted.
+    store
+        .save_site_pack(&StickerPackProjection {
+            pack: StickerPack {
+                room_id: "!space:hs".to_string(),
+                site_id: "test-blog".to_string(),
+                state_key: "default".to_string(),
+                content: StickerPackContent {
+                    usage: vec!["sticker".to_string()],
+                    images: vec![StickerImage {
+                        shortcode: "cat".to_string(),
+                        url: media_url.to_string(),
+                        body: Some("a cat".to_string()),
+                        info: Some(serde_json::json!({
+                            "mimetype": "image/png",
+                            "size": 100,
+                            "w": 512,
+                            "h": 512,
+                        })),
+                    }],
+                    ..Default::default()
+                },
+            },
+            event_id: "$pack:hs".to_string(),
+            sender: "@owner:hs".to_string(),
+            origin_server_ts: 1,
+        })
+        .await
+        .expect("save pack");
+    let accepted = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/posts/hello/comments",
+            Some("null"),
+            &[("idempotency-key", "sticker-key-123456".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
 }

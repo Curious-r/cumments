@@ -215,7 +215,7 @@ mod tests {
             operator_token: None,
             operator_mxids: vec![],
             allow_private_verification_origins: false,
-            preset_stickers: Vec::new(),
+            media_proxy_allow_private_servers: false,
             media_sign_key: None,
         };
 
@@ -261,7 +261,7 @@ mod tests {
             operator_token: None,
             operator_mxids: vec![],
             allow_private_verification_origins: false,
-            preset_stickers: Vec::new(),
+            media_proxy_allow_private_servers: false,
             media_sign_key: None,
         };
 
@@ -300,7 +300,7 @@ mod tests {
             operator_token: None,
             operator_mxids: vec![],
             allow_private_verification_origins: false,
-            preset_stickers: Vec::new(),
+            media_proxy_allow_private_servers: false,
             media_sign_key: None,
         };
 
@@ -358,7 +358,7 @@ mod tests {
             operator_token: None,
             operator_mxids: vec![],
             allow_private_verification_origins: false,
-            preset_stickers: Vec::new(),
+            media_proxy_allow_private_servers: false,
             media_sign_key: None,
         };
         assert!(
@@ -396,7 +396,7 @@ mod tests {
                 "@_cumments_bot:example.org".to_string(),
             ],
             allow_private_verification_origins: false,
-            preset_stickers: Vec::new(),
+            media_proxy_allow_private_servers: false,
             media_sign_key: None,
         };
         assert!(
@@ -411,7 +411,7 @@ mod tests {
             operator_token: None,
             operator_mxids: vec!["@operator:example.org".to_string()],
             allow_private_verification_origins: false,
-            preset_stickers: Vec::new(),
+            media_proxy_allow_private_servers: false,
             media_sign_key: None,
         };
         assert_eq!(

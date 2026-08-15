@@ -173,16 +173,15 @@ pub struct Security {
     /// address space. Off by default because confirm performs outbound probes.
     #[serde(default)]
     pub allow_private_verification_origins: bool,
-    /// Preset sticker MXC URIs guests may reference in sticker messages.
-    /// Stickers are served by the homeserver; Cumments only validates the
-    /// reference.
-    #[serde(default)]
-    pub preset_stickers: Vec<String>,
     /// Independent HMAC key for signed media-proxy URLs. When unset the
     /// AppService token is used, so rotating the AS token invalidates
     /// outstanding media URLs; production deployments should set this.
     #[serde(default)]
     pub media_sign_key: Option<String>,
+    /// Allow the media proxy to fetch loopback/private/link-local targets.
+    /// Off by default because proxying is an SSRF surface.
+    #[serde(default)]
+    pub media_proxy_allow_private_servers: bool,
 }
 
 /// Operator-declared trust for one site.

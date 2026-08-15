@@ -423,9 +423,9 @@ async fn main() -> Result<()> {
         Arc::new(
             cumments_api::routes::media::MediaProxy::new(
                 runtime.homeserver_url.clone(),
-                runtime.server_name.clone(),
                 runtime.as_token.clone(),
                 media_sign_key,
+                settings.security.media_proxy_allow_private_servers,
             )
             .expect("build media proxy"),
         )
@@ -483,7 +483,6 @@ async fn main() -> Result<()> {
         )),
         ephemeral_bus: ephemeral_bus.clone(),
         ephemeral_state: Some(ephemeral_state),
-        preset_stickers: Arc::new(settings.security.preset_stickers.clone()),
     };
     let api_router = cumments_api::build_router(api_state);
 

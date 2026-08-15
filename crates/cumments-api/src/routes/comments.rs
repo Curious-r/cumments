@@ -264,7 +264,7 @@ pub(crate) async fn post_comment_handler(
     }
 
     let idempotency_key = extract_idempotency_key(&headers)?;
-    let req: PostCommentRequest = serde_json::from_str(&body)
+    let mut req: PostCommentRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let fingerprint = request_fingerprint(
         "POST",
@@ -293,7 +293,7 @@ pub(crate) async fn post_comment_handler(
     {
         return Err(AppError::BadRequest(msg.to_string()));
     }
-    if let Some(media) = &req.media {
+    if let Some(media) = req.media.as_mut() {
         if !media.url.starts_with("mxc://") || media.url.len() > 512 {
             return Err(AppError::BadRequest(
                 "media.url must be a valid mxc:// URI.".to_string(),
@@ -306,17 +306,47 @@ pub(crate) async fn post_comment_handler(
                 "media metadata is invalid.".to_string(),
             ));
         }
-        if media.kind == Some(MediaKind::Sticker) && !state.preset_stickers.contains(&media.url) {
-            return Err(AppError::BadRequest(
-                "sticker must reference a preset sticker".to_string(),
-            ));
-        }
-        if media.kind != Some(MediaKind::Sticker)
-            && !state
-                .store
-                .media_upload_owned_by(&media.url, &req.author_public_key, &site_id, &post_slug)
-                .await
-                .map_err(|e| AppError::Internal(format!("failed to verify media ownership: {e}")))?
+        if media.kind == Some(MediaKind::Sticker) {
+            // Stickers must come from the site's projected packs; the server
+            // fills the metadata from the pack so guests cannot forge it.
+            let packs =
+                state.store.list_site_packs(&site_id).await.map_err(|e| {
+                    AppError::Internal(format!("failed to load sticker packs: {e}"))
+                })?;
+            let Some(image) = packs
+                .iter()
+                .flat_map(|pack| &pack.pack.content.images)
+                .find(|image| image.url == media.url)
+            else {
+                return Err(AppError::BadRequest(
+                    "sticker must reference an image from the site's sticker packs".to_string(),
+                ));
+            };
+            media.filename = Some(
+                image
+                    .body
+                    .clone()
+                    .unwrap_or_else(|| image.shortcode.clone()),
+            );
+            if let Some(info) = &image.info {
+                if let Some(mimetype) = info.get("mimetype").and_then(|v| v.as_str()) {
+                    media.mimetype = Some(mimetype.to_string());
+                }
+                if let Some(size) = info.get("size").and_then(|v| v.as_u64()) {
+                    media.size = Some(size);
+                }
+                if let Some(width) = info.get("w").and_then(|v| v.as_u64()) {
+                    media.width = u32::try_from(width).ok();
+                }
+                if let Some(height) = info.get("h").and_then(|v| v.as_u64()) {
+                    media.height = u32::try_from(height).ok();
+                }
+            }
+        } else if !state
+            .store
+            .media_upload_owned_by(&media.url, &req.author_public_key, &site_id, &post_slug)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to verify media ownership: {e}")))?
         {
             return Err(AppError::BadRequest(
                 "media must reference an upload made by this author for this site and post"

@@ -130,7 +130,7 @@ fn user_id_from_query(query: &HashMap<String, String>) -> Result<String, AppErro
         .ok_or_else(|| AppError::BadRequest("user_id query parameter is required".to_string()))
 }
 
-fn rate_limited(
+pub(crate) fn rate_limited(
     state: &ApiState,
     headers: &HeaderMap,
     addr: Option<SocketAddr>,

@@ -916,6 +916,7 @@ dependencies = [
  "cumments-core",
  "cumments-matrix",
  "cumments-store",
+ "cumments-test-utils",
  "ed25519-dalek",
  "hex",
  "hickory-resolver",

@@ -3,7 +3,8 @@ use crate::routes::comments::{
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::media::{
-    MEDIA_MAX_BYTES, MediaProxy, list_stickers_handler, media_handler, upload_media_handler,
+    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, list_stickers_handler, media_handler,
+    remove_site_sticker_handler, upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::moderation::{
@@ -139,8 +140,6 @@ pub struct ApiState {
     pub ephemeral_bus: broadcast::Sender<EphemeralEvent>,
     /// Shared typing state for SSE snapshots, when ephemeral sync is enabled.
     pub ephemeral_state: Option<Arc<EphemeralState>>,
-    /// Preset sticker MXC URIs guests may reference.
-    pub preset_stickers: Arc<Vec<String>>,
 }
 
 /// Builds the Axum router for the API.
@@ -202,7 +201,7 @@ pub fn build_router(state: ApiState) -> Router {
             get(room_info_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/stickers",
+            "/api/v1/sites/{site_id}/stickers",
             get(list_stickers_handler).fallback(method_not_allowed_handler),
         )
         .route(
@@ -254,6 +253,10 @@ pub fn build_router(state: ApiState) -> Router {
             post(add_room_moderator_handler).delete(remove_room_moderator_handler),
         )
         .route(
+            "/api/v1/sites/{site_id}/packs/{pack_id}/stickers",
+            post(add_site_sticker_handler).delete(remove_site_sticker_handler),
+        )
+        .route(
             "/api/v1/sites/{site_id}",
             axum::routing::delete(retire_site_handler),
         )
@@ -303,6 +306,12 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/v1/operator/sites/{site_id}/co-managers",
             axum::routing::post(add_co_manager_handler)
                 .delete(remove_co_manager_handler)
+                .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers",
+            axum::routing::post(add_site_sticker_handler)
+                .delete(remove_site_sticker_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
