@@ -208,7 +208,8 @@ Security model:
   comment.
 - Commands are partitioned by the caller's role. Instance operators
   (`security.operator_mxids`) may list sites, rotate claim tokens, list
-  quarantined rooms, reinstate rooms and trigger backfill. Site owners may
+  quarantined rooms, reinstate rooms, upgrade comment rooms and trigger
+  backfill. Site owners may
   register/retire their own sites, manage co-managers and moderators, issue
   secrets, and switch the active site; public self-service (`site register`,
   `site use`, `site status`) needs no operator configuration.
@@ -307,10 +308,16 @@ the backup command.
 - `m.space.child` events only refresh rooms already known to the local
   registry; unknown rooms linked through a Space are picked up by the
   reconciler or `backfill` instead of being auto-registered.
-- Room upgrades are not actively processed: `m.room.tombstone` is stored but
-  not acted on. After an upgrade, the new room converges through alias
-  recovery and the superseded-room cleanup; image-pack handling across room
-  upgrades (MSC4433) is not implemented.
+- Comment-room upgrades are supported through the homeserver's native
+  `/upgrade`: `cumments rooms upgrade <room_id> <version>`, the Operator API
+  (`POST /api/v1/operator/rooms/{room_id}/upgrade`), or the bot
+  (`!cumments room <room_id> upgrade <version> --confirm`). The replacement
+  room is adopted (metadata repaired), re-linked into the site Space, site
+  roles are re-invited, and the old room is superseded and cleaned up. Site
+  Space upgrades are not supported: MSC4168 (updating `m.space.*` references
+  across rooms) is still open, and a Space upgrade would require re-linking
+  every child room plus copying sticker-pack state. Image-pack handling
+  across room upgrades (MSC4433) is not implemented.
 - State resolution is approximated with latest-wins on
   `(origin_server_ts, event_id)`. This is fine on a single homeserver but is
   not a full DAG/mainline state resolution, so forked or federated rooms may

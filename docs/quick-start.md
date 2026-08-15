@@ -153,6 +153,18 @@ environment, or request v12 per room with
 `CUMMENTS__MATRIX__APPSERVICE__ROOM_VERSION: "12"` (see
 [configuration.md](configuration.md)).
 
+Existing comment rooms can be upgraded without recreating the site:
+
+```bash
+docker compose exec cumments cumments rooms upgrade <room_id> 12
+```
+
+The homeserver moves the room alias to the replacement, Cumments re-adopts
+the new room, re-links it into the site Space, re-invites site roles, and
+supersedes the old room. The same operation is available to operators through
+`!cumments room <room_id> upgrade <version> --confirm` and
+`POST /api/v1/operator/rooms/{room_id}/upgrade`.
+
 ## Troubleshooting
 
 - **Compose refuses to start**: the `./registration.yaml` bind mount does not
