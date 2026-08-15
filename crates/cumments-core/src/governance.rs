@@ -272,6 +272,39 @@ pub fn ensure_role_lock(power_levels: &Value) -> Value {
     updated
 }
 
+/// Whether `user_id` may send `event_type` under the given power levels.
+///
+/// Mirrors the spec: `events[event_type]` overrides; state events otherwise
+/// use `state_default` (default 50); a user's level is `users[user_id]` else
+/// `users_default` (default 0). Membership events and redactions are not
+/// covered here (they have their own thresholds).
+pub fn can_send_state_event(power_levels: &Value, user_id: &str, event_type: &str) -> bool {
+    let object = power_levels.as_object();
+    let threshold = object
+        .and_then(|o| o.get("events"))
+        .and_then(Value::as_object)
+        .and_then(|events| events.get(event_type))
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            object
+                .and_then(|o| o.get("state_default"))
+                .and_then(Value::as_i64)
+        })
+        .unwrap_or(MODERATOR_LEVEL);
+    let level = object
+        .and_then(|o| o.get("users"))
+        .and_then(Value::as_object)
+        .and_then(|users| users.get(user_id))
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            object
+                .and_then(|o| o.get("users_default"))
+                .and_then(Value::as_i64)
+        })
+        .unwrap_or(0);
+    level >= threshold
+}
+
 /// Adds (or raises) one user to the given level.
 pub fn with_user_level(power_levels: &Value, user_id: &str, level: i64) -> Value {
     let mut updated = power_levels.clone();
@@ -401,5 +434,53 @@ mod tests {
         ));
         assert!(!is_as_managed_user("@owner:hs"));
         assert!(!is_as_managed_user("not-an-mxid"));
+    }
+
+    #[test]
+    fn can_send_state_event_follows_spec_thresholds() {
+        let pl = json!({
+            "users": { "@owner:hs": 100, "@co:hs": 75, "@guest:hs": 0 },
+            "events": { POWER_LEVELS_EVENT_TYPE: 100 },
+            "state_default": 50,
+            "users_default": 0,
+        });
+        assert!(can_send_state_event(
+            &pl,
+            "@owner:hs",
+            POWER_LEVELS_EVENT_TYPE
+        ));
+        assert!(!can_send_state_event(
+            &pl,
+            "@co:hs",
+            POWER_LEVELS_EVENT_TYPE
+        ));
+        // Stickers use state_default unless overridden.
+        assert!(can_send_state_event(&pl, "@co:hs", "m.room.image_pack"));
+        assert!(!can_send_state_event(&pl, "@guest:hs", "m.room.image_pack"));
+        // users_default supplies unlisted users.
+        assert!(!can_send_state_event(
+            &pl,
+            "@stranger:hs",
+            "m.room.image_pack"
+        ));
+        let open = json!({ "users_default": 50 });
+        assert!(can_send_state_event(
+            &open,
+            "@stranger:hs",
+            "m.room.image_pack"
+        ));
+        // Above-owner levels can send governance too.
+        let elevated = json!({ "users": { "@admin:hs": 150 } });
+        assert!(can_send_state_event(
+            &elevated,
+            "@admin:hs",
+            POWER_LEVELS_EVENT_TYPE
+        ));
+        // Missing PL content falls back to state_default 50 / users_default 0.
+        assert!(!can_send_state_event(
+            &json!({}),
+            "@anyone:hs",
+            "m.room.image_pack"
+        ));
     }
 }

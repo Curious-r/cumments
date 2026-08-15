@@ -98,6 +98,24 @@ impl SiteService {
         Ok(space_id)
     }
 
+    /// Returns the site's Matrix Space room ID without provisioning one.
+    /// `None` means the site has no Space yet.
+    pub async fn space_id(&self, site_id: &SiteId) -> Result<Option<String>> {
+        let site_id_str = site_id.as_str();
+        if let Some(space_id) = self.cache.read().await.get(site_id_str).cloned() {
+            return Ok(Some(space_id));
+        }
+        if let Some(site) = self.store.get_site(site_id).await?
+            && !site.matrix_space_id.is_empty()
+        {
+            let space_id = site.matrix_space_id;
+            self.cache_put(site_id_str.to_string(), space_id.clone())
+                .await;
+            return Ok(Some(space_id));
+        }
+        Ok(None)
+    }
+
     async fn cache_put(&self, key: String, value: String) {
         let mut cache = self.cache.write().await;
         if cache.len() >= MAX_CACHE_ENTRIES {
