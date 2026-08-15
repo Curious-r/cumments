@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cumments-core", "crates/cumments-store", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-matrix", "crates/cumments-projector"]
+members = ["crates/cumments-core", "crates/cumments-store", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-matrix", "crates/cumments-projector", "crates/cumments-test-utils"]
 
 [workspace.package]
 version = "0.23.3"
@@ -18,6 +18,7 @@ cumments-api = { path = "crates/cumments-api" }
 cumments-reconciler = { path = "crates/cumments-reconciler" }
 cumments-matrix = { path = "crates/cumments-matrix" }
 cumments-projector = { path = "crates/cumments-projector" }
+cumments-test-utils = { path = "crates/cumments-test-utils" }
 
 # External dependencies
 anyhow = "1.0.100"

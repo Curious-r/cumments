@@ -995,6 +995,7 @@ dependencies = [
  "chrono",
  "cumments-core",
  "cumments-store",
+ "cumments-test-utils",
  "ed25519-dalek",
  "reqwest",
  "serde",
@@ -1013,6 +1014,7 @@ dependencies = [
  "chrono",
  "cumments-core",
  "cumments-store",
+ "cumments-test-utils",
  "serde_json",
  "tokio",
  "tracing",
@@ -1031,6 +1033,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cumments-test-utils"
+version = "0.23.3"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "cumments-core",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

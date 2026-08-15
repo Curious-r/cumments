@@ -25,3 +25,4 @@ base64.workspace = true
 bytes.workspace = true
 ed25519-dalek.workspace = true
 cumments-store.workspace = true
+cumments-test-utils.workspace = true
