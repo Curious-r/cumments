@@ -9,10 +9,11 @@ use crate::governance::{
 };
 use crate::models::SiteId;
 use crate::ports::{GovernanceStore, MatrixDriver, RoleClaimStore, SiteAuthStore};
-use crate::site_auth::{generate_token, token_hash};
+use crate::site_auth::{SiteAuthPolicy, generate_token, token_hash};
 use crate::site_service::SiteService;
 use anyhow::{Result, anyhow, bail};
 use chrono::{Duration, Utc};
+use std::collections::HashSet;
 
 /// How long an unverified role claim stays valid.
 pub const ROLE_CLAIM_TTL_HOURS: i64 = 24;
@@ -184,4 +185,41 @@ pub async fn issue_secret(store: &dyn SiteAuthStore, site_id: &str) -> Result<Op
     let secret = generate_token();
     store.store_site_secret(site_id, &secret).await?;
     Ok(Some(secret))
+}
+
+/// One site in the effective list: database-tracked or operator-declared in
+/// the `[sites]` configuration overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveSite {
+    pub site_id: String,
+    pub from_config: bool,
+}
+
+/// Enumerates the effective sites: database rows merged with config-only
+/// overlay entries, sorted by site id. This is the single source of truth
+/// for "which sites exist" used by CLI, API and the bot.
+pub async fn list_effective_sites(
+    store: &dyn SiteAuthStore,
+    policy: &SiteAuthPolicy,
+) -> Result<Vec<EffectiveSite>> {
+    let mut sites: Vec<EffectiveSite> = store
+        .list_site_auth()
+        .await?
+        .into_iter()
+        .map(|site| EffectiveSite {
+            site_id: site.site_id,
+            from_config: false,
+        })
+        .collect();
+    let known: HashSet<String> = sites.iter().map(|site| site.site_id.clone()).collect();
+    for site_id in policy.sites.keys() {
+        if !known.contains(site_id) {
+            sites.push(EffectiveSite {
+                site_id: site_id.clone(),
+                from_config: true,
+            });
+        }
+    }
+    sites.sort_by(|a, b| a.site_id.cmp(&b.site_id));
+    Ok(sites)
 }

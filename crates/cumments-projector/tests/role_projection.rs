@@ -88,6 +88,10 @@ async fn power_levels_project_site_and_room_roles() {
         submission_store: store.clone(),
         audit_store: store.clone(),
         site_auth_store: store.clone(),
+        site_auth_policy: std::sync::Arc::new(cumments_core::site_auth::SiteAuthPolicy {
+            verification: cumments_core::site_auth::SiteVerificationPolicy::Optional,
+            sites: Default::default(),
+        }),
         site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
         )),
@@ -186,6 +190,10 @@ async fn claim_dm_activates_only_the_matching_token() {
         submission_store: store.clone(),
         audit_store: store.clone(),
         site_auth_store: store.clone(),
+        site_auth_policy: std::sync::Arc::new(cumments_core::site_auth::SiteAuthPolicy {
+            verification: cumments_core::site_auth::SiteVerificationPolicy::Optional,
+            sites: Default::default(),
+        }),
         site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
         )),
@@ -295,6 +303,10 @@ async fn claim_dm_requires_a_verified_private_channel() {
         submission_store: store.clone(),
         audit_store: store.clone(),
         site_auth_store: store.clone(),
+        site_auth_policy: std::sync::Arc::new(cumments_core::site_auth::SiteAuthPolicy {
+            verification: cumments_core::site_auth::SiteVerificationPolicy::Optional,
+            sites: Default::default(),
+        }),
         site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
         )),

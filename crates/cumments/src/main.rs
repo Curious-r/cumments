@@ -271,6 +271,7 @@ async fn main() -> Result<()> {
             submission_store: db_store.clone(),
             audit_store: db_store.clone(),
             site_auth_store: db_store.clone(),
+            site_auth_policy: site_auth_policy.clone(),
             site_service: site_service.clone(),
             driver: Some(driver.clone()),
             admin_mxids: admin_mxids.clone(),

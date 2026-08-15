@@ -3,7 +3,10 @@ use cumments_core::{
     governance::{OWNER_LEVEL, RoleEntry},
     models::{Content, TextContent, TextStyle},
     ports::{CommandAuditStore, GovernanceStore, RoleClaimStore, SiteAuthStore},
-    site_auth::{SiteLifecycle, token_hash},
+    site_auth::{
+        SiteAuthMode, SiteAuthPolicy, SiteLifecycle, SitePolicyEntry, SiteVerificationPolicy,
+        token_hash,
+    },
 };
 use cumments_projector::{
     event_processor::{EventProcessor, EventProcessorDeps},
@@ -55,7 +58,7 @@ fn processor(
     members: Vec<String>,
     admin_mxids: Vec<String>,
 ) -> EventProcessor {
-    processor_with(store, members, admin_mxids, None)
+    processor_with(store, members, admin_mxids, None, common::test_policy())
 }
 
 fn processor_with(
@@ -63,6 +66,23 @@ fn processor_with(
     members: Vec<String>,
     admin_mxids: Vec<String>,
     backfill_tx: Option<tokio::sync::mpsc::Sender<cumments_projector::backfill::BackfillRequest>>,
+    policy: std::sync::Arc<cumments_core::site_auth::SiteAuthPolicy>,
+) -> EventProcessor {
+    processor_with_driver(
+        store,
+        Arc::new(common::TestDriver::with_joined_members(members)),
+        admin_mxids,
+        backfill_tx,
+        policy,
+    )
+}
+
+fn processor_with_driver(
+    store: Arc<DbStore>,
+    driver: Arc<common::TestDriver>,
+    admin_mxids: Vec<String>,
+    backfill_tx: Option<tokio::sync::mpsc::Sender<cumments_projector::backfill::BackfillRequest>>,
+    policy: std::sync::Arc<cumments_core::site_auth::SiteAuthPolicy>,
 ) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
     EventProcessor::new(EventProcessorDeps {
@@ -75,10 +95,11 @@ fn processor_with(
         submission_store: store.clone(),
         audit_store: store.clone(),
         site_auth_store: store.clone(),
+        site_auth_policy: policy,
         site_service: Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as Arc<dyn cumments_core::ports::SiteStore>
         )),
-        driver: Some(Arc::new(common::TestDriver::with_joined_members(members))),
+        driver: Some(driver),
         admin_mxids,
         backfill_tx,
         event_bus: tx,
@@ -308,6 +329,7 @@ async fn backfill_queues_for_admin_and_rejects_busy() {
         private_members("@admin:hs"),
         vec!["@admin:hs".to_string()],
         Some(tx.clone()),
+        common::test_policy(),
     );
     assert!(
         p.process_bot_command(&command_message("@admin:hs", "!cumments backfill 10",))
@@ -335,6 +357,7 @@ async fn backfill_queues_for_admin_and_rejects_busy() {
         private_members("@mallory:hs"),
         Vec::new(),
         Some(tx),
+        common::test_policy(),
     );
     assert!(
         denied
@@ -342,4 +365,51 @@ async fn backfill_queues_for_admin_and_rejects_busy() {
             .await
             .expect("process")
     );
+}
+
+#[tokio::test]
+async fn admin_sites_list_includes_config_only_sites() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("config-sites"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    let policy = Arc::new(SiteAuthPolicy {
+        verification: SiteVerificationPolicy::Optional,
+        sites: [(
+            "config-blog".to_string(),
+            SitePolicyEntry {
+                auth_mode: Some(SiteAuthMode::Origin),
+                allowed_origins: Vec::new(),
+                secret: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    });
+    let driver = Arc::new(common::TestDriver::with_joined_members(private_members(
+        "@admin:hs",
+    )));
+    let p = processor_with_driver(
+        store,
+        driver.clone(),
+        vec!["@admin:hs".to_string()],
+        None,
+        policy,
+    );
+    assert!(
+        p.process_bot_command(&command_message("@admin:hs", "!cumments sites list"))
+            .await
+            .expect("process")
+    );
+    let replies = driver.replies.lock().await;
+    let reply = replies
+        .iter()
+        .find(|(_, body)| body.contains("my-blog"))
+        .expect("list reply");
+    assert!(reply.1.contains("config-blog（配置）"));
 }

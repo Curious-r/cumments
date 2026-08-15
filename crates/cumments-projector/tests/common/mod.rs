@@ -12,6 +12,15 @@ pub struct TestDriver {
     pub replies: Mutex<Vec<(String, String)>>,
 }
 
+// Shared test support: not every test binary uses every helper.
+#[allow(dead_code)]
+pub fn test_policy() -> std::sync::Arc<cumments_core::site_auth::SiteAuthPolicy> {
+    std::sync::Arc::new(cumments_core::site_auth::SiteAuthPolicy {
+        verification: cumments_core::site_auth::SiteVerificationPolicy::Optional,
+        sites: Default::default(),
+    })
+}
+
 impl TestDriver {
     pub fn with_joined_members(members: Vec<String>) -> Self {
         Self {

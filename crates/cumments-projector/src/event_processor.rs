@@ -31,7 +31,9 @@ use cumments_core::{
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
-    site_auth::{constant_time_eq, generate_token, sha256_hex, token_hash},
+    site_auth::{
+        SiteAuthMode, SiteAuthPolicy, constant_time_eq, generate_token, sha256_hex, token_hash,
+    },
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -52,6 +54,7 @@ pub struct EventProcessor {
     submission_store: Arc<dyn SubmissionStore>,
     audit_store: Arc<dyn CommandAuditStore>,
     site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
+    site_auth_policy: Arc<SiteAuthPolicy>,
     site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
     #[allow(dead_code)] // read by the chat command router (next slice)
@@ -79,6 +82,8 @@ pub struct EventProcessorDeps {
     pub submission_store: Arc<dyn SubmissionStore>,
     pub audit_store: Arc<dyn CommandAuditStore>,
     pub site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
+    /// Operator-declared site overlay, so bot commands see config-only sites.
+    pub site_auth_policy: Arc<SiteAuthPolicy>,
     pub site_service: Arc<cumments_core::site_service::SiteService>,
     pub driver: Option<Arc<dyn MatrixDriver>>,
     /// Instance operators for chat commands (from `security.admin_mxids`).
@@ -147,6 +152,7 @@ impl EventProcessor {
             submission_store: deps.submission_store,
             audit_store: deps.audit_store,
             site_auth_store: deps.site_auth_store,
+            site_auth_policy: deps.site_auth_policy,
             site_service: deps.site_service,
             driver: deps.driver,
             admin_mxids: deps.admin_mxids,
@@ -387,13 +393,23 @@ impl EventProcessor {
             ["help"] => Ok(CommandOutcome::plain(help_text())),
             ["sites", "list"] => {
                 self.require_admin(event)?;
-                let sites = self.site_auth_store.list_site_auth().await?;
+                let sites = cumments_core::management::list_effective_sites(
+                    self.site_auth_store.as_ref(),
+                    &self.site_auth_policy,
+                )
+                .await?;
                 let reply = if sites.is_empty() {
                     "没有站点。".to_string()
                 } else {
                     sites
                         .iter()
-                        .map(|s| s.site_id.clone())
+                        .map(|s| {
+                            if s.from_config {
+                                format!("{}（配置）", s.site_id)
+                            } else {
+                                s.site_id.clone()
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
@@ -738,11 +754,15 @@ impl EventProcessor {
     }
 
     async fn site_status(&self, site_id: &str) -> Result<String> {
-        let auth = self
-            .site_auth_store
-            .get_site_auth(site_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
+        let Some(auth) = self.site_auth_store.get_site_auth(site_id).await? else {
+            if let Some(entry) = self.site_auth_policy.entry(site_id) {
+                return Ok(format!(
+                    "站点 {site_id}\n来源: 配置声明\n认证: {}\n聊天命令只管理 API 注册站点",
+                    entry.auth_mode.unwrap_or(SiteAuthMode::Origin).as_str()
+                ));
+            }
+            return Err(anyhow!("站点不存在"));
+        };
         let roles = self.governance_store.list_site_roles(site_id).await?;
         let owners = roles
             .iter()

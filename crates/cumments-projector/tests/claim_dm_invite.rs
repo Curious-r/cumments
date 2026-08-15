@@ -47,6 +47,10 @@ fn processor(store: Arc<DbStore>, driver: Arc<TestDriver>) -> EventProcessor {
         submission_store: store.clone(),
         audit_store: store.clone(),
         site_auth_store: store.clone(),
+        site_auth_policy: std::sync::Arc::new(cumments_core::site_auth::SiteAuthPolicy {
+            verification: cumments_core::site_auth::SiteVerificationPolicy::Optional,
+            sites: Default::default(),
+        }),
         site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
         )),

@@ -24,7 +24,6 @@ use cumments_core::site_auth::{
     constant_time_eq, generate_token, token_hash,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -161,23 +160,32 @@ pub(crate) async fn list_admin_sites_handler(
     }
     let query = parse_admin_list_query(&body)?;
 
-    let db_sites = state
-        .store
-        .list_site_auth()
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to list sites: {e}")))?;
+    let effective = cumments_core::management::list_effective_sites(
+        state.store.as_ref(),
+        &state.site_auth_policy,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("failed to list sites: {e}")))?;
 
-    let mut sites = db_sites
-        .iter()
-        .map(|info| admin_site(info, state.site_auth_policy.entry(&info.site_id)))
-        .collect::<Vec<_>>();
-    let known = sites
-        .iter()
-        .map(|site| site.site_id.clone())
-        .collect::<HashSet<_>>();
-    for (site_id, entry) in &state.site_auth_policy.sites {
-        if !known.contains(site_id) {
-            sites.push(admin_site_from_config(site_id, entry));
+    let mut sites = Vec::with_capacity(effective.len());
+    for site in effective {
+        if site.from_config {
+            let config = state
+                .site_auth_policy
+                .entry(&site.site_id)
+                .expect("effective config site has an entry");
+            sites.push(admin_site_from_config(&site.site_id, config));
+        } else {
+            let info = state
+                .store
+                .get_site_auth(&site.site_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to load site: {e}")))?
+                .ok_or_else(|| AppError::NotFound("site not found".to_string()))?;
+            sites.push(admin_site(
+                &info,
+                state.site_auth_policy.entry(&site.site_id),
+            ));
         }
     }
     sites.sort_by(|a, b| a.site_id.cmp(&b.site_id));
