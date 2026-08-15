@@ -210,16 +210,20 @@ impl MatrixDriver for TestDriver {
     }
     async fn get_room_power_levels(
         &self,
-        _room_id: &str,
+        room_id: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
-        unimplemented!("not used in this test")
+        Ok(self.power_levels.lock().await.get(room_id).cloned())
     }
     async fn set_room_power_levels(
         &self,
-        _room_id: &str,
-        _content: &serde_json::Value,
+        room_id: &str,
+        content: &serde_json::Value,
     ) -> anyhow::Result<()> {
-        unimplemented!("not used in this test")
+        self.power_levels
+            .lock()
+            .await
+            .insert(room_id.to_string(), content.clone());
+        Ok(())
     }
 
     async fn get_room_state(

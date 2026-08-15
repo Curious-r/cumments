@@ -26,6 +26,7 @@ pub struct TestDriver {
     pub room_metadata: Mutex<HashMap<String, serde_json::Value>>,
     pub room_state: Mutex<HashMap<(String, String, String), serde_json::Value>>,
     pub state_writes: Mutex<Vec<(String, String, String)>>,
+    pub power_levels: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl TestDriver {
@@ -42,6 +43,7 @@ impl TestDriver {
             room_metadata: Mutex::new(HashMap::new()),
             room_state: Mutex::new(HashMap::new()),
             state_writes: Mutex::new(Vec::new()),
+            power_levels: Mutex::new(HashMap::new()),
         }
     }
 
@@ -90,6 +92,15 @@ impl TestDriver {
             (room_id.into(), event_type.into(), state_key.into()),
             content,
         );
+        self
+    }
+
+    pub fn with_power_levels(
+        mut self,
+        room_id: impl Into<String>,
+        content: serde_json::Value,
+    ) -> Self {
+        self.power_levels.get_mut().insert(room_id.into(), content);
         self
     }
 }

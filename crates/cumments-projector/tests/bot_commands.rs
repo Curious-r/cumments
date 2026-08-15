@@ -2,7 +2,7 @@ use cumments_core::{
     audit::CommandAuditStatus,
     governance::{OWNER_LEVEL, RoleEntry},
     models::{Content, TextContent, TextStyle},
-    ports::{CommandAuditStore, GovernanceStore, RoleClaimStore, SiteAuthStore},
+    ports::{CommandAuditStore, GovernanceStore, RoleClaimStore, SiteAuthStore, SiteStore},
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, SiteLifecycle, SitePolicyEntry, SiteVerificationPolicy,
         token_hash,
@@ -197,8 +197,28 @@ async fn owner_can_create_co_manager_claim_and_retire_with_confirm() {
         )
         .await
         .expect("project owner");
+    store
+        .ensure_site_exists("my-blog", "!space:hs")
+        .await
+        .expect("attach space");
 
-    let p = processor(store.clone(), private_members("@alice:hs"), Vec::new());
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@alice:hs")).with_power_levels(
+            "!space:hs",
+            serde_json::json!({
+                "users": { "@alice:hs": 100 },
+                "events": { "m.room.power_levels": 100 },
+                "state_default": 50,
+            }),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver,
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
@@ -408,4 +428,189 @@ async fn operator_sites_list_includes_config_only_sites() {
         .find(|(_, body)| body.contains("my-blog"))
         .expect("list reply");
     assert!(reply.1.contains("config-blog（配置）"));
+}
+
+fn power_levels(users: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "users": users,
+        "events": { "m.room.power_levels": 100 },
+        "state_default": 50,
+    })
+}
+
+async fn sticker_site(store: &DbStore) {
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("my-blog", "!space:hs")
+        .await
+        .expect("attach space");
+}
+
+#[tokio::test]
+async fn co_manager_can_manage_stickers_but_not_governance() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("co-manager-stickers"))
+            .await
+            .expect("connect db"),
+    );
+    sticker_site(&store).await;
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@bob:hs")).with_power_levels(
+            "!space:hs",
+            power_levels(serde_json::json!({
+                "@alice:hs": 100,
+                "@bob:hs": 75,
+            })),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+
+    // Co-managers may manage stickers (state_default 50 < 75)...
+    assert!(
+        p.process_bot_command(&command_message(
+            "@bob:hs",
+            "!cumments site my-blog sticker add default cat mxc://hs/1",
+        ))
+        .await
+        .expect("process")
+    );
+    let writes = driver.state_writes.lock().await;
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].2, "default");
+    drop(writes);
+
+    // ...but not governance (the power-levels event is locked at 100).
+    assert!(
+        p.process_bot_command(&command_message(
+            "@bob:hs",
+            "!cumments site my-blog co-manager add @carol:hs",
+        ))
+        .await
+        .expect("process")
+    );
+    let audit = store
+        .list_command_audit(Some("@bob:hs"), 10)
+        .await
+        .expect("audit");
+    assert_eq!(audit[0].status, CommandAuditStatus::Denied);
+}
+
+#[tokio::test]
+async fn sticker_remove_requires_confirm_and_executes() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("sticker-remove"))
+            .await
+            .expect("connect db"),
+    );
+    sticker_site(&store).await;
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@alice:hs")).with_power_levels(
+            "!space:hs",
+            power_levels(serde_json::json!({ "@alice:hs": 100 })),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog sticker add default cat mxc://hs/1",
+        ))
+        .await
+        .expect("add")
+    );
+    assert_eq!(driver.state_writes.lock().await.len(), 1);
+
+    // Without --confirm nothing is written.
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog sticker remove default cat",
+        ))
+        .await
+        .expect("remove prompt")
+    );
+    assert_eq!(
+        driver.state_writes.lock().await.len(),
+        1,
+        "remove must wait for confirmation"
+    );
+
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog sticker remove default cat --confirm",
+        ))
+        .await
+        .expect("remove confirmed")
+    );
+    assert_eq!(driver.state_writes.lock().await.len(), 2);
+    let state = driver
+        .room_state
+        .lock()
+        .await
+        .get(&(
+            "!space:hs".to_string(),
+            "m.room.image_pack".to_string(),
+            "default".to_string(),
+        ))
+        .cloned()
+        .expect("pack state");
+    assert!(
+        state["images"]
+            .as_object()
+            .is_some_and(|images| images.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn stranger_cannot_manage_stickers() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("stranger-stickers"))
+            .await
+            .expect("connect db"),
+    );
+    sticker_site(&store).await;
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@eve:hs")).with_power_levels(
+            "!space:hs",
+            power_levels(serde_json::json!({ "@alice:hs": 100 })),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver,
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+
+    assert!(
+        p.process_bot_command(&command_message(
+            "@eve:hs",
+            "!cumments site my-blog sticker add default cat mxc://hs/1",
+        ))
+        .await
+        .expect("process")
+    );
+    let audit = store
+        .list_command_audit(Some("@eve:hs"), 10)
+        .await
+        .expect("audit");
+    assert_eq!(audit[0].status, CommandAuditStatus::Denied);
 }

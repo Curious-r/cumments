@@ -17,7 +17,7 @@ use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
         CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry,
-        is_as_managed_user, role_entries,
+        can_send_state_event, is_as_managed_user, role_entries,
     },
     identity::{post_signature_message, signature_message},
     models::{
@@ -34,7 +34,10 @@ use cumments_core::{
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, constant_time_eq, generate_token, sha256_hex, token_hash,
     },
-    sticker_packs::{IMAGE_PACK_EVENT_TYPE, StickerPackProjection, parse_image_pack_content},
+    sticker_packs::{
+        AddStickerInput, IMAGE_PACK_EVENT_TYPE, StickerPackProjection, StickerPackUseCaseError,
+        add_site_sticker, list_site_sticker_packs, parse_image_pack_content, remove_site_sticker,
+    },
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -100,7 +103,9 @@ pub struct EventProcessorDeps {
 /// commands. Kept separate from projection so `EventProcessor` only routes.
 pub struct BotCommandRouter {
     registry_store: Arc<dyn RegistryStore>,
+    site_store: Arc<dyn SiteStore>,
     governance_store: Arc<dyn GovernanceStore>,
+    sticker_pack_store: Arc<dyn StickerPackStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     audit_store: Arc<dyn CommandAuditStore>,
     site_auth_store: Arc<dyn cumments_core::ports::SiteAuthStore>,
@@ -118,7 +123,9 @@ impl BotCommandRouter {
     pub fn new(deps: &EventProcessorDeps) -> Self {
         Self {
             registry_store: deps.registry_store.clone(),
+            site_store: deps.site_store.clone(),
             governance_store: deps.governance_store.clone(),
+            sticker_pack_store: deps.sticker_pack_store.clone(),
             role_claim_store: deps.role_claim_store.clone(),
             audit_store: deps.audit_store.clone(),
             site_auth_store: deps.site_auth_store.clone(),
@@ -196,6 +203,12 @@ impl From<cumments_core::management::ManagementError> for CommandError {
     }
 }
 
+impl From<StickerPackUseCaseError> for CommandError {
+    fn from(error: StickerPackUseCaseError) -> Self {
+        Self::error(error)
+    }
+}
+
 impl From<anyhow::Error> for CommandError {
     fn from(error: anyhow::Error) -> Self {
         Self::error(error.to_string())
@@ -211,6 +224,9 @@ fn help_text() -> &'static str {
 !cumments site <id> status               站点状态
 !cumments site <id> co-manager add|remove <mxid>
 !cumments site <id> post <slug> moderator add|remove <mxid>
+!cumments site <id> stickers list
+!cumments site <id> sticker add <pack_id> <shortcode> <mxc> [body...]
+!cumments site <id> sticker remove <pack_id> <shortcode> --confirm
 !cumments site <id> secret issue
 !cumments site <id> claim-token rotate    （实例管理员）
 !cumments site <id> retire --confirm
@@ -586,6 +602,120 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
+            ["site", id, "stickers", "list"] => {
+                self.require_site_sticker_access(event, id).await?;
+                let packs = list_site_sticker_packs(self.sticker_pack_store.as_ref(), id).await?;
+                let reply = if packs.is_empty() {
+                    "没有贴纸包。".to_string()
+                } else {
+                    packs
+                        .iter()
+                        .map(|projection| {
+                            let pack = &projection.pack;
+                            let images = pack
+                                .content
+                                .images
+                                .iter()
+                                .map(|image| format!("{}={}", image.shortcode, image.url))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            if images.is_empty() {
+                                format!("{}（空）", pack.state_key)
+                            } else {
+                                format!("{}: {}", pack.state_key, images)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply,
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "sticker", "add", pack_id, shortcode, url] => {
+                self.require_site_sticker_access(event, id).await?;
+                let driver = self.require_driver()?;
+                add_site_sticker(
+                    self.site_store.as_ref(),
+                    driver,
+                    AddStickerInput {
+                        site_id: id,
+                        pack_id,
+                        shortcode,
+                        url,
+                        body: None,
+                        info: None,
+                    },
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("已添加贴纸 {shortcode} 到包 {pack_id}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            [
+                "site",
+                id,
+                "sticker",
+                "add",
+                pack_id,
+                shortcode,
+                url,
+                body @ ..,
+            ] => {
+                self.require_site_sticker_access(event, id).await?;
+                let driver = self.require_driver()?;
+                add_site_sticker(
+                    self.site_store.as_ref(),
+                    driver,
+                    AddStickerInput {
+                        site_id: id,
+                        pack_id,
+                        shortcode,
+                        url,
+                        body: Some(body.join(" ")),
+                        info: None,
+                    },
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("已添加贴纸 {shortcode} 到包 {pack_id}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "sticker", "remove", pack_id, shortcode] => {
+                self.require_site_sticker_access(event, id).await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!(
+                        "确认从包 {pack_id} 移除贴纸 {shortcode}？请回复：\n!cumments site {id} sticker remove {pack_id} {shortcode} --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            [
+                "site",
+                id,
+                "sticker",
+                "remove",
+                pack_id,
+                shortcode,
+                "--confirm",
+            ] => {
+                self.require_site_sticker_access(event, id).await?;
+                let driver = self.require_driver()?;
+                remove_site_sticker(self.site_store.as_ref(), driver, id, pack_id, shortcode)
+                    .await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("已从包 {pack_id} 移除贴纸 {shortcode}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
             ["site", id, "claim-token", "rotate"] => {
                 self.require_operator(event)?;
                 let token = cumments_core::management::rotate_claim_token(
@@ -726,16 +856,58 @@ impl BotCommandRouter {
         if self.operator_mxids.iter().any(|m| m == &event.sender) {
             return Ok(());
         }
-        let owner = self
-            .governance_store
-            .list_site_roles(site_id)
-            .await?
-            .iter()
-            .any(|role| role.level == OWNER_LEVEL && role.user_id == event.sender);
-        if owner {
+        self.require_state_permission(event, site_id, POWER_LEVELS_EVENT_TYPE)
+            .await?;
+        Ok(())
+    }
+
+    /// Sticker-pack management follows the Matrix permission for writing
+    /// `m.room.image_pack` state in the site Space (state_default by
+    /// default), so co-managers are allowed exactly like in a Matrix client.
+    async fn require_site_sticker_access(
+        &self,
+        event: &ParsedRoomMessage,
+        site_id: &str,
+    ) -> Result<(), CommandError> {
+        if self.operator_mxids.iter().any(|m| m == &event.sender) {
+            return Ok(());
+        }
+        self.require_state_permission(event, site_id, IMAGE_PACK_EVENT_TYPE)
+            .await?;
+        Ok(())
+    }
+
+    async fn require_state_permission(
+        &self,
+        event: &ParsedRoomMessage,
+        site_id: &str,
+        event_type: &str,
+    ) -> Result<(), CommandError> {
+        let site_id = SiteId::new(site_id.to_string()).map_err(CommandError::error)?;
+        let Some(space_id) = self
+            .site_service
+            .space_id(&site_id)
+            .await
+            .map_err(CommandError::error)?
+        else {
+            return Err(CommandError::denied(format!(
+                "站点 {} 还没有 Matrix Space",
+                site_id.as_str()
+            )));
+        };
+        let driver = self.require_driver()?;
+        let power_levels = driver
+            .get_room_power_levels(&space_id)
+            .await
+            .map_err(CommandError::error)?
+            .unwrap_or_else(|| serde_json::json!({}));
+        if can_send_state_event(&power_levels, &event.sender, event_type) {
             Ok(())
         } else {
-            Err(CommandError::denied(format!("你不是站点 {site_id} 的站主")))
+            Err(CommandError::denied(format!(
+                "你没有权限在站点 {} 执行此操作",
+                site_id.as_str()
+            )))
         }
     }
 
