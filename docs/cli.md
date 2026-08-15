@@ -83,7 +83,8 @@ cumments rooms list-quarantined
 cumments rooms reinstate '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
 ```
 
-Upgrade a comment room to room version 12:
+Upgrade a comment room (the target version must be newer than the room's
+current version, e.g. upgrading a v11 room to 12):
 
 ```bash
 cumments rooms upgrade '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE' 12

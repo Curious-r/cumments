@@ -228,12 +228,17 @@ finishes.
 ### Room upgrades
 
 Comment rooms can be upgraded to a new room version through the homeserver's
-native `/upgrade`. The operation is available to instance operators only:
-`cumments rooms upgrade ROOM_ID VERSION`, `POST /api/v1/operator/rooms/{room_id}/upgrade`,
-or `!cumments room ROOM_ID upgrade VERSION --confirm` in a private DM. The
-driver is idempotent: an existing `m.room.tombstone` is reused, and a failed
-request re-reads the tombstone before reporting an error, so a lost response
-cannot mint a second replacement room.
+native `/upgrade`. The primary path is site-level (the site owner decides to
+upgrade their own room) with an operator mirror as fallback: site owners use
+`POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade` (claim token) or
+`!cumments site <id> post <slug> upgrade <version> --confirm`; operators use
+`cumments rooms upgrade ROOM_ID VERSION`,
+`POST /api/v1/operator/rooms/{room_id}/upgrade`, or
+`!cumments room ROOM_ID upgrade VERSION --confirm` in a private DM. The
+target version must be newer than the room's current version. The driver is
+idempotent: an existing `m.room.tombstone` is reused, and a failed request
+re-reads the tombstone before reporting an error, so a lost response cannot
+mint a second replacement room.
 
 #### Governance attribution: site-level motivation, instance-level execution
 

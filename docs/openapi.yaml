@@ -573,6 +573,42 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/operator/rooms/{room_id}/upgrade:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    post:
+      tags: [Operator]
+      summary: Upgrade a comment room (operator)
+      operationId: operatorUpgradeRoom
+      description: |
+        Operator mirror of the site-level upgrade endpoint: upgrades a
+        registered active comment room and converges the replacement. The
+        target version must be newer than the room's current version; the
+        upgrade is executed by the AS bot, which stays the replacement
+        room's creator.
+      security:
+        - operatorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpgradeRoomRequest"
+      responses:
+        "200":
+          description: Replacement room converged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeRoomResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/v1/media/{server}/{media_id}:
     parameters:
       - name: server
@@ -1034,6 +1070,45 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/posts/{post_slug}/upgrade:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    post:
+      tags: [Governance]
+      summary: Upgrade a comment room
+      operationId: upgradePostRoom
+      description: |
+        Upgrades the site's active comment room for this post through the
+        homeserver's native `/upgrade` and converges the replacement:
+        metadata is repaired, the room is re-linked into the site Space,
+        site roles are re-invited, and the old room is superseded. The
+        target version must be newer than the room's current version; the
+        upgrade is executed by the AS bot, which stays the replacement
+        room's creator.
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpgradeRoomRequest"
+      responses:
+        "200":
+          description: Replacement room converged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradePostRoomResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/v1/sites/{site_id}/owners:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1786,6 +1861,35 @@ components:
         status:
           type: string
           enum: [retiring]
+    UpgradeRoomRequest:
+      type: object
+      required: [new_version]
+      properties:
+        new_version:
+          type: string
+          description: Target Matrix room version; must be newer than the room's current version.
+    UpgradePostRoomResponse:
+      type: object
+      required: [site_id, post_slug, new_version, replacement_room]
+      properties:
+        site_id:
+          type: string
+        post_slug:
+          type: string
+        new_version:
+          type: string
+        replacement_room:
+          type: string
+    UpgradeRoomResponse:
+      type: object
+      required: [room_id, new_version, replacement_room]
+      properties:
+        room_id:
+          type: string
+        new_version:
+          type: string
+        replacement_room:
+          type: string
     StartVerificationRequest:
       type: object
       required: [origins, methods]
