@@ -173,7 +173,9 @@ supersedes the old room. The same operation is available to operators through
 themselves with `!cumments site <site_id> post <post_slug> upgrade <version>
 --confirm` or `POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
 (claim token). Every path executes the upgrade as the bot, which stays the
-new room's creator.
+new room's creator. Because several surrounding standards are still open
+(MSC4168/MSC4433), the current behavior includes a few documented
+compromises — see [Architecture](architecture.md#room-upgrades).
 
 ## Troubleshooting
 

@@ -292,6 +292,37 @@ use case owns these writes:
   supersedes the old room; the room-cleanup pass then retires the old room's
   AS-managed memberships.
 
+#### Current compromises
+
+Room upgrade is built on a stable endpoint (`/upgrade`), but several
+surrounding mechanisms are still open proposals. Until they mature, the
+implementation carries these documented compromises:
+
+- **Manual Space-graph repair.** MSC4168 (open) would have homeservers copy
+  and update `m.space.*` references across rooms; tuwunel only copies state
+  into the new room. Cumments therefore re-links the Space child and
+  best-effort clears the old child's `via` itself.
+- **No Space upgrades.** Upgrading a site Space would orphan every child
+  room's `m.space.parent`, lose sticker packs (image-pack state is not in
+  the recommended transfer list), and leave the `sites` mapping ambiguous
+  for backfill. While MSC4168/MSC4433 are open, only comment rooms are
+  upgradable.
+- **No image-pack migration.** MSC4433 (open) is not implemented; it is a
+  non-issue for comment rooms because packs live in the site Space, and
+  Space upgrades are out of scope for now.
+- **Target-newer check is ours.** The spec allows upgrading to any supported
+  version, including older ones; Cumments rejects targets that are not
+  newer so the operation stays an actual upgrade.
+- **Legacy pre-v12 rooms are not upgradable.** Room versions 1-11 give no
+  implicit creator power and the auth rules forbid the bot from raising
+  itself above 100; tuwunel's admin `make_room_admin` only grants the
+  room's highest local level (100). New pre-v12 rooms get the bot at 150
+  from creation, but rooms created before that policy are an accepted
+  breaking change while there are no production instances.
+
+These compromises are expected to shrink or disappear as the tracked
+standards land; see below.
+
 #### Tombstone threshold
 
 Initial power levels lock `m.room.tombstone` to 150 (the room version 12
@@ -314,12 +345,19 @@ These open standards shape this design; revisit it when they land:
 
 | Standard | Status (2026-08) | Impact when merged |
 |---|---|---|
-| MSC4168: update `m.space.*` on room upgrade | open; tuwunel implements the copy half only | homeservers update child/parent references themselves; convergence can shrink to idempotent re-check plus old-child `via` clearing |
-| MSC4433: image-pack migration on upgrade | open | comment-room upgrades unaffected (packs live in the site Space); revisit for Space upgrades |
-| Room Upgrades module | stable in v1.19 | re-check the recommended transfer list on every spec upgrade; new copied types may simplify convergence |
+| [MSC4168: update `m.space.*` on room upgrade](https://github.com/matrix-org/matrix-spec-proposals/pull/4168) | open; tuwunel implements the copy half only | homeservers update child/parent references themselves; convergence can shrink to idempotent re-check plus old-child `via` clearing |
+| [MSC4433: image packs and room upgrades](https://github.com/matrix-org/matrix-spec-proposals/pull/4433) | open | comment-room upgrades unaffected (packs live in the site Space); revisit for Space upgrades |
+| [Room Upgrades module](https://spec.matrix.org/v1.19/client-server-api/#room-upgrades) | stable in v1.19 | re-check the recommended transfer list on every spec upgrade; new copied types may simplify convergence |
 
-Policy: once a formal, complete standard exists, revise this design to follow
-it instead of keeping the manual convergence.
+Review triggers:
+
+- a tracked MSC merges into the spec;
+- a Matrix spec release changes the Room Upgrades server-behavior list;
+- the deployed homeserver (tuwunel) implements one of the tracked MSCs.
+
+Policy: when a formal, complete standard exists, revise the implementation
+to follow it instead of keeping the manual convergence, and update the
+compromises above together with the code.
 
 ### Logging mode (local development)
 
