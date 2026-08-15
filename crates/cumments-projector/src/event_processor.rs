@@ -12,7 +12,7 @@ use crate::parsed::{
     ParsedSpaceChild,
 };
 use crate::verification::{verify_delete_proof, verify_guest_event};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
@@ -154,6 +154,42 @@ impl CommandOutcome {
             site_id: None,
             invalid: true,
         }
+    }
+}
+
+/// A command failure with a user-facing message. `denied` marks
+/// authorization rejections so the audit trail records them distinctly from
+/// ordinary errors.
+struct CommandError {
+    message: String,
+    denied: bool,
+}
+
+impl CommandError {
+    fn denied(message: impl std::fmt::Display) -> Self {
+        Self {
+            message: message.to_string(),
+            denied: true,
+        }
+    }
+
+    fn error(message: impl std::fmt::Display) -> Self {
+        Self {
+            message: message.to_string(),
+            denied: false,
+        }
+    }
+}
+
+impl From<cumments_core::site_auth::SiteServiceError> for CommandError {
+    fn from(error: cumments_core::site_auth::SiteServiceError) -> Self {
+        Self::error(error)
+    }
+}
+
+impl From<anyhow::Error> for CommandError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::error(error.to_string())
     }
 }
 
@@ -327,18 +363,15 @@ impl BotCommandRouter {
                 self.record_audit(event, line, outcome.site_id, status, None)
                     .await;
             }
-            Err(e) => {
-                let text = e.to_string();
-                let denied = text.starts_with("denied:");
-                let status = if denied {
+            Err(error) => {
+                let status = if error.denied {
                     CommandAuditStatus::Denied
                 } else {
                     CommandAuditStatus::Error
                 };
-                let msg = text.strip_prefix("denied:").unwrap_or(&text);
-                let msg = format!("错误：{msg}");
+                let msg = format!("错误：{}", error.message);
                 self.reply(event, &msg).await;
-                self.record_audit(event, line, None, status, Some(text))
+                self.record_audit(event, line, None, status, Some(error.message))
                     .await;
             }
         }
@@ -349,7 +382,7 @@ impl BotCommandRouter {
         &self,
         event: &ParsedRoomMessage,
         tokens: &[&str],
-    ) -> Result<CommandOutcome> {
+    ) -> Result<CommandOutcome, CommandError> {
         match tokens {
             ["help"] => Ok(CommandOutcome::plain(help_text())),
             ["sites", "list"] => {
@@ -377,7 +410,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome::plain(reply))
             }
             ["site", "use", id] => {
-                SiteId::new(id.to_string())?;
+                SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let mut active = self.active_sites.lock().await;
                 if !active.contains_key(&event.sender)
                     && active.len() >= Self::ACTIVE_SITES_MAX_USERS
@@ -408,7 +441,7 @@ impl BotCommandRouter {
                 })
             }
             ["site", "register", id] => {
-                let site_id = SiteId::new(id.to_string())?;
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let token = generate_token();
                 self.site_auth_store
                     .register_site(site_id.as_str(), &token_hash(&token), true)
@@ -474,13 +507,13 @@ impl BotCommandRouter {
             }
             ["site", id, "post", slug, "moderator", "add", mxid] => {
                 self.require_site_access(event, id).await?;
-                let site_id = SiteId::new(id.to_string())?;
-                let post_slug = PostSlug::new(slug.to_string())?;
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
                     .registry_store
                     .get_registered_room(&site_id, &post_slug)
                     .await?
-                    .ok_or_else(|| anyhow::anyhow!("没有为 {id}/{slug} 注册的房间"))?;
+                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
                 let pending = cumments_core::management::create_role_claim(
                     self.role_claim_store.as_ref(),
                     id,
@@ -519,13 +552,13 @@ impl BotCommandRouter {
                 "--confirm",
             ] => {
                 self.require_site_access(event, id).await?;
-                let site_id = SiteId::new(id.to_string())?;
-                let post_slug = PostSlug::new(slug.to_string())?;
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
                     .registry_store
                     .get_registered_room(&site_id, &post_slug)
                     .await?
-                    .ok_or_else(|| anyhow::anyhow!("没有为 {id}/{slug} 注册的房间"))?;
+                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
                 let removal = cumments_core::management::remove_room_moderator(
                     self.role_claim_store.as_ref(),
                     self.governance_store.as_ref(),
@@ -551,7 +584,7 @@ impl BotCommandRouter {
                     id,
                 )
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
+                .ok_or_else(|| CommandError::error("站点不存在"))?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("新 claim token（只显示一次，请勿转发）：\n{token}"),
@@ -563,7 +596,7 @@ impl BotCommandRouter {
                 let secret =
                     cumments_core::management::issue_secret(self.site_auth_store.as_ref(), id)
                         .await?
-                        .ok_or_else(|| anyhow::anyhow!("站点不存在"))?;
+                        .ok_or_else(|| CommandError::error("站点不存在"))?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("HMAC secret（只显示一次，请勿转发）：\n{secret}"),
@@ -585,7 +618,7 @@ impl BotCommandRouter {
                 if !cumments_core::management::retire_site(self.site_auth_store.as_ref(), id)
                     .await?
                 {
-                    return Err(anyhow::anyhow!("站点不存在或已退役"));
+                    return Err(CommandError::error("站点不存在或已退役"));
                 }
                 self.governance_notify.notify_one();
                 Ok(CommandOutcome {
@@ -612,7 +645,7 @@ impl BotCommandRouter {
             ["backfill", pages] => {
                 let pages: u32 = pages
                     .parse()
-                    .map_err(|_| anyhow!("无效的 max_pages：{pages}"))?;
+                    .map_err(|_| CommandError::error(format!("无效的 max_pages：{pages}")))?;
                 self.backfill_command(event, pages).await
             }
             ["room", room_id, "reinstate"] => {
@@ -628,7 +661,7 @@ impl BotCommandRouter {
             ["room", room_id, "reinstate", "--confirm"] => {
                 self.require_operator(event)?;
                 if !self.registry_store.reinstate_room(room_id).await? {
-                    return Err(anyhow::anyhow!("房间不在 registry 中"));
+                    return Err(CommandError::error("房间不在 registry 中"));
                 }
                 Ok(CommandOutcome {
                     invalid: false,
@@ -644,7 +677,7 @@ impl BotCommandRouter {
         &self,
         event: &ParsedRoomMessage,
         max_pages: u32,
-    ) -> Result<CommandOutcome> {
+    ) -> Result<CommandOutcome, CommandError> {
         self.require_operator(event)?;
         let Some(tx) = &self.backfill_tx else {
             return Ok(CommandOutcome::plain(
@@ -668,15 +701,19 @@ impl BotCommandRouter {
         }
     }
 
-    fn require_operator(&self, event: &ParsedRoomMessage) -> Result<()> {
+    fn require_operator(&self, event: &ParsedRoomMessage) -> Result<(), CommandError> {
         if self.operator_mxids.iter().any(|m| m == &event.sender) {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("denied: 此命令仅限实例管理员"))
+            Err(CommandError::denied("此命令仅限实例管理员"))
         }
     }
 
-    async fn require_site_access(&self, event: &ParsedRoomMessage, site_id: &str) -> Result<()> {
+    async fn require_site_access(
+        &self,
+        event: &ParsedRoomMessage,
+        site_id: &str,
+    ) -> Result<(), CommandError> {
         if self.operator_mxids.iter().any(|m| m == &event.sender) {
             return Ok(());
         }
@@ -689,11 +726,11 @@ impl BotCommandRouter {
         if owner {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("denied: 你不是站点 {site_id} 的站主"))
+            Err(CommandError::denied(format!("你不是站点 {site_id} 的站主")))
         }
     }
 
-    async fn active_site_for(&self, event: &ParsedRoomMessage) -> Result<String> {
+    async fn active_site_for(&self, event: &ParsedRoomMessage) -> Result<String, CommandError> {
         if let Some(id) = self.active_sites.lock().await.get(&event.sender).cloned() {
             return Ok(id);
         }
@@ -710,18 +747,18 @@ impl BotCommandRouter {
             }
         }
         match owned.len() {
-            0 => Err(anyhow!(
-                "你没有拥有任何站点；请先 `!cumments site register <id>` 注册"
+            0 => Err(CommandError::error(
+                "你没有拥有任何站点；请先 `!cumments site register <id>` 注册",
             )),
             1 => Ok(owned.remove(0)),
-            _ => Err(anyhow!(
+            _ => Err(CommandError::error(format!(
                 "你拥有多个站点：{}；请用 `!cumments site use <id>` 指定",
                 owned.join(", ")
-            )),
+            ))),
         }
     }
 
-    async fn site_status(&self, site_id: &str) -> Result<String> {
+    async fn site_status(&self, site_id: &str) -> Result<String, CommandError> {
         let Some(auth) = self.site_auth_store.get_site_auth(site_id).await? else {
             if let Some(entry) = self.site_auth_policy.entry(site_id) {
                 return Ok(format!(
@@ -729,7 +766,7 @@ impl BotCommandRouter {
                     entry.auth_mode.unwrap_or(SiteAuthMode::Origin).as_str()
                 ));
             }
-            return Err(anyhow!("站点不存在"));
+            return Err(CommandError::error("站点不存在"));
         };
         let roles = self.governance_store.list_site_roles(site_id).await?;
         let owners = roles
@@ -760,10 +797,10 @@ impl BotCommandRouter {
         ))
     }
 
-    fn require_driver(&self) -> Result<&dyn cumments_core::ports::MatrixDriver> {
+    fn require_driver(&self) -> Result<&dyn cumments_core::ports::MatrixDriver, CommandError> {
         self.driver
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("当前模式没有 Matrix driver"))
+            .ok_or_else(|| CommandError::error("当前模式没有 Matrix driver"))
     }
 }
 
