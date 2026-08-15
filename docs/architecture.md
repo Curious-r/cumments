@@ -192,6 +192,38 @@ with the Space, and `backfill` replays Space state events so the rosters
 rebuild after a database reset. See
 [site governance](site-governance.md) for the full model.
 
+### Bot management channel
+
+The AppService sender doubles as a management bot: `@_cumments_bot` accepts
+`!cumments` commands and role-claim tokens (`cumments-claim:...`) in private
+DMs. This is the third management pathway next to the Operator API and the
+CLI. All three call the same `cumments_core::management` use cases, so chat
+commands never open a separate authority or a second write seam.
+
+Security model:
+
+- Commands only execute in a verified private channel — exactly the bot and
+  the sender joined — and fail closed when membership cannot be verified.
+  Elsewhere a `!cumments` message is consumed silently so it never becomes a
+  comment.
+- Commands are partitioned by the caller's role. Instance operators
+  (`security.operator_mxids`) may list sites, rotate claim tokens, list
+  quarantined rooms, reinstate rooms and trigger backfill. Site owners may
+  register/retire their own sites, manage co-managers and moderators, issue
+  secrets, and switch the active site; public self-service (`site register`,
+  `site use`, `site status`) needs no operator configuration.
+- Each sender is rate-limited in-process, and every command is written to the
+  command audit trail with a status (ok / invalid / denied / error /
+  rate-limited).
+- Role claims are capabilities. The bot auto-joins a DM only when the inviter
+  has a pending claim, so it cannot be pulled into arbitrary rooms. Claim DMs
+  must stay unencrypted because the token is plain text; an
+  `m.room.encryption` event is warned about and ignored.
+
+Backfill is also available to operators as `!cumments backfill [max_pages]`;
+it queues a worker request and the bot replies in the DM when the worker
+finishes.
+
 ### Logging mode (local development)
 
 The `LoggingMatrixDriver` logs actions instead of talking to a homeserver.
@@ -218,8 +250,9 @@ stream as comment updates. See
 | `cumments-store` | SQLite persistence (SeaORM), migrations, backup |
 | `cumments-reconciler` | Background writer — reads submissions, calls MatrixDriver, waits for projection to close the loop, reconciles site roles |
 | `cumments-matrix` | MatrixDriver implementations (AppService, Logging) |
-| `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver, claim-DM matching, ephemeral sync, backfill) |
+| `cumments-projector` | Event reception and projection (EventProcessor, PushReceiver, claim-DM matching, ephemeral sync, backfill, chat command routing) |
 | `cumments` | CLI entry point, configuration, assembly |
+| `cumments-test-utils` | Test-only shared doubles (MatrixDriver fake) for workspace tests |
 
 ## Recovery
 
