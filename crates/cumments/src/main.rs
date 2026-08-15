@@ -119,7 +119,9 @@ async fn main() -> Result<()> {
     tracing::info!("Database initialized.");
 
     // Handle CLI subcommands that only need the database.
-    if let Some(cli::Commands::Rooms(rooms_args)) = &args.command {
+    if let Some(cli::Commands::Rooms(rooms_args)) = &args.command
+        && !matches!(rooms_args.command, cli::RoomsCommand::Upgrade(_))
+    {
         cli::handle_rooms_command(&db_store, rooms_args).await?;
         return Ok(());
     }
@@ -254,6 +256,16 @@ async fn main() -> Result<()> {
             sites_args,
         )
         .await?;
+        return Ok(());
+    }
+
+    // Room upgrades need the driver + site service; they run here instead
+    // of the early database-only phase.
+    if let Some(cli::Commands::Rooms(rooms_args)) = &args.command
+        && let cli::RoomsCommand::Upgrade(upgrade_args) = &rooms_args.command
+    {
+        cli::handle_rooms_upgrade_command(&db_store, driver.as_ref(), &site_service, upgrade_args)
+            .await?;
         return Ok(());
     }
 

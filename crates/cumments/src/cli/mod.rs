@@ -8,8 +8,8 @@ mod sites;
 #[cfg(test)]
 mod test_support;
 
-pub use args::{Commands, SitesCommand, handle_completions};
+pub use args::{Commands, RoomsCommand, SitesCommand, handle_completions};
 pub use output::print_json;
 pub use registration::{handle_appservice_command, handle_generate_registration};
-pub use rooms::handle_rooms_command;
+pub use rooms::{handle_rooms_command, handle_rooms_upgrade_command};
 pub use sites::handle_sites_command;

@@ -197,6 +197,9 @@ pub enum RoomsCommand {
     /// Clear a room's quarantine and make it canonical again
     #[command(name = "reinstate")]
     Reinstate(ReinstateRoomArgs),
+    /// Upgrade a registered comment room through the homeserver's /upgrade
+    #[command(name = "upgrade")]
+    Upgrade(UpgradeRoomArgs),
 }
 
 /// Arguments for listing quarantined rooms (mirrors
@@ -219,6 +222,14 @@ pub struct QuarantinedListArgs {
 #[derive(clap::Args, Debug)]
 pub struct ReinstateRoomArgs {
     pub room_id: String,
+}
+
+/// Arguments for upgrading a comment room.
+#[derive(clap::Args, Debug)]
+pub struct UpgradeRoomArgs {
+    pub room_id: String,
+    /// Target Matrix room version, e.g. `12`
+    pub new_version: String,
 }
 
 /// Arguments for generating shell completions.

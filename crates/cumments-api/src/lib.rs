@@ -16,6 +16,7 @@ use crate::routes::operator::{
     config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
     reinstate_room_handler, require_operator, revoke_secret_handler,
     revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
+    upgrade_room_handler,
 };
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -321,6 +322,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/operator/rooms/quarantined/{room_id}",
             axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/rooms/{room_id}/upgrade",
+            axum::routing::post(upgrade_room_handler).fallback(method_not_allowed_handler),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

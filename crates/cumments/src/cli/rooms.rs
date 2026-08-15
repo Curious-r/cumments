@@ -1,6 +1,6 @@
 //! `cumments rooms ...` command handling.
 
-use super::args::{RoomsArgs, RoomsCommand};
+use super::args::{RoomsArgs, RoomsCommand, UpgradeRoomArgs};
 use super::output::{print_json, print_room_table};
 use anyhow::{Result, bail};
 use cumments_core::operator::{OperatorListQuery, list_operator_quarantined_rooms};
@@ -34,7 +34,31 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
             }))?;
             Ok(())
         }
+        RoomsCommand::Upgrade(_) => unreachable!("upgrade is handled after driver setup"),
     }
+}
+
+/// Handles `cumments rooms upgrade ...` after the Matrix driver exists.
+pub async fn handle_rooms_upgrade_command(
+    store: &cumments_store::DbStore,
+    driver: &dyn cumments_core::ports::MatrixDriver,
+    site_service: &cumments_core::site_service::SiteService,
+    args: &UpgradeRoomArgs,
+) -> Result<()> {
+    let replacement = cumments_core::management::upgrade_comment_room(
+        driver,
+        store,
+        site_service,
+        &args.room_id,
+        &args.new_version,
+    )
+    .await?;
+    print_json(&serde_json::json!({
+        "room_id": args.room_id,
+        "new_version": args.new_version,
+        "replacement_room": replacement,
+    }))?;
+    Ok(())
 }
 
 #[cfg(test)]

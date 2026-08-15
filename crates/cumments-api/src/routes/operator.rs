@@ -53,6 +53,18 @@ pub struct ConfigSnippetResponse {
     pub toml: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpgradeRoomRequest {
+    pub new_version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpgradeRoomResponse {
+    pub room_id: String,
+    pub new_version: String,
+    pub replacement_room: String,
+}
+
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
@@ -157,6 +169,27 @@ pub(crate) async fn reinstate_room_handler(
     } else {
         Err(AppError::NotFound("Room not found.".to_string()))
     }
+}
+
+pub(crate) async fn upgrade_room_handler(
+    State(state): State<ApiState>,
+    Path(room_id): Path<String>,
+    Json(body): Json<UpgradeRoomRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let replacement = cumments_core::management::upgrade_comment_room(
+        state.driver.as_ref(),
+        state.store.as_ref(),
+        &state.site_service,
+        &room_id,
+        &body.new_version,
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("failed to upgrade room: {e}")))?;
+    Ok(Json(UpgradeRoomResponse {
+        room_id,
+        new_version: body.new_version,
+        replacement_room: replacement,
+    }))
 }
 
 /// Parses the optional QUERY body; an empty body means default pagination.

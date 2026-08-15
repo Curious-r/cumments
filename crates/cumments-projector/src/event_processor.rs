@@ -233,6 +233,7 @@ fn help_text() -> &'static str {
 !cumments site <id> retire --confirm
 !cumments rooms quarantined               （实例管理员）
 !cumments room <room_id> reinstate --confirm
+!cumments room <room_id> upgrade <new_version> （实例管理员）
 !cumments backfill [max_pages]            （实例管理员）
 破坏性命令需要 --confirm；敏感 token 只在本私聊显示。"
 }
@@ -806,6 +807,33 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("房间 {room_id} 已恢复。"),
+                    site_id: None,
+                })
+            }
+            ["room", room_id, "upgrade", new_version] => {
+                self.require_operator(event)?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!(
+                        "确认升级房间 {room_id} 到 {new_version}？请回复：\n!cumments room {room_id} upgrade {new_version} --confirm"
+                    ),
+                    site_id: None,
+                })
+            }
+            ["room", room_id, "upgrade", new_version, "--confirm"] => {
+                self.require_operator(event)?;
+                let driver = self.require_driver()?;
+                let replacement = cumments_core::management::upgrade_comment_room(
+                    driver,
+                    self.registry_store.as_ref(),
+                    self.site_service.as_ref(),
+                    room_id,
+                    new_version,
+                )
+                .await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("房间 {room_id} 已升级到 {new_version}，新房间：{replacement}"),
                     site_id: None,
                 })
             }
