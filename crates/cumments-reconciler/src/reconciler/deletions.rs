@@ -130,19 +130,15 @@ impl DeletionsPass {
                         "submission_id": id,
                     }
                 });
-                let txn_id = if pending.txn_id.is_none() {
+                let txn_id = if let Some(txn_id) = pending.txn_id.as_deref() {
+                    txn_id.to_owned()
+                } else {
                     let txn_id = fresh_transaction_id("delete");
                     self.deps
                         .submission_store
                         .set_delete_submission_txn_id(id, &txn_id)
                         .await?;
                     txn_id
-                } else {
-                    pending
-                        .txn_id
-                        .as_deref()
-                        .expect("txn_id present")
-                        .to_owned()
                 };
                 let redaction_event_id = match self
                     .deps

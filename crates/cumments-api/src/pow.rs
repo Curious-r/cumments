@@ -15,6 +15,15 @@ const CHALLENGE_EXPIRY_SECONDS: u64 = 300; // 5 minutes
 /// fails closed (new solves are rejected) instead of growing without bound.
 const MAX_USED_CHALLENGES: usize = 100_000;
 
+/// Current Unix time in seconds, saturating instead of panicking if the
+/// system clock is before the Unix epoch.
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[derive(Clone)]
 pub struct Pow {
     secret: String,
@@ -49,10 +58,7 @@ impl Pow {
     /// Generates a new PoW challenge.
     /// The challenge is a signed string containing a timestamp and random bytes.
     pub fn generate_challenge(&self) -> Challenge {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
 
         let mut random_bytes = [0u8; 8];
         rand::rng().fill_bytes(&mut random_bytes);
@@ -94,10 +100,7 @@ impl Pow {
 
         // Check timestamp
         if let Ok(ts) = u64::from_str_radix(ts_hex, 16) {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_now_secs();
             if now > ts + CHALLENGE_EXPIRY_SECONDS {
                 debug!("Expired PoW challenge");
                 return false;
@@ -130,10 +133,7 @@ impl Pow {
         }
 
         // Mark the challenge as used (single-use within its expiry window).
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
         let mut used = self
             .used_challenges
             .lock()

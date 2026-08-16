@@ -128,19 +128,15 @@ impl UpdatesPass {
                     .unwrap_or_else(|| "Guest".to_string());
 
                 // 5. Hands: Allocate/reuse the transaction ID, then send m.replace
-                let txn_id = if pending.txn_id.is_none() {
+                let txn_id = if let Some(txn_id) = pending.txn_id.as_deref() {
+                    txn_id.to_owned()
+                } else {
                     let txn_id = fresh_transaction_id("update");
                     self.deps
                         .submission_store
                         .set_update_submission_txn_id(id, &txn_id)
                         .await?;
                     txn_id
-                } else {
-                    pending
-                        .txn_id
-                        .as_deref()
-                        .expect("txn_id present")
-                        .to_owned()
                 };
                 let event_id = match self
                     .deps

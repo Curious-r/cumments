@@ -145,19 +145,15 @@ impl PostsPass {
                 };
 
                 // 4. Hands: Post the actual message
-                let txn_id = if pending.txn_id.is_none() {
+                let txn_id = if let Some(txn_id) = pending.txn_id.as_deref() {
+                    txn_id.to_owned()
+                } else {
                     let txn_id = fresh_transaction_id("post");
                     self.deps
                         .submission_store
                         .set_post_submission_txn_id(id, &txn_id)
                         .await?;
                     txn_id
-                } else {
-                    pending
-                        .txn_id
-                        .as_deref()
-                        .expect("txn_id present")
-                        .to_owned()
                 };
                 let event_id = {
                     let result = if let Some(location) = &command.location {
