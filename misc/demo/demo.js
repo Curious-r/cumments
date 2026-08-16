@@ -2938,7 +2938,7 @@
                     filename,
                 });
                 const res = await fetch(
-                    `${cfg.api}/api/v1/sites/${cfg.siteId}/me/avatar?${params.toString()}`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/guests/avatar?${params.toString()}`,
                     {
                         method: "PUT",
                         headers: {
@@ -2973,7 +2973,7 @@
                         challenge_response: `${chal.prefix}|${nonce}`,
                     });
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/me/avatar?${params.toString()}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/guests/avatar?${params.toString()}`,
                         { method: "DELETE" },
                     );
                     if (!res.ok) throw new Error(await apiError(res));

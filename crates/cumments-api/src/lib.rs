@@ -188,7 +188,7 @@ pub fn build_router(state: ApiState) -> Router {
             post(location_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/me/avatar",
+            "/api/v1/sites/{site_id}/guests/avatar",
             put(set_guest_avatar_handler)
                 .delete(delete_guest_avatar_handler)
                 .fallback(method_not_allowed_handler)

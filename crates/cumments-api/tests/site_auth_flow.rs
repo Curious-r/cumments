@@ -741,7 +741,7 @@ async fn avatar_preflight_allows_put_and_delete() {
             .clone()
             .oneshot(request(
                 Method::OPTIONS,
-                "/api/v1/sites/test-blog/me/avatar",
+                "/api/v1/sites/test-blog/guests/avatar",
                 Some("null"),
                 &[
                     ("access-control-request-method", method.to_string()),
@@ -787,7 +787,7 @@ async fn avatar_put_is_gated_by_site_auth() {
         .clone()
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/test-blog/me/avatar",
+            "/api/v1/sites/test-blog/guests/avatar",
             Some("https://evil.example.com"),
             &[("idempotency-key", "avatar-origin-key".to_string())],
         ))
@@ -800,7 +800,7 @@ async fn avatar_put_is_gated_by_site_auth() {
         .clone()
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/test-blog/me/avatar",
+            "/api/v1/sites/test-blog/guests/avatar",
             Some("https://blog.example.com"),
             &[("idempotency-key", "avatar-origin-key".to_string())],
         ))
@@ -824,7 +824,7 @@ async fn avatar_put_is_gated_by_site_auth() {
         .clone()
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/test-blog/me/avatar",
+            "/api/v1/sites/test-blog/guests/avatar",
             None,
             &[("idempotency-key", "avatar-secret-key".to_string())],
         ))
@@ -847,7 +847,7 @@ async fn avatar_put_requires_registered_site() {
     let response = router
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/not-registered/me/avatar",
+            "/api/v1/sites/not-registered/guests/avatar",
             Some("null"),
             &[("idempotency-key", "avatar-unregistered-key".to_string())],
         ))
@@ -1593,7 +1593,7 @@ async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let uri = format!(
-        "/api/v1/sites/test-blog/me/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=image%2Fpng&filename=avatar.png"
+        "/api/v1/sites/test-blog/guests/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=image%2Fpng&filename=avatar.png"
     );
 
     let put = router
@@ -1660,7 +1660,7 @@ async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let bad_uri = format!(
-        "/api/v1/sites/test-blog/me/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=video%2Fmp4&filename=clip.mp4"
+        "/api/v1/sites/test-blog/guests/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=video%2Fmp4&filename=clip.mp4"
     );
     let denied = router
         .clone()
@@ -1681,7 +1681,7 @@ async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
     let message = signature_message(&["DELETE_AVATAR", "test-blog", &challenge.prefix]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let delete_uri = format!(
-        "/api/v1/sites/test-blog/me/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}"
+        "/api/v1/sites/test-blog/guests/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}"
     );
     let deleted = router
         .clone()

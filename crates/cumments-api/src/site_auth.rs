@@ -196,7 +196,7 @@ fn is_media_upload_path(path: &str) -> bool {
         && segments[0] == "api"
         && segments[1] == "v1"
         && segments[2] == "sites"
-        && segments[4] == "me"
+        && segments[4] == "guests"
         && segments[5] == "avatar"
 }
 
@@ -732,7 +732,7 @@ mod tests {
             "/api/v1/sites/my-blog/posts/hello/media/extra"
         ));
         assert!(!is_media_upload_path("/api/v1/sites/my-blog/media"));
-        assert!(is_media_upload_path("/api/v1/sites/my-blog/me/avatar"));
+        assert!(is_media_upload_path("/api/v1/sites/my-blog/guests/avatar"));
         assert!(!is_media_upload_path("/health"));
     }
 }

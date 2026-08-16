@@ -837,7 +837,7 @@ pub(crate) async fn set_guest_avatar_handler(
         "{}\n{}\n{}",
         request_fingerprint(
             "PUT",
-            &format!("/api/v1/sites/{}/me/avatar", site_id_val.as_str()),
+            &format!("/api/v1/sites/{}/guests/avatar", site_id_val.as_str()),
             &body,
         ),
         mimetype,

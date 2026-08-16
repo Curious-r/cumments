@@ -44,7 +44,7 @@ signature covers the media URL instead of text content).
 
 ## Guest avatar
 
-`PUT /api/v1/sites/{site_id}/me/avatar?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
+`PUT /api/v1/sites/{site_id}/guests/avatar?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
 
 Uploads raw image bytes as the guest's virtual user and sets the avatar on
 that virtual user's global profile in one request. The signature covers
@@ -65,7 +65,7 @@ projection observe it without an event-content fallback. Avatars are
 site-scoped: the virtual user is derived from `site_id + author_public_key`,
 so the same guest has independent avatars per site.
 
-`DELETE /api/v1/sites/{site_id}/me/avatar?author_public_key=...&author_signature=...&challenge_response=...`
+`DELETE /api/v1/sites/{site_id}/guests/avatar?author_public_key=...&author_signature=...&challenge_response=...`
 
 Removes the avatar. The signature covers
 `["DELETE_AVATAR", site_id, challenge]`; deleting a missing avatar is a
