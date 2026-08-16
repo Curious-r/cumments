@@ -1151,7 +1151,7 @@ paths:
         same `Idempotency-Key` header as comment write submissions; replays
         return the original URL with `Idempotent-Replayed: true`. Avatars are
         site-scoped and propagate to the user's joined rooms as
-        `m.room.member` events (`m.propagate_to: "all"`).
+        `m.room.member` events (MSC4466 `propagate_to: all` query parameter).
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - name: mime

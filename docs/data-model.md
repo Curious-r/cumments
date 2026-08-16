@@ -92,7 +92,7 @@ places and Cumments projects all of them:
 - **Global profile** (`avatar_url` profile field): the canonical identity
   avatar of a user. Guests set it through the guest avatar API, which stores
   it on the virtual user's profile and propagates it to joined rooms as
-  `m.room.member` events (`m.propagate_to: "all"`, MSC4466).
+  `m.room.member` events (MSC4466 `propagate_to: all` query parameter).
 - **`m.room.member.avatar_url`**: the per-room profile snapshot. It is the
   source used when projecting message authors; leave events keep the last
   known value instead of wiping the snapshot, and redaction removes it.

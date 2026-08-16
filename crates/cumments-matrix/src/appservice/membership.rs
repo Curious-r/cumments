@@ -369,10 +369,14 @@ impl AppServiceMatrixDriver {
 
     /// Sets or removes the avatar on a virtual user's global profile.
     ///
-    /// The update carries `m.propagate_to: "all"` (MSC4466) so the
-    /// homeserver emits fresh `m.room.member` events in every joined room;
-    /// without that propagation the avatar would never reach the projector
-    /// (avatars have no event-content fallback, unlike display names).
+    /// The update carries MSC4466's `propagate_to: all` query parameter
+    /// (`computer.gingershaped.msc4466.propagate_to`) so the homeserver
+    /// emits fresh `m.room.member` events in every joined room; without that
+    /// propagation the avatar would never reach the projector (avatars have
+    /// no event-content fallback, unlike display names). The request body
+    /// must contain only the `avatar_url` field: ruma's `set_profile_field`
+    /// deserializer consumes exactly one profile key and rejects any extra
+    /// fields.
     #[instrument(skip(self))]
     pub(super) async fn set_avatar_url_impl(
         &self,
@@ -390,15 +394,14 @@ impl AppServiceMatrixDriver {
         let resp = match avatar_url {
             Some(avatar_url) => self
                 .request(reqwest::Method::PUT, &path, Some(&virtual_user))
-                .json(&serde_json::json!({
-                    "avatar_url": avatar_url,
-                    "m.propagate_to": "all",
-                }))
+                .query(&[("computer.gingershaped.msc4466.propagate_to", "all")])
+                .json(&serde_json::json!({ "avatar_url": avatar_url }))
                 .send()
                 .await
                 .map_err(|e| anyhow!("set avatar request failed: {}", e))?,
             None => self
                 .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+                .query(&[("computer.gingershaped.msc4466.propagate_to", "all")])
                 .send()
                 .await
                 .map_err(|e| anyhow!("delete avatar request failed: {}", e))?,
@@ -478,11 +481,12 @@ mod tests {
     use super::*;
     use cumments_core::ports::MatrixDriver;
     use serde_json::json;
-    use wiremock::matchers::{body_partial_json, method, path, query_param};
+    use wiremock::matchers::{body_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const AVATAR_PROFILE_PATH: &str =
         "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com/avatar_url";
+    const PROPAGATE_TO_QUERY: &str = "computer.gingershaped.msc4466.propagate_to";
 
     #[tokio::test]
     async fn set_avatar_url_updates_the_virtual_user_profile_and_propagates() {
@@ -493,10 +497,10 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
-            .and(body_partial_json(json!({
-                "avatar_url": "mxc://example.com/avatar",
-                "m.propagate_to": "all",
-            })))
+            .and(query_param(PROPAGATE_TO_QUERY, "all"))
+            .and(body_json(
+                json!({ "avatar_url": "mxc://example.com/avatar" }),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(1)
             .mount(&server)
@@ -523,6 +527,7 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
+            .and(query_param(PROPAGATE_TO_QUERY, "all"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(1)
             .mount(&server)

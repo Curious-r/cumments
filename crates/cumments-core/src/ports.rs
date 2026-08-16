@@ -771,8 +771,8 @@ pub trait MatrixDriver: Send + Sync {
     /// Sets (or removes, when `avatar_url` is `None`) the avatar on the
     /// author's virtual-user global profile. The profile update propagates
     /// to the user's joined rooms as `m.room.member` events
-    /// (`m.propagate_to: "all"`), so projections observe the new avatar
-    /// without an event-content fallback.
+    /// (MSC4466 `propagate_to: all` query parameter), so projections observe
+    /// the new avatar without an event-content fallback.
     async fn set_avatar_url(
         &self,
         author_public_key: &str,

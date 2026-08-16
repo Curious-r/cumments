@@ -53,7 +53,7 @@ a partially completed request.
 
 The avatar is stored in the virtual user's Matrix profile and propagates to
 the rooms the user has joined as `m.room.member` events
-(`m.propagate_to: "all"`, MSC4466), so Matrix clients and the Cumments
+(MSC4466 `propagate_to: all` query parameter), so Matrix clients and the Cumments
 projection observe it without an event-content fallback. Avatars are
 site-scoped: the virtual user is derived from `site_id + author_public_key`,
 so the same guest has independent avatars per site.
