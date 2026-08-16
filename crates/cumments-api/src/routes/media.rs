@@ -126,7 +126,8 @@ impl MediaProxy {
         ))
     }
 
-    /// Rewrites media URLs inside a message for API/SSE delivery.
+    /// Rewrites media and author-avatar URLs inside a message for API/SSE
+    /// delivery.
     pub fn proxify_message(&self, message: &mut Message) {
         match &mut message.content {
             Content::Media(media) => {
@@ -151,6 +152,14 @@ impl MediaProxy {
                 }
             }
             _ => {}
+        }
+        if let Some(avatar) = message
+            .author
+            .avatar_url
+            .as_deref()
+            .and_then(|url| self.proxify_thumbnail(url))
+        {
+            message.author.avatar_url = Some(avatar);
         }
     }
 
@@ -810,7 +819,7 @@ mod tests {
             author: AuthorSnapshot {
                 kind: AuthorKind::Matrix,
                 display_name: None,
-                avatar_url: None,
+                avatar_url: Some("mxc://hs/avatar".to_string()),
                 public_key: None,
                 mxid: Some("@alice:hs".to_string()),
             },
@@ -852,6 +861,11 @@ mod tests {
             }
             other => panic!("expected media, got {other:?}"),
         }
+        let avatar = message.author.avatar_url.expect("author avatar rewritten");
+        assert!(
+            avatar.starts_with("/api/v1/media/hs/avatar?") && avatar.contains("&thumbnail=1"),
+            "author avatar must use the thumbnail variant: {avatar}"
+        );
     }
 
     #[test]
