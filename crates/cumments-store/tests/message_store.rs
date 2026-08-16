@@ -3,10 +3,10 @@ use cumments_core::commands::PostCommentCommand;
 use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, CommentMedia, Content, MediaContent, MediaKind, Message,
-    MessageRevision, MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction, SiteId,
-    TextContent, TextStyle, UnknownContent,
+    MessageRevision, MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction,
+    RoomMember, SiteId, TextContent, TextStyle, UnknownContent,
 };
-use cumments_core::ports::{MessageStore, SubmissionStore, VirtualUserStore};
+use cumments_core::ports::{MessageStore, RoomStore, SubmissionStore, VirtualUserStore};
 use cumments_store::DbStore;
 
 /// Unique SQLite file per test to avoid shared in-memory state.
@@ -96,6 +96,68 @@ async fn save_message_records_typed_content_and_internal_fields() {
         .expect("query messages");
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].event_id, "$event:hs");
+}
+
+#[tokio::test]
+async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
+    let store = DbStore::connect(&test_db_url("live-author-profile"))
+        .await
+        .expect("connect db");
+
+    let message = guest_message("$live:hs", "hello");
+    store.save_message(&message).await.expect("save message");
+
+    // No member row yet: the stored projection is the fallback.
+    let stored = store
+        .get_message("$live:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert_eq!(stored.author.display_name.as_deref(), Some("Alice"));
+    assert!(stored.author.avatar_url.is_none());
+
+    // A joined member with a newer profile: reads follow it live.
+    store
+        .save_member(&RoomMember {
+            room_id: message.room_id.clone(),
+            user_id: message.sender_mxid.clone(),
+            display_name: Some("新版名字".to_string()),
+            avatar_url: Some("mxc://hs/new-avatar".to_string()),
+            membership: "join".to_string(),
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("save joined member");
+    let live = store
+        .get_message("$live:hs")
+        .await
+        .expect("get live message")
+        .expect("message exists");
+    assert_eq!(live.author.display_name.as_deref(), Some("新版名字"));
+    assert_eq!(
+        live.author.avatar_url.as_deref(),
+        Some("mxc://hs/new-avatar")
+    );
+
+    // After leaving, the stored snapshot is the fallback again.
+    store
+        .save_member(&RoomMember {
+            room_id: message.room_id,
+            user_id: message.sender_mxid,
+            display_name: None,
+            avatar_url: None,
+            membership: "leave".to_string(),
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("save left member");
+    let left = store
+        .get_message("$live:hs")
+        .await
+        .expect("get left message")
+        .expect("message exists");
+    assert_eq!(left.author.display_name.as_deref(), Some("Alice"));
+    assert!(left.author.avatar_url.is_none());
 }
 
 #[tokio::test]

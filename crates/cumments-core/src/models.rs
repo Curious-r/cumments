@@ -192,7 +192,12 @@ impl AuthorKind {
     }
 }
 
-/// Author identity snapshot, captured when the message was projected.
+/// Author identity profile, captured when the message was projected.
+///
+/// The stored values are a fallback: the public read path (message list,
+/// single message, SSE) overlays the current joined `room_members` profile,
+/// so display names and avatars follow live profile changes. Members who
+/// left the room keep the stored projection.
 ///
 /// - Guest messages carry `public_key`; `mxid` is intentionally not exposed
 ///   because the virtual user ID is an implementation detail derived from the

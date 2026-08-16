@@ -205,6 +205,23 @@ pub(crate) async fn sse_handler(
 
                     if matches {
                         let mut payload = event.clone();
+                        // Live author profile: overlay the current joined
+                        // member state so old comments follow display-name
+                        // and avatar changes (visitor-identity design §7).
+                        match &mut payload {
+                            ProjectorEvent::MessageCreated { message, .. }
+                            | ProjectorEvent::MessageUpdated { message, .. }
+                            | ProjectorEvent::MessageAnnotationsChanged { message, .. } => {
+                                if let Ok(Some(member)) =
+                                    store.get_member(&message.room_id, &message.sender_mxid).await
+                                    && member.membership == "join"
+                                {
+                                    message.author.display_name = member.display_name;
+                                    message.author.avatar_url = member.avatar_url;
+                                }
+                            }
+                            ProjectorEvent::MessageDeleted { .. } => {}
+                        }
                         if let Some(proxy) = &media_proxy {
                             match &mut payload {
                                 ProjectorEvent::MessageCreated { message, .. }

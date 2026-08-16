@@ -2,7 +2,7 @@ use super::DbStore;
 use super::is_unique_violation;
 use crate::entities::{
     backfill_tombstones, media_upload_idempotency, media_uploads, message_revisions, messages,
-    poll_responses, post_submissions, reactions,
+    poll_responses, post_submissions, reactions, room_members,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -773,6 +773,8 @@ impl DbStore {
                 .await?;
             poll.responses = responses.remove(&message.event_id).unwrap_or_default();
         }
+        self.enrich_author_profiles(std::slice::from_mut(&mut message))
+            .await?;
         Ok(message)
     }
 
@@ -781,10 +783,48 @@ impl DbStore {
     async fn hydrate_batch(&self, messages: &mut [Message], event_ids: &[String]) -> Result<()> {
         let mut reactions = self.reaction_summary_map(event_ids).await?;
         let mut responses = self.poll_response_summary_map(event_ids).await?;
-        for message in messages {
+        for message in messages.iter_mut() {
             message.reactions = reactions.remove(&message.event_id).unwrap_or_default();
             if let Content::Poll(poll) = &mut message.content {
                 poll.responses = responses.remove(&message.event_id).unwrap_or_default();
+            }
+        }
+        self.enrich_author_profiles(messages).await?;
+        Ok(())
+    }
+
+    /// Overlays the current joined member profile onto message authors so
+    /// the public read path reflects live display-name and avatar changes
+    /// (renames and MSC4466 profile propagation update `room_members`).
+    ///
+    /// The stored snapshot columns remain as the fallback: members who left
+    /// the room (or whose member state was never seen) keep the value
+    /// captured at projection time.
+    async fn enrich_author_profiles(&self, messages: &mut [Message]) -> Result<()> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let room_ids: Vec<String> = messages
+            .iter()
+            .map(|message| message.room_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let members = room_members::Entity::find()
+            .filter(room_members::Column::RoomId.is_in(room_ids))
+            .filter(room_members::Column::Membership.eq("join"))
+            .all(&self.db)
+            .await?;
+        let by_key: HashMap<(String, String), &room_members::Model> = members
+            .iter()
+            .map(|member| ((member.room_id.clone(), member.user_id.clone()), member))
+            .collect();
+        for message in messages {
+            if let Some(member) =
+                by_key.get(&(message.room_id.clone(), message.sender_mxid.clone()))
+            {
+                message.author.display_name = member.display_name.clone();
+                message.author.avatar_url = member.avatar_url.clone();
             }
         }
         Ok(())
