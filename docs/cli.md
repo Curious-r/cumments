@@ -47,6 +47,7 @@ cumments
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
 │   ├── reinstate ROOM_ID
 │   └── upgrade ROOM_ID VERSION
+│   └── retire ROOM_ID --yes [--wait]
 └── completions SHELL
 ```
 
@@ -65,6 +66,8 @@ cumments
   body-free "no content" convention, so it reports the affected resource.
 - `rooms upgrade` prints `{"room_id","new_version","replacement_room"}`,
   matching the Operator API response.
+- `rooms retire` prints `{"room_id","status":"retiring"}` (or `"retired"`
+  after `--wait` completes), matching the Operator API response shape.
 - Exit codes: `0` success, `1` runtime error, `2` usage error (clap).
 
 ## Examples

@@ -104,6 +104,18 @@ response. This endpoint is the operator mirror of the
 site-level `POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
 (claim token); both execute through the AS bot.
 
+## Retire a comment room
+
+`DELETE /api/v1/operator/rooms/{room_id}`
+
+Marks the registered active room `Retired` immediately (new writes stop),
+then the background reconciler renames the Matrix room `[retired]`, removes
+its alias, leaves it as the AppService sender and every site virtual user,
+and clears the local projections. This is the operator mirror of
+`DELETE /api/v1/sites/{site_id}/posts/{post_slug}` (claim token); both go
+through the same management use case. Unknown or already-retired rooms
+return `404`.
+
 ## Governance fallback
 
 The operator can act on a site's behalf for site-level roles:

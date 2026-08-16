@@ -1,8 +1,10 @@
 use cumments_core::{
     audit::CommandAuditStatus,
     governance::{OWNER_LEVEL, RoleEntry},
-    models::{Content, TextContent, TextStyle},
-    ports::{CommandAuditStore, GovernanceStore, RoleClaimStore, SiteAuthStore, SiteStore},
+    models::{Content, PostSlug, RoomStatus, SiteId, TextContent, TextStyle},
+    ports::{
+        CommandAuditStore, GovernanceStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
+    },
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, SiteLifecycle, SitePolicyEntry, SiteVerificationPolicy,
         token_hash,
@@ -305,6 +307,126 @@ async fn site_registration_is_public_self_service() {
 }
 
 #[tokio::test]
+async fn owner_can_retire_a_post_room_with_confirm() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("owner-post-retire"))
+            .await
+            .expect("connect db"),
+    );
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("my-blog", "!space:hs")
+        .await
+        .expect("attach space");
+    store
+        .register_room("!room:hs", &site_id, &post_slug)
+        .await
+        .expect("register room");
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@alice:hs")).with_power_levels(
+            "!space:hs",
+            power_levels(serde_json::json!({ "@alice:hs": 100 })),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver,
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog post hello retire",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .get_room_status("!room:hs")
+            .await
+            .expect("room status"),
+        Some(RoomStatus::Active),
+        "confirmation must not retire yet"
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@alice:hs",
+            "!cumments site my-blog post hello retire --confirm",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .get_room_status("!room:hs")
+            .await
+            .expect("room status"),
+        Some(RoomStatus::Retired)
+    );
+}
+
+#[tokio::test]
+async fn operator_can_retire_a_room_by_id() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("operator-room-retire"))
+            .await
+            .expect("connect db"),
+    );
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .register_room("!room:hs", &site_id, &post_slug)
+        .await
+        .expect("register room");
+    let p = processor(
+        store.clone(),
+        private_members("@op:hs"),
+        vec!["@op:hs".to_string()],
+    );
+
+    assert!(
+        p.process_bot_command(&command_message("@op:hs", "!cumments room !room:hs retire"))
+            .await
+            .expect("process")
+    );
+    assert_eq!(
+        store
+            .get_room_status("!room:hs")
+            .await
+            .expect("room status"),
+        Some(RoomStatus::Active)
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@op:hs",
+            "!cumments room !room:hs retire --confirm",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .get_room_status("!room:hs")
+            .await
+            .expect("room status"),
+        Some(RoomStatus::Retired)
+    );
+}
+
+#[tokio::test]
 async fn commands_outside_private_channel_are_consumed_silently() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("not-private"))
@@ -492,6 +614,21 @@ async fn co_manager_can_manage_stickers_but_not_governance() {
         p.process_bot_command(&command_message(
             "@bob:hs",
             "!cumments site my-blog co-manager add @carol:hs",
+        ))
+        .await
+        .expect("process")
+    );
+    let audit = store
+        .list_command_audit(Some("@bob:hs"), 10)
+        .await
+        .expect("audit");
+    assert_eq!(audit[0].status, CommandAuditStatus::Denied);
+
+    // Post retirement is the same governance fence: denied for co-managers.
+    assert!(
+        p.process_bot_command(&command_message(
+            "@bob:hs",
+            "!cumments site my-blog post hello retire --confirm",
         ))
         .await
         .expect("process")

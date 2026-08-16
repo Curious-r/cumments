@@ -226,6 +226,7 @@ fn help_text() -> &'static str {
 !cumments site <id> co-manager add|remove <mxid>
 !cumments site <id> post <slug> moderator add|remove <mxid>
 !cumments site <id> post <slug> upgrade <version>（站主）
+!cumments site <id> post <slug> retire --confirm（站主）
 !cumments site <id> stickers list
 !cumments site <id> sticker add <pack_id> <shortcode> <mxc> [body...]
 !cumments site <id> sticker remove <pack_id> <shortcode> --confirm
@@ -235,6 +236,7 @@ fn help_text() -> &'static str {
 !cumments rooms quarantined               （实例管理员）
 !cumments room <room_id> reinstate --confirm
 !cumments room <room_id> upgrade <new_version> （实例管理员）
+!cumments room <room_id> retire --confirm（实例管理员）
 !cumments backfill [max_pages]            （实例管理员）
 破坏性命令需要 --confirm；敏感 token 只在本私聊显示。"
 }
@@ -635,6 +637,38 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
+            ["site", id, "post", slug, "retire"] => {
+                self.require_site_access(event, id).await?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!(
+                        "确认退役 {id}/{slug} 的评论区？此操作不可撤销。请回复：\n!cumments site {id} post {slug} retire --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "post", slug, "retire", "--confirm"] => {
+                self.require_site_access(event, id).await?;
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                if !cumments_core::management::retire_post_room(
+                    self.registry_store.as_ref(),
+                    &site_id,
+                    &post_slug,
+                )
+                .await?
+                {
+                    return Err(CommandError::error(format!(
+                        "没有为 {id}/{slug} 注册的活动房间"
+                    )));
+                }
+                self.governance_notify.notify_one();
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("{id}/{slug} 的评论区已标记退役，后台正在处理。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
             ["site", id, "stickers", "list"] => {
                 self.require_site_sticker_access(event, id).await?;
                 let packs = list_site_sticker_packs(self.sticker_pack_store.as_ref(), id).await?;
@@ -865,6 +899,33 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("房间 {room_id} 已升级到 {new_version}，新房间：{replacement}"),
+                    site_id: None,
+                })
+            }
+            ["room", room_id, "retire"] => {
+                self.require_operator(event)?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!(
+                        "确认退役房间 {room_id}？此操作不可撤销。请回复：\n!cumments room {room_id} retire --confirm"
+                    ),
+                    site_id: None,
+                })
+            }
+            ["room", room_id, "retire", "--confirm"] => {
+                self.require_operator(event)?;
+                if !cumments_core::management::retire_post_room_by_room_id(
+                    self.registry_store.as_ref(),
+                    room_id,
+                )
+                .await?
+                {
+                    return Err(CommandError::error("房间不存在或不是活动状态"));
+                }
+                self.governance_notify.notify_one();
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!("房间 {room_id} 已标记退役，后台正在处理。"),
                     site_id: None,
                 })
             }

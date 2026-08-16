@@ -200,6 +200,10 @@ pub enum RoomsCommand {
     /// Upgrade a registered comment room through the homeserver's /upgrade
     #[command(name = "upgrade")]
     Upgrade(UpgradeRoomArgs),
+    /// Stop writes and retire one comment room (leave Matrix, clear local
+    /// projections in the background)
+    #[command(name = "retire")]
+    Retire(RetireRoomArgs),
 }
 
 /// Arguments for listing quarantined rooms (mirrors
@@ -222,6 +226,18 @@ pub struct QuarantinedListArgs {
 #[derive(clap::Args, Debug)]
 pub struct ReinstateRoomArgs {
     pub room_id: String,
+}
+
+/// Arguments for retiring a comment room.
+#[derive(clap::Args, Debug)]
+pub struct RetireRoomArgs {
+    pub room_id: String,
+    /// Confirm the destructive operation
+    #[arg(long)]
+    pub yes: bool,
+    /// Poll until the background retirement finishes
+    #[arg(long)]
+    pub wait: bool,
 }
 
 /// Arguments for upgrading a comment room.

@@ -125,3 +125,22 @@ The operator mirror is
 `[sites]` configuration cannot be retired through the API; remove them from
 the config file instead. The CLI equivalent is
 `cumments sites retire <id> --yes [--wait]`.
+
+## Retire a post's comment room
+
+`DELETE /api/v1/sites/{site_id}/posts/{post_slug}`
+
+Headers: `X-Cumments-Claim-Token: <claim_token>`
+
+Removes one post's comment section. Like site retirement, this is
+two-phase: the request marks the room `retired` **synchronously** (new
+writes to that room are rejected from that moment) and returns
+`{ "site_id": "...", "post_slug": "...", "status": "retiring" }`. A
+background pass then renames the Matrix room `[retired] site/post`, removes
+its alias, leaves it as the AppService sender and every site virtual user,
+and clears the local projections. The post's alias is released and a later
+registration of the same post slug starts fresh.
+
+The operator mirror is `DELETE /api/v1/operator/rooms/{room_id}` (operator
+token), and the CLI equivalent is `cumments rooms retire ROOM_ID --yes
+[--wait]`. Retiring an unknown or already-retired room returns `404`.

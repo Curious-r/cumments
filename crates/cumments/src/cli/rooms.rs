@@ -1,6 +1,6 @@
 //! `cumments rooms ...` command handling.
 
-use super::args::{RoomsArgs, RoomsCommand, UpgradeRoomArgs};
+use super::args::{RetireRoomArgs, RoomsArgs, RoomsCommand, UpgradeRoomArgs};
 use super::output::{print_json, print_room_table};
 use anyhow::{Result, bail};
 use cumments_core::operator::{OperatorListQuery, list_operator_quarantined_rooms};
@@ -35,7 +35,49 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
             Ok(())
         }
         RoomsCommand::Upgrade(_) => unreachable!("upgrade is handled after driver setup"),
+        RoomsCommand::Retire(args) => retire_room(store, args).await,
     }
+}
+
+/// Marks a room `Retired` (writes stop immediately). The running server's
+/// reconciler performs the Matrix retirement and local cleanup.
+async fn retire_room(store: &cumments_store::DbStore, args: &RetireRoomArgs) -> Result<()> {
+    if !args.yes {
+        bail!("refusing to retire the room without `--yes`");
+    }
+    let retired =
+        cumments_core::management::retire_post_room_by_room_id(store, &args.room_id).await?;
+    if !retired {
+        bail!("room not found or not active");
+    }
+
+    if args.wait {
+        for _ in 0..300 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if store
+                .get_registered_room_identity(&args.room_id)
+                .await?
+                .is_none()
+            {
+                print_json(&serde_json::json!({
+                    "room_id": args.room_id,
+                    "status": "retired",
+                }))?;
+                return Ok(());
+            }
+        }
+        bail!("timed out waiting for the retirement to finish");
+    }
+
+    print_json(&serde_json::json!({
+        "room_id": args.room_id,
+        "status": "retiring",
+    }))?;
+    eprintln!(
+        "The running server retires the Matrix room in the background; \
+         re-run with `--wait` to block until it finishes."
+    );
+    Ok(())
 }
 
 /// Handles `cumments rooms upgrade ...` after the Matrix driver exists.
@@ -63,10 +105,10 @@ pub async fn handle_rooms_upgrade_command(
 
 #[cfg(test)]
 mod tests {
-    use super::super::args::{QuarantinedListArgs, ReinstateRoomArgs};
+    use super::super::args::{QuarantinedListArgs, ReinstateRoomArgs, RetireRoomArgs};
     use super::super::test_support::*;
     use super::*;
-    use cumments_core::models::{PostSlug, SiteId};
+    use cumments_core::models::{PostSlug, RoomStatus, SiteId};
     use cumments_store::DbStore;
 
     #[tokio::test]
@@ -122,6 +164,56 @@ mod tests {
         assert!(
             handle_rooms_command(&store, &missing).await.is_err(),
             "unknown room must fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn rooms_retire_requires_yes_and_marks_retired() {
+        let store = DbStore::connect(&test_db_url("rooms-retire"))
+            .await
+            .expect("connect db");
+        let site = SiteId::from("my-blog");
+        let slug = PostSlug::from("hello");
+        store
+            .register_room("!room:hs", &site, &slug)
+            .await
+            .expect("register room");
+
+        let no_confirm = RoomsArgs {
+            command: RoomsCommand::Retire(RetireRoomArgs {
+                room_id: "!room:hs".to_string(),
+                yes: false,
+                wait: false,
+            }),
+        };
+        assert!(
+            handle_rooms_command(&store, &no_confirm).await.is_err(),
+            "retire without --yes must fail"
+        );
+        assert_eq!(
+            store
+                .get_room_status("!room:hs")
+                .await
+                .expect("room status"),
+            Some(RoomStatus::Active)
+        );
+
+        let retire = RoomsArgs {
+            command: RoomsCommand::Retire(RetireRoomArgs {
+                room_id: "!room:hs".to_string(),
+                yes: true,
+                wait: false,
+            }),
+        };
+        handle_rooms_command(&store, &retire)
+            .await
+            .expect("retire room");
+        assert_eq!(
+            store
+                .get_room_status("!room:hs")
+                .await
+                .expect("room status"),
+            Some(RoomStatus::Retired)
         );
     }
 }
