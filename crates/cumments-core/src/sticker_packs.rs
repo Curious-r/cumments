@@ -476,8 +476,13 @@ pub fn parse_image_pack_content(
 /// Shapes one projected pack for the public sticker API.
 ///
 /// `proxify` maps an `mxc://` URL to a signed preview URL (or `None` when no
-/// proxy is configured); callers own that policy.
-pub fn pack_response_shape(pack: &StickerPack, proxify: impl Fn(&str) -> Option<String>) -> Value {
+/// proxy is configured). `proxify_avatar` maps the pack avatar to its
+/// thumbnail variant; callers own both policies.
+pub fn pack_response_shape(
+    pack: &StickerPack,
+    proxify: impl Fn(&str) -> Option<String>,
+    proxify_avatar: impl Fn(&str) -> Option<String>,
+) -> Value {
     let images = pack
         .content
         .images
@@ -507,6 +512,8 @@ pub fn pack_response_shape(pack: &StickerPack, proxify: impl Fn(&str) -> Option<
     }
     if let Some(avatar) = &pack.content.avatar_url {
         response["avatar_url"] = Value::String(avatar.clone());
+        response["avatar_proxy_url"] =
+            Value::String(proxify_avatar(avatar).unwrap_or_else(|| avatar.clone()));
     }
     response
 }
@@ -639,9 +646,11 @@ mod tests {
         )
         .expect("parse")
         .expect("usage");
-        let shape = pack_response_shape(&parsed, |url| {
-            (url == "mxc://hs/1").then(|| "/api/v1/media/hs/1?expires=1".to_string())
-        });
+        let shape = pack_response_shape(
+            &parsed,
+            |url| (url == "mxc://hs/1").then(|| "/api/v1/media/hs/1?expires=1".to_string()),
+            |_| None,
+        );
         assert_eq!(shape["pack_id"], "default");
         assert_eq!(shape["display_name"], "P");
         assert_eq!(shape["images"][0]["shortcode"], "cat");
@@ -651,7 +660,31 @@ mod tests {
         );
         assert_eq!(shape["images"][0]["info"]["w"], 100);
 
-        let no_proxy = pack_response_shape(&parsed, |_| None);
+        let no_proxy = pack_response_shape(&parsed, |_| None, |_| None);
         assert_eq!(no_proxy["images"][0]["proxy_url"], "mxc://hs/1");
+    }
+
+    #[test]
+    fn response_shape_proxies_pack_avatar() {
+        let parsed = pack(
+            "site",
+            "default",
+            json!({
+                "images": {"cat": {"url": "mxc://hs/1"}},
+                "pack": {"display_name": "P", "avatar_url": "mxc://hs/avatar"}
+            }),
+        )
+        .expect("parse")
+        .expect("usage");
+        let shape = pack_response_shape(
+            &parsed,
+            |_| None,
+            |url| (url == "mxc://hs/avatar").then(|| "/api/v1/media/hs/avatar?w=96".to_string()),
+        );
+        assert_eq!(shape["avatar_url"], "mxc://hs/avatar");
+        assert_eq!(shape["avatar_proxy_url"], "/api/v1/media/hs/avatar?w=96");
+
+        let no_proxy = pack_response_shape(&parsed, |_| None, |_| None);
+        assert_eq!(no_proxy["avatar_proxy_url"], "mxc://hs/avatar");
     }
 }

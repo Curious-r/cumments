@@ -523,6 +523,9 @@ pub struct RoomMetadata {
     pub name: Option<String>,
     pub topic: Option<String>,
     pub avatar_url: Option<String>,
+    /// Same source image as [`Self::avatar_url`]; API responses proxy it with
+    /// the avatar thumbnail variant (96×96 crop).
+    pub avatar_thumbnail_url: Option<String>,
     /// Number of members with `join` membership.
     pub member_count: i64,
 }

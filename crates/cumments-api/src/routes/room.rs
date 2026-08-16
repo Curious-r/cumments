@@ -15,6 +15,7 @@ struct RoomInfoResponse {
     name: Option<String>,
     topic: Option<String>,
     avatar_url: Option<String>,
+    avatar_thumbnail_url: Option<String>,
     member_count: i64,
     system_messages: Vec<cumments_core::models::RoomStateEvent>,
 }
@@ -48,6 +49,7 @@ pub(crate) async fn room_info_handler(
             name: None,
             topic: None,
             avatar_url: None,
+            avatar_thumbnail_url: None,
             member_count: 0,
         });
     if let Some(proxy) = &state.media_proxy
@@ -57,6 +59,14 @@ pub(crate) async fn room_info_handler(
             .and_then(|url| proxy.proxify(url))
     {
         metadata.avatar_url = Some(avatar);
+    }
+    if let Some(proxy) = &state.media_proxy
+        && let Some(avatar) = metadata
+            .avatar_thumbnail_url
+            .as_deref()
+            .and_then(|url| proxy.proxify_avatar(url))
+    {
+        metadata.avatar_thumbnail_url = Some(avatar);
     }
     let system_messages = state
         .store
@@ -69,6 +79,7 @@ pub(crate) async fn room_info_handler(
         name: metadata.name,
         topic: metadata.topic,
         avatar_url: metadata.avatar_url,
+        avatar_thumbnail_url: metadata.avatar_thumbnail_url,
         member_count: metadata.member_count,
         system_messages,
     }))

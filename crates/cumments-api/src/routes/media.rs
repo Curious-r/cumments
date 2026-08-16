@@ -625,12 +625,21 @@ pub(crate) async fn list_stickers_handler(
     let packs = packs
         .iter()
         .map(|projection| {
-            pack_response_shape(&projection.pack, |url| {
-                state
-                    .media_proxy
-                    .as_ref()
-                    .and_then(|proxy| proxy.proxify(url))
-            })
+            pack_response_shape(
+                &projection.pack,
+                |url| {
+                    state
+                        .media_proxy
+                        .as_ref()
+                        .and_then(|proxy| proxy.proxify(url))
+                },
+                |url| {
+                    state
+                        .media_proxy
+                        .as_ref()
+                        .and_then(|proxy| proxy.proxify_avatar(url))
+                },
+            )
         })
         .collect::<Vec<_>>();
     Ok(Json(serde_json::json!({ "packs": packs })))
@@ -671,12 +680,21 @@ pub(crate) async fn add_site_sticker_handler(
     )
     .await
     .map_err(map_sticker_use_case_error)?;
-    Ok(Json(pack_response_shape(&projection.pack, |url| {
-        state
-            .media_proxy
-            .as_ref()
-            .and_then(|proxy| proxy.proxify(url))
-    })))
+    Ok(Json(pack_response_shape(
+        &projection.pack,
+        |url| {
+            state
+                .media_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.proxify(url))
+        },
+        |url| {
+            state
+                .media_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.proxify_avatar(url))
+        },
+    )))
 }
 
 /// Removes one sticker image from a site's pack.
@@ -702,12 +720,21 @@ pub(crate) async fn remove_site_sticker_handler(
     )
     .await
     .map_err(map_sticker_use_case_error)?;
-    Ok(Json(pack_response_shape(&projection.pack, |url| {
-        state
-            .media_proxy
-            .as_ref()
-            .and_then(|proxy| proxy.proxify(url))
-    })))
+    Ok(Json(pack_response_shape(
+        &projection.pack,
+        |url| {
+            state
+                .media_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.proxify(url))
+        },
+        |url| {
+            state
+                .media_proxy
+                .as_ref()
+                .and_then(|proxy| proxy.proxify_avatar(url))
+        },
+    )))
 }
 
 fn map_sticker_use_case_error(error: StickerPackUseCaseError) -> AppError {

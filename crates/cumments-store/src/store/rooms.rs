@@ -153,6 +153,7 @@ impl RoomStore for DbStore {
         let mut name = None;
         let mut topic = None;
         let mut avatar_url = None;
+        let mut avatar_thumbnail_url = None;
         for event in events {
             let Ok(json) = serde_json::from_str::<serde_json::Value>(&event.content_json) else {
                 continue;
@@ -172,6 +173,11 @@ impl RoomStore for DbStore {
                 }
                 "m.room.avatar" if avatar_url.is_none() => {
                     avatar_url = json.get("url").and_then(|v| v.as_str()).map(str::to_string);
+                    // The thumbnail is derived from the same source image by
+                    // requesting the homeserver's avatar bucket (96×96 crop);
+                    // `info.thumbnail_url` is intentionally not relied on
+                    // (see misc/design/avatar.md §3.4).
+                    avatar_thumbnail_url = avatar_url.clone();
                 }
                 _ => {}
             }
@@ -188,6 +194,7 @@ impl RoomStore for DbStore {
             name,
             topic,
             avatar_url,
+            avatar_thumbnail_url,
             member_count,
         }))
     }
