@@ -11,8 +11,8 @@ The endpoint reference is split by resource area:
 - [Governance](governance.md) — owners, co-managers, room moderators, room
   upgrades and the projected rosters.
 - [Operator](operator.md) — operator-only endpoints.
-- [Media](media.md) — the public media proxy, guest uploads and site sticker
-  packs.
+- [Media](media.md) — the public media proxy, guest uploads, guest avatars
+  and site sticker packs.
 
 The sections below describe the primitives shared by every endpoint.
 
@@ -55,10 +55,10 @@ Authors come in two forms:
 
 ## Idempotent writes
 
-`POST`, `PATCH`, `DELETE` and guest media uploads are writes: comment
-submissions accept a submission and return `202 { "submission_id": ... }`
-before the comment actually lands in Matrix, while media uploads return the
-`mxc://` URL synchronously.
+`POST`, `PATCH`, `DELETE`, guest media uploads and guest avatar writes are
+writes: comment submissions accept a submission and return
+`202 { "submission_id": ... }` before the comment actually lands in Matrix,
+while media and avatar uploads return their result synchronously.
 If the client loses the response (network failure, timeout, browser crash) it
 can retry the exact same request with the same `Idempotency-Key` header; the
 server detects the duplicate and returns the original `submission_id` again with

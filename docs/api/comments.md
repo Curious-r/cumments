@@ -72,8 +72,9 @@ Response:
 - `encrypted`: `{ "type": "encrypted", "algorithm": "m.megolm.v1.aes-sha2", "sender_key": … }`
 - `unknown`: `{ "type": "unknown", "fallback": …, "raw": { … } }`
 
-Media URLs are rewritten to signed proxy URLs when the media proxy is
-enabled; see [Media proxy](media.md#media-proxy).
+Media URLs and author avatars (`author.avatar_url`) are rewritten to signed
+proxy URLs when the media proxy is enabled (avatars through the 96×96 crop
+variant); see [Media proxy](media.md#media-proxy).
 
 ## Post a comment
 
@@ -215,7 +216,8 @@ signed proof block, closing the loop through the same projection path.
 `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`
 
 Returns the comment room's current metadata (`name`, `topic`, `avatar_url`,
-`member_count`) and the most recent system messages (member joins/leaves,
-room name/topic/avatar changes). `avatar_url` is a signed media-proxy URL
-when the proxy is enabled. See [Data model](../data-model.md) for the room
-metadata tables.
+`avatar_thumbnail_url`, `member_count`) and the most recent system messages
+(member joins/leaves, room name/topic/avatar changes). `avatar_url` is a
+signed media-proxy URL and `avatar_thumbnail_url` is the same image through
+the 96×96 crop variant, both when the proxy is enabled. See
+[Data model](../data-model.md) for the room metadata tables.

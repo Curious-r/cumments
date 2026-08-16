@@ -84,6 +84,35 @@ their `mxid` and never a `public_key`.
 Reactions and poll responses are annotation edges, not comment messages: they
 are stored in their own tables and aggregated onto the target message.
 
+## Avatars
+
+Matrix has no single avatar entity; avatars live in three spec-defined
+places and Cumments projects all of them:
+
+- **Global profile** (`avatar_url` profile field): the canonical identity
+  avatar of a user. Guests set it through the guest avatar API, which stores
+  it on the virtual user's profile and propagates it to joined rooms as
+  `m.room.member` events (`m.propagate_to: "all"`, MSC4466).
+- **`m.room.member.avatar_url`**: the per-room profile snapshot. It is the
+  source used when projecting message authors; leave events keep the last
+  known value instead of wiping the snapshot, and redaction removes it.
+- **`m.room.avatar`**: the room's own avatar. `url` absent means "no
+  avatar"; `info.thumbnail_url` is preserved in the raw state JSON but is
+  not part of the API contract — the room endpoint derives
+  `avatar_thumbnail_url` from the main image through the 96×96 crop
+  thumbnail variant instead.
+
+Author snapshots are resolved once when a message is projected: Matrix-native
+authors take both display name and avatar from their current `m.room.member`
+state, while guests keep the signed display name from the event content and
+take the avatar from member state. Later profile changes never rewrite
+existing messages.
+
+All avatar URLs are stored as `mxc://` and rewritten to signed media-proxy
+URLs on the way out of the API (see [Media proxy](#media-proxy)); the proxy
+itself uses the authenticated `/_matrix/client/v1/media` endpoints with the
+AppService token.
+
 ## Not part of the comment stream
 
 Two classes of events are deliberately excluded from the `Message` model:
@@ -94,10 +123,11 @@ Two classes of events are deliberately excluded from the `Message` model:
 - **Room state events** (`m.room.member`, name, topic, avatar,
   `m.room.power_levels`, tombstones, `m.space.*`) *are* in room history, but
   they are room metadata rather than comments. A light metadata model
-  (`room_members` + `room_state_events`) records joins/leaves and name, topic
-  and avatar changes; `GET .../room` returns that metadata and the most
-  recent system messages. Power levels feed the governance projection instead
-  (see [site governance](site-governance.md)).
+  (`room_members` + `room_state_events`) records joins/leaves and name,
+  topic and avatar changes; `GET .../room` returns that metadata (including
+  `avatar_thumbnail_url`) and the most recent system messages. Power levels
+  feed the governance projection instead (see
+  [site governance](site-governance.md)).
 
 Voice/video calls are not modeled at all.
 
@@ -137,6 +167,10 @@ Notes on the layout:
   keeps the latest vote authoritative.
 - `formatted_body` is passed through unchanged. The demo renders plain text
   only; any client rendering HTML must sanitize it first.
+- `media_uploads.post_slug` is nullable: comment media records the post it
+  was authorized for, while guest avatars are site-scoped records with a
+  `NULL` post. Avatar media is marked referenced at upload time so the
+  unused-media sweep never collects a profile avatar.
 
 ## Ephemeral events
 
@@ -181,8 +215,12 @@ and other comment-shaped writes go through the async submission queue with an
 ## Media proxy
 
 `mxc://` URIs require Matrix credentials to download, so Cumments exposes a
-public, read-only proxy with short-lived signed URLs. The proxy is limited to
-the configured homeserver, rate limited, size-capped, filtered by content
-type, and answers media and thumbnail requests. It is deliberately
-read-only: site administrators browse media directly in their Matrix client,
-which is one benefit of building on Matrix (see [API](api/media.md#media-proxy)).
+public, read-only proxy with short-lived signed URLs. The proxy is limited
+to the configured homeserver, rate limited, size-capped, filtered by content
+type, and answers media and thumbnail requests through the authenticated
+`/_matrix/client/v1/media` endpoints (MSC3916) with the AppService token.
+Thumbnail requests carry signed `width`/`height`/`method` parameters;
+message thumbnails default to 320×240 `scale` and avatars to 96×96 `crop`.
+It is deliberately read-only: site administrators browse media directly in
+their Matrix client, which is one benefit of building on Matrix (see
+[API](api/media.md#media-proxy)).
