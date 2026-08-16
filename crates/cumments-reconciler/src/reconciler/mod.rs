@@ -4,6 +4,7 @@ mod media;
 mod moderation;
 mod pass;
 mod posts;
+mod room_retirement;
 mod rooms;
 mod timeouts;
 mod updates;
@@ -171,6 +172,10 @@ impl Reconciler {
                 schedule.moderation,
             )),
             Arc::new(rooms::RoomCleanupPass::new(deps.clone(), schedule.rooms)),
+            Arc::new(room_retirement::RoomRetirementPass::new(
+                deps.clone(),
+                schedule.retirements,
+            )),
             Arc::new(decommission::DecommissionPass::new(
                 deps.clone(),
                 schedule.decommission,
@@ -210,6 +215,7 @@ struct PassSchedule {
     claims: PassConfig,
     moderation: PassConfig,
     rooms: PassConfig,
+    retirements: PassConfig,
     decommission: PassConfig,
 }
 
@@ -238,6 +244,7 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
         claims: projection("claims"),
         moderation: projection("moderation"),
         rooms: governance("rooms"),
+        retirements: governance("retirements"),
         decommission: governance("decommission"),
     }
 }
