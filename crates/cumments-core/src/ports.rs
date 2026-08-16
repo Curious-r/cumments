@@ -428,6 +428,10 @@ pub trait RegistryStore: Send + Sync {
     /// AS-managed memberships from rooms that were replaced.
     async fn list_superseded_rooms(&self) -> Result<Vec<String>>;
 
+    /// Lists every room marked retired (post-level decommission) that still
+    /// has a registry row. Used by the room-retirement pass.
+    async fn list_retired_rooms(&self) -> Result<Vec<String>>;
+
     /// Looks up the Cumments identity registered for a room.
     ///
     /// Unlike [`Self::get_registered_room`] this is a reverse lookup by room ID,
@@ -456,6 +460,11 @@ pub trait RegistryStore: Send + Sync {
     /// Retires a room from the registry (e.g. the room no longer exists or
     /// was replaced), keeping the row for projection history.
     async fn retire_room(&self, room_id: &str) -> Result<()>;
+
+    /// Marks an active room `Retired` (post-level decommission), stopping
+    /// new writes immediately. Returns `false` when the room is not in the
+    /// registry or is no longer active.
+    async fn mark_room_retired(&self, room_id: &str) -> Result<bool>;
 
     /// Quarantines a room after an adoption failure. `adoption_failures` is
     /// the failure count after this attempt (the caller derives it from the
@@ -642,6 +651,11 @@ pub trait SiteAuthStore: Send + Sync {
     /// projections, rooms, submissions). Callers must have already retired the
     /// Matrix side; this is the final, idempotent cleanup.
     async fn delete_site(&self, site_id: &str) -> Result<()>;
+
+    /// Removes every local trace of one retired comment room (projections,
+    /// room rows, this post's submissions and media rows). Callers must have
+    /// already retired the Matrix side; idempotent, safe to retry.
+    async fn delete_room_local(&self, room_id: &str) -> Result<()>;
 
     /// Stored SHA-256 hash of the site's claim token, if any.
     async fn get_claim_token_hash(&self, site_id: &str) -> Result<Option<String>>;

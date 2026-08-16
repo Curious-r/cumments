@@ -454,6 +454,9 @@ pub enum RoomStatus {
     Quarantined,
     /// Replaced by another room or no longer usable.
     Superseded,
+    /// Retired by the site owner or operator; the Matrix room was left and
+    /// local projections are being/been cleared.
+    Retired,
 }
 
 impl RoomStatus {
@@ -462,6 +465,7 @@ impl RoomStatus {
             RoomStatus::Active => "active",
             RoomStatus::Quarantined => "quarantined",
             RoomStatus::Superseded => "superseded",
+            RoomStatus::Retired => "retired",
         }
     }
 }
@@ -474,6 +478,7 @@ impl std::str::FromStr for RoomStatus {
             "active" => Ok(RoomStatus::Active),
             "quarantined" => Ok(RoomStatus::Quarantined),
             "superseded" => Ok(RoomStatus::Superseded),
+            "retired" => Ok(RoomStatus::Retired),
             other => Err(format!("unknown room status `{other}`")),
         }
     }

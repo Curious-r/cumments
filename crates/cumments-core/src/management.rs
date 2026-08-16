@@ -351,6 +351,37 @@ pub async fn retire_site(
     Ok(store.mark_site_retiring(site_id).await?)
 }
 
+/// Marks one post's active comment room `Retired`, stopping new writes
+/// immediately; the running reconciler then leaves the Matrix room and
+/// clears local projections. Returns `false` when there is no active room
+/// for the site/post (or it is already retired), matching `retire_site`.
+pub async fn retire_post_room(
+    registry: &dyn RegistryStore,
+    site_id: &SiteId,
+    post_slug: &PostSlug,
+) -> Result<bool, ManagementError> {
+    let Some(room_id) = registry.get_registered_room(site_id, post_slug).await? else {
+        return Ok(false);
+    };
+    Ok(registry.mark_room_retired(&room_id).await?)
+}
+
+/// Room-id variant of [`retire_post_room`], used by the operator mirror and
+/// the CLI/bot room commands.
+pub async fn retire_post_room_by_room_id(
+    registry: &dyn RegistryStore,
+    room_id: &str,
+) -> Result<bool, ManagementError> {
+    let Some(identity) = registry.get_registered_room_identity(room_id).await? else {
+        return Ok(false);
+    };
+    let site_id = SiteId::new(identity.site_id.clone())
+        .map_err(|_| ManagementError::InvalidSiteId(identity.site_id.clone()))?;
+    let post_slug = PostSlug::new(identity.post_slug.clone())
+        .map_err(|_| ManagementError::InvalidPostSlug(identity.post_slug.clone()))?;
+    retire_post_room(registry, &site_id, &post_slug).await
+}
+
 /// Issues a fresh HMAC secret for a site. Returns `None` when the site does
 /// not exist.
 pub async fn issue_secret(

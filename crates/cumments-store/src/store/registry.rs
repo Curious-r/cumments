@@ -78,6 +78,18 @@ impl RegistryStore for DbStore {
         Ok(rows.into_iter().map(|row| row.room_id).collect())
     }
 
+    async fn list_retired_rooms(&self) -> Result<Vec<String>> {
+        let rows = room_registry::Entity::find()
+            .filter(
+                room_registry::COLUMN
+                    .status
+                    .eq(RoomStatus::Retired.as_str()),
+            )
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.room_id).collect())
+    }
+
     async fn get_registered_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>> {
         let room = room_registry::Entity::find_by_id(room_id.to_owned())
             .one(&self.db)
@@ -198,6 +210,23 @@ impl RegistryStore for DbStore {
             .exec(&self.db)
             .await?;
         Ok(())
+    }
+
+    async fn mark_room_retired(&self, room_id: &str) -> Result<bool> {
+        let result = room_registry::Entity::update_many()
+            .col_expr(
+                room_registry::Column::Status,
+                sea_orm::sea_query::Expr::value(RoomStatus::Retired.as_str()),
+            )
+            .col_expr(
+                room_registry::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(room_registry::COLUMN.room_id.eq(room_id))
+            .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
     }
 
     async fn quarantine_room(
