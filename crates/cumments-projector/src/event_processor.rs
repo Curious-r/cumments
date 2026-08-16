@@ -1147,28 +1147,16 @@ impl EventProcessor {
 
     /// Resolves the author profile snapshot at projection time.
     ///
-    /// Matrix-native senders carry no profile in the message event itself:
-    /// both the display name and the avatar come from their current
-    /// `m.room.member` state. Virtual users carry a signed display name in
-    /// the event; their avatar (if any) still comes from room member state.
-    /// The lookup happens once here and is never rewritten by later profile
-    /// changes, matching the author-snapshot data-model contract.
-    fn author_profile_snapshot(
-        is_virtual_user_sender: bool,
-        event_display_name: Option<String>,
-        member: Option<&RoomMember>,
-    ) -> (Option<String>, Option<String>) {
-        if is_virtual_user_sender {
-            (
-                event_display_name,
-                member.and_then(|member| member.avatar_url.clone()),
-            )
-        } else {
-            (
-                member.and_then(|member| member.display_name.clone()),
-                member.and_then(|member| member.avatar_url.clone()),
-            )
-        }
+    /// Both Matrix-native and virtual-user senders take their display name
+    /// and avatar from the current `m.room.member` state: profile data is
+    /// Matrix state, never signed event content. The stored value is a
+    /// fallback; the API/SSE read path joins live member state on output
+    /// (see `misc/design/visitor-identity.md`).
+    fn author_profile_snapshot(member: Option<&RoomMember>) -> (Option<String>, Option<String>) {
+        (
+            member.and_then(|member| member.display_name.clone()),
+            member.and_then(|member| member.avatar_url.clone()),
+        )
     }
 
     /// Process a room message (new comment or edit).
@@ -1357,19 +1345,17 @@ impl EventProcessor {
                 &event.author_public_key,
                 &event.author_signature,
                 &event.author_challenge,
-                &event.display_name,
             ) {
-                (Some(pk), Some(sig), Some(chal), Some(nick)) => {
+                (Some(pk), Some(sig), Some(chal)) => {
                     let message = match &event.content {
                         // Locations use the standalone LOCATE signature;
                         // text/media use the POST signature (which binds the
-                        // display name and reply relation).
+                        // content and reply relation).
                         Content::Location(location) => signature_message(&[
                             "LOCATE",
                             &site_id,
                             &post_slug,
                             &location.geo_uri,
-                            nick,
                             chal,
                         ]),
                         _ => match event.signable_content() {
@@ -1377,7 +1363,6 @@ impl EventProcessor {
                                 &site_id,
                                 &post_slug,
                                 content,
-                                nick,
                                 event.reply_to.as_deref(),
                                 chal,
                             ),
@@ -1410,11 +1395,7 @@ impl EventProcessor {
             .room_store
             .get_member(&event.room_id, &event.sender)
             .await?;
-        let (display_name, avatar_url) = Self::author_profile_snapshot(
-            event.is_virtual_user_sender,
-            event.display_name.clone(),
-            member.as_ref(),
-        );
+        let (display_name, avatar_url) = Self::author_profile_snapshot(member.as_ref());
         let message = Message {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),
@@ -2327,38 +2308,28 @@ mod tests {
 
     #[test]
     fn matrix_author_snapshot_comes_from_room_member_state() {
-        let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(
-            false,
-            None,
-            Some(&member(Some("Alice"), Some("mxc://hs/avatar"))),
-        );
+        let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(Some(&member(
+            Some("Alice"),
+            Some("mxc://hs/avatar"),
+        )));
         assert_eq!(display_name.as_deref(), Some("Alice"));
         assert_eq!(avatar_url.as_deref(), Some("mxc://hs/avatar"));
     }
 
     #[test]
-    fn matrix_author_without_member_state_has_no_profile() {
-        let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(false, None, None);
+    fn author_without_member_state_has_no_profile() {
+        let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(None);
         assert!(display_name.is_none());
         assert!(avatar_url.is_none());
     }
 
     #[test]
-    fn guest_display_name_stays_from_event_and_avatar_from_member_state() {
-        let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(
-            true,
-            Some("访客".to_string()),
-            Some(&member(Some("旧名字"), Some("mxc://hs/avatar"))),
-        );
+    fn guest_author_profile_comes_from_room_member_state() {
+        let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(Some(&member(
+            Some("访客"),
+            Some("mxc://hs/avatar"),
+        )));
         assert_eq!(display_name.as_deref(), Some("访客"));
         assert_eq!(avatar_url.as_deref(), Some("mxc://hs/avatar"));
-    }
-
-    #[test]
-    fn guest_without_member_state_keeps_event_display_name_and_no_avatar() {
-        let (display_name, avatar_url) =
-            EventProcessor::author_profile_snapshot(true, Some("访客".to_string()), None);
-        assert_eq!(display_name.as_deref(), Some("访客"));
-        assert!(avatar_url.is_none());
     }
 }

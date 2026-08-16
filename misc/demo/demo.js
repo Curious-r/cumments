@@ -2131,7 +2131,6 @@
                                 cfg.siteId,
                                 cfg.slug,
                                 geoUri,
-                                displayName,
                                 chal.prefix,
                             ]);
                             const res = await fetch(
@@ -2219,7 +2218,6 @@
                         cfg.siteId,
                         cfg.slug,
                         signedContent,
-                        displayName,
                         replyTo,
                         chal.prefix,
                     ]);

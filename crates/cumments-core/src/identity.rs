@@ -27,13 +27,15 @@ pub fn signature_message(parts: &[&str]) -> String {
 
 /// Build the canonical message signed when posting a comment.
 ///
-/// `reply_to` is always present as its own line (empty when there is no parent)
-/// so the reply relation cannot be swapped after signing.
+/// Only content and operation parameters are signed: site, post, content,
+/// the reply relation (always present as its own line, empty when there is
+/// no parent, so it cannot be swapped after signing) and the challenge
+/// nonce. Display data (display name, avatar) is profile state and never
+/// enters the signature.
 pub fn post_signature_message(
     site_id: &str,
     post_slug: &str,
     content: &str,
-    display_name: &str,
     reply_to: Option<&str>,
     challenge: &str,
 ) -> String {
@@ -42,7 +44,6 @@ pub fn post_signature_message(
         site_id,
         post_slug,
         content,
-        display_name,
         reply_to.unwrap_or(""),
         challenge,
     ])
@@ -140,12 +141,12 @@ mod tests {
     #[test]
     fn post_signature_message_includes_reply_to_slot() {
         assert_eq!(
-            post_signature_message("my-blog", "hello", "content", "Alice", Some("$p:hs"), "ch"),
-            "POST\nmy-blog\nhello\ncontent\nAlice\n$p:hs\nch"
+            post_signature_message("my-blog", "hello", "content", Some("$p:hs"), "ch"),
+            "POST\nmy-blog\nhello\ncontent\n$p:hs\nch"
         );
         assert_eq!(
-            post_signature_message("my-blog", "hello", "content", "Alice", None, "ch"),
-            "POST\nmy-blog\nhello\ncontent\nAlice\n\nch"
+            post_signature_message("my-blog", "hello", "content", None, "ch"),
+            "POST\nmy-blog\nhello\ncontent\n\nch"
         );
     }
 }

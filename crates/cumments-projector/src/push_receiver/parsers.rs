@@ -177,14 +177,12 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     let author_signature = namespaced_string(content, "signature").map(|s| s.to_string());
     let author_challenge = namespaced_string(content, "challenge").map(|s| s.to_string());
     let structured_content = namespaced_string(content, "content");
-    let structured_display_name = namespaced_string(content, "displayname");
 
     let trusted_block = is_virtual_sender
         && author_public_key.is_some()
         && author_signature.is_some()
         && author_challenge.is_some()
-        && structured_content.is_some()
-        && structured_display_name.is_some();
+        && structured_content.is_some();
 
     let mut parsed_content = if event.event_type == "m.room.encrypted" {
         Content::Encrypted(EncryptedPlaceholder {
@@ -271,11 +269,6 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         event_id: event_id.clone(),
         sender: sender.clone(),
         content: parsed_content,
-        display_name: if is_virtual_sender {
-            structured_display_name.map(|s| s.to_string())
-        } else {
-            None
-        },
         author_public_key: if trusted_block {
             author_public_key
         } else {
@@ -689,12 +682,10 @@ mod tests {
                 "m.new_content": {
                     "body": "**Alice**: edited",
                     "host.curious.cumments.message": {
-                        "guest_id": "abcd",
                         "public_key": "pubkey",
                         "signature": "sig",
                         "challenge": "chal",
                         "content": "edited",
-                        "displayname": "Alice",
                         "submission_id": 42,
                     }
                 },
@@ -708,7 +699,6 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse edit");
-        assert_eq!(parsed.display_name.as_deref(), Some("Alice"));
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert!(matches!(&parsed.content, Content::Text(t) if t.body == "edited"));
@@ -745,12 +735,10 @@ mod tests {
                 "msgtype": "m.text",
                 "body": "**Alice**: hello",
                 "host.curious.cumments.message": {
-                    "guest_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
                     "content": "hello",
-                    "displayname": "Alice",
                     "submission_id": 7,
                 }
             })),
@@ -759,7 +747,6 @@ mod tests {
         };
 
         let parsed = parse_push_message(&event).expect("parse comment");
-        assert_eq!(parsed.display_name.as_deref(), Some("Alice"));
         assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(parsed.author_signature.as_deref(), Some("sig"));
         assert!(matches!(&parsed.content, Content::Text(t) if t.body == "hello"));
@@ -785,12 +772,10 @@ mod tests {
                     }
                 },
                 "host.curious.cumments.message": {
-                    "guest_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
                     "content": "hello",
-                    "displayname": "Alice",
                     "submission_id": 7,
                 }
             })),
@@ -816,12 +801,10 @@ mod tests {
                 "msgtype": "m.text",
                 "body": "plain body",
                 "host.curious.cumments.message": {
-                    "guest_id": "abcd",
                     "public_key": "fake-pubkey",
                     "signature": "fake-signature",
                     "challenge": "fake-challenge",
                     "content": "spoofed content",
-                    "displayname": "Spoofed",
                     "submission_id": 42,
                 }
             })),
@@ -835,7 +818,6 @@ mod tests {
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
         assert!(parsed.author_challenge.is_none());
-        assert!(parsed.display_name.is_none());
         assert!(parsed.submission_id.is_none());
     }
 
@@ -1022,12 +1004,10 @@ mod tests {
                     "key": "👍",
                 },
                 "host.curious.cumments.message": {
-                    "guest_id": "abcd",
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
                     "content": "👍",
-                    "displayname": "",
                 }
             }),
         );

@@ -99,8 +99,7 @@ mod tests {
         let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
         let sender = format!("@_cumments_my-blog_{}:example.com", guest_id);
         let challenge = "challenge";
-        let message =
-            post_signature_message("my-blog", "hello", "content", "Alice", None, challenge);
+        let message = post_signature_message("my-blog", "hello", "content", None, challenge);
         let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
 
         assert!(verify_guest_event(

@@ -8,7 +8,6 @@ use crate::wire::{
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use cumments_core::{
-    identity::derive_guest_id_from_public_key,
     models::{CommentMedia, RoomEventPage, SiteId},
     submissions::fresh_transaction_id,
 };
@@ -114,8 +113,6 @@ impl AppServiceMatrixDriver {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
-            .ok_or_else(|| anyhow!("invalid author public key"))?;
 
         // 2. Ensure the virtual user is in the room (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
@@ -129,20 +126,16 @@ impl AppServiceMatrixDriver {
         let message_body = match media {
             Some(media) => build_media_body(
                 media,
-                display_name,
                 author_public_key,
                 author_signature,
                 author_challenge,
-                &guest_id,
                 submission_id,
             ),
             None => build_message_body(
                 content,
-                display_name,
                 author_public_key,
                 author_signature,
                 author_challenge,
-                &guest_id,
                 submission_id,
                 reply_to,
                 reply_to_body,
@@ -202,15 +195,12 @@ impl AppServiceMatrixDriver {
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
         self.ensure_joined(room_id, &virtual_user).await?;
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
-            .ok_or_else(|| anyhow!("invalid author public key"))?;
         let body = build_reaction_body(
             key,
             target_event_id,
             author_public_key,
             author_signature,
             author_challenge,
-            &guest_id,
         );
         let txn_id = fresh_transaction_id("react");
         let path = format!(
@@ -248,15 +238,12 @@ impl AppServiceMatrixDriver {
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
         self.ensure_joined(room_id, &virtual_user).await?;
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
-            .ok_or_else(|| anyhow!("invalid author public key"))?;
         let body = build_poll_vote_body(
             poll_event_id,
             answer_id,
             author_public_key,
             author_signature,
             author_challenge,
-            &guest_id,
         );
         let txn_id = fresh_transaction_id("vote");
         let path = format!(
@@ -297,8 +284,6 @@ impl AppServiceMatrixDriver {
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
         self.ensure_joined(room_id, &virtual_user).await?;
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
-            .ok_or_else(|| anyhow!("invalid author public key"))?;
         // Keep the display name in sync (best-effort), like text posts.
         if let Err(e) = self.ensure_display_name(&virtual_user, display_name).await {
             warn!("Failed to set display name for {}: {:#}", virtual_user, e);
@@ -306,11 +291,9 @@ impl AppServiceMatrixDriver {
         let body = build_location_body(
             geo_uri,
             description,
-            display_name,
             author_public_key,
             author_signature,
             author_challenge,
-            &guest_id,
             submission_id,
         );
         let path = format!(
@@ -359,8 +342,6 @@ impl AppServiceMatrixDriver {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
-            .ok_or_else(|| anyhow!("invalid author public key"))?;
 
         // 2. Ensure joined (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
@@ -374,11 +355,9 @@ impl AppServiceMatrixDriver {
         let message_body = build_edit_body(
             event_id,
             new_content,
-            display_name,
             author_public_key,
             author_signature,
             author_challenge,
-            &guest_id,
             submission_id,
         );
 

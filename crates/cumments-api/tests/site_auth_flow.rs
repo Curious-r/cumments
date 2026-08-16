@@ -1237,7 +1237,6 @@ async fn location_posts_are_queued_and_idempotent() {
         "test-blog",
         "hello",
         "geo:31.2,121.5",
-        display_name,
         &challenge.prefix,
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
@@ -1325,14 +1324,8 @@ async fn comment_replay_returns_original_submission_without_consuming_pow() {
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
     let display_name = "Alice";
-    let message = post_signature_message(
-        "test-blog",
-        "hello",
-        "hello world",
-        display_name,
-        None,
-        &challenge.prefix,
-    );
+    let message =
+        post_signature_message("test-blog", "hello", "hello world", None, &challenge.prefix);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "hello world",
@@ -1401,14 +1394,7 @@ async fn comment_media_must_reference_an_owned_upload() {
     let challenge_response = solve_pow(&challenge);
     let display_name = "Alice";
     let media_url = "mxc://hs/cat";
-    let message = post_signature_message(
-        "test-blog",
-        "hello",
-        media_url,
-        display_name,
-        None,
-        &challenge.prefix,
-    );
+    let message = post_signature_message("test-blog", "hello", media_url, None, &challenge.prefix);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "",
@@ -2351,14 +2337,7 @@ async fn comment_stickers_must_reference_the_sites_packs() {
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
     let media_url = "mxc://hs/cat";
-    let message = post_signature_message(
-        "test-blog",
-        "hello",
-        media_url,
-        "Alice",
-        None,
-        &challenge.prefix,
-    );
+    let message = post_signature_message("test-blog", "hello", media_url, None, &challenge.prefix);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "",

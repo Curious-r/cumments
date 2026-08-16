@@ -12,8 +12,6 @@ pub struct ParsedRoomMessage {
     pub sender: String,
     /// The typed, displayable content of the message.
     pub content: Content,
-    /// The resolved display name of the author, if available.
-    pub display_name: Option<String>,
     /// The author's Ed25519 public key embedded in the event, if any.
     pub author_public_key: Option<String>,
     /// The author's Ed25519 signature embedded in the event, if any.

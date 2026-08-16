@@ -127,11 +127,9 @@ pub(crate) fn reply_fallback_body(
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_message_body(
     content: &str,
-    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    guest_id: &str,
     submission_id: Option<i64>,
     reply_to: Option<&str>,
     reply_to_body: Option<&str>,
@@ -151,14 +149,14 @@ pub(crate) fn build_message_body(
         "body": body,
     });
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
-        "guest_id": guest_id,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
-        // Structured fields so the projector can store the pure content
-        // and displayname instead of parsing them back out of the body.
+        // Structured content so the projector can store the pure body
+        // instead of parsing it back out of the rich-reply fallback.
+        // Display data (display name, avatar) is profile state and is
+        // deliberately not part of the proof block.
         "content": content,
-        "displayname": display_name,
         "submission_id": submission_id,
     });
     if let Some(parent_event_id) = reply_to {
@@ -175,11 +173,9 @@ pub(crate) fn build_message_body(
 /// the canonical signed content.
 pub(crate) fn build_media_body(
     media: &CommentMedia,
-    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    guest_id: &str,
     submission_id: Option<i64>,
 ) -> serde_json::Value {
     let msgtype = match media.kind {
@@ -227,12 +223,10 @@ pub(crate) fn build_media_body(
         message_body["org.matrix.msc3245.voice"] = serde_json::json!({});
     }
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
-        "guest_id": guest_id,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
         "content": media.url,
-        "displayname": display_name,
         "submission_id": submission_id,
     });
     message_body
@@ -244,7 +238,6 @@ pub(crate) fn build_reaction_body(
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    guest_id: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "m.relates_to": {
@@ -253,12 +246,10 @@ pub(crate) fn build_reaction_body(
             "key": key,
         },
         MESSAGE_CONTENT_KEY: {
-            "guest_id": guest_id,
             "public_key": author_public_key,
             "signature": author_signature,
             "challenge": author_challenge,
             "content": key,
-            "displayname": "",
         }
     })
 }
@@ -270,7 +261,6 @@ pub(crate) fn build_poll_vote_body(
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    guest_id: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "msgtype": "org.matrix.msc3381.poll.response",
@@ -282,38 +272,31 @@ pub(crate) fn build_poll_vote_body(
             "event_id": poll_event_id,
         },
         MESSAGE_CONTENT_KEY: {
-            "guest_id": guest_id,
             "public_key": author_public_key,
             "signature": author_signature,
             "challenge": author_challenge,
             "content": answer_id,
-            "displayname": "",
         }
     })
 }
 
 /// Build the `m.room.message` content for a guest location (MSC3488).
-#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_location_body(
     geo_uri: &str,
     description: Option<&str>,
-    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    guest_id: &str,
     submission_id: Option<i64>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "msgtype": "org.matrix.msc3488.location",
         "geo_uri": geo_uri,
         MESSAGE_CONTENT_KEY: {
-            "guest_id": guest_id,
             "public_key": author_public_key,
             "signature": author_signature,
             "challenge": author_challenge,
             "content": geo_uri,
-            "displayname": display_name,
             "submission_id": submission_id,
         }
     });
@@ -323,15 +306,12 @@ pub(crate) fn build_location_body(
     body
 }
 /// Build the `m.room.message` content for an edit (`m.replace`).
-#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_edit_body(
     event_id: &str,
     new_content: &str,
-    display_name: &str,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    guest_id: &str,
     submission_id: Option<i64>,
 ) -> serde_json::Value {
     let mut new_content_obj = serde_json::json!({
@@ -339,12 +319,10 @@ pub(crate) fn build_edit_body(
         "body": new_content,
     });
     new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
-        "guest_id": guest_id,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
         "content": new_content,
-        "displayname": display_name,
         "submission_id": submission_id,
     });
     serde_json::json!({
@@ -453,11 +431,9 @@ mod tests {
     fn message_body_uses_namespaced_content_block() {
         let body = build_message_body(
             "hello <b>",
-            "Alice",
             "pubkey",
             "sig",
             "chal",
-            "abcd",
             Some(7),
             None,
             None,
@@ -470,13 +446,13 @@ mod tests {
         assert!(body.get("formatted_body").is_none());
 
         let ns = body.get(MESSAGE_CONTENT_KEY).expect("namespaced block");
-        assert_eq!(ns["guest_id"].as_str(), Some("abcd"));
         assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
         assert_eq!(ns["signature"].as_str(), Some("sig"));
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("hello <b>"));
-        assert_eq!(ns["displayname"].as_str(), Some("Alice"));
         assert_eq!(ns["submission_id"].as_i64(), Some(7));
+        assert!(ns.get("guest_id").is_none());
+        assert!(ns.get("displayname").is_none());
 
         assert!(body.get("cumments_guest_id").is_none());
         assert!(body.get("cumments_submission_id").is_none());
@@ -495,11 +471,9 @@ mod tests {
                 height: Some(80),
                 voice: false,
             },
-            "Alice",
             "pubkey",
             "sig",
             "chal",
-            "abcd",
             Some(7),
         );
         assert_eq!(body["msgtype"], "m.image");
@@ -525,11 +499,9 @@ mod tests {
                 height: None,
                 voice: true,
             },
-            "Alice",
             "pubkey",
             "sig",
             "chal",
-            "abcd",
             None,
         );
         assert_eq!(body["msgtype"], "m.audio");
@@ -538,52 +510,44 @@ mod tests {
 
     #[test]
     fn reaction_body_carries_annotation_and_proof() {
-        let body = build_reaction_body("👍", "$target:hs", "pk", "sig", "chal", "abcd");
+        let body = build_reaction_body("👍", "$target:hs", "pk", "sig", "chal");
         assert_eq!(body["m.relates_to"]["rel_type"], "m.annotation");
         assert_eq!(body["m.relates_to"]["event_id"], "$target:hs");
         assert_eq!(body["m.relates_to"]["key"], "👍");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "👍");
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["guest_id"], "abcd");
+        assert!(body[MESSAGE_CONTENT_KEY].get("guest_id").is_none());
+        assert!(body[MESSAGE_CONTENT_KEY].get("displayname").is_none());
     }
 
     #[test]
     fn poll_vote_body_carries_answer_and_reference() {
-        let body = build_poll_vote_body("$poll:hs", "2", "pk", "sig", "chal", "abcd");
+        let body = build_poll_vote_body("$poll:hs", "2", "pk", "sig", "chal");
         assert_eq!(body["msgtype"], "org.matrix.msc3381.poll.response");
         assert_eq!(body["org.matrix.msc3381.poll.response"]["answers"][0], "2");
         assert_eq!(body["m.relates_to"]["event_id"], "$poll:hs");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "2");
+        assert!(body[MESSAGE_CONTENT_KEY].get("displayname").is_none());
     }
 
     #[test]
     fn location_body_carries_geo_uri_and_proof() {
-        let body = build_location_body(
-            "geo:31.2,121.5",
-            Some("here"),
-            "Alice",
-            "pk",
-            "sig",
-            "chal",
-            "abcd",
-            Some(9),
-        );
+        let body =
+            build_location_body("geo:31.2,121.5", Some("here"), "pk", "sig", "chal", Some(9));
         assert_eq!(body["msgtype"], "org.matrix.msc3488.location");
         assert_eq!(body["geo_uri"], "geo:31.2,121.5");
         assert_eq!(body["body"], "here");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "geo:31.2,121.5");
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["displayname"], "Alice");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["submission_id"], 9);
+        assert!(body[MESSAGE_CONTENT_KEY].get("displayname").is_none());
     }
 
     #[test]
     fn message_body_with_reply_uses_standard_relation() {
         let body = build_message_body(
             "hello",
-            "Alice",
             "pubkey",
             "sig",
             "chal",
-            "abcd",
             Some(7),
             Some("$parent:hs"),
             Some("original line one\noriginal line two"),
@@ -608,11 +572,9 @@ mod tests {
     fn reply_without_known_original_keeps_pure_body() {
         let body = build_message_body(
             "hello",
-            "Alice",
             "pubkey",
             "sig",
             "chal",
-            "abcd",
             Some(7),
             Some("$parent:hs"),
             None,
@@ -639,11 +601,9 @@ mod tests {
         let body = build_edit_body(
             "$original:hs",
             "edited <b>",
-            "Alice",
             "pubkey",
             "sig",
             "chal",
-            "abcd",
             Some(42),
         );
 
@@ -662,13 +622,13 @@ mod tests {
         let ns = new_content
             .get(MESSAGE_CONTENT_KEY)
             .expect("namespaced block");
-        assert_eq!(ns["guest_id"].as_str(), Some("abcd"));
         assert_eq!(ns["public_key"].as_str(), Some("pubkey"));
         assert_eq!(ns["signature"].as_str(), Some("sig"));
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("edited <b>"));
-        assert_eq!(ns["displayname"].as_str(), Some("Alice"));
         assert_eq!(ns["submission_id"].as_i64(), Some(42));
+        assert!(ns.get("guest_id").is_none());
+        assert!(ns.get("displayname").is_none());
 
         assert!(body.get(MESSAGE_CONTENT_KEY).is_none());
         assert!(body.get("cumments_submission_id").is_none());

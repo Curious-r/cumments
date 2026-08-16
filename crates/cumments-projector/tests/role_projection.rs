@@ -41,7 +41,6 @@ fn claim_message(sender: &str, body: &str) -> ParsedRoomMessage {
             formatted_body: None,
             style: TextStyle::Normal,
         }),
-        display_name: None,
         author_public_key: None,
         author_signature: None,
         author_challenge: None,

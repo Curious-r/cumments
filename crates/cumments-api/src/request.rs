@@ -103,6 +103,9 @@ pub struct PostCommentRequest {
     /// `media.url` and `content` is only the fallback filename.
     #[serde(default)]
     pub media: Option<CommentMedia>,
+    /// Display name to write to the virtual user's Matrix profile. It is
+    /// presentation data and is deliberately not covered by the author
+    /// signature; the signed payload covers only content and reply relation.
     #[validate(length(min = 1, max = 50))]
     pub display_name: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
@@ -179,6 +182,9 @@ pub struct LocationRequest {
     #[validate(length(min = 0, max = 255))]
     #[serde(default)]
     pub description: Option<String>,
+    /// Display name to write to the virtual user's Matrix profile. It is
+    /// presentation data and is deliberately not covered by the author
+    /// signature; the signed payload covers only the geo URI.
     #[validate(length(min = 1, max = 50))]
     pub display_name: String,
     #[validate(length(min = 1, max = 128))]
