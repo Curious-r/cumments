@@ -78,7 +78,7 @@ client instead of the HTTP API.
 - `status`: `405`
 
 The HTTP method is not supported on this route. Comment reads use `QUERY`,
-writes use `POST`/`PATCH`/`DELETE`.
+writes use `POST`/`PUT`/`PATCH`/`DELETE`.
 
 ## Bad request {#bad-request}
 
@@ -115,8 +115,8 @@ window (3600 seconds for hourly limits, 60 seconds for the Operator API).
 - `code`: `idempotency-key-required`
 - `status`: `400`
 
-The `Idempotency-Key` header is mandatory on `POST`, `PATCH`, `DELETE` and
-guest media upload write submissions.
+The `Idempotency-Key` header is mandatory on `POST`, `PUT`, `PATCH`, `DELETE`
+and guest media upload write submissions.
 
 ## Invalid Idempotency-Key {#invalid-idempotency-key}
 

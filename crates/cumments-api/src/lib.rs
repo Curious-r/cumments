@@ -122,7 +122,8 @@ pub struct ApiState {
     pub trusted_proxies: Arc<trusted_proxy::TrustedProxySet>,
     /// Allow verification of loopback/private/link-local IP-literal origins.
     pub allow_private_verification_origins: bool,
-    /// Per-client-key limiter for comment write submissions (POST/PATCH/DELETE).
+    /// Per-client-key limiter for comment and guest-avatar write submissions
+    /// (POST/PUT/PATCH/DELETE).
     pub write_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for new SSE connections.
     pub sse_limiter: Arc<rate_limit::RateLimiter>,

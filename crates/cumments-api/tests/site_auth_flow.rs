@@ -616,6 +616,136 @@ async fn preflight_and_queries_are_public() {
 }
 
 #[tokio::test]
+async fn avatar_preflight_allows_put_and_delete() {
+    let (state, store) = test_state("avatar-cors", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+
+    for method in ["PUT", "DELETE"] {
+        let preflight = router
+            .clone()
+            .oneshot(request(
+                Method::OPTIONS,
+                "/api/v1/sites/test-blog/me/avatar",
+                Some("null"),
+                &[
+                    ("access-control-request-method", method.to_string()),
+                    (
+                        "access-control-request-headers",
+                        "content-type,idempotency-key".to_string(),
+                    ),
+                ],
+            ))
+            .await
+            .expect("call router");
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        let allow = preflight
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .and_then(|v| v.to_str().ok())
+            .expect("allow-methods header");
+        assert!(
+            allow.split(',').any(|m| m.trim() == method),
+            "expected {method} in {allow}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn avatar_put_is_gated_by_site_auth() {
+    // Origin mode: a disallowed origin is rejected before the handler.
+    let (state, store) = test_state("avatar-origin", SiteVerificationPolicy::Required, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .add_verified_origin(
+            "test-blog",
+            &Origin::parse("https://blog.example.com").unwrap(),
+        )
+        .await
+        .expect("verify origin");
+    let router = cumments_api::build_router(state);
+
+    let denied = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/test-blog/me/avatar",
+            Some("https://evil.example.com"),
+            &[("idempotency-key", "avatar-origin-key".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert!(body_text(denied).await.contains("site-origin-denied"));
+
+    let allowed = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/test-blog/me/avatar",
+            Some("https://blog.example.com"),
+            &[("idempotency-key", "avatar-origin-key".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_ne!(allowed.status(), StatusCode::FORBIDDEN);
+
+    // Secret mode: an unsigned PUT is rejected before the handler.
+    let (state, store) = test_state("avatar-secret", SiteVerificationPolicy::Required, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .store_site_secret("test-blog", "super-secret-hmac-key")
+        .await
+        .expect("store secret");
+    let router = cumments_api::build_router(state);
+
+    let unsigned = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/test-blog/me/avatar",
+            None,
+            &[("idempotency-key", "avatar-secret-key".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(unsigned.status(), StatusCode::FORBIDDEN);
+    assert!(body_text(unsigned).await.contains("site-signature-invalid"));
+}
+
+#[tokio::test]
+async fn avatar_put_requires_registered_site() {
+    let (state, _) = test_state(
+        "avatar-unregistered",
+        SiteVerificationPolicy::Disabled,
+        None,
+    )
+    .await;
+    let router = cumments_api::build_router(state);
+
+    let response = router
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/not-registered/me/avatar",
+            Some("null"),
+            &[("idempotency-key", "avatar-unregistered-key".to_string())],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(body_text(response).await.contains("site-not-registered"));
+}
+
+#[tokio::test]
 async fn operator_lifecycle_and_well_known_verification() {
     let (state, _) = test_state(
         "operator",

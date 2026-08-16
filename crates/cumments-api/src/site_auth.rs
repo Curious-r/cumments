@@ -162,7 +162,10 @@ pub async fn public_cors(req: Request, next: Next) -> Response {
 }
 
 fn is_write_method(method: &Method) -> bool {
-    matches!(*method, Method::POST | Method::PATCH | Method::DELETE)
+    matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    )
 }
 
 /// `/api/v1/sites/{site_id}/posts/...` → the site id segment.
@@ -471,7 +474,7 @@ fn preflight_response(allowed_origin: Option<Origin>) -> Response {
     }
     headers.insert(
         ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, QUERY, POST, PATCH, DELETE, OPTIONS"),
+        HeaderValue::from_static("GET, QUERY, POST, PUT, PATCH, DELETE, OPTIONS"),
     );
     headers.insert(
         ACCESS_CONTROL_ALLOW_HEADERS,

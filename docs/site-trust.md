@@ -2,7 +2,7 @@
 
 Cumments' write API is public and `site_id` is a self-declared path
 parameter. Site authentication binds a `site_id` to a real website and
-enforces that binding on the write path (`POST`, `PATCH`, `DELETE`), so one
+enforces that binding on the write path (`POST`, `PUT`, `PATCH`, `DELETE`), so one
 site cannot submit comments as another. It is **not** the comment author's
 identity layer: every visitor still needs the PoW challenge and an Ed25519
 signature for authorship, and every write request still carries an
