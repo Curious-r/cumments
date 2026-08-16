@@ -508,6 +508,7 @@
                     identity = id;
                     renderIdentity();
                     await initApp();
+                    refreshOwnProfile();
                 } catch (e) {
                     renderError(
                         new Error(
@@ -572,6 +573,7 @@
                 document.getElementById("settingDisplayName").value =
                     composerDisplayName || s.displayName;
                 renderIdentity();
+                refreshOwnProfile();
                 document.getElementById("settingsModal").classList.remove("hidden");
             }
 
@@ -675,6 +677,7 @@
                 }
                 identity = next;
                 renderIdentity();
+                refreshOwnProfile();
                 return true;
             }
 
@@ -2765,6 +2768,48 @@
                 }
                 renderIdentity();
                 updateComposerAvatar();
+            }
+
+            // Self-service profile read: the API returns the guest's current
+            // display name and avatar for this site, keyed by the Ed25519
+            // public key. Used after identity restore/import and when the
+            // settings drawer opens, so a restored identity recovers its
+            // profile even before posting any comment. Failures are silent:
+            // the local avatar cache remains the offline fallback.
+            async function refreshOwnProfile() {
+                const cfg = getSettings();
+                if (!cfg.api || !cfg.siteId || !identity) return;
+                try {
+                    const params = new URLSearchParams({
+                        author_public_key: identity.publicKey,
+                    });
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/guests/profile?${params.toString()}`,
+                    );
+                    if (!res.ok) return;
+                    const profile = await res.json();
+                    if (!profile) return;
+                    if (
+                        typeof profile.display_name === "string" &&
+                        profile.display_name
+                    ) {
+                        document.getElementById("composerDisplayName").value =
+                            profile.display_name;
+                        const settingDisplayName = document.getElementById(
+                            "settingDisplayName",
+                        );
+                        if (settingDisplayName) {
+                            settingDisplayName.value = profile.display_name;
+                        }
+                    }
+                    if (profile.avatar_url) {
+                        saveOwnAvatarCache(apiMediaUrl(profile.avatar_url));
+                    } else {
+                        clearOwnAvatarCache();
+                    }
+                } catch {
+                    // offline or unreachable; keep the local cache
+                }
             }
 
             // Own-avatar fallback when the local cache is empty: the newest
