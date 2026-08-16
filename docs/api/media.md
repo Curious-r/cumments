@@ -47,7 +47,9 @@ that virtual user's global profile in one request. The signature covers
 `["UPLOAD_AVATAR", site_id, mime, sha256_hex(body), challenge]`; `mime` must
 be an `image/*` type and the request uses the same `Idempotency-Key` header,
 rate limiting, size/type caps and 24-hour replay window as guest media
-uploads. Replays return the original `{ "avatar_url": "mxc://..." }` with
+uploads. The response returns the avatar as a signed proxy URL
+(`{ "avatar_url": "/api/v1/media/..." }`; the raw MXC URL when the media
+proxy is disabled). Replays return the original URL with
 `Idempotent-Replayed: true` and re-apply the profile write so a retry heals
 a partially completed request.
 

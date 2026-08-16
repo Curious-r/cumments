@@ -636,8 +636,11 @@ pub(crate) async fn upload_media_handler(
 
 /// Builds the JSON response for a guest avatar write, marking idempotent
 /// replays with the same header as media uploads.
-fn avatar_response(avatar_url: &str, replayed: bool) -> Response {
-    let mut response = (Json(serde_json::json!({ "avatar_url": avatar_url })),).into_response();
+fn avatar_response(avatar_url: &str, proxied_url: Option<String>, replayed: bool) -> Response {
+    let mut response = (Json(serde_json::json!({
+        "avatar_url": proxied_url.unwrap_or_else(|| avatar_url.to_owned()),
+    })),)
+        .into_response();
     if replayed {
         response.headers_mut().insert(
             IDEMPOTENT_REPLAYED.clone(),
@@ -668,6 +671,12 @@ pub(crate) async fn set_guest_avatar_handler(
         ));
     }
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let proxied_avatar = |mxc_url: &str| {
+        state
+            .media_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.proxify_avatar(mxc_url))
+    };
 
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
@@ -754,7 +763,11 @@ pub(crate) async fn set_guest_avatar_handler(
             .set_avatar_url(&author_public_key, &site_id_val, Some(&existing.mxc_url))
             .await
             .map_err(|e| AppError::Internal(format!("failed to set avatar: {e}")))?;
-        return Ok(avatar_response(&existing.mxc_url, true));
+        return Ok(avatar_response(
+            &existing.mxc_url,
+            proxied_avatar(&existing.mxc_url),
+            true,
+        ));
     }
 
     if !state.pow.verify(&challenge_response) {
@@ -834,7 +847,7 @@ pub(crate) async fn set_guest_avatar_handler(
                     "failed to mark avatar media as referenced: {e}"
                 )));
             }
-            Ok(avatar_response(&mxc_url, false))
+            Ok(avatar_response(&mxc_url, proxied_avatar(&mxc_url), false))
         }
         cumments_core::media_upload::MediaUploadIdempotencyOutcome::Replayed { mxc_url } => {
             rollback_media_upload(&state, &url).await;
@@ -843,7 +856,7 @@ pub(crate) async fn set_guest_avatar_handler(
                 .set_avatar_url(&author_public_key, &site_id_val, Some(&mxc_url))
                 .await
                 .map_err(|e| AppError::Internal(format!("failed to set avatar: {e}")))?;
-            Ok(avatar_response(&mxc_url, true))
+            Ok(avatar_response(&mxc_url, proxied_avatar(&mxc_url), true))
         }
         cumments_core::media_upload::MediaUploadIdempotencyOutcome::Reused => {
             rollback_media_upload(&state, &url).await;

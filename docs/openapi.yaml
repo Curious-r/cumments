@@ -1203,7 +1203,10 @@ paths:
                 properties:
                   avatar_url:
                     type: string
-                    description: MXC URL of the uploaded avatar media.
+                    description: >
+                      Signed proxy URL for the uploaded avatar (96×96 crop
+                      variant when the media proxy is enabled; the raw MXC
+                      URL otherwise).
         "400":
           $ref: "#/components/responses/Error"
         "403":
