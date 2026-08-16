@@ -138,6 +138,11 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
         live.author.avatar_url.as_deref(),
         Some("mxc://hs/new-avatar")
     );
+    let current_name = store
+        .get_author_display_name("$live:hs")
+        .await
+        .expect("get current display name");
+    assert_eq!(current_name.flatten().as_deref(), Some("新版名字"));
 
     // After leaving, the stored snapshot is the fallback again.
     store
@@ -158,6 +163,11 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
         .expect("message exists");
     assert_eq!(left.author.display_name.as_deref(), Some("Alice"));
     assert!(left.author.avatar_url.is_none());
+    let fallback_name = store
+        .get_author_display_name("$live:hs")
+        .await
+        .expect("get fallback display name");
+    assert_eq!(fallback_name.flatten().as_deref(), Some("Alice"));
 }
 
 #[tokio::test]

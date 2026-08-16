@@ -273,11 +273,25 @@ impl MessageStore for DbStore {
     }
 
     async fn get_author_display_name(&self, event_id: &str) -> Result<Option<Option<String>>> {
-        let model = messages::Entity::find()
+        let Some(model) = messages::Entity::find()
             .filter(messages::COLUMN.event_id.eq(event_id))
             .one(&self.db)
-            .await?;
-        Ok(model.map(|m| m.author_display_name))
+            .await?
+        else {
+            return Ok(None);
+        };
+        // Edits maintain the author's current display name (live profile),
+        // falling back to the stored projection when the member left.
+        if let Some(member) = room_members::Entity::find()
+            .filter(room_members::Column::RoomId.eq(&model.room_id))
+            .filter(room_members::Column::UserId.eq(&model.sender_mxid))
+            .filter(room_members::Column::Membership.eq("join"))
+            .one(&self.db)
+            .await?
+        {
+            return Ok(Some(member.display_name));
+        }
+        Ok(Some(model.author_display_name))
     }
 
     async fn get_author_public_key(&self, event_id: &str) -> Result<Option<String>> {
