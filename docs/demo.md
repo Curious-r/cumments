@@ -38,11 +38,10 @@ The demo also needs a secure context for WebCrypto Ed25519: `file://` and
 or another non-localhost address will fail at identity creation. Serve the
 demo over HTTPS unless you are testing on localhost.
 
-One `file://` limitation remains: media URLs are returned as absolute
-`/api/v1/media/...` paths, which resolve against the `file://` origin and
-therefore do not load. Image/sticker/video/audio attachments are only visible
-when the demo is served over HTTP(S). Everything else (API calls, SSE,
-signatures, identity) works from a directly opened file.
+The demo absolutizes API media URLs against the configured API base before
+rendering them, so avatars, stickers and image/video/audio attachments also
+load when the page is opened directly via `file://` (the API must still be
+reachable from the browser).
 
 The demo has a built-in language switcher (中文 / EN) in the top bar; the
 choice is remembered in `localStorage` (`cumments_demo_lang`).

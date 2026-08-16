@@ -1456,8 +1456,11 @@
                     container.parentNode.insertBefore(header, container);
                 }
                 const cfg = getSettings();
-                const avatar = (info.avatar_thumbnail_url || info.avatar_url)
-                    ? `<img src="${escapeHtml(info.avatar_thumbnail_url || info.avatar_url)}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
+                const roomAvatar = apiMediaUrl(
+                    info.avatar_thumbnail_url || info.avatar_url,
+                );
+                const avatar = roomAvatar
+                    ? `<img src="${escapeHtml(roomAvatar)}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
                     : `<div class="w-9 h-9 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">💬</div>`;
                 const name = info.name
                     ? escapeHtml(info.name)
@@ -1609,7 +1612,7 @@
                 const initials = authorName(comment)[0].toUpperCase();
                 const authorAvatarUrl =
                     comment.author && comment.author.avatar_url
-                        ? comment.author.avatar_url
+                        ? apiMediaUrl(comment.author.avatar_url)
                         : null;
                 const time = formatTime(comment.timestamp);
                 const edited = comment.edited_at ? ` · ${t("edited")}` : "";
@@ -1980,7 +1983,7 @@
                             ${stickers
                                 .map(
                                     (sticker) =>
-                                        `<button type="button" class="sticker-option rounded-lg hover:bg-slate-100 p-1"><img src="${escapeHtml(sticker.proxy_url)}" alt="${escapeHtml(sticker.alt)}" class="w-full rounded-lg" loading="lazy"></button>`,
+                                        `<button type="button" class="sticker-option rounded-lg hover:bg-slate-100 p-1"><img src="${escapeHtml(apiMediaUrl(sticker.proxy_url))}" alt="${escapeHtml(sticker.alt)}" class="w-full rounded-lg" loading="lazy"></button>`,
                                 )
                                 .join("")}
                         </div>
@@ -2509,6 +2512,18 @@
                     .replace(/'/g, "&#39;");
             }
 
+            // The API returns media as same-origin paths (e.g.
+            // /api/v1/media/...). Under file:// those resolve against the
+            // file origin and fail to load, so absolutize them against the
+            // configured API base before using them as img/video/audio src.
+            function apiMediaUrl(url) {
+                if (!url || typeof url !== "string" || !url.startsWith("/")) {
+                    return url;
+                }
+                const base = (getSettings().api || "").replace(/\/+$/, "");
+                return base + url;
+            }
+
             function textBody(content) {
                 return content && content.type === "text" ? content.body : "";
             }
@@ -2538,7 +2553,7 @@
             }
 
             function renderMedia(media) {
-                const url = escapeHtml(media.url || "");
+                const url = escapeHtml(apiMediaUrl(media.url || ""));
                 const alt = escapeHtml(media.alt_text || media.filename || "");
                 switch (media.kind) {
                     case "image":
@@ -2705,9 +2720,10 @@
                     if (
                         cached &&
                         typeof cached.url === "string" &&
-                        cached.url.startsWith("/api/v1/media/")
+                        (cached.url.startsWith("/api/v1/media/") ||
+                            /^https?:\/\//.test(cached.url))
                     ) {
-                        ownAvatarUrl = cached.url;
+                        ownAvatarUrl = apiMediaUrl(cached.url);
                         ownAvatarSiteId = cfg.siteId;
                         return;
                     }
@@ -2771,7 +2787,7 @@
                         comment.author.public_key === identity.publicKey &&
                         comment.author.avatar_url
                     ) {
-                        ownAvatarUrl = comment.author.avatar_url;
+                        ownAvatarUrl = apiMediaUrl(comment.author.avatar_url);
                         ownAvatarSiteId = cfg.siteId;
                         saveOwnAvatarCache(ownAvatarUrl);
                         return;
@@ -2894,7 +2910,7 @@
                 if (!data.avatar_url) {
                     throw new Error(t("avatar_upload_failed"));
                 }
-                saveOwnAvatarCache(data.avatar_url);
+                saveOwnAvatarCache(apiMediaUrl(data.avatar_url));
                 toast(t("avatar_uploaded"), "success");
             }
 
