@@ -54,12 +54,71 @@ const ALLOWED_MEDIA_TYPES: [&str; 5] = [
     "application/pdf",
     "application/octet-stream",
 ];
+/// Default thumbnail requested for avatars: the spec's recommended avatar
+/// bucket and the size Element-family clients converge on for square avatars.
+const AVATAR_THUMBNAIL: ThumbParams = ThumbParams {
+    width: 96,
+    height: 96,
+    method: Some(ThumbMethod::Crop),
+};
+/// Default thumbnail requested for message/location thumbnails, matching the
+/// spec's recommended 320×240 `scale` bucket.
+const CONTENT_THUMBNAIL: ThumbParams = ThumbParams {
+    width: 320,
+    height: 240,
+    method: Some(ThumbMethod::Scale),
+};
+/// Upper bound for requested thumbnail dimensions; the homeserver must never
+/// upscale, so oversized requests are rejected before they reach it.
+const MAX_THUMBNAIL_DIMENSION: u32 = 4096;
 /// CSP applied to proxied SVG documents: they render (inline styles and
 /// `data:` images) but cannot execute scripts, even when opened directly as a
 /// top-level document in the Cumments origin.
 const SVG_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// A validated thumbnail request, mirroring the Matrix thumbnail endpoint's
+/// width/height/method semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThumbParams {
+    pub width: u32,
+    pub height: u32,
+    pub method: Option<ThumbMethod>,
+}
+
+impl ThumbParams {
+    /// Returns `None` when the requested dimensions are outside the proxy's
+    /// bounds (the homeserver must never upscale, so oversized requests are
+    /// pointless).
+    pub fn new(width: u32, height: u32, method: Option<ThumbMethod>) -> Option<Self> {
+        (width > 0
+            && width <= MAX_THUMBNAIL_DIMENSION
+            && height > 0
+            && height <= MAX_THUMBNAIL_DIMENSION)
+            .then_some(Self {
+                width,
+                height,
+                method,
+            })
+    }
+}
+
+/// The two thumbnail resizing methods defined by the Matrix specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbMethod {
+    Crop,
+    Scale,
+}
+
+impl ThumbMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThumbMethod::Crop => "crop",
+            ThumbMethod::Scale => "scale",
+        }
+    }
+}
 
 /// Server-side media proxy configuration.
 pub struct MediaProxy {
@@ -97,16 +156,25 @@ impl MediaProxy {
     /// signed proxy URL. Any syntactically valid, policy-allowed server is
     /// proxied; `None` is returned for malformed or blocked servers.
     pub fn proxify(&self, url: &str) -> Option<String> {
-        self.proxify_inner(url, false)
+        self.proxify_sized(url, None)
     }
 
-    /// Like [`Self::proxify`], but requests the homeserver's 320×320
-    /// thumbnail variant (`thumbnail=1`).
+    /// Like [`Self::proxify`], but requests the homeserver's default
+    /// content-thumbnail variant (320×240, `scale`).
     pub fn proxify_thumbnail(&self, url: &str) -> Option<String> {
-        self.proxify_inner(url, true)
+        self.proxify_sized(url, Some(CONTENT_THUMBNAIL))
     }
 
-    fn proxify_inner(&self, url: &str, thumbnail: bool) -> Option<String> {
+    /// Like [`Self::proxify`], but requests the default avatar thumbnail
+    /// variant (96×96, `crop`).
+    pub fn proxify_avatar(&self, url: &str) -> Option<String> {
+        self.proxify_sized(url, Some(AVATAR_THUMBNAIL))
+    }
+
+    /// Mints a signed proxy URL. Thumbnail dimensions and method, when
+    /// present, are part of the signature so a small-avatar URL cannot be
+    /// rewritten into a large/arbitrary thumbnail request.
+    fn proxify_sized(&self, url: &str, thumb: Option<ThumbParams>) -> Option<String> {
         let rest = url.strip_prefix("mxc://")?;
         let (server, media_id) = rest.split_once('/')?;
         if !is_valid_media_server(server) {
@@ -119,11 +187,15 @@ impl MediaProxy {
             return None;
         }
         let expires = now_epoch_seconds() + MEDIA_URL_TTL_SECONDS;
-        let signature = self.sign(server, media_id, expires);
-        let thumbnail_query = if thumbnail { "&thumbnail=1" } else { "" };
-        Some(format!(
-            "/api/v1/media/{server}/{media_id}?expires={expires}&sig={signature}{thumbnail_query}"
-        ))
+        let signature = self.sign(server, media_id, thumb, expires);
+        let mut query = format!("?expires={expires}&sig={signature}");
+        if let Some(thumb) = thumb {
+            query.push_str(&format!("&width={}&height={}", thumb.width, thumb.height));
+            if let Some(method) = thumb.method {
+                query.push_str(&format!("&method={}", method.as_str()));
+            }
+        }
+        Some(format!("/api/v1/media/{server}/{media_id}{query}"))
     }
 
     /// Rewrites media and author-avatar URLs inside a message for API/SSE
@@ -157,17 +229,33 @@ impl MediaProxy {
             .author
             .avatar_url
             .as_deref()
-            .and_then(|url| self.proxify_thumbnail(url))
+            .and_then(|url| self.proxify_avatar(url))
         {
             message.author.avatar_url = Some(avatar);
         }
     }
 
     /// Verifies an HMAC-signed media URL without revealing the token.
-    pub fn verify(&self, server: &str, media_id: &str, expires: i64, signature: &str) -> bool {
+    pub fn verify(
+        &self,
+        server: &str,
+        media_id: &str,
+        thumb: Option<ThumbParams>,
+        expires: i64,
+        signature: &str,
+    ) -> bool {
         if !is_valid_media_server(server) || media_id.is_empty() || media_id.contains('/') {
             return false;
         }
+        let thumb = match thumb {
+            Some(thumb) => {
+                let Some(thumb) = ThumbParams::new(thumb.width, thumb.height, thumb.method) else {
+                    return false;
+                };
+                Some(thumb)
+            }
+            None => None,
+        };
         if !self.allow_private_servers
             && let Ok(ip) = server.parse::<IpAddr>()
             && is_private_ip_addr(ip)
@@ -178,19 +266,27 @@ impl MediaProxy {
         if expires < now - 60 || expires > now + MEDIA_URL_TTL_SECONDS {
             return false;
         }
-        let expected = self.sign(server, media_id, expires);
+        let expected = self.sign(server, media_id, thumb, expires);
         constant_time_eq(expected.as_bytes(), signature.as_bytes())
     }
 
-    /// Fetches media from the homeserver as the AppService.
+    /// Fetches media from the homeserver as the AppService, using the
+    /// authenticated v1 endpoints (MSC3916). The legacy unauthenticated
+    /// `/_matrix/media/v3/*` endpoints are frozen and disabled by default in
+    /// tuwunel, so they are not used.
     pub async fn fetch(
         &self,
         server: &str,
         media_id: &str,
-        thumbnail: bool,
+        thumb: Option<ThumbParams>,
     ) -> anyhow::Result<reqwest::Response> {
         if !is_valid_media_server(server) || media_id.is_empty() || media_id.contains('/') {
             anyhow::bail!("invalid mxc server/media id in media proxy request");
+        }
+        if let Some(thumb) = thumb {
+            let Some(_) = ThumbParams::new(thumb.width, thumb.height, thumb.method) else {
+                anyhow::bail!("invalid thumbnail dimensions or method");
+            };
         }
         if !self.allow_private_servers {
             if let Ok(ip) = server.parse::<IpAddr>() {
@@ -211,11 +307,7 @@ impl MediaProxy {
                 }
             }
         }
-        let path = if thumbnail {
-            format!("_matrix/media/v3/thumbnail/{server}/{media_id}?width=320&height=320")
-        } else {
-            format!("_matrix/media/v3/download/{server}/{media_id}")
-        };
+        let path = upstream_media_path(server, media_id, thumb);
         let url = format!("{}/{}", self.homeserver_url.trim_end_matches('/'), path);
         Ok(self
             .http_client
@@ -225,16 +317,53 @@ impl MediaProxy {
             .await?)
     }
 
-    fn sign(&self, server: &str, media_id: &str, expires: i64) -> String {
+    fn sign(
+        &self,
+        server: &str,
+        media_id: &str,
+        thumb: Option<ThumbParams>,
+        expires: i64,
+    ) -> String {
         let mut mac = HmacSha256::new_from_slice(self.sign_key.as_bytes())
             .expect("hmac accepts any key length");
+        let (width, height, method) = match thumb {
+            Some(thumb) => (
+                thumb.width,
+                thumb.height,
+                thumb.method.map_or("", ThumbMethod::as_str),
+            ),
+            None => (0, 0, ""),
+        };
         mac.update(server.as_bytes());
         mac.update(b"/");
         mac.update(media_id.as_bytes());
         mac.update(b"/");
+        mac.update(width.to_string().as_bytes());
+        mac.update(b"/");
+        mac.update(height.to_string().as_bytes());
+        mac.update(b"/");
+        mac.update(method.as_bytes());
+        mac.update(b"/");
         mac.update(expires.to_string().as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
+}
+
+/// Builds the homeserver-relative path for a proxied media request, mapping
+/// the proxy's signed thumbnail parameters onto the authenticated v1 media
+/// endpoints.
+fn upstream_media_path(server: &str, media_id: &str, thumb: Option<ThumbParams>) -> String {
+    let Some(thumb) = thumb else {
+        return format!("_matrix/client/v1/media/download/{server}/{media_id}");
+    };
+    let mut path = format!(
+        "_matrix/client/v1/media/thumbnail/{server}/{media_id}?width={}&height={}",
+        thumb.width, thumb.height
+    );
+    if let Some(method) = thumb.method {
+        path.push_str(&format!("&method={}", method.as_str()));
+    }
+    path
 }
 
 /// Whether a Matrix server name is syntactically acceptable for media
@@ -625,19 +754,48 @@ pub(crate) async fn media_handler(
         .get("expires")
         .and_then(|v| v.parse::<i64>().ok())
         .ok_or_else(|| AppError::BadRequest("missing or invalid expires".to_string()))?;
+    let thumb =
+        match (query.get("width"), query.get("height")) {
+            (None, None) => None,
+            (Some(width), Some(height)) => {
+                let width = width
+                    .parse::<u32>()
+                    .map_err(|_| AppError::BadRequest("width must be an integer".to_string()))?;
+                let height = height
+                    .parse::<u32>()
+                    .map_err(|_| AppError::BadRequest("height must be an integer".to_string()))?;
+                let method = match query.get("method").map(String::as_str) {
+                    None => None,
+                    Some("crop") => Some(ThumbMethod::Crop),
+                    Some("scale") => Some(ThumbMethod::Scale),
+                    Some(_) => {
+                        return Err(AppError::BadRequest(
+                            "method must be crop or scale".to_string(),
+                        ));
+                    }
+                };
+                Some(ThumbParams::new(width, height, method).ok_or_else(|| {
+                    AppError::BadRequest("invalid thumbnail dimensions".to_string())
+                })?)
+            }
+            _ => {
+                return Err(AppError::BadRequest(
+                    "width and height must be provided together".to_string(),
+                ));
+            }
+        };
     let signature = query
         .get("sig")
         .cloned()
         .ok_or_else(|| AppError::BadRequest("missing signature".to_string()))?;
-    if !proxy.verify(&server, &media_id, expires, &signature) {
+    if !proxy.verify(&server, &media_id, thumb, expires, &signature) {
         return Err(AppError::BadRequest(
             "invalid or expired media URL".to_string(),
         ));
     }
 
-    let thumbnail = query.get("thumbnail").map(|v| v == "1").unwrap_or(false);
     let upstream = proxy
-        .fetch(&server, &media_id, thumbnail)
+        .fetch(&server, &media_id, thumb)
         .await
         .map_err(|e| AppError::Internal(format!("failed to fetch media: {e}")))?;
     if !upstream.status().is_success() {
@@ -753,6 +911,14 @@ mod tests {
             .collect()
     }
 
+    fn thumb(width: u32, height: u32, method: Option<ThumbMethod>) -> Option<ThumbParams> {
+        Some(ThumbParams {
+            width,
+            height,
+            method,
+        })
+    }
+
     #[test]
     fn proxify_rewrites_mxc_urls_and_verify_round_trips() {
         let p = proxy();
@@ -760,7 +926,7 @@ mod tests {
         assert!(url.starts_with("/api/v1/media/hs/abc?expires="));
         let params = query_params(&url);
         let expires: i64 = params["expires"].parse().expect("expires");
-        assert!(p.verify("hs", "abc", expires, &params["sig"]));
+        assert!(p.verify("hs", "abc", None, expires, &params["sig"]));
     }
 
     #[test]
@@ -771,9 +937,33 @@ mod tests {
         let params = query_params(&url);
         let expires: i64 = params["expires"].parse().expect("expires");
         assert!(
-            p.verify("other", "abc", expires, &params["sig"]),
+            p.verify("other", "abc", None, expires, &params["sig"]),
             "foreign-server URLs must verify"
         );
+    }
+
+    #[test]
+    fn proxify_avatar_and_thumbnail_request_their_default_variants() {
+        let p = proxy();
+        let avatar = p.proxify_avatar("mxc://hs/avatar").expect("avatar");
+        let params = query_params(&avatar);
+        assert_eq!(params.get("width").map(String::as_str), Some("96"));
+        assert_eq!(params.get("height").map(String::as_str), Some("96"));
+        assert_eq!(params.get("method").map(String::as_str), Some("crop"));
+        let expires: i64 = params["expires"].parse().expect("expires");
+        assert!(p.verify(
+            "hs",
+            "avatar",
+            thumb(96, 96, Some(ThumbMethod::Crop)),
+            expires,
+            &params["sig"]
+        ));
+
+        let content = p.proxify_thumbnail("mxc://hs/thumb").expect("thumbnail");
+        let params = query_params(&content);
+        assert_eq!(params.get("width").map(String::as_str), Some("320"));
+        assert_eq!(params.get("height").map(String::as_str), Some("240"));
+        assert_eq!(params.get("method").map(String::as_str), Some("scale"));
     }
 
     #[test]
@@ -801,12 +991,60 @@ mod tests {
         let p = proxy();
         let params = query_params(&p.proxify("mxc://hs/abc").expect("proxify"));
         let expires: i64 = params["expires"].parse().expect("expires");
-        assert!(!p.verify("hs", "abc", expires, "deadbeef"));
-        assert!(!p.verify("hs", "abc", expires - 1000, &params["sig"]));
+        assert!(!p.verify("hs", "abc", None, expires, "deadbeef"));
+        assert!(!p.verify("hs", "abc", None, expires - 1000, &params["sig"]));
         // The signature covers the server, so a URL minted for another
         // server cannot be replayed against it.
-        assert!(!p.verify("other", "abc", expires, &params["sig"]));
-        assert!(!p.verify("hs", "abc", expires, "not-a-signature"));
+        assert!(!p.verify("other", "abc", None, expires, &params["sig"]));
+        assert!(!p.verify("hs", "abc", None, expires, "not-a-signature"));
+    }
+
+    #[test]
+    fn verify_rejects_thumbnail_parameter_tampering() {
+        let p = proxy();
+        let avatar = p.proxify_avatar("mxc://hs/avatar").expect("avatar");
+        let params = query_params(&avatar);
+        let expires: i64 = params["expires"].parse().expect("expires");
+        // The signature binds the requested size: resizing the URL must fail
+        // verification even though server/media/expiry are untouched.
+        assert!(!p.verify(
+            "hs",
+            "avatar",
+            thumb(320, 240, Some(ThumbMethod::Scale)),
+            expires,
+            &params["sig"]
+        ));
+        assert!(!p.verify(
+            "hs",
+            "avatar",
+            thumb(96, 96, Some(ThumbMethod::Scale)),
+            expires,
+            &params["sig"]
+        ));
+    }
+
+    #[test]
+    fn thumbnail_dimensions_are_bounded() {
+        assert!(ThumbParams::new(96, 96, Some(ThumbMethod::Crop)).is_some());
+        assert!(ThumbParams::new(0, 0, None).is_none());
+        assert!(ThumbParams::new(96, 0, None).is_none());
+        assert!(ThumbParams::new(MAX_THUMBNAIL_DIMENSION + 1, 96, None).is_none());
+    }
+
+    #[test]
+    fn upstream_media_path_uses_authenticated_v1_endpoints() {
+        assert_eq!(
+            upstream_media_path("hs", "abc", None),
+            "_matrix/client/v1/media/download/hs/abc"
+        );
+        assert_eq!(
+            upstream_media_path("hs", "abc", thumb(96, 96, Some(ThumbMethod::Crop))),
+            "_matrix/client/v1/media/thumbnail/hs/abc?width=96&height=96&method=crop"
+        );
+        assert_eq!(
+            upstream_media_path("hs", "abc", thumb(320, 240, None)),
+            "_matrix/client/v1/media/thumbnail/hs/abc?width=320&height=240"
+        );
     }
 
     #[test]
@@ -855,16 +1093,21 @@ mod tests {
                 let thumbnail = media.thumbnail_url.expect("thumbnail rewritten");
                 assert!(
                     thumbnail.starts_with("/api/v1/media/hs/thumb?")
-                        && thumbnail.contains("&thumbnail=1"),
-                    "thumbnail URL must request the thumbnail variant: {thumbnail}"
+                        && thumbnail.contains("width=320")
+                        && thumbnail.contains("height=240")
+                        && thumbnail.contains("method=scale"),
+                    "thumbnail URL must request the content thumbnail variant: {thumbnail}"
                 );
             }
             other => panic!("expected media, got {other:?}"),
         }
         let avatar = message.author.avatar_url.expect("author avatar rewritten");
         assert!(
-            avatar.starts_with("/api/v1/media/hs/avatar?") && avatar.contains("&thumbnail=1"),
-            "author avatar must use the thumbnail variant: {avatar}"
+            avatar.starts_with("/api/v1/media/hs/avatar?")
+                && avatar.contains("width=96")
+                && avatar.contains("height=96")
+                && avatar.contains("method=crop"),
+            "author avatar must use the avatar thumbnail variant: {avatar}"
         );
     }
 
