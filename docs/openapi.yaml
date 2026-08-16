@@ -627,8 +627,13 @@ paths:
       operationId: proxyMedia
       description: |
         Public read-only proxy for MXC media. URLs are HMAC-signed with a
-        short TTL; requests are rate limited, restricted to the configured
-        homeserver and filtered by size/content type.
+        short TTL, and the signature covers `server/media_id` plus the
+        optional thumbnail `width`/`height`/`method` so minted URLs cannot
+        be resized into larger or arbitrary thumbnail requests. Requests are
+        rate limited, restricted to the configured homeserver and filtered
+        by size/content type. The homeserver is queried through the
+        authenticated `/_matrix/client/v1/media` endpoints (MSC3916) with
+        the AppService token.
       parameters:
         - name: expires
           in: query
@@ -640,11 +645,26 @@ paths:
           required: true
           schema:
             type: string
-        - name: thumbnail
+        - name: width
           in: query
           required: false
           schema:
-            type: boolean
+            type: integer
+            minimum: 1
+            maximum: 4096
+        - name: height
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 4096
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [crop, scale]
       responses:
         "200":
           description: Media bytes
@@ -687,6 +707,12 @@ paths:
                   avatar_url:
                     type: string
                     nullable: true
+                  avatar_thumbnail_url:
+                    type: string
+                    nullable: true
+                    description: >
+                      Same image through the 96×96 crop thumbnail variant
+                      (signed proxy URL when the proxy is enabled).
                   member_count:
                     type: integer
                   system_messages:
@@ -1109,6 +1135,123 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/me/avatar:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    put:
+      tags: [Comments]
+      summary: Upload and set the guest avatar
+      operationId: setGuestAvatar
+      description: |
+        Uploads raw image bytes as the guest's virtual user and sets the
+        avatar on that virtual user's global profile in one request. Query
+        parameters carry the PoW challenge response and an Ed25519 signature
+        over
+        `UPLOAD_AVATAR/site/mime/sha256_hex(body)/challenge`. Requires the
+        same `Idempotency-Key` header as comment write submissions; replays
+        return the original URL with `Idempotent-Replayed: true`. Avatars are
+        site-scoped and propagate to the user's joined rooms as
+        `m.room.member` events (`m.propagate_to: "all"`).
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: mime
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: filename
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: author_public_key
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: author_signature
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: challenge_response
+          in: query
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Avatar set on the virtual user's profile
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [avatar_url]
+                properties:
+                  avatar_url:
+                    type: string
+                    description: MXC URL of the uploaded avatar media.
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Comments]
+      summary: Remove the guest avatar
+      operationId: deleteGuestAvatar
+      description: |
+        Removes the avatar from the guest's virtual-user profile. Query
+        parameters carry the PoW challenge response and an Ed25519 signature
+        over `DELETE_AVATAR/site/challenge`. Deleting a missing avatar is a
+        successful no-op.
+      parameters:
+        - name: author_public_key
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: author_signature
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: challenge_response
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Avatar removed
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/owners:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -2180,6 +2323,10 @@ components:
         avatar_url:
           type: string
           nullable: true
+        avatar_proxy_url:
+          type: string
+          nullable: true
+          description: Signed preview URL for the pack avatar (96×96 crop variant).
         images:
           type: array
           items:
