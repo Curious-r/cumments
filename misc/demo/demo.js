@@ -1421,8 +1421,8 @@
                     container.parentNode.insertBefore(header, container);
                 }
                 const cfg = getSettings();
-                const avatar = info.avatar_url
-                    ? `<img src="${escapeHtml(info.avatar_url)}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
+                const avatar = (info.avatar_thumbnail_url || info.avatar_url)
+                    ? `<img src="${escapeHtml(info.avatar_thumbnail_url || info.avatar_url)}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
                     : `<div class="w-9 h-9 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">💬</div>`;
                 const name = info.name
                     ? escapeHtml(info.name)
@@ -1572,6 +1572,10 @@
 
                 const avatarStyle = commentAvatarStyle(authorAvatarKey(comment));
                 const initials = authorName(comment)[0].toUpperCase();
+                const authorAvatarUrl =
+                    comment.author && comment.author.avatar_url
+                        ? comment.author.avatar_url
+                        : null;
                 const time = formatTime(comment.timestamp);
                 const edited = comment.edited_at ? ` · ${t("edited")}` : "";
                 const isGuest =
@@ -1587,10 +1591,12 @@
                 el.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
                         <div class="flex items-center gap-3 min-w-0">
-                            <div class="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-sm font-bold text-white"
-                                 style="${avatarStyle}">
-                                ${escapeHtml(initials)}
-                            </div>
+                            ${authorAvatarUrl
+                                ? `<img src="${escapeHtml(authorAvatarUrl)}" alt="" data-avatar class="w-9 h-9 rounded-full object-cover shrink-0" loading="lazy">`
+                                : `<div class="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-sm font-bold text-white"
+                                     style="${avatarStyle}">
+                                    ${escapeHtml(initials)}
+                                </div>`}
                             <div class="min-w-0">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span class="font-semibold text-slate-900 text-sm truncate">
@@ -1632,6 +1638,19 @@
                     </div>
                 `;
 
+                const avatarImg = el.querySelector("img[data-avatar]");
+                if (avatarImg) {
+                    // 签名代理 URL 可能过期或媒体已被删除：加载失败时回退到
+                    // 原来的首字母色块，不破坏布局。
+                    avatarImg.addEventListener("error", () => {
+                        const fallback = document.createElement("div");
+                        fallback.className =
+                            "w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-sm font-bold text-white";
+                        fallback.style.cssText = avatarStyle;
+                        fallback.textContent = initials;
+                        avatarImg.replaceWith(fallback);
+                    });
+                }
                 el.querySelector(".reply-btn").onclick = () => startReply(comment);
                 el.querySelector(".react-btn").onclick = () => pickReaction(comment);
                 el.querySelectorAll(".poll-option").forEach((btn) => {
