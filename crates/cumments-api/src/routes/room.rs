@@ -2,9 +2,11 @@
 
 use crate::ApiState;
 use crate::error::AppError;
+use crate::routes::media::media_url_base;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
+    http::HeaderMap,
 };
 use cumments_core::models::{PostSlug, RoomMetadata, SiteId};
 use serde::Serialize;
@@ -23,6 +25,8 @@ struct RoomInfoResponse {
 /// `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`
 pub(crate) async fn room_info_handler(
     State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Path((site_id, post_slug)): Path<(String, String)>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
@@ -52,11 +56,12 @@ pub(crate) async fn room_info_handler(
             avatar_thumbnail_url: None,
             member_count: 0,
         });
+    let media_base = media_url_base(&state, &headers, Some(addr));
     if let Some(proxy) = &state.media_proxy
         && let Some(avatar) = metadata
             .avatar_url
             .as_deref()
-            .and_then(|url| proxy.proxify(url))
+            .and_then(|url| proxy.proxify(url, &media_base))
     {
         metadata.avatar_url = Some(avatar);
     }
@@ -64,7 +69,7 @@ pub(crate) async fn room_info_handler(
         && let Some(avatar) = metadata
             .avatar_thumbnail_url
             .as_deref()
-            .and_then(|url| proxy.proxify_avatar(url))
+            .and_then(|url| proxy.proxify_avatar(url, &media_base))
     {
         metadata.avatar_thumbnail_url = Some(avatar);
     }

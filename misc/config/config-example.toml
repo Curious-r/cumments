@@ -16,6 +16,14 @@ host = "0.0.0.0"
 # Port number for the HTTP server
 port = 7931
 
+# Externally reachable base URL of this API as seen by browsers, e.g.
+# "https://comments.example.net". Media proxy URLs are minted against it so
+# comment sections hosted on other origins can load avatars and attachments.
+# When unset, the base is derived from the request (Host, plus
+# X-Forwarded-Proto/X-Forwarded-Host from trusted proxies). Set it explicitly
+# when forwarded headers are unreliable or you want a fixed public origin.
+# public_base_url = "https://comments.example.net"
+
 # Reverse proxies trusted to set X-Forwarded-For. Rate limiting uses the peer
 # IP unless it appears here. Entries are named presets (loopback / private /
 # linklocal) or CIDR networks; bare IPs must use /32 or /128.

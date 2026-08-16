@@ -437,6 +437,7 @@ async fn main() -> Result<()> {
                 runtime.homeserver_url.clone(),
                 runtime.as_token.clone(),
                 media_sign_key,
+                settings.server.public_base_url.clone(),
                 settings.security.media_proxy_allow_private_servers,
             )
             .expect("build media proxy"),

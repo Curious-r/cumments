@@ -28,6 +28,13 @@ pub struct Settings {
 pub struct Server {
     pub host: String,
     pub port: u16,
+    /// Externally reachable base URL of this Cumments API (for example
+    /// `https://comments.example.net`). Media proxy URLs are minted against
+    /// it so pages embedded on other origins can load media; when unset the
+    /// URLs stay API-relative and clients must resolve them against the API
+    /// origin themselves.
+    #[serde(default)]
+    pub public_base_url: Option<String>,
     /// Reverse proxies that are allowed to set `X-Forwarded-For`. Rate
     /// limiting only trusts the header when the peer is in this list;
     /// otherwise the peer IP is used as the client key.
@@ -40,6 +47,7 @@ impl Default for Server {
         Self {
             host: "localhost".to_string(),
             port: 7931,
+            public_base_url: None,
             trusted_proxies: TrustedProxyRules::default(),
         }
     }

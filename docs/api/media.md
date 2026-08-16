@@ -12,7 +12,11 @@ signature is an HMAC over
 `server/media_id/width/height/method/expires` (absent thumbnail parameters
 are signed as their defaults) and expires after 15 minutes. Requests are
 rate limited, restricted to the configured homeserver, size-capped, and
-filtered by content type.
+filtered by content type. When `server.public_base_url` is configured the
+URLs are absolute against it; otherwise the base is derived from the request
+(`Host`, plus `X-Forwarded-Proto`/`X-Forwarded-Host` from trusted proxies),
+so URLs are absolute for each client. They only stay API-relative when the
+request carries no usable host.
 
 The proxy mirrors the Matrix thumbnail endpoint's semantics: `width` and
 `height` must be provided together and `method` defaults to `scale`; the

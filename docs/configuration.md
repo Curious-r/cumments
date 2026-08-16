@@ -22,6 +22,7 @@ Once a file is selected, effective value precedence is:
 [server]
 host = "0.0.0.0"
 port = 7931
+# public_base_url = "https://comments.example.net"
 
 [database]
 url = "sqlite://data/cumments.db"
@@ -113,6 +114,14 @@ For local development, set `mode = "logging"`; no `matrix.homeserver` or
   When overriding through the environment, use a comma-separated string
   (`CUMMENTS__SERVER__TRUSTED_PROXIES="loopback,10.0.0.0/8"`) or a
   JSON-style array string (`["loopback", "10.0.0.0/8"]`).
+- `server.public_base_url` (optional) is the externally reachable base URL of
+  this API (for example `https://comments.example.net`). Media proxy URLs are
+  minted as absolute URLs against it, which is required when comment sections
+  are embedded on other origins. When unset, the base is derived from each
+  request instead: the `Host` header, plus `X-Forwarded-Proto` /
+  `X-Forwarded-Host` when the peer is in `server.trusted_proxies`. Set the
+  explicit value when forwarded headers are unreliable or you want a fixed
+  public origin regardless of how clients reach the API.
 - `security.allow_private_verification_origins` (default `false`) permits
   verification of loopback/private/link-local IP-literal origins; keep it
   disabled in production because `confirm` makes outbound HTTP/DNS probes.

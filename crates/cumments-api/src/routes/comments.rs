@@ -8,6 +8,7 @@ use crate::request::{
     PaginationQuery, PostCommentRequest, ReactRequest, UpdateCommentRequest, VoteRequest,
     extract_idempotency_key, request_fingerprint,
 };
+use crate::routes::media::media_url_base;
 use axum::{
     Json,
     extract::{ConnectInfo, Path, Query, State},
@@ -21,6 +22,7 @@ use cumments_core::{
     submissions::{IdempotencyInput, IdempotencyOutcome},
 };
 use ruma_common::EventId;
+use std::net::SocketAddr;
 use validator::Validate;
 
 pub(crate) static QUERY_METHOD: std::sync::LazyLock<Method> =
@@ -172,6 +174,8 @@ impl CommentWritePath {
 pub(crate) async fn query_comments_handler(
     method: Method,
     State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path((site_id, post_slug)): Path<(String, String)>,
     body: String,
 ) -> Result<impl IntoResponse, AppError> {
@@ -208,6 +212,7 @@ pub(crate) async fn query_comments_handler(
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let limit = per_page;
     let offset = (page - 1) * per_page;
+    let media_base = media_url_base(&state, &headers, Some(addr));
 
     match state
         .store
@@ -217,7 +222,7 @@ pub(crate) async fn query_comments_handler(
         Ok(mut page_data) => {
             if let Some(proxy) = &state.media_proxy {
                 for message in &mut page_data.items {
-                    proxy.proxify_message(message);
+                    proxy.proxify_message(message, &media_base);
                 }
             }
             let total = page_data.total;

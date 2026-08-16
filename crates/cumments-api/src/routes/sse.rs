@@ -3,6 +3,7 @@
 use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
+use crate::routes::media::media_url_base;
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::HeaderMap,
@@ -146,6 +147,7 @@ pub(crate) async fn sse_handler(
     };
     let store = state.store.clone();
     let media_proxy = state.media_proxy.clone();
+    let media_base = media_url_base(&state, &headers, Some(addr));
     let ephemeral_state = state.ephemeral_state.clone();
 
     let mut rx = state.event_bus.subscribe();
@@ -208,7 +210,7 @@ pub(crate) async fn sse_handler(
                                 ProjectorEvent::MessageCreated { message, .. }
                                 | ProjectorEvent::MessageUpdated { message, .. }
                                 | ProjectorEvent::MessageAnnotationsChanged { message, .. } => {
-                                    proxy.proxify_message(message);
+                                    proxy.proxify_message(message, &media_base);
                                 }
                                 ProjectorEvent::MessageDeleted { .. } => {}
                             }

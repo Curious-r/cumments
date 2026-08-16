@@ -12,6 +12,7 @@ use crate::rate_limit::client_key;
 use crate::request::{IDEMPOTENT_REPLAYED, extract_idempotency_key, request_fingerprint};
 use crate::routes::comments::challenge_prefix;
 use crate::routes::moderation::rate_limited;
+use crate::trusted_proxy::TrustedProxySet;
 use axum::{
     Json,
     body::{Body, Bytes},
@@ -35,6 +36,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::StreamExt;
 use tracing::warn;
+use url::Url;
 
 /// Upper bound on a single proxied media response and on an uploaded file.
 ///
@@ -127,6 +129,10 @@ pub struct MediaProxy {
     /// HMAC key for signed media URLs, independent of `as_token` so AS token
     /// rotation does not invalidate outstanding proxy URLs.
     sign_key: String,
+    /// Externally reachable base URL of this API. When set it wins over
+    /// request-derived bases; when unset the request's own `Host`/forwarded
+    /// headers are used so pages on other origins still get absolute URLs.
+    public_base_url: Option<String>,
     /// Allow fetching loopback/private/link-local media servers. Off by
     /// default because the proxy is an SSRF surface.
     allow_private_servers: bool,
@@ -138,8 +144,32 @@ impl MediaProxy {
         homeserver_url: String,
         as_token: String,
         sign_key: String,
+        public_base_url: Option<String>,
         allow_private_servers: bool,
     ) -> anyhow::Result<Self> {
+        if let Some(url) = &public_base_url {
+            let trimmed = url.trim_end_matches('/');
+            let parsed = Url::parse(trimmed).map_err(|error| {
+                anyhow::anyhow!("server.public_base_url is not a valid URL: {error}")
+            })?;
+            anyhow::ensure!(
+                parsed.scheme() == "http" || parsed.scheme() == "https",
+                "server.public_base_url must start with http:// or https://"
+            );
+            anyhow::ensure!(
+                parsed.host_str().is_some(),
+                "server.public_base_url must include a host"
+            );
+            anyhow::ensure!(
+                parsed.username().is_empty() && parsed.password().is_none(),
+                "server.public_base_url must not include userinfo"
+            );
+            anyhow::ensure!(
+                parsed.query().is_none() && parsed.fragment().is_none(),
+                "server.public_base_url must not include a query or fragment"
+            );
+        }
+        let public_base_url = public_base_url.map(|url| url.trim_end_matches('/').to_owned());
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
@@ -147,34 +177,50 @@ impl MediaProxy {
             homeserver_url,
             as_token,
             sign_key,
+            public_base_url,
             allow_private_servers,
             http_client,
         })
     }
 
+    /// Resolves the base URL used to make proxy URLs absolute: the explicit
+    /// `server.public_base_url` wins; otherwise the base is derived from the
+    /// request so the returned URLs are reachable by that client.
+    pub fn public_base(
+        &self,
+        headers: &HeaderMap,
+        addr: Option<SocketAddr>,
+        trusted_proxies: &TrustedProxySet,
+    ) -> Option<String> {
+        match &self.public_base_url {
+            Some(base) => Some(base.clone()),
+            None => request_public_base(headers, addr, trusted_proxies),
+        }
+    }
+
     /// Converts an `mxc://server/media_id` reference into a short-lived
     /// signed proxy URL. Any syntactically valid, policy-allowed server is
     /// proxied; `None` is returned for malformed or blocked servers.
-    pub fn proxify(&self, url: &str) -> Option<String> {
-        self.proxify_sized(url, None)
+    pub fn proxify(&self, url: &str, base: &str) -> Option<String> {
+        self.proxify_sized(url, None, base)
     }
 
     /// Like [`Self::proxify`], but requests the homeserver's default
     /// content-thumbnail variant (320×240, `scale`).
-    pub fn proxify_thumbnail(&self, url: &str) -> Option<String> {
-        self.proxify_sized(url, Some(CONTENT_THUMBNAIL))
+    pub fn proxify_thumbnail(&self, url: &str, base: &str) -> Option<String> {
+        self.proxify_sized(url, Some(CONTENT_THUMBNAIL), base)
     }
 
     /// Like [`Self::proxify`], but requests the default avatar thumbnail
     /// variant (96×96, `crop`).
-    pub fn proxify_avatar(&self, url: &str) -> Option<String> {
-        self.proxify_sized(url, Some(AVATAR_THUMBNAIL))
+    pub fn proxify_avatar(&self, url: &str, base: &str) -> Option<String> {
+        self.proxify_sized(url, Some(AVATAR_THUMBNAIL), base)
     }
 
     /// Mints a signed proxy URL. Thumbnail dimensions and method, when
     /// present, are part of the signature so a small-avatar URL cannot be
     /// rewritten into a large/arbitrary thumbnail request.
-    fn proxify_sized(&self, url: &str, thumb: Option<ThumbParams>) -> Option<String> {
+    fn proxify_sized(&self, url: &str, thumb: Option<ThumbParams>, base: &str) -> Option<String> {
         let rest = url.strip_prefix("mxc://")?;
         let (server, media_id) = rest.split_once('/')?;
         if !is_valid_media_server(server) {
@@ -195,21 +241,26 @@ impl MediaProxy {
                 query.push_str(&format!("&method={}", method.as_str()));
             }
         }
-        Some(format!("/api/v1/media/{server}/{media_id}{query}"))
+        let path = format!("/api/v1/media/{server}/{media_id}{query}");
+        if base.is_empty() {
+            Some(path)
+        } else {
+            Some(format!("{}{path}", base.trim_end_matches('/')))
+        }
     }
 
     /// Rewrites media and author-avatar URLs inside a message for API/SSE
     /// delivery.
-    pub fn proxify_message(&self, message: &mut Message) {
+    pub fn proxify_message(&self, message: &mut Message, base: &str) {
         match &mut message.content {
             Content::Media(media) => {
-                if let Some(url) = self.proxify(&media.url) {
+                if let Some(url) = self.proxify(&media.url, base) {
                     media.url = url;
                 }
                 if let Some(thumbnail) = media
                     .thumbnail_url
                     .as_deref()
-                    .and_then(|u| self.proxify_thumbnail(u))
+                    .and_then(|u| self.proxify_thumbnail(u, base))
                 {
                     media.thumbnail_url = Some(thumbnail);
                 }
@@ -218,7 +269,7 @@ impl MediaProxy {
                 if let Some(thumbnail) = location
                     .thumbnail_url
                     .as_deref()
-                    .and_then(|u| self.proxify_thumbnail(u))
+                    .and_then(|u| self.proxify_thumbnail(u, base))
                 {
                     location.thumbnail_url = Some(thumbnail);
                 }
@@ -229,7 +280,7 @@ impl MediaProxy {
             .author
             .avatar_url
             .as_deref()
-            .and_then(|url| self.proxify_avatar(url))
+            .and_then(|url| self.proxify_avatar(url, base))
         {
             message.author.avatar_url = Some(avatar);
         }
@@ -368,6 +419,69 @@ impl MediaProxy {
         mac.update(expires.to_string().as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
+}
+
+/// Resolves the media proxy URL base for one request. An empty result means
+/// the caller should fall back to API-relative proxy URLs.
+pub(crate) fn media_url_base(
+    state: &ApiState,
+    headers: &HeaderMap,
+    addr: Option<SocketAddr>,
+) -> String {
+    state
+        .media_proxy
+        .as_ref()
+        .and_then(|proxy| proxy.public_base(headers, addr, &state.trusted_proxies))
+        .unwrap_or_default()
+}
+
+/// Derives the externally reachable API base from the request. A trusted
+/// reverse proxy may override the scheme and host via `X-Forwarded-Proto` /
+/// `X-Forwarded-Host`; otherwise the connection's own `Host` header is used
+/// with `http` (TLS is terminated by the proxy, not by Cumments).
+fn request_public_base(
+    headers: &HeaderMap,
+    addr: Option<SocketAddr>,
+    trusted_proxies: &TrustedProxySet,
+) -> Option<String> {
+    let trusted_peer = addr.is_some_and(|addr| trusted_proxies.contains(addr.ip()));
+    let scheme = if trusted_peer {
+        first_header_value(headers, "x-forwarded-proto").unwrap_or_else(|| "http".to_string())
+    } else {
+        "http".to_string()
+    };
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let host = if trusted_peer {
+        first_header_value(headers, "x-forwarded-host")
+            .or_else(|| first_header_value(headers, "host"))
+    } else {
+        first_header_value(headers, "host")
+    }?;
+    let candidate = format!("{scheme}://{host}");
+    let parsed = Url::parse(&candidate).ok()?;
+    if parsed.host_str().is_none()
+        || parsed.path() != "/"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return None;
+    }
+    Some(candidate.trim_end_matches('/').to_string())
+}
+
+/// Reads the first comma-separated value of a header, trimmed.
+fn first_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let value = headers.get(name)?.to_str().ok()?;
+    value
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
 }
 
 /// Builds the homeserver-relative path for a proxied media request, mapping
@@ -671,11 +785,12 @@ pub(crate) async fn set_guest_avatar_handler(
         ));
     }
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let media_base = media_url_base(&state, &headers, Some(addr));
     let proxied_avatar = |mxc_url: &str| {
         state
             .media_proxy
             .as_ref()
-            .and_then(|proxy| proxy.proxify_avatar(mxc_url))
+            .and_then(|proxy| proxy.proxify_avatar(mxc_url, &media_base))
     };
 
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
@@ -922,9 +1037,12 @@ pub(crate) async fn delete_guest_avatar_handler(
 /// Lists a site's projected sticker packs for guests.
 pub(crate) async fn list_stickers_handler(
     State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(site_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let media_base = media_url_base(&state, &headers, Some(addr));
     let packs = list_site_sticker_packs(state.store.as_ref(), site_id.as_str())
         .await
         .map_err(|e| AppError::Internal(format!("failed to list sticker packs: {e}")))?;
@@ -937,13 +1055,13 @@ pub(crate) async fn list_stickers_handler(
                     state
                         .media_proxy
                         .as_ref()
-                        .and_then(|proxy| proxy.proxify(url))
+                        .and_then(|proxy| proxy.proxify(url, &media_base))
                 },
                 |url| {
                     state
                         .media_proxy
                         .as_ref()
-                        .and_then(|proxy| proxy.proxify_avatar(url))
+                        .and_then(|proxy| proxy.proxify_avatar(url, &media_base))
                 },
             )
         })
@@ -972,6 +1090,7 @@ pub(crate) async fn add_site_sticker_handler(
     Json(req): Json<AddStickerRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     rate_limited(&state, &headers, Some(connect.0))?;
+    let media_base = media_url_base(&state, &headers, Some(connect.0));
     let projection = add_site_sticker(
         state.store.as_ref(),
         state.driver.as_ref(),
@@ -992,13 +1111,13 @@ pub(crate) async fn add_site_sticker_handler(
             state
                 .media_proxy
                 .as_ref()
-                .and_then(|proxy| proxy.proxify(url))
+                .and_then(|proxy| proxy.proxify(url, &media_base))
         },
         |url| {
             state
                 .media_proxy
                 .as_ref()
-                .and_then(|proxy| proxy.proxify_avatar(url))
+                .and_then(|proxy| proxy.proxify_avatar(url, &media_base))
         },
     )))
 }
@@ -1012,6 +1131,7 @@ pub(crate) async fn remove_site_sticker_handler(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     rate_limited(&state, &headers, Some(connect.0))?;
+    let media_base = media_url_base(&state, &headers, Some(connect.0));
     let shortcode = query
         .get("shortcode")
         .filter(|value| !value.is_empty())
@@ -1032,13 +1152,13 @@ pub(crate) async fn remove_site_sticker_handler(
             state
                 .media_proxy
                 .as_ref()
-                .and_then(|proxy| proxy.proxify(url))
+                .and_then(|proxy| proxy.proxify(url, &media_base))
         },
         |url| {
             state
                 .media_proxy
                 .as_ref()
-                .and_then(|proxy| proxy.proxify_avatar(url))
+                .and_then(|proxy| proxy.proxify_avatar(url, &media_base))
         },
     )))
 }
@@ -1218,6 +1338,7 @@ fn now_epoch_seconds() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trusted_proxy::TrustedProxyRule;
     use cumments_core::models::{
         AuthorKind, AuthorSnapshot, MediaContent, MediaKind, Message, MessageStatus, TextContent,
         TextStyle,
@@ -1228,6 +1349,7 @@ mod tests {
             "http://hs".to_string(),
             "token".to_string(),
             "sign-key".to_string(),
+            None,
             false,
         )
         .expect("build proxy")
@@ -1255,7 +1377,7 @@ mod tests {
     #[test]
     fn proxify_rewrites_mxc_urls_and_verify_round_trips() {
         let p = proxy();
-        let url = p.proxify("mxc://hs/abc").expect("proxify");
+        let url = p.proxify("mxc://hs/abc", "").expect("proxify");
         assert!(url.starts_with("/api/v1/media/hs/abc?expires="));
         let params = query_params(&url);
         let expires: i64 = params["expires"].parse().expect("expires");
@@ -1265,7 +1387,7 @@ mod tests {
     #[test]
     fn proxify_serves_foreign_servers() {
         let p = proxy();
-        let url = p.proxify("mxc://other/abc").expect("foreign proxify");
+        let url = p.proxify("mxc://other/abc", "").expect("foreign proxify");
         assert!(url.starts_with("/api/v1/media/other/abc?expires="));
         let params = query_params(&url);
         let expires: i64 = params["expires"].parse().expect("expires");
@@ -1278,7 +1400,7 @@ mod tests {
     #[test]
     fn proxify_avatar_and_thumbnail_request_their_default_variants() {
         let p = proxy();
-        let avatar = p.proxify_avatar("mxc://hs/avatar").expect("avatar");
+        let avatar = p.proxify_avatar("mxc://hs/avatar", "").expect("avatar");
         let params = query_params(&avatar);
         assert_eq!(params.get("width").map(String::as_str), Some("96"));
         assert_eq!(params.get("height").map(String::as_str), Some("96"));
@@ -1292,7 +1414,9 @@ mod tests {
             &params["sig"]
         ));
 
-        let content = p.proxify_thumbnail("mxc://hs/thumb").expect("thumbnail");
+        let content = p
+            .proxify_thumbnail("mxc://hs/thumb", "")
+            .expect("thumbnail");
         let params = query_params(&content);
         assert_eq!(params.get("width").map(String::as_str), Some("320"));
         assert_eq!(params.get("height").map(String::as_str), Some("240"));
@@ -1302,27 +1426,139 @@ mod tests {
     #[test]
     fn proxify_rejects_private_and_malformed_servers() {
         let p = proxy();
-        assert!(p.proxify("mxc://127.0.0.1/abc").is_none());
-        assert!(p.proxify("mxc://10.0.0.1/abc").is_none());
-        assert!(p.proxify("mxc://::1/abc").is_none());
-        assert!(p.proxify("mxc://bad server/abc").is_none());
-        assert!(p.proxify("mxc://-bad/abc").is_none());
-        assert!(p.proxify("mxc://bad-/abc").is_none());
+        assert!(p.proxify("mxc://127.0.0.1/abc", "").is_none());
+        assert!(p.proxify("mxc://10.0.0.1/abc", "").is_none());
+        assert!(p.proxify("mxc://::1/abc", "").is_none());
+        assert!(p.proxify("mxc://bad server/abc", "").is_none());
+        assert!(p.proxify("mxc://-bad/abc", "").is_none());
+        assert!(p.proxify("mxc://bad-/abc", "").is_none());
 
         let open = MediaProxy::new(
             "http://hs".to_string(),
             "token".to_string(),
             "sign-key".to_string(),
+            None,
             true,
         )
         .expect("build open proxy");
-        assert!(open.proxify("mxc://127.0.0.1/abc").is_some());
+        assert!(open.proxify("mxc://127.0.0.1/abc", "").is_some());
+    }
+
+    #[test]
+    fn proxify_prepends_public_base_url_when_configured() {
+        let p = MediaProxy::new(
+            "http://hs".to_string(),
+            "token".to_string(),
+            "sign-key".to_string(),
+            Some("https://comments.example.net/".to_string()),
+            false,
+        )
+        .expect("build proxy with public base");
+        let base = p
+            .public_base(&HeaderMap::new(), None, &TrustedProxySet::default())
+            .expect("configured base wins");
+        assert_eq!(base, "https://comments.example.net");
+        let url = p.proxify("mxc://hs/abc", &base).expect("proxify");
+        assert!(url.starts_with("https://comments.example.net/api/v1/media/hs/abc?expires="));
+        let params = query_params(&url);
+        let expires: i64 = params["expires"].parse().expect("expires");
+        assert!(p.verify("hs", "abc", None, expires, &params["sig"]));
+
+        let bad = MediaProxy::new(
+            "http://hs".to_string(),
+            "token".to_string(),
+            "sign-key".to_string(),
+            Some("comments.example.net".to_string()),
+            false,
+        );
+        assert!(bad.is_err(), "public base without scheme must be rejected");
+    }
+
+    #[test]
+    fn request_base_uses_host_header_by_default() {
+        let p = proxy();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("comments.example.net"),
+        );
+        let base = p
+            .public_base(&headers, None, &TrustedProxySet::default())
+            .expect("host-derived base");
+        assert_eq!(base, "http://comments.example.net");
+    }
+
+    #[test]
+    fn request_base_prefers_forwarded_headers_from_trusted_peer() {
+        let p = proxy();
+        let trusted = TrustedProxySet::from_rules(&[TrustedProxyRule::parse("loopback").unwrap()])
+            .expect("trusted rules");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("internal.example.net"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("comments.example.net"),
+        );
+        let addr = Some("127.0.0.1:54321".parse().expect("addr"));
+        let base = p
+            .public_base(&headers, addr, &trusted)
+            .expect("forwarded base");
+        assert_eq!(base, "https://comments.example.net");
+    }
+
+    #[test]
+    fn request_base_ignores_forwarded_headers_from_untrusted_peer() {
+        let p = proxy();
+        let trusted = TrustedProxySet::from_rules(&[TrustedProxyRule::parse("loopback").unwrap()])
+            .expect("trusted rules");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("comments.example.net"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("evil.example.net"),
+        );
+        // Untrusted peer: forwarded headers are ignored and http is assumed.
+        let addr = Some("203.0.113.9:54321".parse().expect("addr"));
+        let base = p
+            .public_base(&headers, addr, &trusted)
+            .expect("host-derived base");
+        assert_eq!(base, "http://comments.example.net");
+    }
+
+    #[test]
+    fn request_base_rejects_malformed_hosts() {
+        let p = proxy();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("comments.example.net/path"),
+        );
+        assert!(
+            p.public_base(&headers, None, &TrustedProxySet::default())
+                .is_none()
+        );
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("user@comments.example.net"),
+        );
+        assert!(
+            p.public_base(&headers, None, &TrustedProxySet::default())
+                .is_none()
+        );
     }
 
     #[test]
     fn verify_rejects_tampered_and_expired_urls() {
         let p = proxy();
-        let params = query_params(&p.proxify("mxc://hs/abc").expect("proxify"));
+        let params = query_params(&p.proxify("mxc://hs/abc", "").expect("proxify"));
         let expires: i64 = params["expires"].parse().expect("expires");
         assert!(!p.verify("hs", "abc", None, expires, "deadbeef"));
         assert!(!p.verify("hs", "abc", None, expires - 1000, &params["sig"]));
@@ -1335,7 +1571,7 @@ mod tests {
     #[test]
     fn verify_rejects_thumbnail_parameter_tampering() {
         let p = proxy();
-        let avatar = p.proxify_avatar("mxc://hs/avatar").expect("avatar");
+        let avatar = p.proxify_avatar("mxc://hs/avatar", "").expect("avatar");
         let params = query_params(&avatar);
         let expires: i64 = params["expires"].parse().expect("expires");
         // The signature binds the requested size: resizing the URL must fail
@@ -1419,7 +1655,7 @@ mod tests {
             sender_mxid: "@alice:hs".to_string(),
             raw_content: serde_json::Value::Null,
         };
-        p.proxify_message(&mut message);
+        p.proxify_message(&mut message, "");
         match message.content {
             Content::Media(media) => {
                 assert!(media.url.starts_with("/api/v1/media/hs/abc?"));
@@ -1476,7 +1712,7 @@ mod tests {
             sender_mxid: "@alice:hs".to_string(),
             raw_content: serde_json::Value::Null,
         };
-        p.proxify_message(&mut message);
+        p.proxify_message(&mut message, "");
         assert!(matches!(message.content, Content::Text(_)));
     }
 
