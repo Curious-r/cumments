@@ -76,6 +76,11 @@ Media URLs and author avatars (`author.avatar_url`) are rewritten to signed
 proxy URLs when the media proxy is enabled (avatars through the 96×96 crop
 variant); see [Media proxy](media.md#media-proxy).
 
+`author.display_name` and `author.avatar_url` render the author's **current**
+joined `m.room.member` profile: renaming or changing the avatar updates old
+comments as well. The value captured at projection time is only used as a
+fallback after the author leaves the room.
+
 ## Post a comment
 
 `POST /api/v1/sites/{site_id}/posts/{post_slug}/comments`
@@ -118,7 +123,7 @@ omit `submission_id`.
 Signature message:
 
 ```text
-POST\n{site_id}\n{post_slug}\n{content}\n{display_name}\n{reply_to}\n{challenge_prefix}
+POST\n{site_id}\n{post_slug}\n{content}\n{reply_to}\n{challenge_prefix}
 ```
 
 `reply_to` is the exact Matrix event ID of the parent comment as returned by
@@ -127,6 +132,11 @@ opaque strings by spec; legacy v1/v2 IDs look like `$localpart:server` while
 room v3+ IDs are bare hashes (v3 may even contain `/`). When an event ID is
 used in a request path (the path-based edit form) or query string (delete),
 clients must percent-encode it.
+
+`display_name` is presentation data and is deliberately **not** part of the
+signature: the API writes it to the virtual user's Matrix profile, and the
+event proof block only carries `public_key`, `signature`, `challenge`,
+`content` and `submission_id`.
 
 ## Edit a comment
 
@@ -206,10 +216,12 @@ and aggregated into the poll's response counts.
 
 Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author_signature", "challenge_response" }`.
 The signature covers
-`["LOCATE", site_id, post_slug, geo_uri, display_name, challenge]`;
+`["LOCATE", site_id, post_slug, geo_uri, challenge]`;
 the message is queued like a comment (same `Idempotency-Key` and
 `202 { "submission_id" }` contract) and sent as `m.location` (MSC3488) with the
 signed proof block, closing the loop through the same projection path.
+As with comments, `display_name` is written to the virtual user's profile and
+not covered by the signature.
 
 ## Room info
 

@@ -20,8 +20,10 @@ are.
 3. **Relations are not content.** Replies, edits, threads, reactions and
    deletions are attributes or edges of a message, modeled separately from
    the body.
-4. **Authors are snapshotted.** Display name and avatar are captured when the
-   message is projected; later profile changes do not rewrite history.
+4. **Authors follow live profiles.** Display name and avatar render from the
+   author's current joined `m.room.member` profile, so renames and avatar
+   changes propagate to old comments. The values captured at projection time
+   are kept as a fallback for authors who left the room.
 5. **Boundaries are explicit.** Voice/video calls are out of scope, and
    encrypted content is modeled only as a placeholder.
 
@@ -102,11 +104,15 @@ places and Cumments projects all of them:
   `avatar_thumbnail_url` from the main image through the 96×96 crop
   thumbnail variant instead.
 
-Author snapshots are resolved once when a message is projected: Matrix-native
-authors take both display name and avatar from their current `m.room.member`
-state, while guests keep the signed display name from the event content and
-take the avatar from member state. Later profile changes never rewrite
-existing messages.
+Author profiles are projected into `author_display_name` / `author_avatar_url`
+when a message is stored, but the public read path (message list, single
+message, SSE) overlays the author's current joined `m.room.member` profile.
+Guests and Matrix-native authors behave identically: display data is Matrix
+profile state, never signed event content (see
+[visitor identity design](../misc/design/visitor-identity.md)). Members who
+left the room keep the stored projection as a fallback; a redacted member
+state keeps the membership but drops the profile, so reads show no profile,
+same as a cleared display name or avatar.
 
 All avatar URLs are stored as `mxc://` and rewritten to signed media-proxy
 URLs on the way out of the API (see [Media proxy](#media-proxy)); the proxy

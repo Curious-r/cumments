@@ -1067,6 +1067,10 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 50
+                  description: |
+                    Display name written to the virtual user's Matrix
+                    profile. Presentation data; deliberately not covered by
+                    the author signature.
                 author_public_key:
                   type: string
                 author_signature:
@@ -1945,6 +1949,10 @@ components:
           type: string
           minLength: 1
           maxLength: 50
+          description: |
+            Display name written to the virtual user's Matrix profile.
+            Presentation data; deliberately not covered by the author
+            signature.
         author_public_key:
           type: string
         author_signature:

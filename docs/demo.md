@@ -91,6 +91,11 @@ back to the newest own comment's avatar when the cache is empty (e.g. after
 restoring an identity on another device). Raw `mxc://` URIs are never used as
 image sources; only the API's signed proxy URLs are rendered.
 
+Author display names and avatars are rendered from the current room-member
+profile, so renaming or changing an avatar updates previously posted comments
+too; the local cache only fills the gap before the author has any projected
+comment after restoring an identity.
+
 ## Proof of work
 
 1. Call `GET /api/v1/challenge`.
