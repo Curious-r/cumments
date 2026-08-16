@@ -96,6 +96,7 @@ async fn test_state_with_driver(
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         guest_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        public_read_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
@@ -423,6 +424,50 @@ async fn guest_profile_rejects_an_invalid_public_key() {
         .await
         .expect("call router");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn public_reads_return_404_for_unregistered_sites() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::SigningKey;
+
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let (state, _store) =
+        test_state("public-read-404", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let query_method = Method::from_bytes(b"QUERY").expect("QUERY method");
+    let requests: Vec<(Method, String, String)> = vec![
+        (
+            query_method,
+            "/api/v1/sites/ghost/posts/hello/comments".to_string(),
+            "{}".to_string(),
+        ),
+        (
+            Method::GET,
+            "/api/v1/sites/ghost/roles".to_string(),
+            "null".to_string(),
+        ),
+        (
+            Method::GET,
+            "/api/v1/sites/ghost/stickers".to_string(),
+            "null".to_string(),
+        ),
+        (
+            Method::GET,
+            format!("/api/v1/sites/ghost/guests/profile?author_public_key={public_key}"),
+            "null".to_string(),
+        ),
+    ];
+    for (method, uri, body) in requests {
+        let response = router
+            .clone()
+            .oneshot(request_with_body(method, &uri, None, &[], &body))
+            .await
+            .expect("call router");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{}", uri);
+    }
 }
 
 #[tokio::test]

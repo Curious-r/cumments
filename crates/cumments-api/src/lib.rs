@@ -141,6 +141,9 @@ pub struct ApiState {
     pub media_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for the public guest profile endpoint.
     pub guest_profile_limiter: Arc<rate_limit::RateLimiter>,
+    /// Per-client-key limiter for local public read endpoints (comment
+    /// lists, room metadata, roles, moderators, sticker packs).
+    pub public_read_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for site governance writes.
     pub moderation_limiter: Arc<rate_limit::RateLimiter>,
     /// Live ephemeral events (typing/receipts/presence) for SSE.

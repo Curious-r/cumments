@@ -1041,7 +1041,23 @@ pub(crate) async fn list_stickers_handler(
     headers: HeaderMap,
     Path(site_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    if state
+        .store
+        .get_site(&site_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to look up site: {e}")))?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Site not found.".to_string()));
+    }
     let media_base = media_url_base(&state, &headers, Some(addr));
     let packs = list_site_sticker_packs(state.store.as_ref(), site_id.as_str())
         .await

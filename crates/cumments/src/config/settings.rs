@@ -72,6 +72,7 @@ pub struct RateLimits {
     pub sse: RateLimitBucket,
     pub media: RateLimitBucket,
     pub guest_profile: RateLimitBucket,
+    pub public_read: RateLimitBucket,
     pub moderation: RateLimitBucket,
 }
 
@@ -86,6 +87,7 @@ impl Default for RateLimits {
             sse: RateLimitBucket::new(20, "1h"),
             media: RateLimitBucket::new(120, "1h"),
             guest_profile: RateLimitBucket::new(120, "1h"),
+            public_read: RateLimitBucket::new(1200, "1h"),
             moderation: RateLimitBucket::new(60, "1h"),
         }
     }
@@ -121,6 +123,7 @@ pub struct ResolvedRateLimits {
     pub sse: ResolvedRateLimit,
     pub media: ResolvedRateLimit,
     pub guest_profile: ResolvedRateLimit,
+    pub public_read: ResolvedRateLimit,
     pub moderation: ResolvedRateLimit,
 }
 
@@ -144,6 +147,7 @@ impl RateLimits {
             sse: self.sse.resolved("rate_limit.sse")?,
             media: self.media.resolved("rate_limit.media")?,
             guest_profile: self.guest_profile.resolved("rate_limit.guest_profile")?,
+            public_read: self.public_read.resolved("rate_limit.public_read")?,
             moderation: self.moderation.resolved("rate_limit.moderation")?,
         })
     }

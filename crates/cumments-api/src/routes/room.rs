@@ -2,6 +2,7 @@
 
 use crate::ApiState;
 use crate::error::AppError;
+use crate::rate_limit::client_key;
 use crate::routes::media::media_url_base;
 use axum::{
     Json,
@@ -29,6 +30,13 @@ pub(crate) async fn room_info_handler(
     headers: HeaderMap,
     Path((site_id, post_slug)): Path<(String, String)>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
 

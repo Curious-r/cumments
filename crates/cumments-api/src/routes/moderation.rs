@@ -387,11 +387,30 @@ pub(crate) async fn remove_room_moderator_handler(
 
 pub(crate) async fn list_site_roles_handler(
     State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(site_id): Path<String>,
 ) -> Result<Json<SiteRolesResponse>, AppError> {
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    if state
+        .store
+        .get_site(&site_id_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to look up site: {e}")))?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Site not found.".to_string()));
+    }
     let roles = state
         .store
-        .list_site_roles(&site_id)
+        .list_site_roles(site_id_val.as_str())
         .await
         .map_err(|e| AppError::Internal(format!("failed to list site roles: {e}")))?;
     Ok(Json(site_roles_response(roles)))
@@ -399,8 +418,17 @@ pub(crate) async fn list_site_roles_handler(
 
 pub(crate) async fn list_room_moderators_handler(
     State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path((site_id, post_slug)): Path<(String, String)>,
 ) -> Result<Json<RoomModeratorsResponse>, AppError> {
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
     let room_id = room_id_for(&state, &site_id, &post_slug).await?;

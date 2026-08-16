@@ -184,9 +184,29 @@ pub(crate) async fn query_comments_handler(
         return Err(AppError::MethodNotAllowed);
     }
 
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
+
     // 2. Validate path params
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+
+    // The parent site must exist: a missing parent is a 404, not an empty
+    // page, matching the REST convention for nested resources.
+    if state
+        .store
+        .get_site(&site_id_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to look up site: {e}")))?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Site not found.".to_string()));
+    }
 
     // 3. Parse pagination from JSON body (empty body → defaults)
     let query: PaginationQuery = if body.is_empty() {

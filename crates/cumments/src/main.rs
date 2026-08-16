@@ -494,6 +494,10 @@ async fn main() -> Result<()> {
             rate_limits.guest_profile.requests,
             rate_limits.guest_profile.window,
         )),
+        public_read_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            rate_limits.public_read.requests,
+            rate_limits.public_read.window,
+        )),
         moderation_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.moderation.requests,
             rate_limits.moderation.window,

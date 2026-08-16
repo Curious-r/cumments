@@ -32,5 +32,6 @@ identity, it is high-entropy and not enumerable, and any avatar is already
 public through the guest's comments. Requests are rate limited per client
 IP (default 120/hour, configurable via `rate_limit.guest_profile`).
 
-Errors: `400` for missing/invalid `author_public_key`, `429` when rate
+Errors: `404` when the site is not registered (the parent resource does not
+exist), `400` for missing/invalid `author_public_key`, `429` when rate
 limited.

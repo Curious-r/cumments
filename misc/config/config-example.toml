@@ -130,4 +130,5 @@ mode = "logging"
 # sse           = { requests = 20,  window = "1h" }
 # media         = { requests = 120, window = "1h" }
 # guest_profile = { requests = 120, window = "1h" }
+# public_read   = { requests = 1200, window = "1h" }
 # moderation    = { requests = 60,  window = "1h" }

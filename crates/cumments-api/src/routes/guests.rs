@@ -38,6 +38,17 @@ pub(crate) async fn guest_profile_handler(
     }
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    // A missing parent site is a 404; a missing guest profile on an existing
+    // site is still a 200 empty profile.
+    if state
+        .store
+        .get_site(&site_id_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to look up site: {e}")))?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Site not found.".to_string()));
+    }
     let author_public_key = query
         .get("author_public_key")
         .cloned()
