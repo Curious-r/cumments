@@ -194,7 +194,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Lint OpenAPI contract
         run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
@@ -213,7 +213,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Build docs site
         run: |
