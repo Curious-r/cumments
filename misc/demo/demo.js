@@ -5,6 +5,9 @@
             const SETTINGS_KEY = "cumments_demo_settings";
             const IDENTITY_KEY = "cumments_identity";
             const MNEMONIC_SESSION_KEY = "cumments_mnemonic_session";
+            const AVATAR_CACHE_PREFIX = "cumments_avatar_";
+            const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+            const AVATAR_MAX_DIMENSION = 512;
 
             // ==========================================
             // BIP39
@@ -89,6 +92,17 @@
                     reset_identity: "重置身份",
                     identity_note:
                         "身份 = Ed25519 公钥。私钥只保存在本浏览器；助记词不跨会话保存、仅在创建当次会话可查看。长期备份请抄写助记词或导出私钥；恢复/导入/重置后，旧公钥发布的评论将不再显示编辑/删除入口。",
+                    avatar_label: "头像",
+                    avatar_upload: "上传头像",
+                    avatar_remove: "移除头像",
+                    avatar_note:
+                        "头像按站点独立（虚拟用户由站点 + 公钥派生），只接受图片且会自动压缩到 512px 以内。",
+                    avatar_uploaded: "头像已更新",
+                    avatar_removed: "头像已移除",
+                    avatar_upload_failed: "头像上传失败：",
+                    avatar_remove_failed: "头像移除失败：",
+                    avatar_bad_type: "请选择图片文件",
+                    avatar_too_large: "图片不能超过 5MB",
                     save_refresh: "保存并刷新",
                     mnemonic_title_backup: "备份你的身份助记词",
                     mnemonic_title_view: "身份助记词（本次会话）",
@@ -245,6 +259,17 @@
                     reset_identity: "Reset identity",
                     identity_note:
                         "Identity = Ed25519 public key. The private key only lives in this browser; the mnemonic is not persisted across sessions and is only viewable in the session that created it. For long-term backup, write down the mnemonic or export the private key; after restore/import/reset, comments posted by the old public key lose their edit/delete controls.",
+                    avatar_label: "Avatar",
+                    avatar_upload: "Upload avatar",
+                    avatar_remove: "Remove avatar",
+                    avatar_note:
+                        "Avatars are per-site (the virtual user is derived from site + public key), images only, and are downscaled to at most 512px.",
+                    avatar_uploaded: "Avatar updated",
+                    avatar_removed: "Avatar removed",
+                    avatar_upload_failed: "Avatar upload failed: ",
+                    avatar_remove_failed: "Avatar removal failed: ",
+                    avatar_bad_type: "Please choose an image file",
+                    avatar_too_large: "Images must be under 5MB",
                     save_refresh: "Save & refresh",
                     mnemonic_title_backup: "Back up your identity mnemonic",
                     mnemonic_title_view: "Identity mnemonic (this session)",
@@ -461,6 +486,8 @@
             let currentMnemonic = null;
             let pendingPollTimer = null;
             let sseKey = "";
+            let ownAvatarUrl = null;
+            let ownAvatarSiteId = null;
             const PENDING_POLL_INTERVAL_MS = 2000;
             const PENDING_POLL_LIMIT = 15;
             const PENDING_POLL_LONG_INTERVAL_MS = 10000;
@@ -640,6 +667,11 @@
                 } catch {
                     toast(t("err_identity_save"), "error");
                     return false;
+                }
+                // The avatar belongs to the site-scoped public key; switching
+                // identities must not leak the previous identity's avatar.
+                if (!identity || identity.publicKey !== next.publicKey) {
+                    clearOwnAvatarCache();
                 }
                 identity = next;
                 renderIdentity();
@@ -1037,6 +1069,8 @@
             function renderIdentity() {
                 const el = document.getElementById("publicKey");
                 if (el) el.value = identity ? identity.publicKey : "";
+                renderSettingsAvatar();
+                updateComposerAvatar();
             }
 
             async function copyPublicKey() {
@@ -1358,6 +1392,7 @@
             }
 
             function renderComments(items) {
+                refreshOwnAvatarFromComments(items);
                 const container = document.getElementById("commentsContainer");
                 container.innerHTML = "";
                 if (!items.length) {
@@ -2599,7 +2634,295 @@
                 const input = document.getElementById("composerDisplayName");
                 const avatar = document.getElementById("composerAvatar");
                 const name = (input.value || t("guest_default")).trim();
+                avatar.textContent = "";
+                if (
+                    ownAvatarUrl &&
+                    ownAvatarSiteId === getSettings().siteId
+                ) {
+                    const img = document.createElement("img");
+                    img.src = ownAvatarUrl;
+                    img.alt = "";
+                    img.className =
+                        "w-9 h-9 rounded-full object-cover shrink-0";
+                    img.loading = "lazy";
+                    img.addEventListener("error", () => {
+                        if (avatar.contains(img)) img.remove();
+                        avatar.textContent = name[0].toUpperCase();
+                    });
+                    avatar.appendChild(img);
+                    return;
+                }
                 avatar.textContent = name[0].toUpperCase();
+            }
+
+            function renderSettingsAvatar() {
+                const el = document.getElementById("settingsAvatar");
+                if (!el) return;
+                el.textContent = "";
+                const name = (
+                    document.getElementById("settingDisplayName").value ||
+                    t("guest_default")
+                ).trim();
+                if (
+                    ownAvatarUrl &&
+                    ownAvatarSiteId === getSettings().siteId
+                ) {
+                    const img = document.createElement("img");
+                    img.src = ownAvatarUrl;
+                    img.alt = "";
+                    img.className = "w-12 h-12 rounded-full object-cover";
+                    img.loading = "lazy";
+                    img.addEventListener("error", () => {
+                        renderSettingsAvatarFallback(el, name);
+                    });
+                    el.appendChild(img);
+                    return;
+                }
+                renderSettingsAvatarFallback(el, name);
+            }
+
+            function renderSettingsAvatarFallback(el, name) {
+                el.textContent = "";
+                const div = document.createElement("div");
+                div.className =
+                    "w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold";
+                div.textContent = name[0].toUpperCase();
+                el.appendChild(div);
+            }
+
+            function avatarCacheKey(siteId) {
+                return AVATAR_CACHE_PREFIX + siteId;
+            }
+
+            function loadOwnAvatarCache() {
+                const cfg = getSettings();
+                if (!cfg.siteId) return;
+                try {
+                    const cached = JSON.parse(
+                        localStorage.getItem(avatarCacheKey(cfg.siteId)) ||
+                            "null",
+                    );
+                    if (
+                        cached &&
+                        typeof cached.url === "string" &&
+                        cached.url.startsWith("/api/v1/media/")
+                    ) {
+                        ownAvatarUrl = cached.url;
+                        ownAvatarSiteId = cfg.siteId;
+                        return;
+                    }
+                } catch {
+                    // corrupted cache; fall through to the comment fallback
+                }
+                ownAvatarUrl = null;
+                ownAvatarSiteId = null;
+            }
+
+            function saveOwnAvatarCache(url) {
+                const cfg = getSettings();
+                if (!cfg.siteId || !url) return;
+                try {
+                    localStorage.setItem(
+                        avatarCacheKey(cfg.siteId),
+                        JSON.stringify({
+                            url,
+                            updatedAt: Date.now(),
+                        }),
+                    );
+                } catch {
+                    // cache is best-effort; the in-memory value still works
+                }
+                ownAvatarUrl = url;
+                ownAvatarSiteId = cfg.siteId;
+                renderIdentity();
+                updateComposerAvatar();
+            }
+
+            function clearOwnAvatarCache() {
+                const cfg = getSettings();
+                ownAvatarUrl = null;
+                ownAvatarSiteId = null;
+                if (cfg.siteId) {
+                    try {
+                        localStorage.removeItem(avatarCacheKey(cfg.siteId));
+                    } catch {
+                        // ignore storage failures
+                    }
+                }
+                renderIdentity();
+                updateComposerAvatar();
+            }
+
+            // Own-avatar fallback when the local cache is empty: the newest
+            // own comment that carries an avatar (lists are newest-first).
+            function refreshOwnAvatarFromComments(comments) {
+                const cfg = getSettings();
+                if (
+                    !cfg.siteId ||
+                    !identity ||
+                    (ownAvatarUrl && ownAvatarSiteId === cfg.siteId)
+                ) {
+                    return;
+                }
+                for (const comment of comments) {
+                    if (
+                        comment.author &&
+                        comment.author.type === "guest" &&
+                        comment.author.public_key === identity.publicKey &&
+                        comment.author.avatar_url
+                    ) {
+                        ownAvatarUrl = comment.author.avatar_url;
+                        ownAvatarSiteId = cfg.siteId;
+                        saveOwnAvatarCache(ownAvatarUrl);
+                        return;
+                    }
+                }
+            }
+
+            function chooseAvatarFile() {
+                document.getElementById("avatarFile").click();
+            }
+
+            async function onAvatarFileSelected(event) {
+                const file = event.target.files && event.target.files[0];
+                event.target.value = "";
+                if (!file) return;
+                if (!file.type.startsWith("image/")) {
+                    toast(t("avatar_bad_type"), "error");
+                    return;
+                }
+                if (file.size > AVATAR_MAX_BYTES) {
+                    toast(t("avatar_too_large"), "error");
+                    return;
+                }
+                try {
+                    const { blob, mime, filename } = await readAvatarFile(
+                        file,
+                    );
+                    await uploadAvatar(blob, mime, filename);
+                } catch (e) {
+                    toast(t("avatar_upload_failed") + e.message, "error");
+                }
+            }
+
+            async function readAvatarFile(file) {
+                // Downscale to a square 512×512 PNG so uploads stay small and
+                // the signature covers exactly the bytes that will be sent.
+                if (typeof createImageBitmap === "function") {
+                    try {
+                        const bitmap = await createImageBitmap(file);
+                        try {
+                            const side = Math.min(
+                                AVATAR_MAX_DIMENSION,
+                                Math.max(bitmap.width, bitmap.height),
+                            );
+                            const canvas = document.createElement("canvas");
+                            canvas.width = side;
+                            canvas.height = side;
+                            const ctx = canvas.getContext("2d");
+                            const scale = Math.max(
+                                side / bitmap.width,
+                                side / bitmap.height,
+                            );
+                            const width = bitmap.width * scale;
+                            const height = bitmap.height * scale;
+                            ctx.drawImage(
+                                bitmap,
+                                (side - width) / 2,
+                                (side - height) / 2,
+                                width,
+                                height,
+                            );
+                            const blob = await new Promise((resolve) =>
+                                canvas.toBlob(resolve, "image/png"),
+                            );
+                            if (blob) {
+                                return {
+                                    blob,
+                                    mime: "image/png",
+                                    filename: "avatar.png",
+                                };
+                            }
+                        } finally {
+                            bitmap.close();
+                        }
+                    } catch {
+                        // fall through to the original file
+                    }
+                }
+                return {
+                    blob: file,
+                    mime: file.type || "image/png",
+                    filename: file.name || "avatar",
+                };
+            }
+
+            async function uploadAvatar(blob, mime, filename) {
+                const cfg = getSettings();
+                const chal = await getChallenge(cfg);
+                const nonce = await solvePow(chal.prefix, chal.difficulty);
+                const contentHash = await sha256Hex(
+                    await blob.arrayBuffer(),
+                );
+                const { publicKey, signature } = await authorSignature([
+                    "UPLOAD_AVATAR",
+                    cfg.siteId,
+                    mime,
+                    contentHash,
+                    chal.prefix,
+                ]);
+                const params = new URLSearchParams({
+                    author_public_key: publicKey,
+                    author_signature: signature,
+                    challenge_response: `${chal.prefix}|${nonce}`,
+                    mime,
+                    filename,
+                });
+                const res = await fetch(
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/me/avatar?${params.toString()}`,
+                    {
+                        method: "PUT",
+                        headers: {
+                            "Content-Type": mime,
+                            "Idempotency-Key": newIdempotencyKey(),
+                        },
+                        body: blob,
+                    },
+                );
+                if (!res.ok) throw new Error(await apiError(res));
+                const data = await res.json();
+                if (!data.avatar_url) {
+                    throw new Error(t("avatar_upload_failed"));
+                }
+                saveOwnAvatarCache(data.avatar_url);
+                toast(t("avatar_uploaded"), "success");
+            }
+
+            async function removeAvatar() {
+                const cfg = getSettings();
+                try {
+                    const chal = await getChallenge(cfg);
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "DELETE_AVATAR",
+                        cfg.siteId,
+                        chal.prefix,
+                    ]);
+                    const params = new URLSearchParams({
+                        author_public_key: publicKey,
+                        author_signature: signature,
+                        challenge_response: `${chal.prefix}|${nonce}`,
+                    });
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/me/avatar?${params.toString()}`,
+                        { method: "DELETE" },
+                    );
+                    if (!res.ok) throw new Error(await apiError(res));
+                    clearOwnAvatarCache();
+                    toast(t("avatar_removed"), "success");
+                } catch (e) {
+                    toast(t("avatar_remove_failed") + e.message, "error");
+                }
             }
 
             function toast(message, type = "info") {
@@ -2630,6 +2953,7 @@
                 const cfg = getSettings();
                 sseKey = `${cfg.api}|${cfg.siteId}|${cfg.slug}`;
                 closeSse();
+                loadOwnAvatarCache();
                 state.currentPage = 1;
                 state.meta = null;
                 showLoading();
@@ -2682,6 +3006,15 @@
                 document
                     .getElementById("copyPublicKeyBtn")
                     .addEventListener("click", copyPublicKey);
+                document
+                    .getElementById("avatarFile")
+                    .addEventListener("change", onAvatarFileSelected);
+                document
+                    .getElementById("uploadAvatarBtn")
+                    .addEventListener("click", chooseAvatarFile);
+                document
+                    .getElementById("removeAvatarBtn")
+                    .addEventListener("click", removeAvatar);
                 document
                     .getElementById("showMnemonicBtn")
                     .addEventListener("click", showMnemonic);

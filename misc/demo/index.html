@@ -340,6 +340,50 @@
                             </button>
                         </div>
 
+                        <div class="mt-4 border-t border-slate-100 pt-4">
+                            <label
+                                data-i18n="avatar_label"
+                                class="block text-sm font-medium text-slate-700 mb-2"
+                            >
+                                头像
+                            </label>
+                            <div class="flex items-center gap-3">
+                                <div
+                                    id="settingsAvatar"
+                                    class="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold shrink-0"
+                                >
+                                    ?
+                                </div>
+                                <div class="flex flex-col gap-2">
+                                    <button
+                                        id="uploadAvatarBtn"
+                                        class="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition"
+                                    >
+                                        <span data-i18n="avatar_upload">上传头像</span>
+                                    </button>
+                                    <button
+                                        id="removeAvatarBtn"
+                                        class="text-xs border border-slate-200 rounded-lg px-3 py-2 text-red-500 hover:bg-red-50 transition"
+                                    >
+                                        <span data-i18n="avatar_remove">移除头像</span>
+                                    </button>
+                                </div>
+                                <input
+                                    id="avatarFile"
+                                    type="file"
+                                    accept="image/*"
+                                    class="hidden"
+                                />
+                            </div>
+                            <p
+                                data-i18n="avatar_note"
+                                class="mt-2 text-[11px] text-slate-400 leading-relaxed"
+                            >
+                                头像按站点独立（虚拟用户由站点 + 公钥派生），只接受图片且会自动压缩到
+                                512px 以内。
+                            </p>
+                        </div>
+
                         <div class="mt-3 grid grid-cols-2 gap-2">
                             <button
                                 id="showMnemonicBtn"

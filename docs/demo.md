@@ -72,6 +72,26 @@ rejected when the private key does not match the stated public key. If the
 BIP39 CDN is unreachable, the demo falls back to a random Ed25519 identity and
 reminds you that mnemonic recovery is unavailable.
 
+## Avatars
+
+Comment authors with an avatar render it as an image (the API's signed 96×96
+crop proxy URL) and fall back to the deterministic initial block when the
+image cannot load. The room header prefers `avatar_thumbnail_url` over the
+full-size avatar.
+
+The settings drawer's identity section can upload and remove the guest
+avatar for the current site. Uploads are restricted to images, downscaled
+client-side to a square 512×512 PNG, and signed with
+`["UPLOAD_AVATAR", site_id, mime, sha256_hex(body), challenge]`; removal uses
+`["DELETE_AVATAR", site_id, challenge]` (see
+[Media API](api/media.md#guest-avatar)). Avatars are per-site because the
+virtual user is derived from `site_id + public_key`.
+
+The demo keeps the last known avatar URL in `localStorage` per site and falls
+back to the newest own comment's avatar when the cache is empty (e.g. after
+restoring an identity on another device). Raw `mxc://` URIs are never used as
+image sources; only the API's signed proxy URLs are rendered.
+
 ## Proof of work
 
 1. Call `GET /api/v1/challenge`.
