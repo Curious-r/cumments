@@ -31,6 +31,20 @@ async fn column_names(db: &sea_orm::DatabaseConnection, table: &str) -> Vec<Stri
         .collect()
 }
 
+async fn column_not_null(db: &sea_orm::DatabaseConnection, table: &str, column: &str) -> bool {
+    let sql = format!("PRAGMA table_info({table})");
+    let rows = db
+        .query_all_raw(Statement::from_string(DbBackend::Sqlite, sql))
+        .await
+        .expect("query table info");
+    rows.iter()
+        .find_map(|row| {
+            let name = row.try_get::<String>("", "name").ok()?;
+            (name == column).then(|| row.try_get::<i64>("", "notnull").unwrap_or(1) != 0)
+        })
+        .unwrap_or(false)
+}
+
 #[tokio::test]
 async fn submission_txn_migrations_are_registered() {
     let names = migration_names();
@@ -53,6 +67,10 @@ async fn submission_txn_migrations_are_registered() {
     assert!(
         names.contains(&"m20260815_000049_command_audit_log".to_string()),
         "000049 must be registered or chat command audit records are lost"
+    );
+    assert!(
+        names.contains(&"m20260816_000051_media_uploads_post_slug_nullable".to_string()),
+        "000051 must be registered or site-scoped avatar uploads cannot share the upload table"
     );
 }
 
@@ -105,6 +123,10 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     }
     assert!(claim_columns.iter().any(|c| c == "dm_room_id"));
     assert!(media_columns.iter().any(|c| c == "submission_id"));
+    assert!(
+        !column_not_null(&db, "media_uploads", "post_slug").await,
+        "post_slug must be nullable so avatar uploads are site-scoped"
+    );
     let audit_columns = column_names(&db, "command_audit_logs").await;
     assert!(audit_columns.iter().any(|c| c == "actor_mxid"));
     assert!(audit_columns.iter().any(|c| c == "created_at"));

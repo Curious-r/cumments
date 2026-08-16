@@ -81,13 +81,32 @@ impl MatrixDriver for TestDriver {
     }
     async fn upload_media(
         &self,
-        _bytes: bytes::Bytes,
-        _filename: &str,
+        bytes: bytes::Bytes,
+        filename: &str,
         _mimetype: &str,
-        _author_public_key: &str,
-        _site_id: &SiteId,
+        author_public_key: &str,
+        site_id: &SiteId,
     ) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+        Ok(format!(
+            "mxc://hs/{}/{}-{}-{}",
+            site_id.as_str(),
+            author_public_key,
+            filename,
+            bytes.len()
+        ))
+    }
+    async fn set_avatar_url(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.avatar_updates.lock().await.push((
+            author_public_key.to_string(),
+            site_id.as_str().to_string(),
+            avatar_url.map(str::to_string),
+        ));
+        Ok(())
     }
     #[allow(clippy::too_many_arguments)]
     async fn post_message(

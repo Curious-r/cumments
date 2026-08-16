@@ -367,6 +367,55 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Sets or removes the avatar on a virtual user's global profile.
+    ///
+    /// The update carries `m.propagate_to: "all"` (MSC4466) so the
+    /// homeserver emits fresh `m.room.member` events in every joined room;
+    /// without that propagation the avatar would never reach the projector
+    /// (avatars have no event-content fallback, unlike display names).
+    #[instrument(skip(self))]
+    pub(super) async fn set_avatar_url_impl(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: Option<&str>,
+    ) -> Result<()> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        let path = format!(
+            "_matrix/client/v3/profile/{}/avatar_url",
+            percent_encode(&virtual_user)
+        );
+        let resp = match avatar_url {
+            Some(avatar_url) => self
+                .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+                .json(&serde_json::json!({
+                    "avatar_url": avatar_url,
+                    "m.propagate_to": "all",
+                }))
+                .send()
+                .await
+                .map_err(|e| anyhow!("set avatar request failed: {}", e))?,
+            None => self
+                .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+                .send()
+                .await
+                .map_err(|e| anyhow!("delete avatar request failed: {}", e))?,
+        };
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "set avatar for {} failed ({}): {}",
+                virtual_user,
+                status,
+                error_body
+            ));
+        }
+        Ok(())
+    }
+
     #[instrument(skip(self))]
     pub(super) async fn get_joined_rooms_impl(&self) -> Result<Vec<String>> {
         let resp = self
@@ -420,5 +469,70 @@ impl AppServiceMatrixDriver {
             .await
             .map_err(|e| anyhow!("Failed to parse joined_members response: {}", e))?;
         Ok(data.joined.into_keys().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::test_driver;
+    use super::*;
+    use cumments_core::ports::MatrixDriver;
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const AVATAR_PROFILE_PATH: &str =
+        "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com/avatar_url";
+
+    #[tokio::test]
+    async fn set_avatar_url_updates_the_virtual_user_profile_and_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(AVATAR_PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .and(body_partial_json(json!({
+                "avatar_url": "mxc://example.com/avatar",
+                "m.propagate_to": "all",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        driver
+            .set_avatar_url(
+                "pubkey",
+                &SiteId::from("my-blog"),
+                Some("mxc://example.com/avatar"),
+            )
+            .await
+            .expect("set avatar should succeed");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn delete_avatar_url_removes_the_profile_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path(AVATAR_PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        driver
+            .set_avatar_url("pubkey", &SiteId::from("my-blog"), None)
+            .await
+            .expect("delete avatar should succeed");
+        server.verify().await;
     }
 }

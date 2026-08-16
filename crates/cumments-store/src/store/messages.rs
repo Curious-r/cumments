@@ -522,14 +522,14 @@ impl MessageStore for DbStore {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: &str,
+        post_slug: Option<&str>,
     ) -> Result<()> {
         let now = chrono::Utc::now();
         let model = media_uploads::ActiveModel {
             mxc_url: Set(mxc_url.to_owned()),
             author_public_key: Set(author_public_key.to_owned()),
             site_id: Set(site_id.to_owned()),
-            post_slug: Set(post_slug.to_owned()),
+            post_slug: Set(post_slug.map(str::to_string)),
             used_at: Set(None),
             submission_id: Set(None),
             created_at: Set(now),
@@ -658,7 +658,7 @@ impl MessageStore for DbStore {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: &str,
+        post_slug: Option<&str>,
         idempotency: &MediaUploadIdempotencyInput,
     ) -> Result<MediaUploadIdempotencyOutcome> {
         let now = chrono::Utc::now();
@@ -693,7 +693,7 @@ impl MessageStore for DbStore {
             mxc_url: Set(mxc_url.to_owned()),
             author_public_key: Set(author_public_key.to_owned()),
             site_id: Set(site_id.to_owned()),
-            post_slug: Set(post_slug.to_owned()),
+            post_slug: Set(post_slug.map(str::to_string)),
             used_at: Set(None),
             created_at: Set(now),
             ..Default::default()

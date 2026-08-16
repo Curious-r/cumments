@@ -579,7 +579,7 @@ pub(crate) async fn upload_media_handler(
             &url,
             &author_public_key,
             site_id_val.as_str(),
-            post_slug_val.as_str(),
+            Some(post_slug_val.as_str()),
             &MediaUploadIdempotencyInput {
                 key: idempotency_key,
                 request_fingerprint: fingerprint,
@@ -611,6 +611,270 @@ pub(crate) async fn upload_media_handler(
             Err(AppError::IdempotencyReused)
         }
     }
+}
+
+/// Builds the JSON response for a guest avatar write, marking idempotent
+/// replays with the same header as media uploads.
+fn avatar_response(avatar_url: &str, replayed: bool) -> Response {
+    let mut response = (Json(serde_json::json!({ "avatar_url": avatar_url })),).into_response();
+    if replayed {
+        response.headers_mut().insert(
+            IDEMPOTENT_REPLAYED.clone(),
+            HeaderValue::from_static("true"),
+        );
+    }
+    response
+}
+
+/// Guest avatar upload: verifies PoW + author signature, uploads the image as
+/// the author's virtual user, records the site-scoped upload idempotently,
+/// then points the virtual user's global profile at it.
+///
+/// `UPLOAD_AVATAR` is a one-request operation (upload + set profile); the
+/// media upload machinery is shared with comment media so ownership,
+/// idempotency, rate limiting and cleanup behave identically.
+pub(crate) async fn set_guest_avatar_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(site_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    if state.driver.sender_user_id().is_none() {
+        return Err(AppError::NotFound(
+            "Avatar uploads are not enabled for this deployment.".to_string(),
+        ));
+    }
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "avatar uploads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.write_limiter.window().as_secs(),
+        });
+    }
+    if body.len() > MEDIA_MAX_BYTES {
+        return Err(AppError::BadRequest(
+            "media exceeds the size limit".to_string(),
+        ));
+    }
+    let idempotency_key = extract_idempotency_key(&headers)?;
+    let author_public_key = query
+        .get("author_public_key")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_public_key".to_string()))?;
+    let author_signature = query
+        .get("author_signature")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_signature".to_string()))?;
+    let challenge_response = query
+        .get("challenge_response")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing challenge_response".to_string()))?;
+    let mimetype = query
+        .get("mime")
+        .cloned()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let filename = query
+        .get("filename")
+        .cloned()
+        .unwrap_or_else(|| "avatar".to_string());
+
+    if !mimetype.starts_with("image/") {
+        return Err(AppError::BadRequest(format!(
+            "avatar must be an image, got {mimetype}"
+        )));
+    }
+
+    let fingerprint = format!(
+        "{}\n{}\n{}",
+        request_fingerprint(
+            "PUT",
+            &format!("/api/v1/sites/{}/me/avatar", site_id_val.as_str()),
+            &body,
+        ),
+        mimetype,
+        filename,
+    );
+    let sign_message = |challenge: &str| {
+        signature_message(&[
+            "UPLOAD_AVATAR",
+            site_id_val.as_str(),
+            &mimetype,
+            &sha256_hex(&body),
+            challenge,
+        ])
+    };
+
+    // Idempotency replay short-circuits before PoW so a retry does not need
+    // a fresh proof of work; the Ed25519 signature is still verified. The
+    // profile write is repeated so a retry heals a partially-completed set.
+    if let Some(existing) = state
+        .store
+        .find_media_upload_idempotency(&author_public_key, &idempotency_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to check avatar idempotency: {e}")))?
+    {
+        if existing.request_fingerprint != fingerprint {
+            return Err(AppError::IdempotencyReused);
+        }
+        let challenge = challenge_prefix(&challenge_response);
+        if !verify_signature(
+            &author_public_key,
+            &sign_message(challenge),
+            &author_signature,
+        ) {
+            return Err(AppError::InvalidSignature);
+        }
+        state
+            .driver
+            .set_avatar_url(&author_public_key, &site_id_val, Some(&existing.mxc_url))
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to set avatar: {e}")))?;
+        return Ok(avatar_response(&existing.mxc_url, true));
+    }
+
+    if !state.pow.verify(&challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&challenge_response);
+    if !verify_signature(
+        &author_public_key,
+        &sign_message(challenge),
+        &author_signature,
+    ) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let url = state
+        .driver
+        .upload_media(body, &filename, &mimetype, &author_public_key, &site_id_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to upload avatar media: {e}")))?;
+    let outcome = match state
+        .store
+        .save_media_upload_idempotent(
+            &url,
+            &author_public_key,
+            site_id_val.as_str(),
+            None,
+            &MediaUploadIdempotencyInput {
+                key: idempotency_key,
+                request_fingerprint: fingerprint,
+            },
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            rollback_media_upload(&state, &url).await;
+            return Err(AppError::Internal(format!(
+                "failed to record avatar upload: {e}"
+            )));
+        }
+    };
+
+    match outcome {
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Created { mxc_url } => {
+            if let Err(e) = state
+                .driver
+                .set_avatar_url(&author_public_key, &site_id_val, Some(&mxc_url))
+                .await
+            {
+                // Undo both sides so a retry with the same key re-uploads
+                // cleanly instead of pointing the profile at a rolled-back
+                // or missing media copy.
+                rollback_media_upload(&state, &mxc_url).await;
+                if let Err(cleanup) = state.store.delete_media_upload(&mxc_url).await {
+                    warn!(
+                        url = mxc_url,
+                        %cleanup,
+                        "failed to clean up avatar upload record after profile write failure"
+                    );
+                }
+                return Err(AppError::Internal(format!("failed to set avatar: {e}")));
+            }
+            // The avatar is referenced by the virtual user's profile, so it
+            // must never be collected by the unused-media sweep.
+            if let Err(e) = state.store.mark_media_used(&mxc_url).await {
+                warn!(
+                    url = mxc_url,
+                    %e,
+                    "failed to mark avatar media as referenced"
+                );
+            }
+            Ok(avatar_response(&mxc_url, false))
+        }
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Replayed { mxc_url } => {
+            rollback_media_upload(&state, &url).await;
+            state
+                .driver
+                .set_avatar_url(&author_public_key, &site_id_val, Some(&mxc_url))
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to set avatar: {e}")))?;
+            Ok(avatar_response(&mxc_url, true))
+        }
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Reused => {
+            rollback_media_upload(&state, &url).await;
+            Err(AppError::IdempotencyReused)
+        }
+    }
+}
+
+/// Removes the guest's avatar: verifies PoW + author signature, then deletes
+/// the virtual user's `avatar_url` profile field. Deleting a missing avatar
+/// is a successful no-op on the homeserver side.
+pub(crate) async fn delete_guest_avatar_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(site_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if state.driver.sender_user_id().is_none() {
+        return Err(AppError::NotFound(
+            "Avatar management is not enabled for this deployment.".to_string(),
+        ));
+    }
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "avatar deletes are rate limited; try again later".to_string(),
+            retry_after_seconds: state.write_limiter.window().as_secs(),
+        });
+    }
+    let author_public_key = query
+        .get("author_public_key")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_public_key".to_string()))?;
+    let author_signature = query
+        .get("author_signature")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_signature".to_string()))?;
+    let challenge_response = query
+        .get("challenge_response")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing challenge_response".to_string()))?;
+
+    if !state.pow.verify(&challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&challenge_response);
+    let message = signature_message(&["DELETE_AVATAR", site_id_val.as_str(), challenge]);
+    if !verify_signature(&author_public_key, &message, &author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    state
+        .driver
+        .set_avatar_url(&author_public_key, &site_id_val, None)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to remove avatar: {e}")))?;
+    Ok(Json(serde_json::json!({})))
 }
 
 /// Lists a site's projected sticker packs for guests.

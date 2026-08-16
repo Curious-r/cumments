@@ -3,8 +3,9 @@ use crate::routes::comments::{
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::media::{
-    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, list_stickers_handler, media_handler,
-    remove_site_sticker_handler, upload_media_handler,
+    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_guest_avatar_handler,
+    list_stickers_handler, media_handler, remove_site_sticker_handler, set_guest_avatar_handler,
+    upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::moderation::{
@@ -31,7 +32,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
 };
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
@@ -181,6 +182,13 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/posts/{post_slug}/location",
             post(location_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/me/avatar",
+            put(set_guest_avatar_handler)
+                .delete(delete_guest_avatar_handler)
+                .fallback(method_not_allowed_handler)
+                .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

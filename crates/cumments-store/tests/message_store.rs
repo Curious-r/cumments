@@ -490,7 +490,7 @@ async fn media_uploads_track_ownership_and_usage() {
         .expect("connect db");
 
     store
-        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", "hello")
+        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", Some("hello"))
         .await
         .expect("record upload");
 
@@ -521,7 +521,7 @@ async fn media_uploads_track_ownership_and_usage() {
 
     // Re-recording the same URL keeps a single row and re-arms ownership.
     store
-        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", "hello")
+        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", Some("hello"))
         .await
         .expect("re-record upload");
 
@@ -574,7 +574,7 @@ async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
         .await
         .expect("connect db");
     store
-        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", "hello")
+        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", Some("hello"))
         .await
         .expect("record upload");
 
@@ -640,7 +640,13 @@ async fn media_upload_idempotency_replays_the_same_request() {
     };
 
     let created = store
-        .save_media_upload_idempotent("mxc://hs/first", "alice-key", "my-blog", "hello", &input)
+        .save_media_upload_idempotent(
+            "mxc://hs/first",
+            "alice-key",
+            "my-blog",
+            Some("hello"),
+            &input,
+        )
         .await
         .expect("record first upload");
     assert!(matches!(
@@ -649,7 +655,13 @@ async fn media_upload_idempotency_replays_the_same_request() {
     ));
 
     let replay = store
-        .save_media_upload_idempotent("mxc://hs/second", "alice-key", "my-blog", "hello", &input)
+        .save_media_upload_idempotent(
+            "mxc://hs/second",
+            "alice-key",
+            "my-blog",
+            Some("hello"),
+            &input,
+        )
         .await
         .expect("replay upload");
     assert!(matches!(
@@ -695,7 +707,7 @@ async fn media_upload_idempotency_rejects_key_reuse_with_different_request() {
             "mxc://hs/first",
             "alice-key",
             "my-blog",
-            "hello",
+            Some("hello"),
             &MediaUploadIdempotencyInput {
                 key: "upload-key-123456".to_string(),
                 request_fingerprint: "fp-1".to_string(),
@@ -709,7 +721,7 @@ async fn media_upload_idempotency_rejects_key_reuse_with_different_request() {
             "mxc://hs/second",
             "alice-key",
             "my-blog",
-            "hello",
+            Some("hello"),
             &MediaUploadIdempotencyInput {
                 key: "upload-key-123456".to_string(),
                 request_fingerprint: "fp-2".to_string(),

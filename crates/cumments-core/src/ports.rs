@@ -294,7 +294,7 @@ pub trait MessageStore: Send + Sync {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: &str,
+        post_slug: Option<&str>,
     ) -> Result<()>;
 
     /// Whether a media URL was uploaded by this author for this site/post.
@@ -338,7 +338,7 @@ pub trait MessageStore: Send + Sync {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: &str,
+        post_slug: Option<&str>,
         idempotency: &MediaUploadIdempotencyInput,
     ) -> Result<MediaUploadIdempotencyOutcome>;
 
@@ -767,6 +767,18 @@ pub trait MatrixDriver: Send + Sync {
         author_public_key: &str,
         site_id: &SiteId,
     ) -> Result<String>;
+
+    /// Sets (or removes, when `avatar_url` is `None`) the avatar on the
+    /// author's virtual-user global profile. The profile update propagates
+    /// to the user's joined rooms as `m.room.member` events
+    /// (`m.propagate_to: "all"`), so projections observe the new avatar
+    /// without an event-content fallback.
+    async fn set_avatar_url(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: Option<&str>,
+    ) -> Result<()>;
 
     /// Posts a message to a specific room.
     async fn post_message(

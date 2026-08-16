@@ -53,6 +53,7 @@ pub mod m20260815_000047_role_claim_dm_room;
 pub mod m20260815_000048_media_upload_submission;
 pub mod m20260815_000049_command_audit_log;
 pub mod m20260816_000050_sticker_packs;
+pub mod m20260816_000051_media_uploads_post_slug_nullable;
 
 pub struct Migrator;
 
@@ -154,6 +155,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000048_media_upload_submission::Migration),
             Box::new(m20260815_000049_command_audit_log::Migration),
             Box::new(m20260816_000050_sticker_packs::Migration),
+            Box::new(m20260816_000051_media_uploads_post_slug_nullable::Migration),
         ]
     }
 }

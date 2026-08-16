@@ -246,7 +246,7 @@ mod tests {
                 "mxc://hs/abc",
                 "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
                 site,
-                "hello",
+                Some("hello"),
             )
             .await
             .expect("media upload");

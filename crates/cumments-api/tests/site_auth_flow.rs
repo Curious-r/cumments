@@ -18,7 +18,7 @@ use cumments_core::ports::{
     StickerPackStore,
 };
 use cumments_core::site_auth::{
-    Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
+    Origin, SiteAuthPolicy, SiteVerificationPolicy, sha256_hex, site_request_signature, token_hash,
 };
 use cumments_core::site_service::SiteService;
 use cumments_core::sticker_packs::{
@@ -153,6 +153,26 @@ fn request_with_body(
     let mut req = builder
         .body(Body::from(body.to_owned()))
         .expect("build request");
+    req.extensions_mut().insert(ConnectInfo(
+        "127.0.0.1:45678".parse::<SocketAddr>().unwrap(),
+    ));
+    req
+}
+
+fn request_raw(
+    method: Method,
+    uri: &str,
+    headers: &[(&str, String)],
+    body: Vec<u8>,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/octet-stream");
+    for (name, value) in headers {
+        builder = builder.header(*name, value.as_str());
+    }
+    let mut req = builder.body(Body::from(body)).expect("build request");
     req.extensions_mut().insert(ConnectInfo(
         "127.0.0.1:45678".parse::<SocketAddr>().unwrap(),
     ));
@@ -1294,7 +1314,7 @@ async fn comment_media_must_reference_an_owned_upload() {
 
     // After recording the upload for this author/site/post: accepted.
     store
-        .record_media_upload(media_url, &public_key, "test-blog", "hello")
+        .record_media_upload(media_url, &public_key, "test-blog", Some("hello"))
         .await
         .expect("record upload");
     let accepted = router
@@ -1309,6 +1329,143 @@ async fn comment_media_must_reference_an_owned_upload() {
         .await
         .expect("call router");
     assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let driver = Arc::new(cumments_test_utils::TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "avatar",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[17u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let avatar_body = b"fake-png-bytes".to_vec();
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let message = signature_message(&[
+        "UPLOAD_AVATAR",
+        "test-blog",
+        "image/png",
+        &sha256_hex(&avatar_body),
+        &challenge.prefix,
+    ]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let uri = format!(
+        "/api/v1/sites/test-blog/me/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=image%2Fpng&filename=avatar.png"
+    );
+
+    let put = router
+        .clone()
+        .oneshot(request_raw(
+            Method::PUT,
+            &uri,
+            &[("idempotency-key", "avatar-key-123456".to_string())],
+            avatar_body.clone(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(put.status(), StatusCode::OK);
+    assert!(put.headers().get("idempotent-replayed").is_none());
+    let put_json: serde_json::Value = serde_json::from_str(&body_text(put).await).expect("parse");
+    let avatar_url = put_json["avatar_url"]
+        .as_str()
+        .expect("avatar url")
+        .to_string();
+    assert!(avatar_url.starts_with("mxc://hs/test-blog/"));
+    assert_eq!(
+        *driver.avatar_updates.lock().await,
+        vec![(
+            public_key.clone(),
+            "test-blog".to_string(),
+            Some(avatar_url.clone())
+        )]
+    );
+
+    // Replaying the same idempotency key returns the original URL and marks
+    // the replay without consuming fresh PoW.
+    let replay = router
+        .clone()
+        .oneshot(request_raw(
+            Method::PUT,
+            &uri,
+            &[("idempotency-key", "avatar-key-123456".to_string())],
+            avatar_body.clone(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        replay
+            .headers()
+            .get("idempotent-replayed")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    let replay_json: serde_json::Value =
+        serde_json::from_str(&body_text(replay).await).expect("parse");
+    assert_eq!(replay_json["avatar_url"], avatar_url);
+
+    // Non-image uploads are rejected before any Matrix write.
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let bad_body = b"not-an-image".to_vec();
+    let message = signature_message(&[
+        "UPLOAD_AVATAR",
+        "test-blog",
+        "video/mp4",
+        &sha256_hex(&bad_body),
+        &challenge.prefix,
+    ]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let bad_uri = format!(
+        "/api/v1/sites/test-blog/me/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=video%2Fmp4&filename=clip.mp4"
+    );
+    let denied = router
+        .clone()
+        .oneshot(request_raw(
+            Method::PUT,
+            &bad_uri,
+            &[("idempotency-key", "avatar-key-654321".to_string())],
+            bad_body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(denied).await.contains("must be an image"));
+
+    // Delete removes the profile field with its own signature.
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let message = signature_message(&["DELETE_AVATAR", "test-blog", &challenge.prefix]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+    let delete_uri = format!(
+        "/api/v1/sites/test-blog/me/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}"
+    );
+    let deleted = router
+        .clone()
+        .oneshot(request_raw(Method::DELETE, &delete_uri, &[], Vec::new()))
+        .await
+        .expect("call router");
+    assert_eq!(deleted.status(), StatusCode::OK);
+    let updates = driver.avatar_updates.lock().await.clone();
+    assert_eq!(
+        updates.last(),
+        Some(&(public_key, "test-blog".to_string(), None))
+    );
 }
 
 #[tokio::test]

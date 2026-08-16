@@ -91,6 +91,19 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(format!("mxc://logging/{}/{}", site_id.as_str(), filename))
     }
 
+    async fn set_avatar_url(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: Option<&str>,
+    ) -> Result<()> {
+        info!(
+            "LOGGING: Set avatar for {author_public_key} on site={} to {avatar_url:?} (no-op)",
+            site_id.as_str()
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn post_message(
         &self,

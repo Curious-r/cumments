@@ -58,6 +58,16 @@ impl MatrixDriver for AppServiceMatrixDriver {
             .await
     }
 
+    async fn set_avatar_url(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: Option<&str>,
+    ) -> Result<()> {
+        self.set_avatar_url_impl(author_public_key, site_id, avatar_url)
+            .await
+    }
+
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,
