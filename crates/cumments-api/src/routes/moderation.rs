@@ -53,6 +53,13 @@ pub struct UpgradePostRoomResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RetirePostRoomResponse {
+    pub site_id: String,
+    pub post_slug: String,
+    pub status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RoomModeratorsResponse {
     pub room_id: String,
     pub moderators: Vec<String>,
@@ -465,6 +472,34 @@ pub(crate) async fn retire_site_handler(
     state.governance_notify.notify_one();
     Ok(Json(RetireSiteResponse {
         site_id: site_id.as_str().to_string(),
+        status: "retiring",
+    }))
+}
+
+/// Site-owner entry point for retiring one post's comment room: writes to
+/// that room stop immediately, then the reconciler leaves the Matrix room
+/// and clears local projections. The claim token's site scope is the whole
+/// authorization boundary; the operator mirror accepts a raw room ID under
+/// `/api/v1/operator/rooms/{room_id}`.
+pub(crate) async fn retire_post_room_handler(
+    State(state): State<ApiState>,
+    Path((site_id, post_slug)): Path<(String, String)>,
+) -> Result<Json<RetirePostRoomResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let retired =
+        cumments_core::management::retire_post_room(state.store.as_ref(), &site_id, &post_slug)
+            .await
+            .map_err(map_management_error)?;
+    if !retired {
+        return Err(AppError::NotFound(
+            "no active room registered for this post".to_string(),
+        ));
+    }
+    state.governance_notify.notify_one();
+    Ok(Json(RetirePostRoomResponse {
+        site_id: site_id.as_str().to_string(),
+        post_slug: post_slug.as_str().to_string(),
         status: "retiring",
     }))
 }

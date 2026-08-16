@@ -471,6 +471,62 @@ async fn public_reads_return_404_for_unregistered_sites() {
 }
 
 #[tokio::test]
+async fn operator_room_retire_mirror_marks_retired() {
+    let (state, store) = test_state(
+        "operator-room-retire",
+        SiteVerificationPolicy::Disabled,
+        Some("test-operator-token"),
+    )
+    .await;
+    store
+        .register_site("my-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    store
+        .register_room("!room:hs", &site_id, &post_slug)
+        .await
+        .expect("register room");
+
+    let router = cumments_api::build_router(state.clone());
+    let uri = "/api/v1/operator/rooms/!room:hs";
+
+    let missing = router
+        .clone()
+        .oneshot(request_with_body(Method::DELETE, uri, None, &[], ""))
+        .await
+        .expect("call router");
+    assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+    let ok = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::DELETE,
+            uri,
+            None,
+            &[("authorization", "Bearer test-operator-token".to_string())],
+            "",
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(ok.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(ok.into_body(), 64 * 1024)
+        .await
+        .expect("read body");
+    let data: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+    assert_eq!(data["room_id"], "!room:hs");
+    assert_eq!(data["status"], "retiring");
+    assert_eq!(
+        store
+            .get_room_status("!room:hs")
+            .await
+            .expect("room status"),
+        Some(cumments_core::models::RoomStatus::Retired)
+    );
+}
+
+#[tokio::test]
 async fn disabled_write_errors_include_wildcard_cors() {
     let (state, store) =
         test_state("disabled-errors", SiteVerificationPolicy::Disabled, None).await;

@@ -237,6 +237,62 @@ async fn upgrade_site_post_room_resolves_registry_then_upgrades() {
     );
 }
 
+#[tokio::test]
+async fn post_room_retire_endpoint_requires_claim_token_and_marks_retired() {
+    let store = DbStore::connect(&test_db_url("api-post-retire"))
+        .await
+        .expect("connect test database");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    store
+        .register_room("!room:hs", &site_id, &post_slug)
+        .await
+        .expect("register room");
+
+    let app = cumments_api::build_router(api_state(TestDriver::new(), store.clone()));
+    let uri = "/api/v1/sites/my-blog/posts/hello";
+
+    let missing = app
+        .clone()
+        .oneshot(api_request(Method::DELETE, uri, None, ""))
+        .await
+        .expect("call router");
+    assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+    let ok = app
+        .clone()
+        .oneshot(api_request(Method::DELETE, uri, Some("claim"), ""))
+        .await
+        .expect("call router");
+    assert_eq!(ok.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(ok.into_body(), 64 * 1024)
+        .await
+        .expect("read body");
+    let data: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+    assert_eq!(data["status"], "retiring");
+    assert_eq!(
+        store
+            .get_room_status("!room:hs")
+            .await
+            .expect("room status"),
+        Some(RoomStatus::Retired)
+    );
+
+    let again = app
+        .oneshot(api_request(Method::DELETE, uri, Some("claim"), ""))
+        .await
+        .expect("call router");
+    assert_eq!(
+        again.status(),
+        StatusCode::NOT_FOUND,
+        "retiring an already-retired room is a 404"
+    );
+}
+
 fn api_state(driver: TestDriver, store: DbStore) -> ApiState {
     let (event_bus, _) = tokio::sync::broadcast::channel(100);
     let site_service_store: Arc<dyn SiteStore> = Arc::new(store.clone());

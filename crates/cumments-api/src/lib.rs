@@ -12,12 +12,12 @@ use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::moderation::{
     add_co_manager_handler, add_owner_handler, add_room_moderator_handler,
     list_room_moderators_handler, list_site_roles_handler, remove_co_manager_handler,
-    remove_owner_handler, remove_room_moderator_handler, require_claim_token, retire_site_handler,
-    upgrade_post_room_handler,
+    remove_owner_handler, remove_room_moderator_handler, require_claim_token,
+    retire_post_room_handler, retire_site_handler, upgrade_post_room_handler,
 };
 use crate::routes::operator::{
     config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
-    reinstate_room_handler, require_operator, revoke_secret_handler,
+    reinstate_room_handler, require_operator, retire_room_handler, revoke_secret_handler,
     revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
     upgrade_room_handler,
 };
@@ -285,6 +285,10 @@ pub fn build_router(state: ApiState) -> Router {
             "/api/v1/sites/{site_id}/posts/{post_slug}/upgrade",
             axum::routing::post(upgrade_post_room_handler).fallback(method_not_allowed_handler),
         )
+        .route(
+            "/api/v1/sites/{site_id}/posts/{post_slug}",
+            axum::routing::delete(retire_post_room_handler).fallback(method_not_allowed_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_claim_token,
@@ -350,6 +354,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/operator/rooms/{room_id}/upgrade",
             axum::routing::post(upgrade_room_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/rooms/{room_id}",
+            axum::routing::delete(retire_room_handler).fallback(method_not_allowed_handler),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

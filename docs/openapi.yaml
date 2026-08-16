@@ -609,6 +609,38 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v1/operator/rooms/{room_id}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    delete:
+      tags: [Operator]
+      summary: Retire a comment room (operator)
+      operationId: operatorRetireRoom
+      description: |
+        Operator mirror of the site-level post retirement: marks the
+        registered active room `Retired`, stopping new writes, and the
+        background reconciler leaves the Matrix room (rename, alias removal,
+        AS sender and virtual users) and clears local projections.
+      security:
+        - operatorToken: []
+      responses:
+        "200":
+          description: Room marked retiring
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room_id, status]
+                properties:
+                  room_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [retiring]
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /api/v1/media/{server}/{media_id}:
     parameters:
       - name: server
@@ -1138,6 +1170,43 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "409":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/posts/{post_slug}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PostSlug"
+    delete:
+      tags: [Governance]
+      summary: Retire a post's comment room
+      operationId: retirePostRoom
+      description: |
+        Site-owner entry point for removing a post's comment section: marks
+        the active comment room `Retired`, stopping new writes, and the
+        background reconciler leaves the Matrix room (rename, alias removal,
+        AS sender and virtual users) and clears local projections. The
+        operator mirror accepts a raw room ID under
+        `/api/v1/operator/rooms/{room_id}`.
+      security:
+        - claimToken: []
+      responses:
+        "200":
+          description: Room marked retiring
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [site_id, post_slug, status]
+                properties:
+                  site_id:
+                    type: string
+                  post_slug:
+                    type: string
+                  status:
+                    type: string
+                    enum: [retiring]
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /api/v1/sites/{site_id}/guests/avatar:
     parameters:

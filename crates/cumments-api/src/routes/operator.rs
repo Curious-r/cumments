@@ -65,6 +65,12 @@ pub struct UpgradeRoomResponse {
     pub replacement_room: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RetireRoomResponse {
+    pub room_id: String,
+    pub status: &'static str,
+}
+
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
@@ -189,6 +195,27 @@ pub(crate) async fn upgrade_room_handler(
         room_id,
         new_version: body.new_version,
         replacement_room: replacement,
+    }))
+}
+
+/// Operator mirror for post-level room retirement, keyed by the raw room ID.
+pub(crate) async fn retire_room_handler(
+    State(state): State<ApiState>,
+    Path(room_id): Path<String>,
+) -> Result<Json<RetireRoomResponse>, AppError> {
+    let retired =
+        cumments_core::management::retire_post_room_by_room_id(state.store.as_ref(), &room_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to retire room: {e}")))?;
+    if !retired {
+        return Err(AppError::NotFound(
+            "room not found or not active".to_string(),
+        ));
+    }
+    state.governance_notify.notify_one();
+    Ok(Json(RetireRoomResponse {
+        room_id,
+        status: "retiring",
     }))
 }
 
