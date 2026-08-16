@@ -297,13 +297,34 @@ impl MediaProxy {
                 let resolver = hickory_resolver::TokioResolver::builder_tokio()
                     .and_then(|builder| builder.build())
                     .map_err(|e| anyhow::anyhow!("failed to initialize DNS resolver: {e}"))?;
-                let lookup = resolver.lookup_ip(server.to_string()).await.map_err(|e| {
+                let first = resolver.lookup_ip(server.to_string()).await.map_err(|e| {
                     anyhow::anyhow!("failed to resolve media server `{server}`: {e}")
                 })?;
-                if lookup.iter().any(is_private_ip_addr) {
+                if first.iter().any(is_private_ip_addr) {
                     anyhow::bail!(
                         "media proxy refuses server {server}: resolves to a private address"
                     );
+                }
+                // The proxy never connects to `server` itself: it delegates
+                // the fetch to the configured homeserver, which performs its
+                // own resolution for federated media. A second independent
+                // resolution that disagrees (or leaks a private address) is
+                // a DNS-rebinding attempt and is refused; the homeserver's
+                // own remote-media protections remain the final boundary.
+                let second = resolver.lookup_ip(server.to_string()).await.map_err(|e| {
+                    anyhow::anyhow!("failed to re-resolve media server `{server}`: {e}")
+                })?;
+                if second.iter().any(is_private_ip_addr) {
+                    anyhow::bail!(
+                        "media proxy refuses server {server}: resolves to a private address"
+                    );
+                }
+                let mut first_ips = first.iter().collect::<Vec<_>>();
+                first_ips.sort();
+                let mut second_ips = second.iter().collect::<Vec<_>>();
+                second_ips.sort();
+                if first_ips != second_ips {
+                    anyhow::bail!("media proxy refuses server {server}: DNS answers are unstable");
                 }
             }
         }
@@ -797,13 +818,21 @@ pub(crate) async fn set_guest_avatar_handler(
                 return Err(AppError::Internal(format!("failed to set avatar: {e}")));
             }
             // The avatar is referenced by the virtual user's profile, so it
-            // must never be collected by the unused-media sweep.
+            // must never be collected by the unused-media sweep. A failure
+            // to mark it rolls the upload back so a retry with the same key
+            // re-uploads cleanly instead of leaving an unmarked orphan.
             if let Err(e) = state.store.mark_media_used(&mxc_url).await {
-                warn!(
-                    url = mxc_url,
-                    %e,
-                    "failed to mark avatar media as referenced"
-                );
+                rollback_media_upload(&state, &mxc_url).await;
+                if let Err(cleanup) = state.store.delete_media_upload(&mxc_url).await {
+                    warn!(
+                        url = mxc_url,
+                        %cleanup,
+                        "failed to clean up avatar upload record after reference-marking failure"
+                    );
+                }
+                return Err(AppError::Internal(format!(
+                    "failed to mark avatar media as referenced: {e}"
+                )));
             }
             Ok(avatar_response(&mxc_url, false))
         }
