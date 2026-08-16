@@ -1,4 +1,5 @@
 pub mod comments;
+pub mod guests;
 pub mod media;
 pub mod misc;
 pub mod moderation;

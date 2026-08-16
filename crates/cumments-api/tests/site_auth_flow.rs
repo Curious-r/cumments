@@ -11,8 +11,10 @@ use axum::{
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
 use cumments_core::governance::{NewRoleClaim, OWNER_LEVEL, RoleEntry};
-use cumments_core::identity::{post_signature_message, signature_message};
-use cumments_core::models::{PostSlug, SiteId};
+use cumments_core::identity::{
+    derive_guest_id_from_public_key, post_signature_message, signature_message,
+};
+use cumments_core::models::{GuestProfile, PostSlug, SiteId};
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
     StickerPackStore,
@@ -93,6 +95,7 @@ async fn test_state_with_driver(
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        guest_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
@@ -311,6 +314,115 @@ async fn write_enforcement_follows_policy_and_origin() {
             .await
             .contains("site-verification-required")
     );
+}
+
+#[tokio::test]
+async fn guest_profile_returns_the_current_profile_and_guest_id() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
+    let driver = TestDriver::new().with_guest_profile(
+        "test-blog",
+        public_key.clone(),
+        GuestProfile {
+            display_name: Some("Alice".to_string()),
+            avatar_url: Some("mxc://hs/avatar".to_string()),
+        },
+    );
+    let (state, store) = test_state_with_driver(
+        "guest-profile",
+        SiteVerificationPolicy::Disabled,
+        None,
+        Arc::new(driver),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+
+    let router = cumments_api::build_router(state.clone());
+    let uri = format!("/api/v1/sites/test-blog/guests/profile?author_public_key={public_key}");
+    let response = router
+        .clone()
+        .oneshot(request_with_body(Method::GET, &uri, None, &[], "null"))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_str(&body_text(response).await).expect("parse profile");
+    assert_eq!(body["guest_id"], guest_id);
+    assert_eq!(body["display_name"], "Alice");
+    // The media proxy is disabled in tests, so the raw MXC URI is returned.
+    assert_eq!(body["avatar_url"], "mxc://hs/avatar");
+}
+
+#[tokio::test]
+async fn guest_profile_returns_empty_profile_for_unknown_guest() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
+    let (state, store) = test_state_with_driver(
+        "guest-profile-empty",
+        SiteVerificationPolicy::Disabled,
+        None,
+        Arc::new(TestDriver::new()),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+
+    let router = cumments_api::build_router(state.clone());
+    let uri = format!("/api/v1/sites/test-blog/guests/profile?author_public_key={public_key}");
+    let response = router
+        .clone()
+        .oneshot(request_with_body(Method::GET, &uri, None, &[], "null"))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_str(&body_text(response).await).expect("parse profile");
+    assert_eq!(body["guest_id"], guest_id);
+    assert!(body["display_name"].is_null());
+    assert!(body["avatar_url"].is_null());
+}
+
+#[tokio::test]
+async fn guest_profile_rejects_an_invalid_public_key() {
+    let (state, store) = test_state(
+        "guest-profile-invalid",
+        SiteVerificationPolicy::Disabled,
+        None,
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+
+    let router = cumments_api::build_router(state.clone());
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::GET,
+            "/api/v1/sites/test-blog/guests/profile?author_public_key=not-a-key",
+            None,
+            &[],
+            "null",
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

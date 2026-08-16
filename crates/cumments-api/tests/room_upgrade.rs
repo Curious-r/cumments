@@ -268,6 +268,7 @@ fn api_state(driver: TestDriver, store: DbStore) -> ApiState {
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        guest_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,

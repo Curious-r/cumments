@@ -10,6 +10,7 @@ The endpoint reference is split by resource area:
   secret issuance.
 - [Governance](governance.md) — owners, co-managers, room moderators, room
   upgrades and the projected rosters.
+- [Guests](guests.md) — the guest's self-service profile read.
 - [Operator](operator.md) — operator-only endpoints.
 - [Media](media.md) — the public media proxy, guest uploads, guest avatars
   and site sticker packs.
@@ -147,10 +148,10 @@ registry is documented in [Problem types](../problems/index.md).
 rate limited per client IP (10/hour and 20/hour by default). Limit exceeded
 returns `429 code=rate-limited`. Verification `confirm` is limited to
 30/hour, comment and guest-avatar writes (`POST`/`PUT`/`PATCH`/`DELETE`) to
-120/hour, and new SSE connections to 20/hour with a global cap of 500
-concurrent streams. Site governance writes are limited to 60/hour. Every
-budget is configurable under `[rate_limit]` and applied at startup; see
-[Configuration](../configuration.md#rate-limits).
+120/hour, guest profile reads to 120/hour, and new SSE connections to
+20/hour with a global cap of 500 concurrent streams. Site governance writes
+are limited to 60/hour. Every budget is configurable under `[rate_limit]`
+and applied at startup; see [Configuration](../configuration.md#rate-limits).
 Every `429` response carries a `Retry-After` header set to the endpoint's
 fixed limit window (3600 seconds for hourly limits, 60 seconds for the operator
 API). It is a conservative constant, not the exact remaining time for the

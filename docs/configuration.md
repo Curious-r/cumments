@@ -215,6 +215,7 @@ operator         = { requests = 60,  window = "1m" }
 write         = { requests = 120, window = "1h" }
 sse           = { requests = 20,  window = "1h" }
 media         = { requests = 120, window = "1h" }
+guest_profile = { requests = 120, window = "1h" }
 moderation    = { requests = 60,  window = "1h" }
 ```
 

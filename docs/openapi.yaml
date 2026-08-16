@@ -1259,6 +1259,36 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/guests/profile:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    get:
+      tags: [Comments]
+      summary: Get the guest's current profile for this site
+      operationId: getGuestProfile
+      description: |
+        Public self-service read of a guest's current global profile
+        (display name and avatar) for this site, keyed by the guest's
+        Ed25519 public key. Unknown or privacy-hidden profiles return an
+        empty profile (`null` fields) rather than an error, so clients can
+        treat "no profile" as a normal state.
+      parameters:
+        - name: author_public_key
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current guest profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuestProfile"
+        "400":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/owners:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1682,6 +1712,23 @@ components:
         status:
           type: string
           enum: [ok]
+    GuestProfile:
+      type: object
+      required: [guest_id, display_name, avatar_url]
+      properties:
+        guest_id:
+          type: string
+          description: 32-hex identifier derived from the public key.
+        display_name:
+          type: string
+          nullable: true
+          description: Current Matrix profile display name, or null when unset.
+        avatar_url:
+          type: string
+          nullable: true
+          description: |
+            Signed proxy URL (96×96 crop variant when the media proxy is
+            enabled; the raw MXC URL otherwise), or null when unset.
     ChallengeResponse:
       type: object
       required: [prefix, difficulty]

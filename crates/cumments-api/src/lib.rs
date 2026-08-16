@@ -2,6 +2,7 @@ use crate::routes::comments::{
     delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
+use crate::routes::guests::guest_profile_handler;
 use crate::routes::media::{
     MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_guest_avatar_handler,
     list_stickers_handler, media_handler, remove_site_sticker_handler, set_guest_avatar_handler,
@@ -138,6 +139,8 @@ pub struct ApiState {
     pub media_proxy: Option<Arc<MediaProxy>>,
     /// Per-client-key limiter for media proxy requests.
     pub media_limiter: Arc<rate_limit::RateLimiter>,
+    /// Per-client-key limiter for the public guest profile endpoint.
+    pub guest_profile_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for site governance writes.
     pub moderation_limiter: Arc<rate_limit::RateLimiter>,
     /// Live ephemeral events (typing/receipts/presence) for SSE.
@@ -214,6 +217,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/stickers",
             get(list_stickers_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/guests/profile",
+            get(guest_profile_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/roles",
