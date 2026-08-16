@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cumments_core::{
     identity::derive_guest_id_from_public_key,
-    models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, GuestProfile, PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
 use tracing::{debug, info};
@@ -102,6 +102,18 @@ impl MatrixDriver for LoggingMatrixDriver {
             site_id.as_str()
         );
         Ok(())
+    }
+
+    async fn get_profile(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<Option<GuestProfile>> {
+        info!(
+            "LOGGING: Get profile for {author_public_key} on site={} (no-op)",
+            site_id.as_str()
+        );
+        Ok(None)
     }
 
     #[allow(clippy::too_many_arguments)]

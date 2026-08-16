@@ -5,9 +5,9 @@ use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
 use crate::models::{
-    CommentMedia, Message, MessagePage, MessageRevision, PollVote, PostSlug, QuarantinedRoom,
-    Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
-    SiteId,
+    CommentMedia, GuestProfile, Message, MessagePage, MessageRevision, PollVote, PostSlug,
+    QuarantinedRoom, Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata,
+    RoomStateEvent, RoomStatus, SiteId,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -779,6 +779,17 @@ pub trait MatrixDriver: Send + Sync {
         site_id: &SiteId,
         avatar_url: Option<&str>,
     ) -> Result<()>;
+
+    /// Reads a guest's current global profile from the homeserver.
+    ///
+    /// Returns `Ok(None)` when the virtual user does not exist or the
+    /// homeserver refuses to disclose the profile (`404`/`403` per MSC4170),
+    /// so callers can treat "no profile" as a single case.
+    async fn get_profile(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<Option<GuestProfile>>;
 
     /// Posts a message to a specific room.
     async fn post_message(

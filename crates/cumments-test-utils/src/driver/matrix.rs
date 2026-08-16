@@ -8,7 +8,7 @@
 
 use super::TestDriver;
 use cumments_core::{
-    models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, GuestProfile, PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
 
@@ -107,6 +107,18 @@ impl MatrixDriver for TestDriver {
             avatar_url.map(str::to_string),
         ));
         Ok(())
+    }
+    async fn get_profile(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> anyhow::Result<Option<GuestProfile>> {
+        Ok(self
+            .guest_profiles
+            .lock()
+            .await
+            .get(&(site_id.as_str().to_string(), author_public_key.to_string()))
+            .cloned())
     }
     #[allow(clippy::too_many_arguments)]
     async fn post_message(

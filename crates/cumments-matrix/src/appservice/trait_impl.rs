@@ -8,7 +8,7 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
-    models::{CommentMedia, PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, GuestProfile, PostSlug, RoomEventPage, SiteId},
     ports::MatrixDriver,
 };
 
@@ -66,6 +66,14 @@ impl MatrixDriver for AppServiceMatrixDriver {
     ) -> Result<()> {
         self.set_avatar_url_impl(author_public_key, site_id, avatar_url)
             .await
+    }
+
+    async fn get_profile(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<Option<GuestProfile>> {
+        self.get_profile_impl(author_public_key, site_id).await
     }
 
     async fn ensure_comment_room(

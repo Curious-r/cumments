@@ -213,6 +213,17 @@ pub struct AuthorSnapshot {
     pub mxid: Option<String>,
 }
 
+/// A guest's current global profile as read from the homeserver.
+///
+/// `None` fields mean the field is not set on the virtual user's profile.
+/// The API layer rewrites `avatar_url` (an `mxc://` URI) into a signed proxy
+/// URL before exposing it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestProfile {
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
 /// The sealed set of displayable message contents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

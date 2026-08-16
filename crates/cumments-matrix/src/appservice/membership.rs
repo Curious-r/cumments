@@ -3,7 +3,7 @@
 use super::*;
 use crate::wire::percent_encode;
 use anyhow::{Result, anyhow};
-use cumments_core::models::SiteId;
+use cumments_core::models::{GuestProfile, SiteId};
 use serde::Deserialize;
 use tracing::{instrument, warn};
 
@@ -419,6 +419,62 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
+    /// Reads the virtual user's current global profile.
+    ///
+    /// `404` (user does not exist) and `403` (homeserver configured not to
+    /// disclose profiles, MSC4170) both map to `Ok(None)` so the public API
+    /// can treat "no profile" as one case without leaking existence.
+    #[instrument(skip(self))]
+    pub(super) async fn get_profile_impl(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<Option<GuestProfile>> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await?;
+        let path = format!(
+            "_matrix/client/v3/profile/{}",
+            percent_encode(&virtual_user)
+        );
+        let resp = self
+            .request(reqwest::Method::GET, &path, Some(&virtual_user))
+            .send()
+            .await
+            .map_err(|e| anyhow!("get profile request failed: {}", e))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND
+            || resp.status() == reqwest::StatusCode::FORBIDDEN
+        {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "get profile for {} failed ({}): {}",
+                virtual_user,
+                status,
+                error_body
+            ));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("failed to parse profile response: {e}"))?;
+        Ok(Some(GuestProfile {
+            display_name: data
+                .get("displayname")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            avatar_url: data
+                .get("avatar_url")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+        }))
+    }
+
     #[instrument(skip(self))]
     pub(super) async fn get_joined_rooms_impl(&self) -> Result<Vec<String>> {
         let resp = self
@@ -486,6 +542,8 @@ mod tests {
 
     const AVATAR_PROFILE_PATH: &str =
         "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com/avatar_url";
+    const PROFILE_PATH: &str =
+        "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com";
     const PROPAGATE_TO_QUERY: &str = "computer.gingershaped.msc4466.propagate_to";
 
     #[tokio::test]
@@ -538,6 +596,86 @@ mod tests {
             .set_avatar_url("pubkey", &SiteId::from("my-blog"), None)
             .await
             .expect("delete avatar should succeed");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn get_profile_reads_display_name_and_avatar() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "displayname": "Alice",
+                "avatar_url": "mxc://example.com/avatar",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let profile = driver
+            .get_profile("pubkey", &SiteId::from("my-blog"))
+            .await
+            .expect("get profile should succeed")
+            .expect("profile exists");
+        assert_eq!(profile.display_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            profile.avatar_url.as_deref(),
+            Some("mxc://example.com/avatar")
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn get_profile_maps_missing_and_private_profiles_to_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(json!({ "errcode": "M_NOT_FOUND" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let driver = test_driver(&server);
+        assert!(
+            driver
+                .get_profile("pubkey", &SiteId::from("my-blog"))
+                .await
+                .expect("404 maps to None")
+                .is_none()
+        );
+        server.verify().await;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(json!({ "errcode": "M_FORBIDDEN" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let driver = test_driver(&server);
+        assert!(
+            driver
+                .get_profile("pubkey", &SiteId::from("my-blog"))
+                .await
+                .expect("403 maps to None")
+                .is_none()
+        );
         server.verify().await;
     }
 }

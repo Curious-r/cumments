@@ -8,6 +8,8 @@ mod matrix;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
+use cumments_core::models::GuestProfile;
+
 /// In-memory [`MatrixDriver`] double that records the calls each test
 /// asserts.
 ///
@@ -32,6 +34,7 @@ pub struct TestDriver {
     pub space_links: Mutex<Vec<(String, String)>>,
     pub invites: Mutex<Vec<(String, String)>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
+    pub guest_profiles: Mutex<HashMap<(String, String), GuestProfile>>,
 }
 
 impl TestDriver {
@@ -54,6 +57,7 @@ impl TestDriver {
             space_links: Mutex::new(Vec::new()),
             invites: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
+            guest_profiles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -111,6 +115,18 @@ impl TestDriver {
         content: serde_json::Value,
     ) -> Self {
         self.power_levels.get_mut().insert(room_id.into(), content);
+        self
+    }
+
+    pub fn with_guest_profile(
+        mut self,
+        site_id: impl Into<String>,
+        author_public_key: impl Into<String>,
+        profile: GuestProfile,
+    ) -> Self {
+        self.guest_profiles
+            .get_mut()
+            .insert((site_id.into(), author_public_key.into()), profile);
         self
     }
 }
