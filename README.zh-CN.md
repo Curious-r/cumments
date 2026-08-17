@@ -58,7 +58,7 @@ docker compose up -d
 - [站点认证](docs/site-trust.md) —— origin 与 HMAC 两种写入信任模型。
 - [站点验证](docs/site-verification.md) —— 绑定 SSG 站点、well-known/DNS
   证明、严格 HMAC 模式。
-- [站点治理](docs/site-governance.md) —— 站主、协管员与逐房间版主的 Matrix
+- [站点治理](docs/site-governance.md) —— 站主、总版主与逐房间版主的 Matrix
   权限模型。
 
 **参考**

@@ -50,7 +50,7 @@ the per-field errors; correct them and resubmit.
 - `code`: `not-found`
 - `status`: `404`
 
-The route does not exist or the referenced resource (site, post, comment,
+The route does not exist or the referenced resource (site, page, comment,
 verification) is not visible to this request.
 
 ## Unauthorized {#unauthorized}
@@ -116,7 +116,7 @@ window (3600 seconds for hourly limits, 60 seconds for the Operator API).
 - `status`: `400`
 
 The `Idempotency-Key` header is mandatory on `POST`, `PUT`, `PATCH`, `DELETE`
-and guest media upload write submissions.
+and visitor media upload write submissions.
 
 ## Invalid Idempotency-Key {#invalid-idempotency-key}
 
@@ -163,7 +163,7 @@ verification policy.
 - `code`: `site-retired`
 - `status`: `410`
 
-The site is being decommissioned and no longer accepts writes. A background
+The site is being retired and no longer accepts writes. A background
 pass is retiring its Matrix Space and rooms and clearing the local
 projections; reads keep working until the local data is gone.
 

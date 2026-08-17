@@ -8,11 +8,11 @@ The endpoint reference is split by resource area:
   locations and room info.
 - [Sites](sites.md) — self-service registration, verification and HMAC
   secret issuance.
-- [Governance](governance.md) — owners, co-managers, room moderators, room
+- [Governance](governance.md) — owners, global-moderators, room moderators, room
   upgrades and the projected rosters.
-- [Guests](guests.md) — the guest's self-service profile read.
+- [Visitors](visitors.md) — the visitor's self-service profile read.
 - [Operator](operator.md) — operator-only endpoints.
-- [Media](media.md) — the public media proxy, guest uploads, guest avatars
+- [Media](media.md) — the public media proxy, visitor uploads, visitor avatars
   and site sticker packs.
 
 The sections below describe the primitives shared by every endpoint.
@@ -48,7 +48,7 @@ is the part of `challenge_response` before `|`.
 
 Authors come in two forms:
 
-- `"type": "guest"` — posted through the Cumments API by a virtual user;
+- `"type": "visitor"` — posted through the Cumments API by a virtual user;
   `author.public_key` is set and `PATCH`/`DELETE` work via the API.
 - `"type": "matrix"` — posted directly in Matrix by a regular account;
   `author.mxid` is set. These comments are managed from a Matrix client, and
@@ -56,7 +56,7 @@ Authors come in two forms:
 
 ## Idempotent writes
 
-`POST`, `PATCH`, `DELETE`, guest media uploads and guest avatar writes are
+`POST`, `PATCH`, `DELETE`, visitor media uploads and visitor avatar writes are
 writes: comment submissions accept a submission and return
 `202 { "submission_id": ... }` before the comment actually lands in Matrix,
 while media and avatar uploads return their result synchronously.
@@ -94,7 +94,7 @@ form (the path-based or body-based PATCH variant) for all retries of a key.
 
 ## Real-time updates (SSE)
 
-`GET /api/v1/sites/{site_id}/posts/{post_slug}/sse`
+`GET /api/v1/sites/{site_id}/pages/{page_slug}/sse`
 
 Server-sent events use the shape `{ "type": "...", "payload": { ... } }`:
 
@@ -147,8 +147,8 @@ registry is documented in [Problem types](../problems/index.md).
 `POST /api/v1/sites` and `POST /api/v1/sites/{site_id}/verifications` are
 rate limited per client IP (10/hour and 20/hour by default). Limit exceeded
 returns `429 code=rate-limited`. Verification `confirm` is limited to
-30/hour, comment and guest-avatar writes (`POST`/`PUT`/`PATCH`/`DELETE`) to
-120/hour, guest profile reads to 120/hour, and new SSE connections to
+30/hour, comment and visitor-avatar writes (`POST`/`PUT`/`PATCH`/`DELETE`) to
+120/hour, visitor profile reads to 120/hour, and new SSE connections to
 20/hour with a global cap of 500 concurrent streams. Local public reads
 (comment lists, room metadata, roles, moderators, sticker packs) share a
 generous `public_read` budget of 1200/hour per client key, which covers
@@ -158,7 +158,7 @@ embeds hit on GitHub's 60/hour limit. Site governance writes are limited to
 startup; see [Configuration](../configuration.md#rate-limits).
 
 Rate limiting is layered by cost: endpoints that trigger external work
-(media proxy, guest profile lookups) or long-lived connections (SSE) get
+(media proxy, visitor profile lookups) or long-lived connections (SSE) get
 their own tighter budgets, while local SQLite reads get the generous
 `public_read` bucket. In front of a reverse proxy or CDN, that layer remains
 the primary defence for high-frequency public traffic.
@@ -183,7 +183,7 @@ token allows at most 5 confirm attempts before a new challenge is required.
 
 ## Validation
 
-`site_id` and `post_slug` accept lowercase `[a-z0-9-]`, 1–64 characters.
+`site_id` and `page_slug` accept lowercase `[a-z0-9-]`, 1–64 characters.
 Invalid values return `400 code=validation-error`.
 
 ## Design trade-offs
@@ -205,10 +205,10 @@ DELETEs. DELETE targets therefore travel as query parameters
 
 **Missing parents are 404, empty children are 200.** A site that is not
 registered returns `404` for its nested resources (comment list, roles,
-sticker packs, guest profile, room, moderators) because the parent resource
+sticker packs, visitor profile, room, moderators) because the parent resource
 does not exist. Once the site exists, "no data yet" is still a successful
 empty response: an empty comment page, an empty role/sticker list, or an
-empty guest profile (`null` fields) all come back as `200`.
+empty visitor profile (`null` fields) all come back as `200`.
 
 **Registration before writes.** A `site_id` must be registered through the
 site API/CLI or declared in `[sites]` before it can receive comments, in

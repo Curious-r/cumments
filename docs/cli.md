@@ -40,8 +40,8 @@ cumments
 │   ├── rotate-claim-token SITE_ID
 │   ├── add-owner SITE_ID USER_ID
 │   ├── remove-owner SITE_ID USER_ID
-│   ├── add-co-manager SITE_ID USER_ID
-│   ├── remove-co-manager SITE_ID USER_ID
+│   ├── add-global-moderator SITE_ID USER_ID
+│   ├── remove-global-moderator SITE_ID USER_ID
 │   └── retire SITE_ID --yes [--wait]
 ├── rooms
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
@@ -124,7 +124,7 @@ CLI never writes Matrix power levels directly:
 ```bash
 cumments sites add-owner my-blog '@alice:example.com'
 cumments sites remove-owner my-blog '@alice:example.com'
-cumments sites add-co-manager my-blog '@bob:example.com'
+cumments sites add-global-moderator my-blog '@bob:example.com'
 ```
 
 `remove-*` cancels a pending claim; a role that has already been applied is
@@ -134,9 +134,9 @@ state is not actually changed.
 
 Retire a site (destructive, needs `--yes`). The command marks the site
 `retiring` — writes stop immediately — and the **running server's**
-background reconciler decommissions its Matrix Space and rooms, then clears
+background reconciler retires its Matrix Space and rooms, then clears
 the local data. Without `--wait` the command returns once the site is marked;
-with `--wait` it polls until the decommission finishes (or times out after
+with `--wait` it polls until the retirement finishes (or times out after
 five minutes). Config-declared sites cannot be retired; remove them from the
 config file instead.
 

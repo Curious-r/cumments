@@ -9,10 +9,10 @@ history with `cumments backfill`.
 
 - **Matrix as the event log** — comments are `m.room.message`, edits are
   `m.replace`, deletions are `m.redaction`.
-- **Two kinds of authors** — guest comments without accounts carry an
+- **Two kinds of authors** — visitor comments without accounts carry an
   Ed25519 identity, signature and signed Proof-of-Work challenge; Matrix
   users comment natively and are governed by room power levels.
-- **Rich content** — guest uploads (image / video / audio / file / voice)
+- **Rich content** — visitor uploads (image / video / audio / file / voice)
   served through a signed public media proxy, MSC3488 locations, reactions
   and MSC3381 polls.
 - **Reply trees and real-time SSE** — `message_created` /
@@ -22,7 +22,7 @@ history with `cumments backfill`.
   virtual users, receives events over HTTP push.
 - **Flexible site trust** — operator-declared `[sites]` or self-service
   verification via `/.well-known` / DNS TXT; origin mode or HMAC secret mode.
-- **Site governance** — owner (100), co-manager (75) and per-room moderator
+- **Site governance** — owner (100), global-moderator (75) and per-room moderator
   (50) roles encoded in Matrix power levels; owners manage everything from a
   Matrix client, the API writes to the same state.
 - **Operator API + local CLI** — sites, secrets, roles, quarantined rooms,
@@ -105,7 +105,7 @@ curl -sS -X POST "http://localhost:7931/api/v1/sites/$(jq -r .site_id site.json)
   -d '{"user_id":"@you:your-server.example.com"}'
 ```
 
-Everything else — appointing co-managers, moderating rooms — happens from a
+Everything else — appointing global-moderators, moderating rooms — happens from a
 Matrix client. See the [site governance
 guide](https://curious-r.github.io/cumments/site-governance/) and the
 [installation guide](https://curious-r.github.io/cumments/quick-start/).

@@ -15,7 +15,7 @@ Space. Cumments keeps the two apart:
 
 - the AppService sender is the room creator and therefore the platform's
   backstop — it is never represented as a role;
-- each site has its own **owner**, **co-manager** and per-room
+- each site has its own **owner**, **global-moderator** and per-room
   **moderator** roles, encoded purely in Matrix power levels;
 - day-to-day management happens in a Matrix client; the API and Operator API
   are just other writers to the same Matrix state;
@@ -29,14 +29,14 @@ One level ladder runs through both the Space and comment rooms:
 | Role | Space | Every comment room | Meaning |
 |---|---|---|---|
 | Site owner | 100 | 100 | Manages the Space and every room; may edit power levels |
-| Co-manager | 75 | 75 | Site-level deputy, added automatically to every room the AppService creates |
+| Global Moderator | 75 | 75 | Site-level deputy, added automatically to every room the AppService creates |
 | Room moderator | — | 50 | Appointed per room, in that room only |
 
 `ban`, `kick`, `redact` and the `state_default` thresholds stay at Matrix's
-default 50, so co-managers (75) and moderators (50) have the same practical
+default 50, so global-moderators (75) and moderators (50) have the same practical
 moderation powers inside a room. The 75 level exists so site-managed roles
 can be told apart from per-room moderators, which is what the reconciliation
-pass keys on. If co-managers ever need more power than moderators, the
+pass keys on. If global-moderators ever need more power than moderators, the
 thresholds can move into the 50–75 gap without touching the ladder.
 
 The `m.room.power_levels` event itself is locked to 100 in both the Space and
@@ -51,13 +51,13 @@ The Space is where site-level roles are managed, but every comment room has
 its own copy of the power levels. A background pass keeps each room aligned
 with the Space:
 
-- entries at **≥ 75** (owner 100 + co-managers 75) are replicated from the
-  Space into every room — new co-managers are added, revoked ones removed;
+- entries at **≥ 75** (owner 100 + global-moderators 75) are replicated from the
+  Space into every room — new global-moderators are added, revoked ones removed;
 - entries at **50** are per-room moderators and are **never touched** by the
   pass; the site owner manages them room by room.
 
-This makes 75 the "co-manager-only" slot: anyone holding 75 in a room must
-also be a Space co-manager, otherwise the pass removes them from that room.
+This makes 75 the "global-moderator-only" slot: anyone holding 75 in a room must
+also be a Space global-moderator, otherwise the pass removes them from that room.
 To let someone help in just one room, appoint them as a 50 moderator.
 
 Example: the Space has `{owner: 100, alice: 75}` and room A has
@@ -65,14 +65,14 @@ Example: the Space has `{owner: 100, alice: 75}` and room A has
 
 | Change in the Space | Effect on room A | bob |
 |---|---|---|
-| `carol` becomes a co-manager | `carol: 75` is added to A | untouched |
-| `alice`'s co-manager role is revoked | `alice: 75` is removed from A | untouched |
+| `carol` becomes a global-moderator | `carol: 75` is added to A | untouched |
+| `alice`'s global-moderator role is revoked | `alice: 75` is removed from A | untouched |
 | bob's moderator role changes in A | no participation | changed by the owner directly |
 
 The pass is triggered by the 60-second reconcile cycle, by an API write, and
 by Space power-level pushes; it is idempotent, retried on failure, and
 serialized per site. New rooms are seeded from the Space roster at creation
-time (owner + co-managers, moderators start empty).
+time (owner + global-moderators, moderators start empty).
 
 ## Day-to-day workflow
 
@@ -85,7 +85,7 @@ time (owner + co-managers, moderators start empty).
    bot and the sender). Once the homeserver pushes that DM,
    Cumments activates the claim and writes the role into Matrix power levels.
 3. Everything after that happens in a Matrix client: edit the Space's power
-   levels to add/remove co-managers, and edit a comment room's power levels
+   levels to add/remove global-moderators, and edit a comment room's power levels
    to appoint its moderators.
 4. The homeserver pushes those state events to Cumments, which projects them
    into the read model. The background pass keeps room-level site roles
@@ -152,10 +152,10 @@ registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 | Endpoint | Method | Payload | Effect |
 |---|---|---|---|
 | `/api/v1/sites/{site_id}/owners` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a site owner (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/co-managers` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a co-manager (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a room moderator (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/roles` | GET | — | Projected owners and co-managers |
-| `/api/v1/sites/{site_id}/posts/{post_slug}/moderators` | GET | — | Projected room moderators |
+| `/api/v1/sites/{site_id}/global-moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a global-moderator (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a room moderator (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/roles` | GET | — | Projected owners and global-moderators |
+| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | GET | — | Projected room moderators |
 
 POST responses are
 `{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
@@ -163,9 +163,9 @@ DELETE responses are `{ "revoked": true, "user_id", "level" }` and are
 idempotent. Reads come from the projection and are therefore eventually
 consistent with Matrix.
 
-The CLI mirrors the owner and co-manager operations locally
-(`cumments sites add-owner` / `remove-owner`, `add-co-manager` /
-`remove-co-manager`): `add-*` stores a pending claim and prints the
+The CLI mirrors the owner and global-moderator operations locally
+(`cumments sites add-owner` / `remove-owner`, `add-global-moderator` /
+`remove-global-moderator`): `add-*` stores a pending claim and prints the
 `verify_token`, while `remove-*` revokes a pending claim. The CLI never
 writes power levels, so an already-applied role must be removed from a
 Matrix client or the Operator API (see [CLI](cli.md)).

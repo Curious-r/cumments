@@ -22,7 +22,7 @@ characters); ids are first-come, and a conflict returns `409`. Without a
 body, the server generates an unguessable random id (32 hex characters). The
 chosen id is what shows up in Matrix: the Space alias
 `#_cumments_my-blog:server`, each room alias
-`#_cumments_my-blog_<post>:server` and the Space display name.
+`#_cumments_my-blog_<page>:server` and the Space display name.
 Chosen ids are a privilege: under the `optional` verification policy they
 must verify at least one origin before they accept writes, while random ids
 keep the relaxed migration behavior. The name stays reserved while
@@ -126,20 +126,20 @@ The operator mirror is
 the config file instead. The CLI equivalent is
 `cumments sites retire <id> --yes [--wait]`.
 
-## Retire a post's comment room
+## Retire a page's comment room
 
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}`
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}`
 
 Headers: `X-Cumments-Claim-Token: <claim_token>`
 
-Removes one post's comment section. Like site retirement, this is
+Removes one page's comment section. Like site retirement, this is
 two-phase: the request marks the room `retired` **synchronously** (new
 writes to that room are rejected from that moment) and returns
-`{ "site_id": "...", "post_slug": "...", "status": "retiring" }`. A
-background pass then renames the Matrix room `[retired] site/post`, removes
+`{ "site_id": "...", "page_slug": "...", "status": "retiring" }`. A
+background pass then renames the Matrix room `[retired] site/page`, removes
 its alias, leaves it as the AppService sender and every site virtual user,
-and clears the local projections. The post's alias is released and a later
-registration of the same post slug starts fresh.
+and clears the local projections. The page's alias is released and a later
+registration of the same page slug starts fresh.
 
 The operator mirror is `DELETE /api/v1/operator/rooms/{room_id}` (operator
 token), and the CLI equivalent is `cumments rooms retire ROOM_ID --yes

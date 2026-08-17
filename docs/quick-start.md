@@ -126,7 +126,7 @@ VERIFY_TOKEN=$(jq -r .verify_token owner.json)
 ```
 
 After verification the owner holds power 100 in the site Space and every
-comment room, and can appoint co-managers and per-room moderators (see
+comment room, and can appoint global-moderators and per-room moderators (see
 [site governance](site-governance.md)).
 
 ## 6. Verify
@@ -134,7 +134,7 @@ comment room, and can appoint co-managers and per-room moderators (see
 1. Open the [demo frontend](demo.md) (`misc/demo/index.html`) against
    `http://localhost:7931` and post a comment.
 2. In Matrix, check that a Space (`Comments: <site>`), a comment room
-   (`Comments: <site>/<post>`), and the virtual user were created, and that
+   (`Comments: <site>/<page>`), and the virtual user were created, and that
    the owner account appears with power 100 in both.
 3. The comment should appear in the frontend in real time via SSE.
 
@@ -170,8 +170,8 @@ the new room, re-links it into the site Space, re-invites site roles, and
 supersedes the old room. The same operation is available to operators through
 `!cumments room <room_id> upgrade <version> --confirm` and
 `POST /api/v1/operator/rooms/{room_id}/upgrade`; site owners can trigger it
-themselves with `!cumments site <site_id> post <post_slug> upgrade <version>
---confirm` or `POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
+themselves with `!cumments site <site_id> page <page_slug> upgrade <version>
+--confirm` or `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
 (claim token). Every path executes the upgrade as the bot, which stays the
 new room's creator. Because several surrounding standards are still open
 (MSC4168/MSC4433), the current behavior includes a few documented

@@ -1,12 +1,12 @@
-# Guests
+# Visitors
 
-Public self-service reads for guest (visitor) identities on a site.
+Public self-service reads for visitor (visitor) identities on a site.
 
-## Get the guest's current profile
+## Get the visitor's current profile
 
-`GET /api/v1/sites/{site_id}/guests/profile?author_public_key=...`
+`GET /api/v1/sites/{site_id}/visitors/profile?author_public_key=...`
 
-Returns the guest's current global Matrix profile for this site. The virtual
+Returns the visitor's current global Matrix profile for this site. The virtual
 user is derived from `site_id + author_public_key`, so this endpoint answers
 "who am I on this site?" for a browser-held key without any session.
 
@@ -14,7 +14,7 @@ Response:
 
 ```json
 {
-  "guest_id": "a1b2c3d4e5f60718a1b2c3d4e5f60718",
+  "visitor_id": "a1b2c3d4e5f60718a1b2c3d4e5f60718",
   "display_name": "Alice",
   "avatar_url": "https://comments.example.net/api/v1/media/..."
 }
@@ -29,8 +29,8 @@ Response:
 
 The endpoint is public and read-only: the Ed25519 public key is the
 identity, it is high-entropy and not enumerable, and any avatar is already
-public through the guest's comments. Requests are rate limited per client
-IP (default 120/hour, configurable via `rate_limit.guest_profile`).
+public through the visitor's comments. Requests are rate limited per client
+IP (default 120/hour, configurable via `rate_limit.visitor_profile`).
 
 Errors: `404` when the site is not registered (the parent resource does not
 exist), `400` for missing/invalid `author_public_key`, `429` when rate

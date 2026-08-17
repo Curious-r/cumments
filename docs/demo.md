@@ -78,12 +78,12 @@ crop proxy URL) and fall back to the deterministic initial block when the
 image cannot load. The room header prefers `avatar_thumbnail_url` over the
 full-size avatar.
 
-The settings drawer's identity section can upload and remove the guest
+The settings drawer's identity section can upload and remove the visitor
 avatar for the current site. Uploads are restricted to images, downscaled
 client-side to a square 512×512 PNG, and signed with
 `["UPLOAD_AVATAR", site_id, mime, sha256_hex(body), challenge]`; removal uses
 `["DELETE_AVATAR", site_id, challenge]` (see
-[Media API](api/media.md#guest-avatar)). Avatars are per-site because the
+[Media API](api/media.md#visitor-avatar)). Avatars are per-site because the
 virtual user is derived from `site_id + public_key`.
 
 The demo keeps the last known avatar URL in `localStorage` per site and falls

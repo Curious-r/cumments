@@ -59,7 +59,7 @@ Use this when a claim token may have leaked.
 
 Operator mirror of the claim-token retire endpoint: marks the site
 `retiring` immediately (writes get `410 code=site-retired`) and lets the
-background pass decommission the Matrix Space/rooms and clear local
+background pass retirement the Matrix Space/rooms and clear local
 projections. See [Sites](sites.md#retire-a-site) for the full flow. Sites
 declared in `[sites]` cannot be retired this way.
 
@@ -71,7 +71,7 @@ Optional JSON body with the same `page` / `per_page` / `site_id` fields as
 [List sites](#list-sites).
 
 Returns rooms whose adoption failed governance checks and are currently
-quarantined, with the room id, site/post, quarantine reason, when the room
+quarantined, with the room id, site/page, quarantine reason, when the room
 was first quarantined, how many consecutive adoption attempts failed, and
 when the next automatic retry is scheduled (`null` means manual attention is
 required). Quarantined rooms are retried on a 1h/6h/24h schedule; after the
@@ -84,7 +84,7 @@ pagination/filter fields and `{ "data", "meta" }` shape apply.
 `DELETE /api/v1/operator/rooms/quarantined/{room_id}`
 
 Clears a room's quarantine and makes it the canonical room again (any other
-active room for the same post is superseded). The operation is idempotent:
+active room for the same page is superseded). The operation is idempotent:
 reinstating an already-active room also returns `204`; an unknown room
 returns `404`.
 
@@ -101,7 +101,7 @@ operation is idempotent: an existing `m.room.tombstone` is reused. Spaces,
 unknown rooms, non-active rooms, invalid versions and versions that are not
 newer than the room's current version are rejected with a `4xx` problem
 response. This endpoint is the operator mirror of the
-site-level `POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
+site-level `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
 (claim token); both execute through the AS bot.
 
 ## Retire a comment room
@@ -112,7 +112,7 @@ Marks the registered active room `Retired` immediately (new writes stop),
 then the background reconciler renames the Matrix room `[retired]`, removes
 its alias, leaves it as the AppService sender and every site virtual user,
 and clears the local projections. This is the operator mirror of
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}` (claim token); both go
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}` (claim token); both go
 through the same management use case. Unknown or already-retired rooms
 return `404`.
 
@@ -122,8 +122,8 @@ The operator can act on a site's behalf for site-level roles:
 
 - `POST /api/v1/operator/sites/{site_id}/owners` /
   `DELETE /api/v1/operator/sites/{site_id}/owners?user_id=...`
-- `POST /api/v1/operator/sites/{site_id}/co-managers` /
-  `DELETE /api/v1/operator/sites/{site_id}/co-managers?user_id=...`
+- `POST /api/v1/operator/sites/{site_id}/global-moderators` /
+  `DELETE /api/v1/operator/sites/{site_id}/global-moderators?user_id=...`
 
 These use the same handlers and response shapes as the claim-token
 [Governance](governance.md) endpoints, including the pending-claim

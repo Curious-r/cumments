@@ -12,7 +12,7 @@ Every write also carries the author proof described in the
 
 ## List comments
 
-`QUERY /api/v1/sites/{site_id}/posts/{post_slug}/comments` (RFC 10008)
+`QUERY /api/v1/sites/{site_id}/pages/{page_slug}/comments` (RFC 10008)
 
 Body:
 
@@ -28,9 +28,9 @@ Response:
     {
       "event_id": "$event:server",
       "site_id": "my-blog",
-      "post_slug": "hello-world",
+      "page_slug": "hello-world",
       "author": {
-        "type": "guest",
+        "type": "visitor",
         "display_name": "Alice",
         "avatar_url": null,
         "public_key": "...",
@@ -83,7 +83,7 @@ fallback after the author leaves the room.
 
 ## Post a comment
 
-`POST /api/v1/sites/{site_id}/posts/{post_slug}/comments`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/comments`
 
 Body:
 
@@ -100,7 +100,7 @@ Body:
 ```
 
 When `media` is present (an object returned by
-[Guest media upload](media.md#guest-media-upload), or a site sticker pack
+[Visitor media upload](media.md#visitor-media-upload), or a site sticker pack
 reference with `"kind": "sticker"`), the signature covers `media.url` instead
 of `content`; `content` then only serves as the fallback filename/text.
 
@@ -123,7 +123,7 @@ omit `submission_id`.
 Signature message:
 
 ```text
-POST\n{site_id}\n{post_slug}\n{content}\n{reply_to}\n{challenge_prefix}
+POST\n{site_id}\n{page_slug}\n{content}\n{reply_to}\n{challenge_prefix}
 ```
 
 `reply_to` is the exact Matrix event ID of the parent comment as returned by
@@ -140,17 +140,17 @@ event proof block only carries `public_key`, `signature`, `challenge`,
 
 ## Edit a comment
 
-`PATCH /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}`
+`PATCH /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}`
 
 Signature message:
 
 ```text
-PATCH\n{site_id}\n{post_slug}\n{comment_id}\n{content}\n{challenge_prefix}
+PATCH\n{site_id}\n{page_slug}\n{comment_id}\n{content}\n{challenge_prefix}
 ```
 
 The same operation is available without embedding `comment_id` in the URL:
 
-`PATCH /api/v1/sites/{site_id}/posts/{post_slug}/comments`
+`PATCH /api/v1/sites/{site_id}/pages/{page_slug}/comments`
 
 ```json
 {
@@ -168,7 +168,7 @@ Both require the `Idempotency-Key` header.
 
 ## Delete a comment
 
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/comments?comment_id=$event%3Aserver`
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/comments?comment_id=$event%3Aserver`
 
 The target event id travels as a percent-encoded `comment_id` query
 parameter. RFC 9110 leaves DELETE request bodies undefined, so Cumments
@@ -187,36 +187,36 @@ proof:
 Signature message:
 
 ```text
-DELETE\n{site_id}\n{post_slug}\n{comment_id}\n{challenge_prefix}
+DELETE\n{site_id}\n{page_slug}\n{comment_id}\n{challenge_prefix}
 ```
 
 The request requires the `Idempotency-Key` header.
 
 ## React to a comment
 
-`POST /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions`
 
 Body: `{ "key", "author_public_key", "author_signature", "challenge_response" }`.
-The signature covers `["REACT", site_id, post_slug, comment_id, key, challenge]`;
-the reaction is sent as the guest's virtual user (`m.reaction` with the
+The signature covers `["REACT", site_id, page_slug, comment_id, key, challenge]`;
+the reaction is sent as the visitor's virtual user (`m.reaction` with the
 signed proof block) and projected into the message's reaction counts.
 
 ## Vote on a poll
 
-`POST /api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes`
 
 Body: `{ "option_id", "author_public_key", "author_signature", "challenge_response" }`.
-The signature covers `["VOTE", site_id, post_slug, poll_id, option_id, challenge]`;
+The signature covers `["VOTE", site_id, page_slug, poll_id, option_id, challenge]`;
 the vote is sent as `m.poll.response` (MSC3381) with the signed proof block
 and aggregated into the poll's response counts.
 
 ## Post a location
 
-`POST /api/v1/sites/{site_id}/posts/{post_slug}/location`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/location`
 
 Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author_signature", "challenge_response" }`.
 The signature covers
-`["LOCATE", site_id, post_slug, geo_uri, challenge]`;
+`["LOCATE", site_id, page_slug, geo_uri, challenge]`;
 the message is queued like a comment (same `Idempotency-Key` and
 `202 { "submission_id" }` contract) and sent as `m.location` (MSC3488) with the
 signed proof block, closing the loop through the same projection path.
@@ -225,7 +225,7 @@ not covered by the signature.
 
 ## Room info
 
-`GET /api/v1/sites/{site_id}/posts/{post_slug}/room`
+`GET /api/v1/sites/{site_id}/pages/{page_slug}/room`
 
 Returns the comment room's current metadata (`name`, `topic`, `avatar_url`,
 `avatar_thumbnail_url`, `member_count`) and the most recent system messages

@@ -76,7 +76,7 @@
                     prev_page: "上一页",
                     next_page: "下一页",
                     manage_note:
-                        "你只能编辑/删除自己发布的评论；管理员可以直接在 Matrix 客户端中治理评论房间。",
+                        "你只能编辑/删除自己发布的评论；版主可以直接在 Matrix 客户端中治理评论房间。",
                     api_url: "API 地址",
                     site_id: "Site ID",
                     slug: "Slug",
@@ -114,12 +114,12 @@
                     mnemonic_done: "我已备份，继续",
                     close: "关闭",
                     mnemonic_alt: "不想用助记词？改用随机私钥身份",
-                    guest_default: "访客",
+                    visitor_default: "访客",
                     matrix_user: "Matrix 用户",
-                    guest_badge: "Cumments 访客",
+                    visitor_badge: "Cumments 访客",
                     identity_tag_title: "同一访客的稳定身份标记；改名不会改变它",
                     role_owner: "站主",
-                    role_co_manager: "协管员",
+                    role_global_moderator: "总版主",
                     role_moderator: "版主",
                     room_roles: "治理",
                     reply: "回复",
@@ -281,12 +281,12 @@
                     mnemonic_done: "I've backed it up, continue",
                     close: "Close",
                     mnemonic_alt: "Don't want a mnemonic? Use a random identity instead",
-                    guest_default: "Guest",
+                    visitor_default: "Visitor",
                     matrix_user: "Matrix user",
-                    guest_badge: "Cumments guest",
-                    identity_tag_title: "Stable identity marker for the same guest; renaming does not change it",
+                    visitor_badge: "Cumments visitor",
+                    identity_tag_title: "Stable identity marker for the same visitor; renaming does not change it",
                     role_owner: "Owner",
-                    role_co_manager: "Co-manager",
+                    role_global_moderator: "Global Moderator",
                     role_moderator: "Moderator",
                     room_roles: "Governance",
                     reply: "Reply",
@@ -476,7 +476,7 @@
                 pendingComment: null,
                 presenceOnline: new Set(),
                 siteOwners: new Set(),
-                siteCoManagers: new Set(),
+                siteGlobalModerators: new Set(),
                 roomModerators: new Set(),
             };
 
@@ -541,7 +541,7 @@
                     slug: document.getElementById("slug").value.trim(),
                     displayName:
                         document.getElementById("settingDisplayName").value.trim() ||
-                        t("guest_default"),
+                        t("visitor_default"),
                 };
             }
 
@@ -1122,7 +1122,7 @@
                 return (
                     !!identity &&
                     comment.author &&
-                    comment.author.type === "guest" &&
+                    comment.author.type === "visitor" &&
                     comment.author.public_key === identity.publicKey
                 );
             }
@@ -1142,7 +1142,7 @@
                     }
                     if (
                         !c.author ||
-                        c.author.type !== "guest" ||
+                        c.author.type !== "visitor" ||
                         c.author.public_key !== pending.publicKey ||
                         signableContent(c.content) !== pending.content
                     ) {
@@ -1199,7 +1199,7 @@
                         ? author.mxid.replace(/^@/, "").split(":")[0]
                         : t("matrix_user");
                 }
-                return author.display_name || t("guest_default");
+                return author.display_name || t("visitor_default");
             }
 
             function authorAvatarKey(comment) {
@@ -1207,10 +1207,10 @@
                 return author.public_key || author.mxid || comment.event_id;
             }
 
-            // Stable, short, deterministic tag for a guest identity. The
+            // Stable, short, deterministic tag for a visitor identity. The
             // display name may change freely; the public key never does, so
             // this tag is how the UI shows "same person, different name".
-            function guestIdentityTag(publicKey) {
+            function visitorIdentityTag(publicKey) {
                 let hash = 0;
                 for (const ch of publicKey) {
                     hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
@@ -1229,8 +1229,8 @@
                 if (state.siteOwners.has(mxid)) {
                     return `<span class="text-[10px] font-medium text-amber-700 bg-amber-50 rounded px-1.5 py-0.5">${t("role_owner")}</span>`;
                 }
-                if (state.siteCoManagers.has(mxid)) {
-                    return `<span class="text-[10px] font-medium text-purple-700 bg-purple-50 rounded px-1.5 py-0.5">${t("role_co_manager")}</span>`;
+                if (state.siteGlobalModerators.has(mxid)) {
+                    return `<span class="text-[10px] font-medium text-purple-700 bg-purple-50 rounded px-1.5 py-0.5">${t("role_global_moderator")}</span>`;
                 }
                 if (state.roomModerators.has(mxid)) {
                     return `<span class="text-[10px] font-medium text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5">${t("role_moderator")}</span>`;
@@ -1257,7 +1257,7 @@
 
             async function queryComments(cfg, page, perPage) {
                 const res = await fetch(
-                    `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments`,
                     {
                         method: "QUERY",
                         headers: { "Content-Type": "application/json" },
@@ -1417,7 +1417,7 @@
                 const cfg = getSettings();
                 try {
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/room`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/room`,
                     );
                     if (!res.ok) return;
                     const info = await res.json();
@@ -1433,13 +1433,13 @@
                     const [siteRes, roomRes] = await Promise.all([
                         fetch(`${cfg.api}/api/v1/sites/${cfg.siteId}/roles`),
                         fetch(
-                            `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/moderators`,
+                            `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/moderators`,
                         ),
                     ]);
                     if (siteRes.ok) {
                         const roles = await siteRes.json();
                         state.siteOwners = new Set(roles.owners || []);
-                        state.siteCoManagers = new Set(roles.co_managers || []);
+                        state.siteGlobalModerators = new Set(roles.global_moderators || []);
                     }
                     if (roomRes.ok) {
                         const moderators = await roomRes.json();
@@ -1478,7 +1478,7 @@
                 const governanceUsers = [
                     ...new Set([
                         ...state.siteOwners,
-                        ...state.siteCoManagers,
+                        ...state.siteGlobalModerators,
                         ...state.roomModerators,
                     ]),
                 ]
@@ -1619,14 +1619,14 @@
                         : null;
                 const time = formatTime(comment.timestamp);
                 const edited = comment.edited_at ? ` · ${t("edited")}` : "";
-                const isGuest =
-                    comment.author && comment.author.type === "guest";
-                const badge = isGuest
-                    ? `<span class="text-[10px] font-medium text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">${t("guest_badge")}</span>`
+                const isVisitor =
+                    comment.author && comment.author.type === "visitor";
+                const badge = isVisitor
+                    ? `<span class="text-[10px] font-medium text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">${t("visitor_badge")}</span>`
                     : `<span class="text-[10px] font-medium text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">Matrix</span>`;
                 const identityTag =
-                    isGuest && comment.author.public_key
-                        ? `<span class="text-[10px] font-mono text-slate-400" title="${escapeHtml(t("identity_tag_title"))}">${escapeHtml(guestIdentityTag(comment.author.public_key))}</span>`
+                    isVisitor && comment.author.public_key
+                        ? `<span class="text-[10px] font-mono text-slate-400" title="${escapeHtml(t("identity_tag_title"))}">${escapeHtml(visitorIdentityTag(comment.author.public_key))}</span>`
                         : "";
 
                 el.innerHTML = `
@@ -1911,7 +1911,7 @@
                         filename,
                     });
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/media?${params.toString()}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/media?${params.toString()}`,
                         {
                             method: "POST",
                             headers: {
@@ -2058,7 +2058,7 @@
                         chal.prefix,
                     ]);
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}/reactions`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}/reactions`,
                         {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -2092,7 +2092,7 @@
                         chal.prefix,
                     ]);
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/polls/${encodeURIComponent(pollId)}/votes`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/polls/${encodeURIComponent(pollId)}/votes`,
                         {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -2125,7 +2125,7 @@
                         const cfg = getSettings();
                         const displayName =
                             document.getElementById("composerDisplayName").value.trim() ||
-                            t("guest_default");
+                            t("visitor_default");
                         try {
                             const chal = await getChallenge(cfg);
                             const nonce = await solvePow(chal.prefix, chal.difficulty);
@@ -2137,7 +2137,7 @@
                                 chal.prefix,
                             ]);
                             const res = await fetch(
-                                `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/location`,
+                                `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/location`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -2187,7 +2187,7 @@
                 const cfg = getSettings();
                 const displayName =
                     document.getElementById("composerDisplayName").value.trim() ||
-                    t("guest_default");
+                    t("visitor_default");
                 const content = document
                     .getElementById("composerContent")
                     .value.trim();
@@ -2227,7 +2227,7 @@
 
                     status.textContent = t("status_submitting");
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments`,
                         {
                             method: "POST",
                             headers: {
@@ -2295,7 +2295,7 @@
                     chal.prefix,
                 ]);
                 const res = await fetch(
-                    `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}`,
                     {
                         method: "PATCH",
                         headers: {
@@ -2327,7 +2327,7 @@
                         chal.prefix,
                     ]);
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/comments?comment_id=${encodeURIComponent(commentId)}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments?comment_id=${encodeURIComponent(commentId)}`,
                         {
                             method: "DELETE",
                             headers: {
@@ -2387,7 +2387,7 @@
 
             function connectSse() {
                 const cfg = getSettings();
-                const url = `${cfg.api}/api/v1/sites/${cfg.siteId}/posts/${cfg.slug}/sse`;
+                const url = `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/sse`;
                 const sse = new EventSource(url);
                 state.currentSse = sse;
 
@@ -2649,7 +2649,7 @@
             function updateComposerAvatar() {
                 const input = document.getElementById("composerDisplayName");
                 const avatar = document.getElementById("composerAvatar");
-                const name = (input.value || t("guest_default")).trim();
+                const name = (input.value || t("visitor_default")).trim();
                 avatar.textContent = "";
                 if (
                     ownAvatarUrl &&
@@ -2677,7 +2677,7 @@
                 el.textContent = "";
                 const name = (
                     document.getElementById("settingDisplayName").value ||
-                    t("guest_default")
+                    t("visitor_default")
                 ).trim();
                 if (
                     ownAvatarUrl &&
@@ -2770,7 +2770,7 @@
                 updateComposerAvatar();
             }
 
-            // Self-service profile read: the API returns the guest's current
+            // Self-service profile read: the API returns the visitor's current
             // display name and avatar for this site, keyed by the Ed25519
             // public key. Used after identity restore/import and when the
             // settings drawer opens, so a restored identity recovers its
@@ -2784,7 +2784,7 @@
                         author_public_key: identity.publicKey,
                     });
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/guests/profile?${params.toString()}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/visitors/profile?${params.toString()}`,
                     );
                     if (!res.ok) return;
                     const profile = await res.json();
@@ -2826,7 +2826,7 @@
                 for (const comment of comments) {
                     if (
                         comment.author &&
-                        comment.author.type === "guest" &&
+                        comment.author.type === "visitor" &&
                         comment.author.public_key === identity.publicKey &&
                         comment.author.avatar_url
                     ) {
@@ -2938,7 +2938,7 @@
                     filename,
                 });
                 const res = await fetch(
-                    `${cfg.api}/api/v1/sites/${cfg.siteId}/guests/avatar?${params.toString()}`,
+                    `${cfg.api}/api/v1/sites/${cfg.siteId}/visitors/avatar?${params.toString()}`,
                     {
                         method: "PUT",
                         headers: {
@@ -2973,7 +2973,7 @@
                         challenge_response: `${chal.prefix}|${nonce}`,
                     });
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/guests/avatar?${params.toString()}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/visitors/avatar?${params.toString()}`,
                         { method: "DELETE" },
                     );
                     if (!res.ok) throw new Error(await apiError(res));

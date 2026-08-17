@@ -1,7 +1,7 @@
 # Cumments
 
 Cumments is a Matrix-native comment system. Comments are first-class Matrix
-events: posts, edits and deletes live in Matrix rooms, are stored by a
+events: comments, edits and deletes live in Matrix rooms, are stored by a
 projector into a local read model, and are exposed to websites through an
 HTTP API with async write submissions.
 
@@ -25,7 +25,7 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 - [Site trust](site-trust.md) — origin and HMAC write-path trust
   models, with a [verification walkthrough](site-verification.md) for SSG
   sites.
-- [Site governance](site-governance.md) — owners, co-managers and per-room
+- [Site governance](site-governance.md) — owners, global-moderators and per-room
   moderators encoded in Matrix power levels, with token-DM verification.
 
 ## Reference

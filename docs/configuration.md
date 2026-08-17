@@ -215,9 +215,9 @@ operator         = { requests = 60,  window = "1m" }
 write         = { requests = 120, window = "1h" }
 sse           = { requests = 20,  window = "1h" }
 media         = { requests = 120, window = "1h" }
-guest_profile = { requests = 120, window = "1h" }
+visitor_profile = { requests = 120, window = "1h" }
 public_read   = { requests = 1200, window = "1h" }
-moderation    = { requests = 60,  window = "1h" }
+governance    = { requests = 60,  window = "1h" }
 ```
 
 - `requests` is the maximum per window, per client key; it must be at least 1.

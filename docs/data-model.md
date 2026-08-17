@@ -32,8 +32,8 @@ are.
 ```rust
 Message {
     event_id,               // the Matrix event ID
-    site_id, post_slug,     // which site and post this comment belongs to
-    author: AuthorSnapshot, // guest (public_key) or matrix (mxid)
+    site_id, page_slug,     // which site and page this comment belongs to
+    author: AuthorSnapshot, // visitor (public_key) or matrix (mxid)
     content: Content,       // sealed enum, see below
     timestamp,              // Matrix origin_server_ts
     edited_at,              // last m.replace timestamp, if any
@@ -50,7 +50,7 @@ The full revision history of every edit is kept in a dedicated
 `room_id`, `sender_mxid` and the raw Matrix `content` are internal integrity
 fields and are never serialized to API or SSE clients.
 
-Guest authors carry an Ed25519 `public_key`; their virtual-user Matrix ID is
+Visitor authors carry an Ed25519 `public_key`; their virtual-user Matrix ID is
 an implementation detail and is not exposed. Matrix-native authors carry
 their `mxid` and never a `public_key`.
 
@@ -92,7 +92,7 @@ Matrix has no single avatar entity; avatars live in three spec-defined
 places and Cumments projects all of them:
 
 - **Global profile** (`avatar_url` profile field): the canonical identity
-  avatar of a user. Guests set it through the guest avatar API, which stores
+  avatar of a user. Visitors set it through the visitor avatar API, which stores
   it on the virtual user's profile and propagates it to joined rooms as
   `m.room.member` events (MSC4466 `propagate_to: all` query parameter).
 - **`m.room.member.avatar_url`**: the per-room profile snapshot. It is the
@@ -107,7 +107,7 @@ places and Cumments projects all of them:
 Author profiles are projected into `author_display_name` / `author_avatar_url`
 when a message is stored, but the public read path (message list, single
 message, SSE) overlays the author's current joined `m.room.member` profile.
-Guests and Matrix-native authors behave identically: display data is Matrix
+Visitors and Matrix-native authors behave identically: display data is Matrix
 profile state, never signed event content (see
 [visitor identity design](../misc/design/visitor-identity.md)). Members who
 left the room keep the stored projection as a fallback; a redacted member
@@ -142,7 +142,7 @@ Voice/video calls are not modeled at all.
 ```sql
 messages (
   event_id TEXT PRIMARY KEY,
-  room_id, site_id, post_slug,
+  room_id, site_id, page_slug,
   author_type, author_mxid, author_display_name, author_avatar_url,
   author_public_key,
   content_json JSON,          -- the serialized Content enum
@@ -173,9 +173,9 @@ Notes on the layout:
   keeps the latest vote authoritative.
 - `formatted_body` is passed through unchanged. The demo renders plain text
   only; any client rendering HTML must sanitize it first.
-- `media_uploads.post_slug` is nullable: comment media records the post it
-  was authorized for, while guest avatars are site-scoped records with a
-  `NULL` post. Avatar media is marked referenced at upload time so the
+- `media_uploads.page_slug` is nullable: comment media records the page it
+  was authorized for, while visitor avatars are site-scoped records with a
+  `NULL` page. Avatar media is marked referenced at upload time so the
   unused-media sweep never collects a profile avatar.
 
 ## Ephemeral events
@@ -195,23 +195,23 @@ per-room in-memory state:
 - Protocol limits still apply: private read receipts (MSC2285) are invisible
   to the AppService, so only public receipts (MSC2666) can be surfaced.
 
-## Guest sending capability
+## Visitor sending capability
 
-The API turns typed requests into Matrix events sent by each guest's virtual
+The API turns typed requests into Matrix events sent by each visitor's virtual
 user. Every event carries a signed proof block under the
 `host.curious.cumments` content namespace, which the projector verifies
 before trusting the projection.
 
-| Content kind | Guest sending | Mechanism |
+| Content kind | Visitor sending | Mechanism |
 |---|---|---|
 | Text | Supported | `m.text` with reply/edit/delete, queued as a submission |
 | Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; orphaned uploads are garbage-collected |
-| Sticker | Supported | Choose from the site's sticker packs (`m.room.image_pack` on the site Space); the API validates the reference and fills metadata, guests cannot upload stickers |
+| Sticker | Supported | Choose from the site's sticker packs (`m.room.image_pack` on the site Space); the API validates the reference and fills metadata, visitors cannot upload stickers |
 | Location | Supported | `m.location` (MSC3488), queued like a comment |
 | Poll | Supported | API proxies `m.poll.start` / `m.poll.response` with proof |
 | Reaction | Supported | API proxies `m.reaction` with proof; deduplicated per sender + key |
-| Encrypted | Excluded | Conflicts with guest verification, AS proxying and auditing |
-| Unknown / arbitrary raw events | Excluded | Guests may only send the whitelisted typed requests |
+| Encrypted | Excluded | Conflicts with visitor verification, AS proxying and auditing |
+| Unknown / arbitrary raw events | Excluded | Visitors may only send the whitelisted typed requests |
 
 Reactions and votes are sent synchronously and are naturally idempotent
 (reaction dedupe by sender + key, latest-vote-wins); text, media, location

@@ -3,7 +3,7 @@
 Site-owner operations authenticate with the claim token returned at site
 registration (`X-Cumments-Claim-Token`). Operator fallbacks with the same
 handlers live under `/api/v1/operator/sites/{site_id}/owners` and
-`/api/v1/operator/sites/{site_id}/co-managers` (operator token) — see
+`/api/v1/operator/sites/{site_id}/global-moderators` (operator token) — see
 [Operator API](operator.md#governance-fallback). Room upgrades follow the
 same pattern: the site-level endpoint below, plus an operator mirror in the
 Operator API.
@@ -30,39 +30,39 @@ pending claim or removes an applied role; when the last site owner is
 removed the response also carries a `warnings` array. Registering the owner
 is the one-time bootstrap step.
 
-## Site co-managers
+## Site global-moderators
 
-`POST /api/v1/sites/{site_id}/co-managers` /
-`DELETE /api/v1/sites/{site_id}/co-managers?user_id=...`
+`POST /api/v1/sites/{site_id}/global-moderators` /
+`DELETE /api/v1/sites/{site_id}/global-moderators?user_id=...`
 
 POST body: `{ "user_id": "..." }`; DELETE takes `user_id` as a query
-parameter. Co-managers hold 75 in the Space and are replicated into every
-comment room by the moderation sync pass. POST returns the pending claim
+parameter. Global moderators hold 75 in the Space and are replicated into every
+comment room by the governance sync pass. POST returns the pending claim
 shape; DELETE returns the revoked shape.
 
 ## Room moderators
 
-`POST /api/v1/sites/{site_id}/posts/{post_slug}/moderators` /
-`DELETE /api/v1/sites/{site_id}/posts/{post_slug}/moderators?user_id=...`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/moderators` /
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/moderators?user_id=...`
 
 POST body: `{ "user_id": "..." }`; DELETE takes `user_id` as a query
 parameter. Appoints or removes a moderator (level 50) in the room registered
-for that post only. POST returns the pending claim shape; DELETE returns the
+for that page only. POST returns the pending claim shape; DELETE returns the
 revoked shape.
 
 ## Read the projected rosters
 
-`GET /api/v1/sites/{site_id}/roles` → `{ "owners": [...], "co_managers": [...] }`
+`GET /api/v1/sites/{site_id}/roles` → `{ "owners": [...], "global_moderators": [...] }`
 
-`GET /api/v1/sites/{site_id}/posts/{post_slug}/moderators` →
+`GET /api/v1/sites/{site_id}/pages/{page_slug}/moderators` →
 `{ "room_id": "...", "moderators": [...] }`
 
 ## Upgrade a comment room
 
-`POST /api/v1/sites/{site_id}/posts/{post_slug}/upgrade`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
 
 Body: `{"new_version": "12"}`. Upgrades the site's active comment room for
-this post through the homeserver's native `/upgrade` and converges the
+this page through the homeserver's native `/upgrade` and converges the
 replacement: metadata is repaired, the room is re-linked into the site
 Space (the old child's `via` is cleared best-effort), site roles are
 re-invited, and the new room becomes the registry's active room (the old one

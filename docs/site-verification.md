@@ -167,7 +167,7 @@ function hex(bytes) {
 const CUMMENTS_BASE = "https://comments.example.com";
 // Must be the Cumments endpoint your frontend posts to — the proxy's own
 // route may differ and the signature covers this path, not the proxy path.
-const CUMMENTS_PATH = "/api/v1/sites/<site_id>/posts/<post_slug>/comments";
+const CUMMENTS_PATH = "/api/v1/sites/<site_id>/pages/<page_slug>/comments";
 
 export async function onRequestPost(context) {
   const body = await context.request.text();

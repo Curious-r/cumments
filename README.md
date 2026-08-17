@@ -13,14 +13,14 @@ that can be rebuilt from Matrix history with `cumments backfill`.
 
 - **Matrix as the event log** — comments are `m.room.message` events, edits
   are `m.replace`, and deletions are `m.redaction`.
-- **Two kinds of authors** — guest comments posted through the API carry the
+- **Two kinds of authors** — visitor comments posted through the API carry the
   author's Ed25519 public key, signature and signed PoW challenge; Matrix
   comments are governed by Matrix identities and room power levels.
 - **Disposable read model** — `cumments backfill` rebuilds sites, rooms and
   comments from Matrix history.
 - **AppService-first** — production mode registers as a Matrix Application
   Service, uses virtual users, and receives events via HTTP push.
-- **PoW anti-spam** — guest comments require a signed proof-of-work challenge;
+- **PoW anti-spam** — visitor comments require a signed proof-of-work challenge;
   no login or account system.
 - **Reply trees and real-time SSE** — replies use Matrix rich replies, and
   updates stream via `message_created` / `message_updated` / `message_deleted`.
@@ -66,7 +66,7 @@ The full documentation is rendered at <https://curious-r.github.io/cumments/>.
   write-path trust models.
 - [Site verification](docs/site-verification.md) — bind an SSG site,
   well-known/DNS proofs, strict HMAC mode.
-- [Site governance](docs/site-governance.md) — owners, co-managers and
+- [Site governance](docs/site-governance.md) — owners, global-moderators and
   per-room moderators in Matrix power levels.
 
 **Reference**
