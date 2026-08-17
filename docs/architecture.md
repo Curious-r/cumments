@@ -187,10 +187,11 @@ authenticated with `hs_token` (Bearer header, legacy query fallback).
 Governance follows the same source-of-truth principle: a site is a Matrix
 Space, and the Space's `m.room.power_levels` plus each comment room's own
 `m.room.power_levels` define who manages the site and moderates its rooms.
-The level ladder is 100 (owner), 75 (global-moderator, replicated from the Space
+The level ladder is 100 (site admin), 75 (manager, replicated from the Space
 into every room) and 50 (per-room moderator). The power-levels event itself
-is locked to 100 so only owners and the AppService sender can change
-governance. Push projection stores the rosters in disposable `site_roles` /
+is locked to 100 in the Space and 75 in comment rooms, so site admins (and
+the AppService sender) govern the Space while managers can appoint room
+moderators. Push projection stores the rosters in disposable `site_roles` /
 `room_roles` tables, a reconciler pass keeps room-level site roles aligned
 with the Space, and `backfill` replays Space state events so the rosters
 rebuild after a database reset. See
@@ -213,9 +214,9 @@ Security model:
 - Commands are partitioned by the caller's role. Instance operators
   (`security.operator_mxids`) may list sites, rotate claim tokens, list
   quarantined rooms, reinstate rooms, upgrade comment rooms and trigger
-  backfill. Site owners may
-  register/retire their own sites, manage global-moderators and moderators, issue
-  secrets, and switch the active site; public self-service (`site register`,
+  backfill. Site admins may register/retire their own sites, manage managers
+  and moderators, issue secrets, and switch the active site; managers may
+  appoint/revoke room moderators; public self-service (`site register`,
   `site use`, `site status`) needs no operator configuration.
 - Each sender is rate-limited in-process, and every command is written to the
   command audit trail with a status (ok / invalid / denied / error /
@@ -232,8 +233,8 @@ finishes.
 ### Room upgrades
 
 Comment rooms can be upgraded to a new room version through the homeserver's
-native `/upgrade`. The primary path is site-level (the site owner decides to
-upgrade their own room) with an operator mirror as fallback: site owners use
+native `/upgrade`. The primary path is site-level (a site admin decides to
+upgrade their own room) with an operator mirror as fallback: site admins use
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade` (claim token) or
 `!cumments site <id> page <slug> upgrade <version> --confirm`; operators use
 `cumments rooms upgrade ROOM_ID VERSION`,
@@ -246,29 +247,29 @@ mint a second replacement room.
 
 #### Governance attribution: site-level motivation, instance-level execution
 
-The room belongs to a site and the site owner (level 100) is its highest
+The room belongs to a site and the site admin (level 100) is its highest
 governance role, so upgrading one of the site's rooms is a **site-level
 operation** with an operator mirror, exactly like retiring the site: the
-owner triggers it through the claim-token API or the bot, and the instance
+admin triggers it through the claim-token API or the bot, and the instance
 operator can act as a fallback. The reasons for the split are:
 
 - In room version 12 the caller of `/upgrade` becomes the new room's creator
-  with immutable infinite power. A site owner upgrading directly would
+  with immutable infinite power. A site admin upgrading directly would
   escalate from governance level 100 to creator power and could lock the bot
   out of the replacement room. With the bot as the caller, the bot remains
-  the creator and the owner keeps level 100.
+  the creator and the admin keeps level 100.
 - An upgrade mutates shared invariants (alias, registry single-active
   supersede, cleanup, Space re-link); they stay inside the shared management
-  seam and the operator mirror exists for fallback, but the owner's own
+  seam and the operator mirror exists for fallback, but the admin's own
   rooms are not an adoption-trust matter like quarantine/reinstate.
 - Every upgrade mints a new room; repeated upgrades create orphaned
-  replacements and role re-invites, bounded by the site owner's own scope.
+  replacements and role re-invites, bounded by the site admin's own scope.
 
 Implemented entry points:
 
-- Site owner: `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
+- Site admin: `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
   (claim token) and `!cumments site <id> page <slug> upgrade <version>
-  --confirm` (private DM, site-owner permission).
+  --confirm` (private DM, site-admin permission).
 - Operator mirror: `POST /api/v1/operator/rooms/{room_id}/upgrade`
   (operator token) and `!cumments room <id> upgrade <version> --confirm`.
 
@@ -330,10 +331,10 @@ standards land; see below.
 #### Tombstone threshold
 
 Initial power levels lock `m.room.tombstone` to 150 (the room version 12
-recommended value) and the moderation pass normalizes existing rooms. This
-blocks both 50-level moderators and 100-level site owners from sending a
+recommended value) and the governance pass normalizes existing rooms. This
+blocks both 50-level moderators and 100-level site admins from sending a
 tombstone in a Matrix client, so only the room creator (the AS bot, who has
-infinite power in v12) can upgrade. A client-side upgrade by a site owner
+infinite power in v12) can upgrade. A client-side upgrade by a site admin
 would otherwise make them the replacement room's creator with immutable
 infinite power, bypassing the convergence loop. In v12 rooms the bot's
 creator power is implicit; in pre-v12 rooms the initial power levels give

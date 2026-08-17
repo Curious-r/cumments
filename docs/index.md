@@ -11,7 +11,7 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 ## Getting started
 
 - [Quick start](quick-start.md) — run the bundled tuwunel + Cumments stack
-  and register the first site owner.
+  and register the first site admin.
 - [Configuration](configuration.md) — file discovery, environment variables
   and the full AppService example.
 
@@ -25,7 +25,7 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 - [Site trust](site-trust.md) — origin and HMAC write-path trust
   models, with a [verification walkthrough](site-verification.md) for SSG
   sites.
-- [Site governance](site-governance.md) — owners, global-moderators and per-room
+- [Site governance](site-governance.md) — site admins, managers and per-room
   moderators encoded in Matrix power levels, with token-DM verification.
 
 ## Reference

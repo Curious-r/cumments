@@ -120,10 +120,12 @@ return `404`.
 
 The operator can act on a site's behalf for site-level roles:
 
-- `POST /api/v1/operator/sites/{site_id}/owners` /
-  `DELETE /api/v1/operator/sites/{site_id}/owners?user_id=...`
-- `POST /api/v1/operator/sites/{site_id}/global-moderators` /
-  `DELETE /api/v1/operator/sites/{site_id}/global-moderators?user_id=...`
+- `POST /api/v1/operator/sites/{site_id}/admins` /
+  `DELETE /api/v1/operator/sites/{site_id}/admins?user_id=...`
+- `POST /api/v1/operator/sites/{site_id}/managers` /
+  `DELETE /api/v1/operator/sites/{site_id}/managers?user_id=...`
+- `POST /api/v1/operator/sites/{site_id}/ownership/transfer` — operator
+  mirror of the claim-token ownership transfer.
 
 These use the same handlers and response shapes as the claim-token
 [Governance](governance.md) endpoints, including the pending-claim

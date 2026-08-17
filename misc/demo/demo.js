@@ -118,8 +118,8 @@
                     matrix_user: "Matrix 用户",
                     visitor_badge: "Cumments 访客",
                     identity_tag_title: "同一访客的稳定身份标记；改名不会改变它",
-                    role_owner: "站主",
-                    role_global_moderator: "总版主",
+                    role_admin: "站点管理员",
+                    role_manager: "主管",
                     role_moderator: "版主",
                     room_roles: "治理",
                     reply: "回复",
@@ -285,8 +285,8 @@
                     matrix_user: "Matrix user",
                     visitor_badge: "Cumments visitor",
                     identity_tag_title: "Stable identity marker for the same visitor; renaming does not change it",
-                    role_owner: "Owner",
-                    role_global_moderator: "Global Moderator",
+                    role_admin: "Site Admin",
+                    role_manager: "Manager",
                     role_moderator: "Moderator",
                     room_roles: "Governance",
                     reply: "Reply",
@@ -475,8 +475,8 @@
                 replyingTo: null,
                 pendingComment: null,
                 presenceOnline: new Set(),
-                siteOwners: new Set(),
-                siteGlobalModerators: new Set(),
+                siteAdmins: new Set(),
+                siteManagers: new Set(),
                 roomModerators: new Set(),
             };
 
@@ -1226,11 +1226,11 @@
                 const author = comment.author || {};
                 if (author.type !== "matrix" || !author.mxid) return "";
                 const mxid = author.mxid;
-                if (state.siteOwners.has(mxid)) {
-                    return `<span class="text-[10px] font-medium text-amber-700 bg-amber-50 rounded px-1.5 py-0.5">${t("role_owner")}</span>`;
+                if (state.siteAdmins.has(mxid)) {
+                    return `<span class="text-[10px] font-medium text-amber-700 bg-amber-50 rounded px-1.5 py-0.5">${t("role_admin")}</span>`;
                 }
-                if (state.siteGlobalModerators.has(mxid)) {
-                    return `<span class="text-[10px] font-medium text-purple-700 bg-purple-50 rounded px-1.5 py-0.5">${t("role_global_moderator")}</span>`;
+                if (state.siteManagers.has(mxid)) {
+                    return `<span class="text-[10px] font-medium text-purple-700 bg-purple-50 rounded px-1.5 py-0.5">${t("role_manager")}</span>`;
                 }
                 if (state.roomModerators.has(mxid)) {
                     return `<span class="text-[10px] font-medium text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5">${t("role_moderator")}</span>`;
@@ -1433,17 +1433,17 @@
                     const [siteRes, roomRes] = await Promise.all([
                         fetch(`${cfg.api}/api/v1/sites/${cfg.siteId}/roles`),
                         fetch(
-                            `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/moderators`,
+                            `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/roles`,
                         ),
                     ]);
                     if (siteRes.ok) {
                         const roles = await siteRes.json();
-                        state.siteOwners = new Set(roles.owners || []);
-                        state.siteGlobalModerators = new Set(roles.global_moderators || []);
+                        state.siteAdmins = new Set(roles.admins || []);
+                        state.siteManagers = new Set(roles.managers || []);
                     }
                     if (roomRes.ok) {
-                        const moderators = await roomRes.json();
-                        state.roomModerators = new Set(moderators.moderators || []);
+                        const roles = await roomRes.json();
+                        state.roomModerators = new Set(roles.moderators || []);
                     }
                 } catch {
                     // Governance badges are decorative; ignore failures.
@@ -1477,8 +1477,8 @@
                     .join("");
                 const governanceUsers = [
                     ...new Set([
-                        ...state.siteOwners,
-                        ...state.siteGlobalModerators,
+                        ...state.siteAdmins,
+                        ...state.siteManagers,
                         ...state.roomModerators,
                     ]),
                 ]

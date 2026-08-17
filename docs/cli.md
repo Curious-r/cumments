@@ -38,10 +38,11 @@ cumments
 │   ├── revoke-secret SITE_ID --yes
 │   ├── export-config [--raw] SITE_ID
 │   ├── rotate-claim-token SITE_ID
-│   ├── add-owner SITE_ID USER_ID
-│   ├── remove-owner SITE_ID USER_ID
-│   ├── add-global-moderator SITE_ID USER_ID
-│   ├── remove-global-moderator SITE_ID USER_ID
+│   ├── add-admin SITE_ID USER_ID
+│   ├── remove-admin SITE_ID USER_ID
+│   ├── add-manager SITE_ID USER_ID
+│   ├── remove-manager SITE_ID USER_ID
+│   ├── transfer-owner SITE_ID USER_ID
 │   └── retire SITE_ID --yes [--wait]
 ├── rooms
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
@@ -122,9 +123,10 @@ DM `cumments-claim:<token>` to the AS bot before the role is applied. The
 CLI never writes Matrix power levels directly:
 
 ```bash
-cumments sites add-owner my-blog '@alice:example.com'
-cumments sites remove-owner my-blog '@alice:example.com'
-cumments sites add-global-moderator my-blog '@bob:example.com'
+cumments sites add-admin my-blog '@alice:example.com'
+cumments sites remove-admin my-blog '@alice:example.com'
+cumments sites add-manager my-blog '@bob:example.com'
+cumments sites transfer-owner my-blog '@carol:example.com'
 ```
 
 `remove-*` cancels a pending claim; a role that has already been applied is

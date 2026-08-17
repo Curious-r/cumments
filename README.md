@@ -42,7 +42,7 @@ docker run --rm --entrypoint cumments \
 docker compose up -d
 ```
 
-The full walkthrough — registration, the site owner, verification and
+The full walkthrough — registration, the first site admin, verification and
 troubleshooting — is in the [installation guide](docs/quick-start.md).
 
 ## Documentation
@@ -66,7 +66,7 @@ The full documentation is rendered at <https://curious-r.github.io/cumments/>.
   write-path trust models.
 - [Site verification](docs/site-verification.md) — bind an SSG site,
   well-known/DNS proofs, strict HMAC mode.
-- [Site governance](docs/site-governance.md) — owners, global-moderators and
+- [Site governance](docs/site-governance.md) — site admins, managers and
   per-room moderators in Matrix power levels.
 
 **Reference**

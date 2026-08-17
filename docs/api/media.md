@@ -74,7 +74,7 @@ successful no-op.
 ## Site sticker packs
 
 Sticker packs are Matrix-native `m.room.image_pack` state events on the
-site's Space (MSC2545). Site owners and global-moderators manage them in any
+site's Space (MSC2545). Site admins and managers manage them in any
 Matrix client; the bot commands and the endpoints below are the scripted
 equivalents, and the public read endpoint serves the projected packs to
 visitors.

@@ -85,7 +85,7 @@ initialized.`, and `Server listening on 0.0.0.0:7931`.
 > `TUWUNEL_YES_I_AM_VERY_VERY_SURE_I_WANT_AN_OPEN_REGISTRATION_SERVER_PRONE_TO_ABUSE`
 > before exposing the homeserver beyond your machine.
 
-## 5. Create an account and register the site owner
+## 5. Create an account and register the first site admin
 
 The first account registered on tuwunel is granted homeserver admin
 privileges. Cumments itself does not read a fixed admin account from
@@ -98,7 +98,8 @@ curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
 ```
 
 The response contains the `user_id` (e.g. `@alice:localhost:8008`). Register
-the site through the Cumments API and bind that account as its owner:
+the site through the Cumments API and bind that account as its first site
+admin:
 
 ```bash
 # Registration is mandatory before the site can receive comments. Pick an id
@@ -109,10 +110,10 @@ curl -sS -X POST http://localhost:7931/api/v1/sites \
 SITE_ID=my-blog
 CLAIM=$(jq -r .claim_token site.json)
 
-curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/owners" \
+curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/admins" \
   -H "Content-Type: application/json" \
   -H "X-Cumments-Claim-Token: $CLAIM" \
-  -d '{"user_id":"@alice:localhost:8008"}' | tee owner.json
+  -d '{"user_id":"@alice:localhost:8008"}' | tee admin.json
 ```
 
 The response contains a one-time `verify_token`. The account proves ownership
@@ -120,13 +121,13 @@ by sending exactly `cumments-claim:<token>` as a direct message to the
 AppService bot (`@_cumments_bot:localhost:8008`):
 
 ```bash
-VERIFY_TOKEN=$(jq -r .verify_token owner.json)
+VERIFY_TOKEN=$(jq -r .verify_token admin.json)
 # From the alice account in any Matrix client, DM this text to the bot:
 # cumments-claim:$VERIFY_TOKEN
 ```
 
-After verification the owner holds power 100 in the site Space and every
-comment room, and can appoint global-moderators and per-room moderators (see
+After verification the admin holds power 100 in the site Space and every
+comment room, and can appoint managers and per-room moderators (see
 [site governance](site-governance.md)).
 
 ## 6. Verify
@@ -135,7 +136,7 @@ comment room, and can appoint global-moderators and per-room moderators (see
    `http://localhost:7931` and post a comment.
 2. In Matrix, check that a Space (`Comments: <site>`), a comment room
    (`Comments: <site>/<page>`), and the virtual user were created, and that
-   the owner account appears with power 100 in both.
+   the admin account appears with power 100 in both.
 3. The comment should appear in the frontend in real time via SSE.
 
 If comments exist in Matrix but not in the API, rebuild the read model from
@@ -169,7 +170,7 @@ The homeserver moves the room alias to the replacement, Cumments re-adopts
 the new room, re-links it into the site Space, re-invites site roles, and
 supersedes the old room. The same operation is available to operators through
 `!cumments room <room_id> upgrade <version> --confirm` and
-`POST /api/v1/operator/rooms/{room_id}/upgrade`; site owners can trigger it
+`POST /api/v1/operator/rooms/{room_id}/upgrade`; site admins can trigger it
 themselves with `!cumments site <site_id> page <page_slug> upgrade <version>
 --confirm` or `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
 (claim token). Every path executes the upgrade as the bot, which stays the

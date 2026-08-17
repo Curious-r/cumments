@@ -9,41 +9,46 @@ tables for API visibility; it never enforces a separate local roster.
 ## Why this design
 
 Governance must not conflate the platform operator with the owner of every
-site: a multi-site, multi-owner deployment would otherwise leave each site
-owner with a foreign high-privilege account permanently resident in their
-Space. Cumments keeps the two apart:
+site: a multi-site deployment would otherwise leave each site owner with a
+foreign high-privilege account permanently resident in their Space. Cumments
+keeps the two apart:
 
 - the AppService sender is the room creator and therefore the platform's
   backstop — it is never represented as a role;
-- each site has its own **owner**, **global-moderator** and per-room
-  **moderator** roles, encoded purely in Matrix power levels;
-- day-to-day management happens in a Matrix client; the API and Operator API
-  are just other writers to the same Matrix state;
+- **ownership** is a claim-token capability held by the site owner;
+- each site has **site admins** (100), **managers** (75) and per-room
+  **moderators** (50), encoded purely in Matrix power levels;
+- day-to-day management happens in a Matrix client or through the bot; the
+  API and Operator API are just other writers to the same Matrix state;
 - the backend projects power levels into `site_roles` / `room_roles` and
   reconciles them, but never enforces a local copy.
 
 ## Roles and levels
 
-One level ladder runs through both the Space and comment rooms:
-
 | Role | Space | Every comment room | Meaning |
 |---|---|---|---|
-| Site owner | 100 | 100 | Manages the Space and every room; may edit power levels |
-| Global Moderator | 75 | 75 | Site-level deputy, added automatically to every room the AppService creates |
+| Site Admin | 100 | 100 | Full site-level operational powers; may manage managers, moderators, stickers, secrets, retirement and upgrades |
+| Manager | 75 | 75 | Site-level deputy, replicated into every comment room; may appoint/revoke room moderators |
 | Room moderator | — | 50 | Appointed per room, in that room only |
 
+The site **owner** is not a Matrix role: the owner is whoever holds the
+site's claim token. Owners appoint and remove site admins and transfer
+ownership through the claim-token API. A site may have zero or more site
+admins; the owner's own Matrix account is usually the first one.
+
 `ban`, `kick`, `redact` and the `state_default` thresholds stay at Matrix's
-default 50, so global-moderators (75) and moderators (50) have the same practical
+default 50, so managers (75) and moderators (50) have the same practical
 moderation powers inside a room. The 75 level exists so site-managed roles
 can be told apart from per-room moderators, which is what the reconciliation
-pass keys on. If global-moderators ever need more power than moderators, the
-thresholds can move into the 50–75 gap without touching the ladder.
+pass keys on.
 
-The `m.room.power_levels` event itself is locked to 100 in both the Space and
-every comment room (`events: {"m.room.power_levels": 100}`), so only owners
-and the room creator (the AppService sender) can change governance. The
-AppService sender is the room creator: it is the platform's backstop and is
-not represented as a role.
+The `m.room.power_levels` event itself is locked to **100 in the Space** and
+**75 in comment rooms** (`events: {"m.room.power_levels": 75}` in rooms),
+and `m.room.tombstone` is locked to 150. Managers can therefore appoint room
+moderators exactly like a Matrix client, while only site admins and the room
+creator (the AppService sender) can change the Space. The AppService sender
+is the room creator: it is the platform's backstop and is not represented as
+a role.
 
 ### The reconciliation boundary: ≥ 75, never 50
 
@@ -51,56 +56,55 @@ The Space is where site-level roles are managed, but every comment room has
 its own copy of the power levels. A background pass keeps each room aligned
 with the Space:
 
-- entries at **≥ 75** (owner 100 + global-moderators 75) are replicated from the
-  Space into every room — new global-moderators are added, revoked ones removed;
+- entries at **≥ 75** (admins 100 + managers 75) are replicated from the
+  Space into every room — new managers are added, revoked ones removed;
 - entries at **50** are per-room moderators and are **never touched** by the
-  pass; the site owner manages them room by room.
+  pass; site admins and managers manage them room by room.
 
-This makes 75 the "global-moderator-only" slot: anyone holding 75 in a room must
-also be a Space global-moderator, otherwise the pass removes them from that room.
-To let someone help in just one room, appoint them as a 50 moderator.
+This makes 75 the "manager-only" slot: anyone holding 75 in a room must also
+be a Space manager, otherwise the pass removes them from that room. To let
+someone help in just one room, appoint them as a 50 moderator.
 
-Example: the Space has `{owner: 100, alice: 75}` and room A has
-`{owner: 100, alice: 75, bob: 50}` (bob moderates only room A):
+Example: the Space has `{admin: 100, alice: 75}` and room A has
+`{admin: 100, alice: 75, bob: 50}` (bob moderates only room A):
 
 | Change in the Space | Effect on room A | bob |
 |---|---|---|
-| `carol` becomes a global-moderator | `carol: 75` is added to A | untouched |
-| `alice`'s global-moderator role is revoked | `alice: 75` is removed from A | untouched |
-| bob's moderator role changes in A | no participation | changed by the owner directly |
+| `carol` becomes a manager | `carol: 75` is added to A | untouched |
+| `alice`'s manager role is revoked | `alice: 75` is removed from A | untouched |
+| bob's moderator role changes in A | no participation | changed by an admin/manager |
 
 The pass is triggered by the 60-second reconcile cycle, by an API write, and
 by Space power-level pushes; it is idempotent, retried on failure, and
 serialized per site. New rooms are seeded from the Space roster at creation
-time (owner + global-moderators, moderators start empty).
+time (admins + managers, moderators start empty).
 
 ## Day-to-day workflow
 
-1. The site owner registers their own Matrix account through the API (or
-   asks the platform operator to do it). The API returns a one-time
-   verification token because a Matrix ID cannot be provisioned ahead of
-   time and the ID must be proven to belong to the registrant.
+1. The site owner registers the site and appoints their own Matrix account
+   as the first **site admin** through the API (or asks the platform
+   operator to do it). The API returns a one-time verification token
+   because a Matrix ID cannot be provisioned ahead of time and the ID must
+   be proven to belong to the registrant.
 2. The target Matrix account sends `cumments-claim:<token>` as a direct
    message to the AppService bot in a 1:1 DM (the only two members are the
-   bot and the sender). Once the homeserver pushes that DM,
-   Cumments activates the claim and writes the role into Matrix power levels.
-3. Everything after that happens in a Matrix client: edit the Space's power
-   levels to add/remove global-moderators, and edit a comment room's power levels
-   to appoint its moderators.
-4. The homeserver pushes those state events to Cumments, which projects them
-   into the read model. The background pass keeps room-level site roles
-   aligned with the Space.
-5. New comment rooms are seeded from the Space's roster at creation time.
-
-The API offers the same operations for scripted/automated setups; registration
-stores a pending claim, verification happens through the DM token, and the
-normal projection brings the applied role back into the read model.
+   bot and the sender). Once the homeserver pushes that DM, Cumments
+   activates the claim and writes the role into Matrix power levels.
+3. Site admins manage the Space in a Matrix client or through the bot: they
+   add/remove managers, retire rooms, issue secrets and appoint room
+   moderators.
+4. Managers appoint and revoke room moderators through their Matrix client
+   or the bot; the room's power-levels threshold (75) lets them edit the
+   room exactly like a Matrix client would.
+5. The homeserver pushes state events to Cumments, which projects them into
+   the read model. The background pass keeps room-level site roles aligned
+   with the Space.
 
 ## Token-DM verification
 
-Every role registration — including the first owner — starts as a **pending
-claim** with a 24-hour expiry. The claim does not affect Matrix until the
-target MXID proves ownership by sending the exact text
+Every role registration — including the first site admin — starts as a
+**pending claim** with a 24-hour expiry. The claim does not affect Matrix
+until the target MXID proves ownership by sending the exact text
 `cumments-claim:<token>` to the AppService bot in a 1:1 DM (the only two
 members are the bot and the sender).
 
@@ -140,22 +144,24 @@ ignored. The bot never replies, so there is no forged callback surface.
 - The token is 32 random bytes, hex-encoded, one-time and short-lived (24 h).
 - `sender == target MXID` is guaranteed by the homeserver; Cumments cannot
   be tricked into activating a claim for another account.
-- Claim creation stays behind the site's claim token (or operator token) and the
-  governance rate limiter, and the number of pending claims is bounded.
+- Claim creation stays behind the site's claim token (or operator token) and
+  the governance rate limiter, and the number of pending claims is bounded.
 
 ## API
 
-Site-owner operations authenticate with the claim token returned at site
-registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
+Site-owner (claim-token) operations authenticate with the token returned at
+site registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 `/api/v1/operator/sites/{site_id}/...` and use the operator token.
 
 | Endpoint | Method | Payload | Effect |
 |---|---|---|---|
-| `/api/v1/sites/{site_id}/owners` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a site owner (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/global-moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a global-moderator (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Register/revoke a room moderator (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/roles` | GET | — | Projected owners and global-moderators |
-| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | GET | — | Projected room moderators |
+| `/api/v1/sites/{site_id}/admins` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a site admin (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/managers` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a manager (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a room moderator (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/roles` | GET | — | Projected admins and managers |
+| `/api/v1/sites/{site_id}/pages/{page_slug}/roles` | GET | — | Projected admins, managers and moderators |
+| `/api/v1/sites/{site_id}/ownership/transfer` | POST | `{ "user_id": ... }` | Start a two-phase ownership transfer |
+| `/api/v1/sites/{site_id}/claim-token/rotate` | POST | — | Owner rotates their own claim token |
 
 POST responses are
 `{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
@@ -163,18 +169,24 @@ DELETE responses are `{ "revoked": true, "user_id", "level" }` and are
 idempotent. Reads come from the projection and are therefore eventually
 consistent with Matrix.
 
-The CLI mirrors the owner and global-moderator operations locally
-(`cumments sites add-owner` / `remove-owner`, `add-global-moderator` /
-`remove-global-moderator`): `add-*` stores a pending claim and prints the
-`verify_token`, while `remove-*` revokes a pending claim. The CLI never
-writes power levels, so an already-applied role must be removed from a
-Matrix client or the Operator API (see [CLI](cli.md)).
+The CLI mirrors the admin and manager operations locally
+(`cumments sites add-admin` / `remove-admin`, `add-manager` /
+`remove-manager`) and can start a transfer with `cumments sites transfer-owner`:
+`add-*` stores a pending claim and prints the `verify_token`, while
+`remove-*` revokes a pending claim. The CLI never writes power levels, so an
+already-applied role must be removed from a Matrix client or the Operator
+API (see [CLI](cli.md)).
 
-## Platform ownership and recovery
+## Ownership transfer and recovery
 
-The Cumments operator never needs a personal Matrix account: the AppService
-sender is the creator of every Space and room, and the Operator API / CLI can
-drive it. To hand a site over, the operator rotates the claim token
-(`POST /api/v1/operator/sites/{site_id}/claim-token/rotate`), gives it to the new
-owner, and registers the new owner's Matrix ID via the operator mirror of the
-owners endpoint.
+The owner (claim-token holder) can start a two-phase transfer with
+`POST /api/v1/sites/{site_id}/ownership/transfer`. The target verifies the
+usual `cumments-claim` token; once verified, Cumments resets the site-admin
+roster to the new owner's verified account, rotates the claim token and
+delivers the new token in the bot DM. Old site admins are removed with the
+transfer.
+
+If the claim token is lost, the Cumments operator can rotate it through the
+Operator API and appoint a fresh site admin. The AppService sender is the
+creator of every Space and room, so it remains the last-resort backstop even
+when a site has no admins.

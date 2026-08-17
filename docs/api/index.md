@@ -8,7 +8,7 @@ The endpoint reference is split by resource area:
   locations and room info.
 - [Sites](sites.md) — self-service registration, verification and HMAC
   secret issuance.
-- [Governance](governance.md) — owners, global-moderators, room moderators, room
+- [Governance](governance.md) — site admins, managers, room moderators, room
   upgrades and the projected rosters.
 - [Visitors](visitors.md) — the visitor's self-service profile read.
 - [Operator](operator.md) — operator-only endpoints.
