@@ -298,6 +298,7 @@ pub(crate) async fn start_owner_transfer_handler(
     let (pending, transfer) = cumments_core::management::start_owner_transfer(
         state.store.as_ref(),
         state.store.as_ref(),
+        state.store.as_ref(),
         site_id.as_str(),
         &user_id,
     )

@@ -173,6 +173,7 @@ async fn transfer_owner(store: &cumments_store::DbStore, args: &SiteUserIdArg) -
     let (pending, transfer) = cumments_core::management::start_owner_transfer(
         store,
         store,
+        store,
         site_id.as_str(),
         &args.user_id,
     )

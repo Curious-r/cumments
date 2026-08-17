@@ -474,11 +474,13 @@ impl BotCommandRouter {
             }
             ["site", "register", id] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let driver = self.require_driver()?;
+                cumments_core::governance::validate_governance_user_id(&event.sender)
+                    .map_err(CommandError::error)?;
                 let token = generate_token();
                 self.site_auth_store
                     .register_site(site_id.as_str(), &token_hash(&token), true)
                     .await?;
-                let driver = self.require_driver()?;
                 cumments_core::management::bootstrap_first_site_admin(
                     self.role_claim_store.as_ref(),
                     driver,

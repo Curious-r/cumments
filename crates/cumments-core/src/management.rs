@@ -295,9 +295,20 @@ pub async fn bootstrap_first_site_admin(
 pub async fn start_owner_transfer(
     role_claims: &dyn RoleClaimStore,
     transfers: &dyn SiteTransferStore,
+    site_auth: &dyn SiteAuthStore,
     site_id: &str,
     user_id: &str,
 ) -> Result<(PendingRoleClaim, SiteTransfer), ManagementError> {
+    if site_auth.get_site_auth(site_id).await?.is_none() {
+        return Err(ManagementError::SiteNotApiRegistered(site_id.to_string()));
+    }
+    if let Some(previous) = transfers.find_pending_transfer(site_id).await?
+        && previous.target_mxid != user_id
+    {
+        role_claims
+            .revoke_role_claim(site_id, "", &previous.target_mxid, SITE_ADMIN_LEVEL)
+            .await?;
+    }
     let pending = create_role_claim(role_claims, site_id, "", user_id, SITE_ADMIN_LEVEL).await?;
     let transfer = transfers
         .upsert_pending_transfer(site_id, &pending.user_id, pending.expires_at)

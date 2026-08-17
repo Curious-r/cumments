@@ -2093,6 +2093,35 @@ async fn ownership_transfer_starts_pending_claim_and_transfer() {
         .expect("pending transfer")
         .expect("transfer exists");
     assert_eq!(transfer.target_mxid, "@new-owner:hs");
+
+    // Re-issuing for a different target revokes the previous pending claim.
+    let restarted = router
+        .oneshot(request_with_body(
+            Method::POST,
+            &format!("/api/v1/sites/{site_id}/ownership/transfer"),
+            None,
+            &[("x-cumments-claim-token", "claim-token".to_string())],
+            &serde_json::json!({ "user_id": "@other:hs" }).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(restarted.status(), StatusCode::OK);
+    assert!(
+        store
+            .pending_claims_for_user("@new-owner:hs")
+            .await
+            .expect("old pending claims")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .find_pending_transfer(site_id)
+            .await
+            .expect("pending transfer")
+            .expect("transfer exists")
+            .target_mxid,
+        "@other:hs"
+    );
 }
 
 #[tokio::test]
