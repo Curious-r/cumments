@@ -25,8 +25,23 @@ impl MatrixDriver for TestDriver {
     ) -> anyhow::Result<String> {
         unimplemented!("not used in this test")
     }
-    async fn create_site_space(&self, _site_id: &SiteId) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+    async fn create_site_space(&self, site_id: &SiteId) -> anyhow::Result<String> {
+        let space_id = format!("!space-{}:hs", site_id.as_str());
+        self.power_levels
+            .lock()
+            .await
+            .entry(space_id.clone())
+            .or_insert_with(|| {
+                serde_json::json!({
+                    "users": {},
+                    "events": {
+                        "m.room.power_levels": 100,
+                        "m.room.tombstone": 150,
+                    },
+                    "state_default": 50,
+                })
+            });
+        Ok(space_id)
     }
     async fn set_room_name(&self, _room_id: &str, _name: &str) -> anyhow::Result<()> {
         Ok(())

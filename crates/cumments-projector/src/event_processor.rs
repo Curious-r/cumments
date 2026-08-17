@@ -220,7 +220,7 @@ fn help_text() -> &'static str {
     "Cumments bot 命令：
 !cumments help
 !cumments sites list                     （实例管理员）
-!cumments site register <id>             公开注册站点
+!cumments site register <id>             公开注册站点并成为首个站点管理员
 !cumments site use <id>                  设置当前站点
 !cumments site <id> status               站点状态
 !cumments site <id> manager add|remove <mxid>
@@ -478,10 +478,20 @@ impl BotCommandRouter {
                 self.site_auth_store
                     .register_site(site_id.as_str(), &token_hash(&token), true)
                     .await?;
+                let driver = self.require_driver()?;
+                cumments_core::management::bootstrap_first_site_admin(
+                    self.role_claim_store.as_ref(),
+                    driver,
+                    &self.site_service,
+                    site_id.as_str(),
+                    &event.sender,
+                )
+                .await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "站点 {id} 已注册。claim token（只显示一次，请勿转发）：\n{token}"
+                        "站点 {id} 已注册，{} 已登记为本站第一个站点管理员。claim token（只显示一次，请勿转发）：\n{token}",
+                        event.sender
                     ),
                     site_id: Some(id.to_string()),
                 })

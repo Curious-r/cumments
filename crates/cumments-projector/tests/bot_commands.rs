@@ -590,7 +590,16 @@ async fn site_registration_is_public_self_service() {
             .await
             .expect("connect db"),
     );
-    let p = processor(store.clone(), private_members("@alice:hs"), Vec::new());
+    let driver = Arc::new(common::TestDriver::with_joined_members(private_members(
+        "@alice:hs",
+    )));
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
@@ -605,6 +614,25 @@ async fn site_registration_is_public_self_service() {
             .await
             .expect("site")
             .is_some()
+    );
+    let applied = store.list_applied_claims().await.expect("applied claims");
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].user_id, "@alice:hs");
+    assert_eq!(applied[0].level, SITE_ADMIN_LEVEL);
+    assert_eq!(
+        driver
+            .power_levels
+            .lock()
+            .await
+            .get("!space-my-blog:hs")
+            .unwrap()["users"]["@alice:hs"],
+        SITE_ADMIN_LEVEL
+    );
+    let replies = driver.replies.lock().await;
+    assert!(
+        replies
+            .iter()
+            .any(|(_, body)| body.contains("已登记为本站第一个站点管理员"))
     );
 }
 

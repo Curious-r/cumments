@@ -240,6 +240,55 @@ pub async fn create_role_claim(
     })
 }
 
+/// Bootstraps a freshly registered site through the bot's self-service path:
+/// registers the sender's own Matrix account as the first site admin and
+/// records an applied role claim for audit.
+///
+/// This is deliberately a bootstrap-only use case. Subsequent admin
+/// appointments and revocations remain owner-only operations behind the
+/// claim-token API; the bot never receives a "manage admins" command.
+pub async fn bootstrap_first_site_admin(
+    role_claims: &dyn RoleClaimStore,
+    driver: &dyn MatrixDriver,
+    site_service: &SiteService,
+    site_id: &str,
+    user_id: &str,
+) -> Result<(), ManagementError> {
+    let user_id = validate_governance_user_id(user_id)
+        .map_err(|e| ManagementError::InvalidUserId(e.to_string()))?;
+    let site_id = SiteId::new(site_id.to_string())
+        .map_err(|e| ManagementError::InvalidSiteId(e.to_string()))?;
+    let space_id = site_service.ensure_space(&site_id, driver).await?;
+
+    let verify_token = generate_token();
+    let claim = role_claims
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: site_id.as_str().to_string(),
+            room_id: String::new(),
+            user_id: user_id.clone(),
+            level: SITE_ADMIN_LEVEL,
+            token_hash: token_hash(&verify_token),
+            expires_at: Utc::now() + Duration::hours(ROLE_CLAIM_TTL_HOURS),
+        })
+        .await?;
+
+    set_role_level(driver, &space_id, &user_id, SITE_ADMIN_LEVEL, true).await?;
+    if let Err(error) = driver.invite_user(&space_id, &user_id).await {
+        warn!(
+            "first admin bootstrap: invite {} to {space_id} failed: {error:#}",
+            user_id
+        );
+    }
+
+    if !role_claims.mark_claim_activated(claim.id).await? {
+        return Err(ManagementError::Infra(anyhow::anyhow!(
+            "failed to activate first-admin bootstrap claim"
+        )));
+    }
+    role_claims.mark_claim_applied(claim.id).await?;
+    Ok(())
+}
+
 /// Starts a site ownership handover: creates a pending site-admin claim for
 /// the target and records a pending transfer with the same expiry. The
 /// claim-token holder (owner) remains in control until the target verifies.
