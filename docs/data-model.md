@@ -108,8 +108,8 @@ Author profiles are projected into `author_display_name` / `author_avatar_url`
 when a message is stored, but the public read path (message list, single
 message, SSE) overlays the author's current joined `m.room.member` profile.
 Visitors and Matrix-native authors behave identically: display data is Matrix
-profile state, never signed event content (see
-[visitor identity design](../misc/design/visitor-identity.md)). Members who
+profile state, never signed event content (see the
+[demo frontend](demo.md)). Members who
 left the room keep the stored projection as a fallback; a redacted member
 state keeps the membership but drops the profile, so reads show no profile,
 same as a cleared display name or avatar.
