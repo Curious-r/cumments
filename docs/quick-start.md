@@ -97,9 +97,13 @@ curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
   -d '{"username":"alice","password":"your-password","auth":{"type":"m.login.dummy"}}'
 ```
 
-The response contains the `user_id` (e.g. `@alice:localhost:8008`). Register
-the site through the Cumments API and bind that account as its first site
-admin:
+The response contains the `user_id` (e.g. `@alice:localhost:8008`).
+
+If alice is registering for herself, she can DM the bot
+`!cumments site register my-blog`: the bot registers the site, creates the
+Space and makes her the first site admin immediately. The API path below is
+the generic path — use it when the registrant and the first admin are
+different accounts:
 
 ```bash
 # Registration is mandatory before the site can receive comments. Pick an id

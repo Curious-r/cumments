@@ -81,12 +81,14 @@ time (admins + managers, moderators start empty).
 
 ## Day-to-day workflow
 
-1. The site owner registers the site and appoints their own Matrix account
-   as the first **site admin** through the API (or asks the platform
-   operator to do it). The API returns a one-time verification token
-   because a Matrix ID cannot be provisioned ahead of time and the ID must
-   be proven to belong to the registrant.
-2. The target Matrix account sends `cumments-claim:<token>` as a direct
+1. **Self-service**: the site owner sends `!cumments site register <id>`
+   in a DM with the bot. The bot registers the site, creates the Space and
+   writes the sender as the first **site admin** immediately. Alternatively,
+   register through the API and appoint any Matrix account as the first
+   admin (the API returns a one-time verification token because the
+   registrant and target are not necessarily the same account).
+2. For API/operator-appointed roles, the target Matrix account sends
+   `cumments-claim:<token>` as a direct
    message to the AppService bot in a 1:1 DM (the only two members are the
    bot and the sender). Once the homeserver pushes that DM, Cumments
    activates the claim and writes the role into Matrix power levels.
@@ -102,11 +104,14 @@ time (admins + managers, moderators start empty).
 
 ## Token-DM verification
 
-Every role registration — including the first site admin — starts as a
-**pending claim** with a 24-hour expiry. The claim does not affect Matrix
-until the target MXID proves ownership by sending the exact text
-`cumments-claim:<token>` to the AppService bot in a 1:1 DM (the only two
-members are the bot and the sender).
+Every role registration through the API/operator path — including the first
+site admin — starts as a **pending claim** with a 24-hour expiry. The claim
+does not affect Matrix until the target MXID proves ownership by sending the
+exact text `cumments-claim:<token>` to the AppService bot in a 1:1 DM (the
+only two members are the bot and the sender). The bot's self-service
+`site register` path skips this second step because the homeserver has
+already authenticated the sender in the DM; it records an applied claim
+instead.
 
 ### Claim lifecycle
 
