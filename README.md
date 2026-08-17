@@ -83,6 +83,10 @@ The full documentation is rendered at <https://curious-r.github.io/cumments/>.
 - [Demo](docs/demo.md) — backend-only positioning, demo page, identity,
   proof of work.
 
+## Inspiration
+
+This project is heavily inspired by [Cactus Comments](https://cactus.chat/). 
+
 ## License
 
 MIT

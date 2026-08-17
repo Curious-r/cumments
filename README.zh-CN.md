@@ -72,6 +72,10 @@ docker compose up -d
 - [开发](docs/development.md) —— 工具链、检查、从 main 构建镜像。
 - [演示页](docs/demo.md) —— 后端定位说明、演示页、身份、proof of work。
 
+## 灵感来源
+
+本项目受 [Cactus Comments](https://cactus.chat/) 启发. 
+
 ## License
 
 MIT
