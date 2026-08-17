@@ -873,7 +873,7 @@ impl AppServiceMatrixDriver {
             let alias_localpart =
                 comment_room_alias_localpart(site_id.as_str(), page_slug.as_str());
             // Site-managed roles are seeded from the Space so a new room opens
-            // with the same owner/global-moderator roster (per-room moderators start
+            // with the same admin/manager roster (per-room moderators start
             // empty and are appointed later).
             let space_power_levels = self
                 .get_power_levels(space_id)

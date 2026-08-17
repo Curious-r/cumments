@@ -167,7 +167,7 @@ impl ReconcilePass for SiteRetirementPass {
 mod tests {
     use super::*;
     use cumments_core::{
-        governance::{NewRoleClaim, OWNER_LEVEL},
+        governance::{NewRoleClaim, SITE_ADMIN_LEVEL},
         models::{PageSlug, SiteId},
         ports::{
             MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore, VirtualUserStore,
@@ -255,7 +255,7 @@ mod tests {
                 site_id: site.to_string(),
                 room_id: String::new(),
                 user_id: "@u:hs".to_string(),
-                level: OWNER_LEVEL,
+                level: SITE_ADMIN_LEVEL,
                 token_hash: "hash".to_string(),
                 expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             })
@@ -276,6 +276,7 @@ mod tests {
             message_store: store.clone(),
             virtual_user_store: store.clone(),
             site_auth_store: store.clone(),
+            site_transfer_store: store.clone(),
             driver: driver.clone(),
             site_service: Arc::new(SiteService::new(
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>

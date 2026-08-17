@@ -1180,7 +1180,7 @@ paths:
       summary: Retire a page's comment room
       operationId: retirePageRoom
       description: |
-        Site-owner entry point for removing a page's comment section: marks
+        Site-admin entry point for removing a page's comment section: marks
         the active comment room `Retired`, stopping new writes, and the
         background reconciler leaves the Matrix room (rename, alias removal,
         AS sender and virtual users) and clears local projections. The
@@ -1358,13 +1358,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/owners:
+  /api/v1/sites/{site_id}/admins:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
-      summary: Register or add a site owner
-      operationId: addSiteOwner
+      summary: Appoint a site admin
+      operationId: addSiteAdmin
       security:
         - claimToken: []
       requestBody:
@@ -1390,8 +1390,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Governance]
-      summary: Remove a site owner
-      operationId: removeSiteOwner
+      summary: Remove a site admin
+      operationId: removeSiteAdmin
       security:
         - claimToken: []
       parameters:
@@ -1411,13 +1411,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/global-moderators:
+  /api/v1/sites/{site_id}/managers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
-      summary: Add a site global-moderator
-      operationId: addSiteGlobalModerator
+      summary: Add a site manager
+      operationId: addSiteManager
       security:
         - claimToken: []
       requestBody:
@@ -1443,8 +1443,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Governance]
-      summary: Remove a site global-moderator
-      operationId: removeSiteGlobalModerator
+      summary: Remove a site manager
+      operationId: removeSiteManager
       security:
         - claimToken: []
       parameters:
@@ -1531,6 +1531,69 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/pages/{page_slug}/roles:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PageSlug"
+    get:
+      tags: [Governance]
+      summary: List projected roles for one comment room
+      operationId: listPageRoles
+      responses:
+        "200":
+          description: Projected room roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageRolesResponse"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/claim-token/rotate:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Governance]
+      summary: Rotate the site claim token (owner)
+      operationId: rotateSiteClaimToken
+      security:
+        - claimToken: []
+      responses:
+        "200":
+          description: New claim token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateClaimTokenResponse"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/sites/{site_id}/ownership/transfer:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Governance]
+      summary: Start a site ownership transfer
+      operationId: startSiteOwnershipTransfer
+      security:
+        - claimToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Pending owner claim and transfer record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnerTransferResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/roles:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1545,13 +1608,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SiteRolesResponse"
-  /api/v1/operator/sites/{site_id}/owners:
+  /api/v1/operator/sites/{site_id}/admins:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
-      summary: Register or add a site owner (operator)
-      operationId: operatorAddSiteOwner
+      summary: Appoint a site admin (operator)
+      operationId: operatorAddSiteAdmin
       security:
         - operatorToken: []
       requestBody:
@@ -1577,8 +1640,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Operator]
-      summary: Remove a site owner (operator)
-      operationId: operatorRemoveSiteOwner
+      summary: Remove a site admin (operator)
+      operationId: operatorRemoveSiteAdmin
       security:
         - operatorToken: []
       parameters:
@@ -1598,13 +1661,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/operator/sites/{site_id}/global-moderators:
+  /api/v1/operator/sites/{site_id}/managers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
-      summary: Add a site global-moderator (operator)
-      operationId: operatorAddSiteGlobalModerator
+      summary: Add a site manager (operator)
+      operationId: operatorAddSiteManager
       security:
         - operatorToken: []
       requestBody:
@@ -1630,8 +1693,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Operator]
-      summary: Remove a site global-moderator (operator)
-      operationId: operatorRemoveSiteGlobalModerator
+      summary: Remove a site manager (operator)
+      operationId: operatorRemoveSiteManager
       security:
         - operatorToken: []
       parameters:
@@ -1646,6 +1709,34 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/operator/sites/{site_id}/ownership/transfer:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Operator]
+      summary: Start a site ownership transfer (operator)
+      operationId: operatorStartSiteOwnershipTransfer
+      security:
+        - operatorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserIdRequest"
+      responses:
+        "200":
+          description: Pending owner claim and transfer record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnerTransferResponse"
+        "400":
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
@@ -2414,19 +2505,74 @@ components:
           type: array
           items:
             type: string
-          description: Non-empty when the revocation leaves a notable state (e.g. the last site owner was removed).
+          description: Non-empty when the revocation leaves a notable state (e.g. the last site admin was removed).
     SiteRolesResponse:
       type: object
-      required: [owners, global_moderators]
+      required: [admins, managers]
       properties:
-        owners:
+        admins:
           type: array
           items:
             type: string
-        global_moderators:
+        managers:
           type: array
           items:
             type: string
+    PageRolesResponse:
+      type: object
+      required: [site_id, page_slug, room_id, admins, managers, moderators]
+      properties:
+        site_id:
+          type: string
+        page_slug:
+          type: string
+        room_id:
+          type: string
+        admins:
+          type: array
+          items:
+            type: string
+        managers:
+          type: array
+          items:
+            type: string
+        moderators:
+          type: array
+          items:
+            type: string
+    OwnerTransferInfo:
+      type: object
+      required: [site_id, target_mxid, status, expires_at]
+      properties:
+        site_id:
+          type: string
+        target_mxid:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, expired, cancelled]
+        expires_at:
+          type: string
+          format: date-time
+    OwnerTransferResponse:
+      type: object
+      required: [pending, user_id, level, verify_token, expires_at, transfer]
+      properties:
+        pending:
+          type: boolean
+          enum: [true]
+        user_id:
+          type: string
+        level:
+          type: integer
+          enum: [100]
+        verify_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        transfer:
+          $ref: "#/components/schemas/OwnerTransferInfo"
     RoomModeratorsResponse:
       type: object
       required: [room_id, moderators]

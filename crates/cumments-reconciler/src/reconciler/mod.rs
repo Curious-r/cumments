@@ -15,7 +15,7 @@ use cumments_core::{
     models::{PageSlug, QuarantinedRoom, SiteId},
     ports::{
         GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
-        SiteStore, SubmissionStore, VirtualUserStore,
+        SiteStore, SiteTransferStore, SubmissionStore, VirtualUserStore,
     },
     site_service::SiteService,
 };
@@ -131,6 +131,7 @@ pub struct ReconcilerDeps {
     pub message_store: Arc<dyn MessageStore>,
     pub virtual_user_store: Arc<dyn VirtualUserStore>,
     pub site_auth_store: Arc<dyn SiteAuthStore>,
+    pub site_transfer_store: Arc<dyn SiteTransferStore>,
     pub driver: Arc<dyn MatrixDriver>,
     pub site_service: Arc<SiteService>,
 }

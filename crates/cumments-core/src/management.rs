@@ -4,11 +4,13 @@
 //! operation is implemented exactly once here on top of the core ports.
 
 use crate::governance::{
-    GLOBAL_MODERATOR_LEVEL, MODERATOR_LEVEL, NewRoleClaim, SITE_ROLE_MIN_LEVEL, role_entries,
-    set_role_level, validate_governance_user_id,
+    MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, SITE_ADMIN_LEVEL, SITE_ROLE_MIN_LEVEL,
+    SiteTransfer, role_entries, set_role_level, validate_governance_user_id,
 };
 use crate::models::{PageSlug, RoomStatus, SiteId};
-use crate::ports::{GovernanceStore, MatrixDriver, RegistryStore, RoleClaimStore, SiteAuthStore};
+use crate::ports::{
+    GovernanceStore, MatrixDriver, RegistryStore, RoleClaimStore, SiteAuthStore, SiteTransferStore,
+};
 use crate::site_auth::{SiteAuthPolicy, generate_token, token_hash};
 use crate::site_service::SiteService;
 use chrono::{Duration, Utc};
@@ -33,7 +35,7 @@ pub enum ManagementError {
     #[error("no pending claim or applied role for this user and level")]
     RoleNotFound,
     #[error(
-        "this user holds a site-level role; manage them through the owners or global-moderators endpoint"
+        "this user holds a site-level role; manage them through the admins or managers endpoint"
     )]
     SiteLevelRoleConflict,
     #[error("room {0} is not in the registry")]
@@ -48,6 +50,8 @@ pub enum ManagementError {
     RoomVersionNotNewer(String, String),
     #[error("room {0} has no m.room.create event")]
     RoomWithoutCreateEvent(String),
+    #[error("site {0} is not API-registered; ownership transfer requires a claim token")]
+    SiteNotApiRegistered(String),
     #[error(transparent)]
     Infra(#[from] anyhow::Error),
 }
@@ -236,6 +240,81 @@ pub async fn create_role_claim(
     })
 }
 
+/// Starts a site ownership handover: creates a pending site-admin claim for
+/// the target and records a pending transfer with the same expiry. The
+/// claim-token holder (owner) remains in control until the target verifies.
+pub async fn start_owner_transfer(
+    role_claims: &dyn RoleClaimStore,
+    transfers: &dyn SiteTransferStore,
+    site_id: &str,
+    user_id: &str,
+) -> Result<(PendingRoleClaim, SiteTransfer), ManagementError> {
+    let pending = create_role_claim(role_claims, site_id, "", user_id, SITE_ADMIN_LEVEL).await?;
+    let transfer = transfers
+        .upsert_pending_transfer(site_id, &pending.user_id, pending.expires_at)
+        .await?;
+    Ok((pending, transfer))
+}
+
+/// Completes a verified ownership transfer: resets the site-admin roster to
+/// the new owner's verified account, rotates the claim token, and delivers
+/// the new token through the target's claim DM.
+///
+/// Returns `false` when no matching pending transfer exists (the caller
+/// should leave the claim applied as a plain admin registration).
+pub async fn complete_owner_transfer(
+    transfers: &dyn SiteTransferStore,
+    site_auth: &dyn SiteAuthStore,
+    driver: &dyn MatrixDriver,
+    site_service: &SiteService,
+    site_id: &str,
+    target_mxid: &str,
+    dm_room_id: &str,
+) -> Result<bool, ManagementError> {
+    let Some(transfer) = transfers.find_pending_transfer(site_id).await? else {
+        return Ok(false);
+    };
+    if transfer.target_mxid != target_mxid {
+        return Ok(false);
+    }
+
+    let site_id = SiteId::new(site_id.to_string())
+        .map_err(|e| ManagementError::InvalidSiteId(e.to_string()))?;
+    let space_id = site_service.ensure_space(&site_id, driver).await?;
+    let power_levels = driver
+        .get_room_power_levels(&space_id)
+        .await?
+        .unwrap_or_else(|| serde_json::json!({}));
+    let sender = driver.sender_user_id().unwrap_or_default();
+    for role in role_entries(&power_levels, SITE_ADMIN_LEVEL) {
+        if role.user_id == target_mxid || role.user_id == sender {
+            continue;
+        }
+        set_role_level(driver, &space_id, &role.user_id, SITE_ADMIN_LEVEL, false).await?;
+    }
+
+    let new_token = rotate_claim_token(site_auth, site_id.as_str())
+        .await?
+        .ok_or_else(|| ManagementError::SiteNotApiRegistered(site_id.as_str().to_string()))?;
+    if let Err(error) = driver
+        .send_bot_message(
+            dm_room_id,
+            &format!("新 claim token（只显示一次，请勿转发）：\n{new_token}"),
+        )
+        .await
+    {
+        warn!(
+            "owner transfer: failed to deliver new claim token to {} in {dm_room_id}: {error:#}",
+            transfer.target_mxid
+        );
+    }
+    transfers
+        .complete_transfer(site_id.as_str(), transfer.id)
+        .await?;
+
+    Ok(true)
+}
+
 /// Removes a site-level role: cancels a pending claim, or removes an applied
 /// role from the Space power levels (the governance pass then propagates the
 /// removal into every comment room).
@@ -277,7 +356,7 @@ pub async fn remove_site_role(
 }
 
 /// Removes an already-applied room moderator from a room's power levels.
-/// Site-level roles (>= global-moderator) are rejected so this cannot fight the
+/// Site-level roles (>= manager) are rejected so this cannot fight the
 /// governance sync pass.
 pub async fn remove_room_moderator(
     store: &dyn RoleClaimStore,
@@ -314,7 +393,7 @@ pub async fn remove_room_moderator(
         .find(|role| role.user_id == user_id)
         .map(|role| role.level)
         .unwrap_or(0);
-    if current_level >= GLOBAL_MODERATOR_LEVEL {
+    if current_level >= MANAGER_LEVEL {
         return Err(ManagementError::SiteLevelRoleConflict);
     }
 

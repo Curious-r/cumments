@@ -95,18 +95,21 @@ pub enum SitesCommand {
     /// Stop writes and retire the site's Matrix Space and rooms
     #[command(name = "retire")]
     Retire(RetireSiteArgs),
-    /// Start a pending owner claim and print its one-time verify token
-    #[command(name = "add-owner")]
-    AddOwner(SiteUserIdArg),
-    /// Revoke a pending owner claim (applied roles are managed in Matrix)
-    #[command(name = "remove-owner")]
-    RemoveOwner(SiteUserIdArg),
-    /// Start a pending global-moderator claim and print its one-time verify token
-    #[command(name = "add-global-moderator")]
-    AddGlobalModerator(SiteUserIdArg),
-    /// Revoke a pending global-moderator claim (applied roles are managed in Matrix)
-    #[command(name = "remove-global-moderator")]
-    RemoveGlobalModerator(SiteUserIdArg),
+    /// Start a pending site-admin claim and print its one-time verify token
+    #[command(name = "add-admin")]
+    AddAdmin(SiteUserIdArg),
+    /// Revoke a pending site-admin claim (applied roles are managed in Matrix)
+    #[command(name = "remove-admin")]
+    RemoveAdmin(SiteUserIdArg),
+    /// Start a pending manager claim and print its one-time verify token
+    #[command(name = "add-manager")]
+    AddManager(SiteUserIdArg),
+    /// Revoke a pending manager claim (applied roles are managed in Matrix)
+    #[command(name = "remove-manager")]
+    RemoveManager(SiteUserIdArg),
+    /// Start an ownership transfer; the target must verify the claim token
+    #[command(name = "transfer-owner")]
+    TransferOwner(SiteUserIdArg),
 }
 
 #[derive(clap::Args, Debug)]

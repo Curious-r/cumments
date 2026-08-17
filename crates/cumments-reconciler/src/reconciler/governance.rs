@@ -9,9 +9,10 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::governance::{
-    RoleEntry, SITE_ROLE_MIN_LEVEL, ensure_governance_locks, reconcile_site_roles, role_entries,
-    set_role_level,
+    RoleEntry, SITE_ADMIN_LEVEL, SITE_ROLE_MIN_LEVEL, ensure_space_governance_locks,
+    reconcile_site_roles, role_entries, set_role_level,
 };
+use cumments_core::management::complete_owner_transfer;
 use cumments_core::models::SiteId;
 use tracing::{info, warn};
 
@@ -31,6 +32,10 @@ impl ClaimsPass {
         // Leave claim DMs whose claims expired before their rows are purged.
         self.leave_unneeded_claim_dms().await;
         self.deps.role_claim_store.purge_expired_claims().await?;
+        self.deps
+            .site_transfer_store
+            .expire_pending_transfers()
+            .await?;
         let claims = self
             .deps
             .role_claim_store
@@ -68,6 +73,33 @@ impl ClaimsPass {
                 .mark_claim_applied(claim.id)
                 .await?;
             applied += 1;
+
+            if claim.room_id.is_empty()
+                && claim.level == SITE_ADMIN_LEVEL
+                && let Some(dm_room_id) = claim.dm_room_id.clone()
+            {
+                match complete_owner_transfer(
+                    self.deps.site_transfer_store.as_ref(),
+                    self.deps.site_auth_store.as_ref(),
+                    self.deps.driver.as_ref(),
+                    &self.deps.site_service,
+                    &claim.site_id,
+                    &claim.user_id,
+                    &dm_room_id,
+                )
+                .await
+                {
+                    Ok(true) => info!(
+                        "owner transfer completed for site {} -> {}",
+                        claim.site_id, claim.user_id
+                    ),
+                    Ok(false) => {}
+                    Err(error) => warn!(
+                        "owner transfer completion failed for site {} -> {}: {error:#}",
+                        claim.site_id, claim.user_id
+                    ),
+                }
+            }
         }
         self.reconcile_applied_claims().await?;
         self.leave_unneeded_claim_dms().await;
@@ -150,7 +182,7 @@ impl ReconcilePass for ClaimsPass {
     }
 }
 
-/// Converges site-managed roles (owner 100 / global-moderator 75) from each site
+/// Converges site-managed roles (admin 100 / manager 75) from each site
 /// Space into its active comment rooms.
 pub struct GovernanceSyncPass {
     deps: Arc<ReconcilerDeps>,
@@ -183,7 +215,7 @@ impl GovernanceSyncPass {
             };
 
             // Normalize legacy Spaces that predate the governance lock.
-            let locked = ensure_governance_locks(&space_power_levels);
+            let locked = ensure_space_governance_locks(&space_power_levels);
             if locked != space_power_levels {
                 self.deps
                     .driver
@@ -255,5 +287,165 @@ impl ReconcilePass for GovernanceSyncPass {
 
     async fn run(&self) -> Result<u64> {
         self.reconcile().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cumments_core::{
+        governance::{NewRoleClaim, RoleEntry, SITE_ADMIN_LEVEL},
+        ports::{RoleClaimStore, SiteAuthStore, SiteTransferStore},
+        site_auth::token_hash,
+        site_service::SiteService,
+    };
+    use cumments_store::DbStore;
+    use cumments_test_utils::TestDriver;
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    fn test_db_url(name: &str) -> String {
+        let path = std::path::Path::new("/tmp").join(format!(
+            "cumments-governance-test-{}-{}.db",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::fs::File::create(&path).expect("create db file");
+        format!("sqlite://{}", path.display())
+    }
+
+    #[tokio::test]
+    async fn claims_pass_completes_transfer_and_resets_admins() {
+        let store = Arc::new(
+            DbStore::connect(&test_db_url("transfer"))
+                .await
+                .expect("connect db"),
+        );
+        let site_id = "transfer-site";
+        store
+            .register_site(site_id, &token_hash("old-token"), false)
+            .await
+            .expect("register site");
+        store
+            .ensure_site_exists(site_id, "!space:hs")
+            .await
+            .expect("attach space");
+
+        store
+            .upsert_role_claim(&NewRoleClaim {
+                site_id: site_id.to_string(),
+                room_id: String::new(),
+                user_id: "@new-admin:hs".to_string(),
+                level: SITE_ADMIN_LEVEL,
+                token_hash: "verify-hash".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            })
+            .await
+            .expect("claim");
+        let claim = store
+            .pending_claims_for_user("@new-admin:hs")
+            .await
+            .expect("pending")
+            .remove(0);
+        store
+            .set_claim_dm_room_for_user("@new-admin:hs", "!dm:hs")
+            .await
+            .expect("dm room");
+        assert!(store.mark_claim_activated(claim.id).await.unwrap());
+        store
+            .upsert_pending_transfer(
+                site_id,
+                "@new-admin:hs",
+                chrono::Utc::now() + chrono::Duration::hours(1),
+            )
+            .await
+            .expect("transfer");
+        store
+            .replace_site_roles(
+                site_id,
+                &[
+                    RoleEntry {
+                        user_id: "@old-admin:hs".into(),
+                        level: SITE_ADMIN_LEVEL,
+                    },
+                    RoleEntry {
+                        user_id: "@new-admin:hs".into(),
+                        level: SITE_ADMIN_LEVEL,
+                    },
+                ],
+            )
+            .await
+            .expect("project roles");
+
+        let driver = Arc::new(TestDriver::new().with_power_levels(
+            "!space:hs",
+            serde_json::json!({
+                "users": {
+                    "@old-admin:hs": SITE_ADMIN_LEVEL,
+                    "@manager:hs": 75,
+                },
+                "events": {
+                    "m.room.power_levels": 100,
+                    "m.room.tombstone": 150,
+                },
+                "state_default": 50,
+            }),
+        ));
+        let deps = Arc::new(ReconcilerDeps {
+            submission_store: store.clone(),
+            registry_store: store.clone(),
+            site_store: store.clone(),
+            role_claim_store: store.clone(),
+            governance_store: store.clone(),
+            message_store: store.clone(),
+            virtual_user_store: store.clone(),
+            site_auth_store: store.clone(),
+            site_transfer_store: store.clone(),
+            driver: driver.clone(),
+            site_service: Arc::new(SiteService::new(
+                store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+            )),
+        });
+        let pass = ClaimsPass::new(
+            deps,
+            PassConfig {
+                name: "claims-transfer-test",
+                interval: std::time::Duration::from_secs(60),
+                wakeup: Arc::new(Notify::new()),
+            },
+        );
+        assert_eq!(pass.run().await.expect("claims pass"), 1);
+
+        let pl = driver
+            .power_levels
+            .lock()
+            .await
+            .get("!space:hs")
+            .cloned()
+            .expect("space power levels");
+        assert_eq!(pl["users"]["@new-admin:hs"], SITE_ADMIN_LEVEL);
+        assert!(pl["users"].get("@old-admin:hs").is_none());
+        assert_eq!(pl["users"]["@manager:hs"], 75);
+        assert!(
+            store
+                .find_pending_transfer(site_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let auth = store
+            .get_site_auth(site_id)
+            .await
+            .expect("site auth")
+            .expect("exists");
+        let new_hash = auth.claim_token_hash.expect("rotated token hash");
+        assert_ne!(new_hash, token_hash("old-token"));
+        let replies = driver.replies.lock().await;
+        assert!(
+            replies
+                .iter()
+                .any(|(room, body)| room == "!dm:hs" && body.contains("新 claim token"))
+        );
     }
 }

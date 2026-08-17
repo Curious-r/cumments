@@ -4,7 +4,7 @@ use super::args::{ExportConfigArgs, RetireSiteArgs, SiteUserIdArg, SitesArgs, Si
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
-use cumments_core::governance::{GLOBAL_MODERATOR_LEVEL, OWNER_LEVEL};
+use cumments_core::governance::{MANAGER_LEVEL, SITE_ADMIN_LEVEL};
 use cumments_core::models::SiteId;
 use cumments_core::operator::{
     OperatorListQuery, config_snippet_toml, list_operator_sites, operator_site,
@@ -151,18 +151,50 @@ pub async fn handle_sites_command(
             eprintln!("Keep the new claim token private; it proves ownership of this site.");
             Ok(())
         }
-        SitesCommand::AddOwner(args) => add_role_claim(store, args, OWNER_LEVEL).await,
-        SitesCommand::AddGlobalModerator(args) => {
-            add_role_claim(store, args, GLOBAL_MODERATOR_LEVEL).await
+        SitesCommand::AddAdmin(args) => add_role_claim(store, args, SITE_ADMIN_LEVEL).await,
+        SitesCommand::AddManager(args) => add_role_claim(store, args, MANAGER_LEVEL).await,
+        SitesCommand::RemoveAdmin(args) => {
+            remove_role_claim(store, driver, site_service, args, SITE_ADMIN_LEVEL).await
         }
-        SitesCommand::RemoveOwner(args) => {
-            remove_role_claim(store, driver, site_service, args, OWNER_LEVEL).await
+        SitesCommand::RemoveManager(args) => {
+            remove_role_claim(store, driver, site_service, args, MANAGER_LEVEL).await
         }
-        SitesCommand::RemoveGlobalModerator(args) => {
-            remove_role_claim(store, driver, site_service, args, GLOBAL_MODERATOR_LEVEL).await
-        }
+        SitesCommand::TransferOwner(args) => transfer_owner(store, args).await,
         SitesCommand::Retire(args) => retire_site(store, policy, args).await,
     }
+}
+
+/// Starts an ownership transfer through the shared core use case and prints
+/// the one-time verification token exactly like the other role claims.
+async fn transfer_owner(store: &cumments_store::DbStore, args: &SiteUserIdArg) -> Result<()> {
+    let site_id =
+        SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+    require_api_registered_site(store, site_id.as_str()).await?;
+    let (pending, transfer) = cumments_core::management::start_owner_transfer(
+        store,
+        store,
+        site_id.as_str(),
+        &args.user_id,
+    )
+    .await?;
+    print_json(&serde_json::json!({
+        "pending": true,
+        "user_id": pending.user_id,
+        "level": pending.level,
+        "verify_token": pending.verify_token,
+        "expires_at": pending.expires_at,
+        "transfer": {
+            "site_id": site_id.as_str(),
+            "target_mxid": transfer.target_mxid,
+            "status": transfer.status.as_str(),
+            "expires_at": transfer.expires_at,
+        },
+    }))?;
+    eprintln!(
+        "The target MXID must DM `cumments-claim:{}` to the AS bot to complete the transfer.",
+        pending.verify_token
+    );
+    Ok(())
 }
 
 /// Prints the JSON-wrapped config snippet (or raw TOML with `--raw`).
@@ -459,14 +491,14 @@ mod tests {
             .expect("register site");
 
         let add = SitesArgs {
-            command: SitesCommand::AddOwner(SiteUserIdArg {
+            command: SitesCommand::AddAdmin(SiteUserIdArg {
                 site_id: "my-blog".to_string(),
                 user_id: "@owner:hs".to_string(),
             }),
         };
         run_sites(&store, &policy, &add)
             .await
-            .expect("add owner claim");
+            .expect("add admin claim");
         assert_eq!(
             store
                 .pending_claims_for_user("@owner:hs")
@@ -477,14 +509,14 @@ mod tests {
         );
 
         let remove = SitesArgs {
-            command: SitesCommand::RemoveOwner(SiteUserIdArg {
+            command: SitesCommand::RemoveAdmin(SiteUserIdArg {
                 site_id: "my-blog".to_string(),
                 user_id: "@owner:hs".to_string(),
             }),
         };
         run_sites(&store, &policy, &remove)
             .await
-            .expect("remove owner claim");
+            .expect("remove admin claim");
         assert!(
             store
                 .pending_claims_for_user("@owner:hs")
@@ -495,7 +527,7 @@ mod tests {
 
         // Applied roles are Matrix state, which the CLI does not write.
         let missing = SitesArgs {
-            command: SitesCommand::RemoveOwner(SiteUserIdArg {
+            command: SitesCommand::RemoveAdmin(SiteUserIdArg {
                 site_id: "my-blog".to_string(),
                 user_id: "@owner:hs".to_string(),
             }),

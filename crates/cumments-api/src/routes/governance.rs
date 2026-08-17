@@ -1,4 +1,4 @@
-//! Site governance endpoints: owners, global-moderators and room moderators.
+//! Site governance endpoints: admins, managers and room moderators.
 //!
 //! Role registration is always token-DM verified: the API stores a pending
 //! claim and returns a one-time token; the target MXID sends the token to the
@@ -18,8 +18,7 @@ use axum::{
 use chrono::Utc;
 use cumments_core::{
     governance::{
-        GLOBAL_MODERATOR_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, RoleEntry,
-        validate_governance_user_id,
+        MANAGER_LEVEL, MODERATOR_LEVEL, RoleEntry, SITE_ADMIN_LEVEL, validate_governance_user_id,
     },
     management::ManagementError,
     models::{PageSlug, SiteId},
@@ -36,8 +35,8 @@ pub struct UserIdRequest {
 
 #[derive(Debug, Serialize)]
 pub struct SiteRolesResponse {
-    pub owners: Vec<String>,
-    pub global_moderators: Vec<String>,
+    pub admins: Vec<String>,
+    pub managers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +66,16 @@ pub struct RoomModeratorsResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct PageRolesResponse {
+    pub site_id: String,
+    pub page_slug: String,
+    pub room_id: String,
+    pub admins: Vec<String>,
+    pub managers: Vec<String>,
+    pub moderators: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PendingRoleResponse {
     pub pending: bool,
     pub user_id: String,
@@ -76,12 +85,30 @@ pub struct PendingRoleResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct OwnerTransferInfo {
+    pub site_id: String,
+    pub target_mxid: String,
+    pub status: &'static str,
+    pub expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OwnerTransferResponse {
+    pub pending: bool,
+    pub user_id: String,
+    pub level: i64,
+    pub verify_token: String,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub transfer: OwnerTransferInfo,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RevokedRoleResponse {
     pub revoked: bool,
     pub user_id: String,
     pub level: i64,
     /// Non-empty only when the revocation leaves the site in a notable state
-    /// (e.g. the last owner was removed).
+    /// (e.g. the last site admin was removed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -181,14 +208,14 @@ async fn room_id_for(
 
 fn site_roles_response(roles: Vec<RoleEntry>) -> SiteRolesResponse {
     SiteRolesResponse {
-        owners: roles
+        admins: roles
             .iter()
-            .filter(|role| role.level == OWNER_LEVEL)
+            .filter(|role| role.level == SITE_ADMIN_LEVEL)
             .map(|role| role.user_id.clone())
             .collect(),
-        global_moderators: roles
+        managers: roles
             .iter()
-            .filter(|role| role.level == GLOBAL_MODERATOR_LEVEL)
+            .filter(|role| role.level == MANAGER_LEVEL)
             .map(|role| role.user_id.clone())
             .collect(),
     }
@@ -210,6 +237,7 @@ fn map_management_error(error: ManagementError) -> AppError {
         ManagementError::SiteLevelRoleConflict => AppError::Conflict(error.to_string()),
         ManagementError::RoomNotRegistered(message) => AppError::NotFound(message),
         ManagementError::RoomNotActive(message) => AppError::Conflict(message),
+        ManagementError::SiteNotApiRegistered(message) => AppError::Conflict(message),
         ManagementError::Infra(error) => {
             AppError::Internal(format!("management operation failed: {error}"))
         }
@@ -242,7 +270,7 @@ async fn create_role_claim(
     })
 }
 
-pub(crate) async fn add_owner_handler(
+pub(crate) async fn add_admin_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -252,12 +280,45 @@ pub(crate) async fn add_owner_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&req.user_id)?;
-    create_role_claim(&state, &site_id, "", &user_id, OWNER_LEVEL)
+    create_role_claim(&state, &site_id, "", &user_id, SITE_ADMIN_LEVEL)
         .await
         .map(Json)
 }
 
-pub(crate) async fn remove_owner_handler(
+pub(crate) async fn start_owner_transfer_handler(
+    State(state): State<ApiState>,
+    Path(site_id): Path<String>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<UserIdRequest>,
+) -> Result<Json<OwnerTransferResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    rate_limited(&state, &headers, Some(connect.0))?;
+    let user_id = parse_user_id(&req.user_id)?;
+    let (pending, transfer) = cumments_core::management::start_owner_transfer(
+        state.store.as_ref(),
+        state.store.as_ref(),
+        site_id.as_str(),
+        &user_id,
+    )
+    .await
+    .map_err(map_management_error)?;
+    Ok(Json(OwnerTransferResponse {
+        pending: true,
+        user_id: pending.user_id,
+        level: pending.level,
+        verify_token: pending.verify_token,
+        expires_at: pending.expires_at,
+        transfer: OwnerTransferInfo {
+            site_id: site_id.as_str().to_string(),
+            target_mxid: transfer.target_mxid,
+            status: transfer.status.as_str(),
+            expires_at: transfer.expires_at,
+        },
+    }))
+}
+
+pub(crate) async fn remove_admin_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -274,7 +335,7 @@ pub(crate) async fn remove_owner_handler(
         &state.site_service,
         site_id.as_str(),
         &user_id,
-        OWNER_LEVEL,
+        SITE_ADMIN_LEVEL,
     )
     .await
     .map_err(map_management_error)?;
@@ -287,16 +348,16 @@ pub(crate) async fn remove_owner_handler(
         .list_site_roles(site_id.as_str())
         .await
         .map_err(|e| AppError::Internal(format!("failed to list site roles: {e}")))?;
-    warnings.extend(owner_removal_warnings(&roles));
+    warnings.extend(admin_removal_warnings(&roles));
     Ok(Json(RevokedRoleResponse {
         revoked: true,
         user_id,
-        level: OWNER_LEVEL,
+        level: SITE_ADMIN_LEVEL,
         warnings,
     }))
 }
 
-pub(crate) async fn add_global_moderator_handler(
+pub(crate) async fn add_manager_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -306,12 +367,12 @@ pub(crate) async fn add_global_moderator_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&req.user_id)?;
-    create_role_claim(&state, &site_id, "", &user_id, GLOBAL_MODERATOR_LEVEL)
+    create_role_claim(&state, &site_id, "", &user_id, MANAGER_LEVEL)
         .await
         .map(Json)
 }
 
-pub(crate) async fn remove_global_moderator_handler(
+pub(crate) async fn remove_manager_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -328,7 +389,7 @@ pub(crate) async fn remove_global_moderator_handler(
         &state.site_service,
         site_id.as_str(),
         &user_id,
-        GLOBAL_MODERATOR_LEVEL,
+        MANAGER_LEVEL,
     )
     .await
     .map_err(map_management_error)?;
@@ -338,7 +399,7 @@ pub(crate) async fn remove_global_moderator_handler(
     Ok(Json(RevokedRoleResponse {
         revoked: true,
         user_id,
-        level: GLOBAL_MODERATOR_LEVEL,
+        level: MANAGER_LEVEL,
         warnings: Vec::new(),
     }))
 }
@@ -455,6 +516,46 @@ pub(crate) async fn list_room_moderators_handler(
     }))
 }
 
+pub(crate) async fn list_page_roles_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path((site_id, page_slug)): Path<(String, String)>,
+) -> Result<Json<PageRolesResponse>, AppError> {
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+    let room_id = room_id_for(&state, &site_id, &page_slug).await?;
+    let roles = state
+        .store
+        .list_room_roles(&room_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list room roles: {e}")))?;
+    let mut response = PageRolesResponse {
+        site_id: site_id.as_str().to_string(),
+        page_slug: page_slug.as_str().to_string(),
+        room_id: room_id.clone(),
+        admins: Vec::new(),
+        managers: Vec::new(),
+        moderators: Vec::new(),
+    };
+    for role in roles {
+        match role.level {
+            SITE_ADMIN_LEVEL => response.admins.push(role.user_id),
+            MANAGER_LEVEL => response.managers.push(role.user_id),
+            MODERATOR_LEVEL => response.moderators.push(role.user_id),
+            _ => {}
+        }
+    }
+    Ok(Json(response))
+}
+
 /// Starts site retirement: writes are rejected immediately, then the
 /// reconciler retires the Matrix Space/rooms and clears local projections.
 pub(crate) async fn retire_site_handler(
@@ -538,15 +639,16 @@ pub(crate) async fn upgrade_page_room_handler(
 }
 
 /// Warnings attached to a role-revocation response. Currently only the
-/// "last site owner" case is notable: the site stays operational because the
-/// AppService sender remains the backstop, but no human can manage it.
-fn owner_removal_warnings(roles: &[RoleEntry]) -> Vec<String> {
-    if roles.iter().any(|role| role.level == OWNER_LEVEL) {
+/// "last site admin" case is notable: the site stays owned by the claim-token
+/// holder and operational because the AppService sender remains the backstop,
+/// but no Matrix account can manage it until an admin is appointed.
+fn admin_removal_warnings(roles: &[RoleEntry]) -> Vec<String> {
+    if roles.iter().any(|role| role.level == SITE_ADMIN_LEVEL) {
         Vec::new()
     } else {
         vec![
-            "last site owner revoked; the site has no human owner and the AppService \
-             sender remains the only backstop"
+            "last site admin removed; the site is still owned by the claim-token \
+             holder but has no Matrix admin until one is appointed"
                 .to_string(),
         ]
     }
@@ -557,20 +659,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owner_removal_warns_only_when_no_owner_remains() {
-        assert!(owner_removal_warnings(&[]).len() == 1);
+    fn admin_removal_warns_only_when_no_admin_remains() {
+        assert!(admin_removal_warnings(&[]).len() == 1);
         assert!(
-            owner_removal_warnings(&[RoleEntry {
-                user_id: "@co:hs".into(),
-                level: GLOBAL_MODERATOR_LEVEL,
+            admin_removal_warnings(&[RoleEntry {
+                user_id: "@manager:hs".into(),
+                level: MANAGER_LEVEL,
             }])
             .len()
                 == 1
         );
         assert!(
-            owner_removal_warnings(&[RoleEntry {
-                user_id: "@owner:hs".into(),
-                level: OWNER_LEVEL,
+            admin_removal_warnings(&[RoleEntry {
+                user_id: "@admin:hs".into(),
+                level: SITE_ADMIN_LEVEL,
             }])
             .is_empty()
         );

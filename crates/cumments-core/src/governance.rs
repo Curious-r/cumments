@@ -22,25 +22,30 @@ pub const TOMBSTONE_EVENT_TYPE: &str = "m.room.tombstone";
 /// The power level required to send `m.room.tombstone`. Cumments uses the
 /// room version 12 recommended value 150: only the room creator (the AS bot,
 /// who has infinite power in v12) or a user explicitly boosted to 150 can
-/// upgrade a room. Site owners stay at 100 and therefore cannot self-upgrade
+/// upgrade a room. Site admins stay at 100 and therefore cannot self-upgrade
 /// from a Matrix client — doing so would make them the replacement room's
 /// creator with immutable infinite power.
 pub const TOMBSTONE_LOCK_LEVEL: i64 = 150;
 
 /// Level ladder for site governance roles.
-pub const OWNER_LEVEL: i64 = 100;
-pub const GLOBAL_MODERATOR_LEVEL: i64 = 75;
+pub const SITE_ADMIN_LEVEL: i64 = 100;
+pub const MANAGER_LEVEL: i64 = 75;
 pub const MODERATOR_LEVEL: i64 = 50;
 
-/// The level required to edit `m.room.power_levels` itself. Only the site
-/// owner and the room creator (AS sender) reach it.
-pub const ROLE_LOCK_LEVEL: i64 = 100;
+/// The level required to edit `m.room.power_levels` in the site Space. Only
+/// site admins (100) and the room creator (AS sender) reach it.
+pub const SPACE_ROLE_LOCK_LEVEL: i64 = SITE_ADMIN_LEVEL;
+
+/// The level required to edit `m.room.power_levels` in a comment room.
+/// Managers (75) may appoint and revoke room moderators exactly like a
+/// Matrix client would; the governance sync pass pins this threshold back.
+pub const ROOM_ROLE_LOCK_LEVEL: i64 = MANAGER_LEVEL;
 
 /// Entries at or above this level are site-managed: they are replicated from
 /// the site Space into every comment room, and the governance sync loop
 /// reconciles them. Per-room moderators (50) live below this line and are
 /// never touched by site-level reconciliation.
-pub const SITE_ROLE_MIN_LEVEL: i64 = GLOBAL_MODERATOR_LEVEL;
+pub const SITE_ROLE_MIN_LEVEL: i64 = MANAGER_LEVEL;
 
 /// One projected governance entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +100,7 @@ impl FromStr for RoleClaimStatus {
 pub struct RoleClaim {
     pub id: i64,
     pub site_id: String,
-    /// Empty string for site-level roles (owner/global-moderator); otherwise the
+    /// Empty string for site-level roles (admin/manager); otherwise the
     /// comment room this moderator claim targets.
     pub room_id: String,
     /// The DM room the AppService bot joined to verify this claim, if any.
@@ -110,6 +115,57 @@ pub struct RoleClaim {
     pub created_at: DateTime<Utc>,
     pub activated_at: Option<DateTime<Utc>>,
     pub applied_at: Option<DateTime<Utc>>,
+}
+
+/// Lifecycle of a site ownership transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteTransferStatus {
+    /// The target has not verified the pending owner claim yet.
+    Pending,
+    /// The target verified and received the rotated claim token.
+    Completed,
+    /// The pending claim expired before verification.
+    Expired,
+    /// The transfer was superseded by a newer pending transfer.
+    Cancelled,
+}
+
+impl SiteTransferStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Expired => "expired",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl FromStr for SiteTransferStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "completed" => Ok(Self::Completed),
+            "expired" => Ok(Self::Expired),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(format!("unknown site transfer status `{other}`")),
+        }
+    }
+}
+
+/// A site ownership transfer: process state between the owner starting a
+/// handover and the target MXID verifying the pending claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteTransfer {
+    pub id: i64,
+    pub site_id: String,
+    pub target_mxid: String,
+    pub status: SiteTransferStatus,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 /// Payload for creating or rotating a role claim.
@@ -206,8 +262,8 @@ pub fn role_entries(power_levels: &Value, min_level: i64) -> Vec<RoleEntry> {
 
 /// Initial power levels for a site Space: the creator entry (pre-v12 rooms)
 /// plus the governance locks. `state_default` is lowered to the moderator
-/// level so site global-moderators can manage Space structure, but the power-levels
-/// event stays owner-only and the tombstone stays bot-only (150). In
+/// level so site managers can manage Space structure, but the power-levels
+/// event stays admin-only and the tombstone stays bot-only (150). In
 /// pre-v12 rooms (where the bot has no implicit creator power) the sender
 /// entry is set to the tombstone lock level so the bot can later upgrade the
 /// room; v12 rooms omit the entry and rely on implicit creator power.
@@ -222,7 +278,7 @@ pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) ->
     serde_json::json!({
         "users": users,
         "events": {
-            POWER_LEVELS_EVENT_TYPE: ROLE_LOCK_LEVEL,
+            POWER_LEVELS_EVENT_TYPE: SPACE_ROLE_LOCK_LEVEL,
             TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
         },
         "state_default": MODERATOR_LEVEL,
@@ -230,8 +286,8 @@ pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) ->
 }
 
 /// Initial power levels for a comment room, seeded from the site Space: every
-/// site-managed entry (owner and global-moderators) is replicated, per-room
-/// moderators start empty, and the power-levels event is owner-locked while
+/// site-managed entry (admins and managers) is replicated, per-room
+/// moderators start empty, and the power-levels event is manager-locked while
 /// the tombstone is bot-only (150). The sender entry (pre-v12 rooms) is the
 /// tombstone lock level so the bot can upgrade the room later.
 pub fn initial_comment_room_power_levels(
@@ -254,7 +310,7 @@ pub fn initial_comment_room_power_levels(
     serde_json::json!({
         "users": users,
         "events": {
-            POWER_LEVELS_EVENT_TYPE: ROLE_LOCK_LEVEL,
+            POWER_LEVELS_EVENT_TYPE: ROOM_ROLE_LOCK_LEVEL,
             TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
         },
     })
@@ -262,7 +318,8 @@ pub fn initial_comment_room_power_levels(
 
 /// Replaces every site-managed entry (≥ [`SITE_ROLE_MIN_LEVEL`]) with the
 /// given Space-derived list, while preserving the sender's own entry and all
-/// per-room moderators (< 75). Also guarantees the governance locks.
+/// per-room moderators (< [`MANAGER_LEVEL`]). Also guarantees the room
+/// governance locks.
 pub fn reconcile_site_roles(
     power_levels: &Value,
     sender_user_id: &str,
@@ -281,16 +338,27 @@ pub fn reconcile_site_roles(
             users.insert(role.user_id.clone(), Value::from(role.level));
         }
     }
-    ensure_governance_locks(&updated)
+    ensure_room_governance_locks(&updated)
 }
 
-/// Guarantees that `m.room.power_levels` is owner-locked and
+/// Guarantees that `m.room.power_levels` in a site Space is admin-locked and
 /// `m.room.tombstone` is bot-only (150). Room version 12 requires the
 /// tombstone threshold to be explicit and above `state_default`; without
 /// this, a 50-level member could tombstone/upgrade a room, and with only
-/// owner level a 100-level site owner could self-upgrade and inherit creator
+/// admin level a 100-level site admin could self-upgrade and inherit creator
 /// power.
-pub fn ensure_governance_locks(power_levels: &Value) -> Value {
+pub fn ensure_space_governance_locks(power_levels: &Value) -> Value {
+    ensure_power_levels_locked(power_levels, SPACE_ROLE_LOCK_LEVEL)
+}
+
+/// Same as [`ensure_space_governance_locks`], but pins the power-levels
+/// event to [`ROOM_ROLE_LOCK_LEVEL`] so managers can appoint room moderators
+/// without being able to touch site-level roles.
+pub fn ensure_room_governance_locks(power_levels: &Value) -> Value {
+    ensure_power_levels_locked(power_levels, ROOM_ROLE_LOCK_LEVEL)
+}
+
+fn ensure_power_levels_locked(power_levels: &Value, power_levels_lock: i64) -> Value {
     let mut updated = power_levels.clone();
     let events = updated
         .as_object_mut()
@@ -301,7 +369,7 @@ pub fn ensure_governance_locks(power_levels: &Value) -> Value {
         .expect("events is an object");
     events.insert(
         POWER_LEVELS_EVENT_TYPE.to_string(),
-        Value::from(ROLE_LOCK_LEVEL),
+        Value::from(power_levels_lock),
     );
     events.insert(
         TOMBSTONE_EVENT_TYPE.to_string(),
@@ -386,7 +454,7 @@ mod tests {
 
     fn space() -> Value {
         json!({
-            "users": { "@owner:hs": 100, "@co:hs": 75 },
+            "users": { "@admin:hs": 100, "@manager:hs": 75 },
             "events": { POWER_LEVELS_EVENT_TYPE: 100 },
             "state_default": 50,
         })
@@ -420,20 +488,26 @@ mod tests {
     #[test]
     fn comment_room_seeding_replicates_site_roles_and_locks() {
         let seeded = initial_comment_room_power_levels(&space(), "@bot:hs", true);
-        assert_eq!(seeded["users"]["@owner:hs"], 100);
-        assert_eq!(seeded["users"]["@co:hs"], 75);
+        assert_eq!(seeded["users"]["@admin:hs"], 100);
+        assert_eq!(seeded["users"]["@manager:hs"], 75);
         assert_eq!(
             seeded["users"]["@bot:hs"], TOMBSTONE_LOCK_LEVEL,
             "pre-v12 rooms must give the bot tombstone power"
         );
-        assert_eq!(seeded["events"][POWER_LEVELS_EVENT_TYPE], 100);
+        assert_eq!(
+            seeded["events"][POWER_LEVELS_EVENT_TYPE],
+            ROOM_ROLE_LOCK_LEVEL
+        );
         assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
     }
 
     #[test]
     fn space_seeding_locks_tombstone_above_state_default() {
         let seeded = initial_space_power_levels("@bot:hs", true);
-        assert_eq!(seeded["events"][POWER_LEVELS_EVENT_TYPE], 100);
+        assert_eq!(
+            seeded["events"][POWER_LEVELS_EVENT_TYPE],
+            SPACE_ROLE_LOCK_LEVEL
+        );
         assert_eq!(seeded["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
         assert!(
             seeded["events"][TOMBSTONE_EVENT_TYPE].as_i64().unwrap()
@@ -446,8 +520,8 @@ mod tests {
         let room = json!({
             "users": {
                 "@bot:hs": 100,
-                "@old-owner:hs": 100,
-                "@old-co:hs": 75,
+                "@old-admin:hs": 100,
+                "@old-manager:hs": 75,
                 "@mod:hs": 50,
             }
         });
@@ -455,7 +529,7 @@ mod tests {
             &room,
             "@bot:hs",
             &[RoleEntry {
-                user_id: "@new-owner:hs".into(),
+                user_id: "@new-admin:hs".into(),
                 level: 100,
             }],
         );
@@ -465,10 +539,10 @@ mod tests {
                 "users": {
                     "@bot:hs": 100,
                     "@mod:hs": 50,
-                    "@new-owner:hs": 100,
+                    "@new-admin:hs": 100,
                 },
                 "events": {
-                    POWER_LEVELS_EVENT_TYPE: 100,
+                    POWER_LEVELS_EVENT_TYPE: ROOM_ROLE_LOCK_LEVEL,
                     TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
                 },
             })
@@ -476,16 +550,58 @@ mod tests {
     }
 
     #[test]
-    fn governance_locks_add_missing_tombstone_threshold() {
+    fn space_locks_pin_admin_threshold_and_tombstone() {
         let legacy = json!({
-            "users": { "@owner:hs": 100 },
+            "users": { "@admin:hs": 100 },
+            "events": { POWER_LEVELS_EVENT_TYPE: 50 },
+            "state_default": 50,
+        });
+        let locked = ensure_space_governance_locks(&legacy);
+        assert_eq!(
+            locked["events"][POWER_LEVELS_EVENT_TYPE],
+            SPACE_ROLE_LOCK_LEVEL
+        );
+        assert_eq!(locked["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
+        // Idempotent: re-running keeps both locks.
+        assert_eq!(ensure_space_governance_locks(&locked), locked);
+    }
+
+    #[test]
+    fn room_locks_pin_manager_threshold_and_tombstone() {
+        let legacy = json!({
+            "users": { "@manager:hs": 75 },
             "events": { POWER_LEVELS_EVENT_TYPE: 100 },
             "state_default": 50,
         });
-        let locked = ensure_governance_locks(&legacy);
+        let locked = ensure_room_governance_locks(&legacy);
+        assert_eq!(
+            locked["events"][POWER_LEVELS_EVENT_TYPE],
+            ROOM_ROLE_LOCK_LEVEL
+        );
         assert_eq!(locked["events"][TOMBSTONE_EVENT_TYPE], TOMBSTONE_LOCK_LEVEL);
-        // Idempotent: re-running keeps both locks.
-        assert_eq!(ensure_governance_locks(&locked), locked);
+        assert_eq!(ensure_room_governance_locks(&locked), locked);
+    }
+
+    #[test]
+    fn reconcile_converges_legacy_room_pl_lock_from_100_to_75() {
+        let room = json!({
+            "users": { "@admin:hs": 100, "@mod:hs": 50 },
+            "events": { POWER_LEVELS_EVENT_TYPE: 100 },
+            "state_default": 50,
+        });
+        let reconciled = reconcile_site_roles(
+            &room,
+            "@bot:hs",
+            &[RoleEntry {
+                user_id: "@admin:hs".into(),
+                level: SITE_ADMIN_LEVEL,
+            }],
+        );
+        assert_eq!(
+            reconciled["events"][POWER_LEVELS_EVENT_TYPE],
+            ROOM_ROLE_LOCK_LEVEL
+        );
+        assert_eq!(reconciled["users"]["@mod:hs"], MODERATOR_LEVEL);
     }
 
     #[test]
@@ -508,23 +624,27 @@ mod tests {
     #[test]
     fn can_send_state_event_follows_spec_thresholds() {
         let pl = json!({
-            "users": { "@owner:hs": 100, "@co:hs": 75, "@visitor:hs": 0 },
+            "users": { "@admin:hs": 100, "@manager:hs": 75, "@visitor:hs": 0 },
             "events": { POWER_LEVELS_EVENT_TYPE: 100 },
             "state_default": 50,
             "users_default": 0,
         });
         assert!(can_send_state_event(
             &pl,
-            "@owner:hs",
+            "@admin:hs",
             POWER_LEVELS_EVENT_TYPE
         ));
         assert!(!can_send_state_event(
             &pl,
-            "@co:hs",
+            "@manager:hs",
             POWER_LEVELS_EVENT_TYPE
         ));
         // Stickers use state_default unless overridden.
-        assert!(can_send_state_event(&pl, "@co:hs", "m.room.image_pack"));
+        assert!(can_send_state_event(
+            &pl,
+            "@manager:hs",
+            "m.room.image_pack"
+        ));
         assert!(!can_send_state_event(
             &pl,
             "@visitor:hs",
@@ -542,7 +662,7 @@ mod tests {
             "@stranger:hs",
             "m.room.image_pack"
         ));
-        // Above-owner levels can send governance too.
+        // Above-admin levels can send governance too.
         let elevated = json!({ "users": { "@admin:hs": 150 } });
         assert!(can_send_state_event(
             &elevated,
@@ -555,11 +675,11 @@ mod tests {
             "@anyone:hs",
             "m.room.image_pack"
         ));
-        // A 50-level moderator and a 100-level site owner cannot send the
+        // A 50-level moderator and a 100-level site admin cannot send the
         // tombstone; only a user at the 150 lock level (the bot creator, or
         // someone explicitly boosted) can.
         let locked = json!({
-            "users": { "@owner:hs": 100, "@mod:hs": 50, "@elevated:hs": 150 },
+            "users": { "@admin:hs": 100, "@mod:hs": 50, "@elevated:hs": 150 },
             "events": {
                 POWER_LEVELS_EVENT_TYPE: 100,
                 TOMBSTONE_EVENT_TYPE: TOMBSTONE_LOCK_LEVEL,
@@ -573,7 +693,7 @@ mod tests {
         ));
         assert!(!can_send_state_event(
             &locked,
-            "@owner:hs",
+            "@admin:hs",
             TOMBSTONE_EVENT_TYPE
         ));
         assert!(can_send_state_event(

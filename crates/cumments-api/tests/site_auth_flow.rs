@@ -10,14 +10,14 @@ use axum::{
     routing::{get, post},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
-use cumments_core::governance::{NewRoleClaim, OWNER_LEVEL, RoleEntry};
+use cumments_core::governance::{NewRoleClaim, RoleEntry, SITE_ADMIN_LEVEL};
 use cumments_core::identity::{
     derive_visitor_id_from_public_key, post_signature_message, signature_message,
 };
 use cumments_core::models::{PageSlug, SiteId, VisitorProfile};
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
-    StickerPackStore,
+    SiteTransferStore, StickerPackStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, sha256_hex, site_request_signature, token_hash,
@@ -1812,18 +1812,18 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         .expect("register site");
     let router = cumments_api::build_router(state);
 
-    let owner_uri = format!("/api/v1/sites/{site_id}/owners");
-    let owner_body = serde_json::json!({ "user_id": "@owner:hs" }).to_string();
+    let admin_uri = format!("/api/v1/sites/{site_id}/admins");
+    let admin_body = serde_json::json!({ "user_id": "@owner:hs" }).to_string();
 
     // Missing claim token is rejected before any Matrix write.
     let denied = router
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            &owner_uri,
+            &admin_uri,
             None,
             &[],
-            &owner_body,
+            &admin_body,
         ))
         .await
         .expect("call router");
@@ -1835,10 +1835,10 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            &owner_uri,
+            &admin_uri,
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
-            &owner_body,
+            &admin_body,
         ))
         .await
         .expect("call router");
@@ -1881,7 +1881,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
             .clone()
             .oneshot(request_with_body(
                 Method::POST,
-                &owner_uri,
+                &admin_uri,
                 None,
                 &[("x-cumments-claim-token", "claim-token".to_string())],
                 &serde_json::json!({ "user_id": raw }).to_string(),
@@ -1892,30 +1892,30 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     }
 
     // The operator mirror works without a claim token.
-    let co_uri = format!("/api/v1/operator/sites/{site_id}/global-moderators");
-    let added_co = router
+    let manager_uri = format!("/api/v1/operator/sites/{site_id}/managers");
+    let added_manager = router
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            &co_uri,
+            &manager_uri,
             None,
             &[("authorization", "Bearer test-operator-token".to_string())],
-            &serde_json::json!({ "user_id": "@co:hs" }).to_string(),
+            &serde_json::json!({ "user_id": "@manager:hs" }).to_string(),
         ))
         .await
         .expect("call router");
-    assert_eq!(added_co.status(), StatusCode::OK);
-    let co_json: serde_json::Value =
-        serde_json::from_str(&body_text(added_co).await).expect("parse response");
-    assert_eq!(co_json["pending"], serde_json::json!(true));
-    assert_eq!(co_json["level"], 75);
+    assert_eq!(added_manager.status(), StatusCode::OK);
+    let manager_json: serde_json::Value =
+        serde_json::from_str(&body_text(added_manager).await).expect("parse response");
+    assert_eq!(manager_json["pending"], serde_json::json!(true));
+    assert_eq!(manager_json["level"], 75);
 
     // Deleting a pending claim revokes it without touching Matrix.
     let removed = router
         .clone()
         .oneshot(request_with_body(
             Method::DELETE,
-            &format!("{owner_uri}?user_id=%40owner%3Ahs"),
+            &format!("{admin_uri}?user_id=%40owner%3Ahs"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
             "",
@@ -1944,7 +1944,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
                     level: 100,
                 },
                 RoleEntry {
-                    user_id: "@co:hs".into(),
+                    user_id: "@manager:hs".into(),
                     level: 75,
                 },
             ],
@@ -1964,15 +1964,12 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     assert_eq!(listed.status(), StatusCode::OK);
     let listed_json: serde_json::Value =
         serde_json::from_str(&body_text(listed).await).expect("parse response");
-    assert_eq!(listed_json["owners"], serde_json::json!(["@owner:hs"]));
-    assert_eq!(
-        listed_json["global_moderators"],
-        serde_json::json!(["@co:hs"])
-    );
+    assert_eq!(listed_json["admins"], serde_json::json!(["@owner:hs"]));
+    assert_eq!(listed_json["managers"], serde_json::json!(["@manager:hs"]));
 }
 
 #[tokio::test]
-async fn applied_owner_revocation_marks_the_claim_revoked() {
+async fn applied_admin_revocation_marks_the_claim_revoked() {
     let (state, store) = test_state(
         "applied-revoke",
         SiteVerificationPolicy::Required,
@@ -1991,7 +1988,7 @@ async fn applied_owner_revocation_marks_the_claim_revoked() {
             site_id: site_id.to_string(),
             room_id: String::new(),
             user_id: "@owner:hs".to_string(),
-            level: OWNER_LEVEL,
+            level: SITE_ADMIN_LEVEL,
             token_hash: "verify-hash".to_string(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         })
@@ -2017,18 +2014,18 @@ async fn applied_owner_revocation_marks_the_claim_revoked() {
             site_id,
             &[RoleEntry {
                 user_id: "@owner:hs".into(),
-                level: OWNER_LEVEL,
+                level: SITE_ADMIN_LEVEL,
             }],
         )
         .await
-        .expect("project owner");
+        .expect("project admin");
 
     let router = cumments_api::build_router(state);
     let removed = router
         .clone()
         .oneshot(request_with_body(
             Method::DELETE,
-            &format!("/api/v1/sites/{site_id}/owners?user_id=%40owner%3Ahs"),
+            &format!("/api/v1/sites/{site_id}/admins?user_id=%40owner%3Ahs"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
             "",
@@ -2046,6 +2043,153 @@ async fn applied_owner_revocation_marks_the_claim_revoked() {
             .expect("applied claims")
             .is_empty(),
         "the applied claim row must be marked revoked after the Matrix write"
+    );
+}
+
+#[tokio::test]
+async fn ownership_transfer_starts_pending_claim_and_transfer() {
+    let (state, store) = test_state(
+        "ownership-transfer",
+        SiteVerificationPolicy::Required,
+        Some("test-operator-token"),
+    )
+    .await;
+    let site_id = "transfer-site";
+    store
+        .register_site(site_id, &token_hash("claim-token"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+
+    let started = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            &format!("/api/v1/sites/{site_id}/ownership/transfer"),
+            None,
+            &[("x-cumments-claim-token", "claim-token".to_string())],
+            &serde_json::json!({ "user_id": "@new-owner:hs" }).to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(started.status(), StatusCode::OK);
+    let started_json: serde_json::Value =
+        serde_json::from_str(&body_text(started).await).expect("parse response");
+    assert_eq!(started_json["pending"], serde_json::json!(true));
+    assert_eq!(started_json["user_id"], "@new-owner:hs");
+    assert_eq!(started_json["transfer"]["status"], "pending");
+    assert_eq!(started_json["transfer"]["target_mxid"], "@new-owner:hs");
+    assert_eq!(
+        store
+            .pending_claims_for_user("@new-owner:hs")
+            .await
+            .expect("pending claims")
+            .len(),
+        1
+    );
+    let transfer = store
+        .find_pending_transfer(site_id)
+        .await
+        .expect("pending transfer")
+        .expect("transfer exists");
+    assert_eq!(transfer.target_mxid, "@new-owner:hs");
+}
+
+#[tokio::test]
+async fn page_roles_endpoint_returns_projected_ladder() {
+    let (state, store) = test_state(
+        "page-roles",
+        SiteVerificationPolicy::Required,
+        Some("test-operator-token"),
+    )
+    .await;
+    let site_id = "page-roles-site";
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+    store
+        .register_site(site_id, &token_hash("claim-token"), false)
+        .await
+        .expect("register site");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::new(site_id.to_string()).unwrap(),
+            &page_slug,
+        )
+        .await
+        .expect("register room");
+    store
+        .replace_room_roles(
+            "!room:hs",
+            &[
+                cumments_core::governance::RoleEntry {
+                    user_id: "@admin:hs".into(),
+                    level: 100,
+                },
+                cumments_core::governance::RoleEntry {
+                    user_id: "@manager:hs".into(),
+                    level: 75,
+                },
+                cumments_core::governance::RoleEntry {
+                    user_id: "@mod:hs".into(),
+                    level: 50,
+                },
+            ],
+        )
+        .await
+        .expect("project room roles");
+    let router = cumments_api::build_router(state);
+    let listed = router
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/sites/{site_id}/pages/hello/roles"),
+            None,
+            &[],
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let json: serde_json::Value =
+        serde_json::from_str(&body_text(listed).await).expect("parse response");
+    assert_eq!(json["admins"], serde_json::json!(["@admin:hs"]));
+    assert_eq!(json["managers"], serde_json::json!(["@manager:hs"]));
+    assert_eq!(json["moderators"], serde_json::json!(["@mod:hs"]));
+}
+
+#[tokio::test]
+async fn site_owner_can_rotate_claim_token() {
+    let (state, store) = test_state(
+        "owner-rotate",
+        SiteVerificationPolicy::Required,
+        Some("test-operator-token"),
+    )
+    .await;
+    let site_id = "owner-rotate-site";
+    store
+        .register_site(site_id, &token_hash("old-token"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+    let rotated = router
+        .oneshot(request_with_body(
+            Method::POST,
+            &format!("/api/v1/sites/{site_id}/claim-token/rotate"),
+            None,
+            &[("x-cumments-claim-token", "old-token".to_string())],
+            "",
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let json: serde_json::Value =
+        serde_json::from_str(&body_text(rotated).await).expect("parse response");
+    assert_ne!(json["claim_token"], "old-token");
+    assert_eq!(
+        store
+            .get_claim_token_hash(site_id)
+            .await
+            .expect("token hash")
+            .expect("exists"),
+        token_hash(json["claim_token"].as_str().unwrap())
     );
 }
 
@@ -2334,7 +2478,7 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
     assert_eq!(write.status(), StatusCode::GONE);
     assert!(body_text(write).await.contains("site-retired"));
 
-    // The claim token was cleared, so a second owner attempt is unauthenticated.
+    // The claim token was cleared, so a second retire attempt is unauthenticated.
     let again = router
         .clone()
         .oneshot(request(

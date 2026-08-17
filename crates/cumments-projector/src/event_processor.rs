@@ -16,7 +16,7 @@ use anyhow::Result;
 use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
-        GLOBAL_MODERATOR_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry,
+        MANAGER_LEVEL, MODERATOR_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry, SITE_ADMIN_LEVEL,
         SITE_ROLE_MIN_LEVEL, can_send_state_event, is_as_managed_user, role_entries,
     },
     identity::{post_signature_message, signature_message},
@@ -223,10 +223,12 @@ fn help_text() -> &'static str {
 !cumments site register <id>             公开注册站点
 !cumments site use <id>                  设置当前站点
 !cumments site <id> status               站点状态
-!cumments site <id> global-moderator add|remove <mxid>
+!cumments site <id> manager add|remove <mxid>
+!cumments site <id> manager resign --confirm
 !cumments site <id> page <slug> moderator add|remove <mxid>
-!cumments site <id> page <slug> upgrade <version>（站主）
-!cumments site <id> page <slug> retire --confirm（站主）
+!cumments site <id> page <slug> moderator resign --confirm
+!cumments site <id> page <slug> upgrade <version>（站点管理员）
+!cumments site <id> page <slug> retire --confirm（站点管理员）
 !cumments site <id> stickers list
 !cumments site <id> sticker add <pack_id> <shortcode> <mxc> [body...]
 !cumments site <id> sticker remove <pack_id> <shortcode> --confirm
@@ -484,36 +486,36 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "global-moderator", "add", mxid] => {
+            ["site", id, "manager", "add", mxid] => {
                 self.require_site_access(event, id).await?;
                 let pending = cumments_core::management::create_role_claim(
                     self.role_claim_store.as_ref(),
                     id,
                     "",
                     mxid,
-                    GLOBAL_MODERATOR_LEVEL,
+                    MANAGER_LEVEL,
                 )
                 .await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "已为 {mxid} 创建总版主认领。请对方给 bot 发送：\ncumments-claim:{}",
+                        "已为 {mxid} 创建主管认领。请对方给 bot 发送：\ncumments-claim:{}",
                         pending.verify_token
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "global-moderator", "remove", mxid] => {
+            ["site", id, "manager", "remove", mxid] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id} 的总版主 {mxid}？请回复：\n!cumments site {id} global-moderator remove {mxid} --confirm"
+                        "确认移除 {id} 的主管 {mxid}？请回复：\n!cumments site {id} manager remove {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "global-moderator", "remove", mxid, "--confirm"] => {
+            ["site", id, "manager", "remove", mxid, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let driver = self.require_driver()?;
                 let removal = cumments_core::management::remove_site_role(
@@ -523,7 +525,7 @@ impl BotCommandRouter {
                     &self.site_service,
                     id,
                     mxid,
-                    GLOBAL_MODERATOR_LEVEL,
+                    MANAGER_LEVEL,
                 )
                 .await?;
                 if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
@@ -531,12 +533,39 @@ impl BotCommandRouter {
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已移除 {id} 的总版主 {mxid}。"),
+                    reply: format!("已移除 {id} 的主管 {mxid}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "manager", "resign"] => Ok(CommandOutcome {
+                invalid: false,
+                reply: format!(
+                    "确认辞去 {id} 的主管？此操作只移除权限，不会让你离开房间。请回复：\n!cumments site {id} manager resign --confirm"
+                ),
+                site_id: Some(id.to_string()),
+            }),
+            ["site", id, "manager", "resign", "--confirm"] => {
+                let driver = self.require_driver()?;
+                let removal = cumments_core::management::remove_site_role(
+                    self.role_claim_store.as_ref(),
+                    self.governance_store.as_ref(),
+                    driver,
+                    &self.site_service,
+                    id,
+                    &event.sender,
+                    MANAGER_LEVEL,
+                )
+                .await?;
+                if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+                    self.governance_notify.notify_one();
+                }
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: "已辞去主管权限。".to_string(),
                     site_id: Some(id.to_string()),
                 })
             }
             ["site", id, "page", slug, "moderator", "add", mxid] => {
-                self.require_site_access(event, id).await?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -544,6 +573,7 @@ impl BotCommandRouter {
                     .get_registered_room(&site_id, &page_slug)
                     .await?
                     .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                self.require_room_state_permission(event, &room_id).await?;
                 let pending = cumments_core::management::create_role_claim(
                     self.role_claim_store.as_ref(),
                     id,
@@ -562,7 +592,14 @@ impl BotCommandRouter {
                 })
             }
             ["site", id, "page", slug, "moderator", "remove", mxid] => {
-                self.require_site_access(event, id).await?;
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let room_id = self
+                    .registry_store
+                    .get_registered_room(&site_id, &page_slug)
+                    .await?
+                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                self.require_room_state_permission(event, &room_id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
@@ -581,7 +618,6 @@ impl BotCommandRouter {
                 mxid,
                 "--confirm",
             ] => {
-                self.require_site_access(event, id).await?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -589,6 +625,7 @@ impl BotCommandRouter {
                     .get_registered_room(&site_id, &page_slug)
                     .await?
                     .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                self.require_room_state_permission(event, &room_id).await?;
                 let removal = cumments_core::management::remove_room_moderator(
                     self.role_claim_store.as_ref(),
                     self.governance_store.as_ref(),
@@ -604,6 +641,48 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("已移除 {id}/{slug} 的版主 {mxid}。"),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "page", slug, "moderator", "resign"] => {
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let room_id = self
+                    .registry_store
+                    .get_registered_room(&site_id, &page_slug)
+                    .await?
+                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: format!(
+                        "确认辞去 {id}/{slug}（{room_id}）的版主？此操作只移除权限，不会让你离开房间。请回复：\n!cumments site {id} page {slug} moderator resign --confirm"
+                    ),
+                    site_id: Some(id.to_string()),
+                })
+            }
+            ["site", id, "page", slug, "moderator", "resign", "--confirm"] => {
+                let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let room_id = self
+                    .registry_store
+                    .get_registered_room(&site_id, &page_slug)
+                    .await?
+                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                let removal = cumments_core::management::remove_room_moderator(
+                    self.role_claim_store.as_ref(),
+                    self.governance_store.as_ref(),
+                    self.require_driver()?,
+                    id,
+                    &room_id,
+                    &event.sender,
+                )
+                .await?;
+                if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
+                    self.governance_notify.notify_one();
+                }
+                Ok(CommandOutcome {
+                    invalid: false,
+                    reply: "已辞去版主权限。".to_string(),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -982,9 +1061,37 @@ impl BotCommandRouter {
         Ok(())
     }
 
+    /// Room-level governance check: the sender must be able to write
+    /// `m.room.power_levels` in the comment room itself. With the room
+    /// threshold pinned to 75 this matches the Matrix client exactly:
+    /// managers and admins can appoint moderators, 50-level moderators
+    /// cannot.
+    async fn require_room_state_permission(
+        &self,
+        event: &ParsedRoomMessage,
+        room_id: &str,
+    ) -> Result<(), CommandError> {
+        if self.operator_mxids.iter().any(|m| m == &event.sender) {
+            return Ok(());
+        }
+        let driver = self.require_driver()?;
+        let power_levels = driver
+            .get_room_power_levels(room_id)
+            .await
+            .map_err(CommandError::error)?
+            .unwrap_or_else(|| serde_json::json!({}));
+        if can_send_state_event(&power_levels, &event.sender, POWER_LEVELS_EVENT_TYPE) {
+            Ok(())
+        } else {
+            Err(CommandError::denied(format!(
+                "你没有权限在房间 {room_id} 执行此操作"
+            )))
+        }
+    }
+
     /// Sticker-pack management follows the Matrix permission for writing
     /// `m.room.image_pack` state in the site Space (state_default by
-    /// default), so global-moderators are allowed exactly like in a Matrix client.
+    /// default), so managers are allowed exactly like in a Matrix client.
     async fn require_site_sticker_access(
         &self,
         event: &ParsedRoomMessage,
@@ -1036,25 +1143,25 @@ impl BotCommandRouter {
         if let Some(id) = self.active_sites.lock().await.get(&event.sender).cloned() {
             return Ok(id);
         }
-        // Fall back to the owner's sites: a single owned site is automatic,
-        // multiple owned sites list the ambiguity instead of guessing.
+        // Fall back to the sites the sender administers: a single site is
+        // automatic, multiple sites list the ambiguity instead of guessing.
         let mut owned = Vec::new();
         for site in self.site_auth_store.list_site_auth().await? {
             let roles = self.governance_store.list_site_roles(&site.site_id).await?;
             if roles
                 .iter()
-                .any(|role| role.level == OWNER_LEVEL && role.user_id == event.sender)
+                .any(|role| role.level == SITE_ADMIN_LEVEL && role.user_id == event.sender)
             {
                 owned.push(site.site_id);
             }
         }
         match owned.len() {
             0 => Err(CommandError::error(
-                "你没有拥有任何站点；请先 `!cumments site register <id>` 注册",
+                "你不是任何站点的管理员；请先 `!cumments site register <id>` 注册",
             )),
             1 => Ok(owned.remove(0)),
             _ => Err(CommandError::error(format!(
-                "你拥有多个站点：{}；请用 `!cumments site use <id>` 指定",
+                "你管理多个站点：{}；请用 `!cumments site use <id>` 指定",
                 owned.join(", ")
             ))),
         }
@@ -1071,30 +1178,30 @@ impl BotCommandRouter {
             return Err(CommandError::error("站点不存在"));
         };
         let roles = self.governance_store.list_site_roles(site_id).await?;
-        let owners = roles
+        let admins = roles
             .iter()
-            .filter(|r| r.level == OWNER_LEVEL)
+            .filter(|r| r.level == SITE_ADMIN_LEVEL)
             .map(|r| r.user_id.clone())
             .collect::<Vec<_>>()
             .join(", ");
-        let global_moderators = roles
+        let managers = roles
             .iter()
-            .filter(|r| r.level == GLOBAL_MODERATOR_LEVEL)
+            .filter(|r| r.level == MANAGER_LEVEL)
             .map(|r| r.user_id.clone())
             .collect::<Vec<_>>()
             .join(", ");
         Ok(format!(
-            "站点 {site_id}\n状态: {}\n站主: {}\n总版主: {}",
+            "站点 {site_id}\n状态: {}\n站点管理员: {}\n主管: {}",
             auth.auth_mode.as_str(),
-            if owners.is_empty() {
+            if admins.is_empty() {
                 "（无）"
             } else {
-                &owners
+                &admins
             },
-            if global_moderators.is_empty() {
+            if managers.is_empty() {
                 "（无）"
             } else {
-                &global_moderators
+                &managers
             },
         ))
     }
@@ -1842,7 +1949,7 @@ impl EventProcessor {
         }
         if event.event_type == POWER_LEVELS_EVENT_TYPE {
             let site = self.site_store.get_site_by_space_id(&event.room_id).await?;
-            // A site Space's power levels define site roles (>= global-moderator);
+            // A site Space's power levels define site roles (>= manager);
             // comment rooms additionally carry per-room moderators (>= 50).
             let min_level = if site.is_some() {
                 SITE_ROLE_MIN_LEVEL

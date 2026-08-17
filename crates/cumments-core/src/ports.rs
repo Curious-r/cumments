@@ -1,6 +1,6 @@
 use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
-use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry};
+use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry, SiteTransfer};
 use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
@@ -621,6 +621,30 @@ pub trait RoleClaimStore: Send + Sync {
     /// Deletes expired claims that never reached `applied`. Applied claims
     /// are kept for audit purposes.
     async fn purge_expired_claims(&self) -> Result<u64>;
+}
+
+/// Port for site ownership transfers: short-lived process state between a
+/// pending owner claim and the completed handover.
+#[async_trait]
+pub trait SiteTransferStore: Send + Sync {
+    /// Replaces any existing pending transfer for the site with a new one.
+    /// The superseded transfer is marked `cancelled`.
+    async fn upsert_pending_transfer(
+        &self,
+        site_id: &str,
+        target_mxid: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<SiteTransfer>;
+
+    /// The current pending transfer for the site, if any.
+    async fn find_pending_transfer(&self, site_id: &str) -> Result<Option<SiteTransfer>>;
+
+    /// Marks a pending transfer as completed. Returns `false` when the row
+    /// is missing or no longer pending.
+    async fn complete_transfer(&self, site_id: &str, id: i64) -> Result<bool>;
+
+    /// Marks expired pending transfers as `expired`; returns the count.
+    async fn expire_pending_transfers(&self) -> Result<u64>;
 }
 
 /// Port for site identity and write-path authentication state.

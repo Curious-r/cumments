@@ -3,10 +3,11 @@ use crate::routes::comments::{
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
-    add_global_moderator_handler, add_owner_handler, add_room_moderator_handler,
-    list_room_moderators_handler, list_site_roles_handler, remove_global_moderator_handler,
-    remove_owner_handler, remove_room_moderator_handler, require_claim_token,
-    retire_page_room_handler, retire_site_handler, upgrade_page_room_handler,
+    add_admin_handler, add_manager_handler, add_room_moderator_handler, list_page_roles_handler,
+    list_room_moderators_handler, list_site_roles_handler, remove_admin_handler,
+    remove_manager_handler, remove_room_moderator_handler, require_claim_token,
+    retire_page_room_handler, retire_site_handler, start_owner_transfer_handler,
+    upgrade_page_room_handler,
 };
 use crate::routes::media::{
     MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_visitor_avatar_handler,
@@ -39,7 +40,8 @@ use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
         GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteAuthStore, SiteStore, StickerPackStore, SubmissionStore, VirtualUserStore,
+        SiteAuthStore, SiteStore, SiteTransferStore, StickerPackStore, SubmissionStore,
+        VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -71,6 +73,7 @@ pub trait ApiStore:
     + GovernanceStore
     + StickerPackStore
     + RoleClaimStore
+    + SiteTransferStore
     + VirtualUserStore
     + Send
     + Sync
@@ -86,6 +89,7 @@ impl<
         + GovernanceStore
         + StickerPackStore
         + RoleClaimStore
+        + SiteTransferStore
         + VirtualUserStore
         + Send
         + Sync,
@@ -234,6 +238,10 @@ pub fn build_router(state: ApiState) -> Router {
             get(list_room_moderators_handler).fallback(method_not_allowed_handler),
         )
         .route(
+            "/api/v1/sites/{site_id}/pages/{page_slug}/roles",
+            get(list_page_roles_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
             "/api/v1/media/{server}/{media_id}",
             get(media_handler).fallback(method_not_allowed_handler),
         )
@@ -262,12 +270,20 @@ pub fn build_router(state: ApiState) -> Router {
     // Site governance writes, authenticated with the site's claim token.
     let governance_router = Router::new()
         .route(
-            "/api/v1/sites/{site_id}/owners",
-            post(add_owner_handler).delete(remove_owner_handler),
+            "/api/v1/sites/{site_id}/admins",
+            post(add_admin_handler).delete(remove_admin_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/global-moderators",
-            post(add_global_moderator_handler).delete(remove_global_moderator_handler),
+            "/api/v1/sites/{site_id}/managers",
+            post(add_manager_handler).delete(remove_manager_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/claim-token/rotate",
+            axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/ownership/transfer",
+            axum::routing::post(start_owner_transfer_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/moderators",
@@ -326,16 +342,20 @@ pub fn build_router(state: ApiState) -> Router {
         )
         // Operator fallback for site ownership takeover.
         .route(
-            "/api/v1/operator/sites/{site_id}/owners",
-            axum::routing::post(add_owner_handler)
-                .delete(remove_owner_handler)
+            "/api/v1/operator/sites/{site_id}/admins",
+            axum::routing::post(add_admin_handler)
+                .delete(remove_admin_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/global-moderators",
-            axum::routing::post(add_global_moderator_handler)
-                .delete(remove_global_moderator_handler)
+            "/api/v1/operator/sites/{site_id}/managers",
+            axum::routing::post(add_manager_handler)
+                .delete(remove_manager_handler)
                 .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/sites/{site_id}/ownership/transfer",
+            axum::routing::post(start_owner_transfer_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers",

@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
-    governance::{NewRoleClaim, OWNER_LEVEL, RoleClaimStatus},
+    governance::{NewRoleClaim, RoleClaimStatus, SITE_ADMIN_LEVEL},
     ports::RoleClaimStore,
 };
 use cumments_store::DbStore;
@@ -21,7 +21,7 @@ fn new_claim(user_id: &str, expires_in: chrono::Duration) -> NewRoleClaim {
         site_id: "my-blog".to_string(),
         room_id: String::new(),
         user_id: user_id.to_string(),
-        level: OWNER_LEVEL,
+        level: SITE_ADMIN_LEVEL,
         token_hash: "token-hash".to_string(),
         expires_at: Utc::now() + expires_in,
     }
@@ -97,14 +97,14 @@ async fn applied_claim_is_revoked_after_matrix_role_removal() {
     // An applied claim is not cancellable through the pending path...
     assert!(
         !store
-            .revoke_role_claim("my-blog", "", "@u:hs", OWNER_LEVEL)
+            .revoke_role_claim("my-blog", "", "@u:hs", SITE_ADMIN_LEVEL)
             .await
             .unwrap()
     );
     // ...but the applied-revocation path (used after the Matrix write) works.
     assert!(
         store
-            .mark_applied_claim_revoked("my-blog", "", "@u:hs", OWNER_LEVEL)
+            .mark_applied_claim_revoked("my-blog", "", "@u:hs", SITE_ADMIN_LEVEL)
             .await
             .unwrap()
     );

@@ -16,6 +16,7 @@ pub mod retirement;
 pub mod role_claims;
 pub mod rooms;
 pub mod site_auth;
+pub mod site_transfers;
 pub mod sticker_packs;
 pub mod submissions;
 

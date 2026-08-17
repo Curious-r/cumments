@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
-    governance::{NewRoleClaim, OWNER_LEVEL},
+    governance::{NewRoleClaim, SITE_ADMIN_LEVEL},
     ports::RoleClaimStore,
 };
 use cumments_projector::{
@@ -77,7 +77,7 @@ async fn bot_joins_dm_only_when_inviter_has_a_pending_claim() {
             site_id: "my-blog".to_string(),
             room_id: String::new(),
             user_id: "@owner:hs".to_string(),
-            level: OWNER_LEVEL,
+            level: SITE_ADMIN_LEVEL,
             token_hash: "hash".to_string(),
             expires_at: Utc::now() + Duration::hours(1),
         })

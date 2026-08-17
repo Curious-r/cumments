@@ -1,6 +1,6 @@
 use cumments_core::{
     audit::CommandAuditStatus,
-    governance::{OWNER_LEVEL, RoleEntry},
+    governance::{MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, RoleEntry, SITE_ADMIN_LEVEL},
     models::{Content, PageSlug, RoomStatus, SiteId, TextContent, TextStyle},
     ports::{
         CommandAuditStore, GovernanceStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
@@ -178,9 +178,9 @@ async fn operator_sites_list_works_and_unknown_user_is_denied() {
 }
 
 #[tokio::test]
-async fn owner_can_create_global_moderator_claim_and_retire_with_confirm() {
+async fn admin_can_create_manager_claim_and_retire_with_confirm() {
     let store = Arc::new(
-        DbStore::connect(&test_db_url("owner"))
+        DbStore::connect(&test_db_url("admin"))
             .await
             .expect("connect db"),
     );
@@ -193,11 +193,11 @@ async fn owner_can_create_global_moderator_claim_and_retire_with_confirm() {
             "my-blog",
             &[RoleEntry {
                 user_id: "@alice:hs".into(),
-                level: OWNER_LEVEL,
+                level: SITE_ADMIN_LEVEL,
             }],
         )
         .await
-        .expect("project owner");
+        .expect("project admin");
     store
         .ensure_site_exists("my-blog", "!space:hs")
         .await
@@ -223,7 +223,7 @@ async fn owner_can_create_global_moderator_claim_and_retire_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog global-moderator add @bob:hs",
+            "!cumments site my-blog manager add @bob:hs",
         ))
         .await
         .expect("process")
@@ -282,6 +282,308 @@ async fn owner_can_create_global_moderator_claim_and_retire_with_confirm() {
 }
 
 #[tokio::test]
+async fn manager_can_appoint_room_moderator_from_room_power() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("manager-room-moderator"))
+            .await
+            .expect("connect db"),
+    );
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("my-blog", "!space:hs")
+        .await
+        .expect("attach space");
+    store
+        .register_room("!room:hs", &site_id, &page_slug)
+        .await
+        .expect("register room");
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@manager:hs"))
+            .with_power_levels(
+                "!space:hs",
+                serde_json::json!({
+                    "users": { "@manager:hs": MANAGER_LEVEL },
+                    "events": { "m.room.power_levels": 100 },
+                    "state_default": 50,
+                }),
+            )
+            .with_power_levels(
+                "!room:hs",
+                serde_json::json!({
+                    "users": { "@manager:hs": MANAGER_LEVEL },
+                    "events": { "m.room.power_levels": 75 },
+                    "state_default": 50,
+                }),
+            ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver,
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@manager:hs",
+            "!cumments site my-blog page hello moderator add @mod:hs",
+        ))
+        .await
+        .expect("process")
+    );
+    assert_eq!(
+        store
+            .pending_claims_for_user("@mod:hs")
+            .await
+            .expect("pending")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn fifty_level_moderator_cannot_appoint_room_moderator() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("mod-cannot-appoint"))
+            .await
+            .expect("connect db"),
+    );
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("my-blog", "!space:hs")
+        .await
+        .expect("attach space");
+    store
+        .register_room("!room:hs", &site_id, &page_slug)
+        .await
+        .expect("register room");
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@mod:hs")).with_power_levels(
+            "!room:hs",
+            serde_json::json!({
+                "users": { "@mod:hs": MODERATOR_LEVEL },
+                "events": { "m.room.power_levels": 75 },
+                "state_default": 50,
+            }),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver,
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@mod:hs",
+            "!cumments site my-blog page hello moderator add @other:hs",
+        ))
+        .await
+        .expect("process")
+    );
+    let audit = store
+        .list_command_audit(Some("@mod:hs"), 10)
+        .await
+        .expect("audit");
+    assert_eq!(audit[0].status, CommandAuditStatus::Denied);
+}
+
+#[tokio::test]
+async fn manager_can_resign_with_confirm() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("manager-resign"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .ensure_site_exists("my-blog", "!space:hs")
+        .await
+        .expect("attach space");
+    store
+        .replace_site_roles(
+            "my-blog",
+            &[RoleEntry {
+                user_id: "@manager:hs".into(),
+                level: MANAGER_LEVEL,
+            }],
+        )
+        .await
+        .expect("project manager");
+    store
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: "my-blog".to_string(),
+            room_id: String::new(),
+            user_id: "@manager:hs".to_string(),
+            level: MANAGER_LEVEL,
+            token_hash: "hash".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        })
+        .await
+        .expect("claim");
+    let claim = store
+        .pending_claims_for_user("@manager:hs")
+        .await
+        .expect("pending")
+        .remove(0);
+    assert!(store.mark_claim_activated(claim.id).await.unwrap());
+    let activated = store
+        .activated_unapplied_claims()
+        .await
+        .expect("activated")
+        .remove(0);
+    store
+        .mark_claim_applied(activated.id)
+        .await
+        .expect("applied");
+
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@manager:hs")).with_power_levels(
+            "!space:hs",
+            serde_json::json!({
+                "users": { "@manager:hs": MANAGER_LEVEL },
+                "events": { "m.room.power_levels": 100 },
+                "state_default": 50,
+            }),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@manager:hs",
+            "!cumments site my-blog manager resign --confirm",
+        ))
+        .await
+        .expect("process")
+    );
+    assert!(
+        driver.power_levels.lock().await.get("!space:hs").unwrap()["users"]
+            .get("@manager:hs")
+            .is_none()
+    );
+    assert!(
+        store
+            .list_applied_claims()
+            .await
+            .expect("claims")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn moderator_can_resign_with_confirm() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("moderator-resign"))
+            .await
+            .expect("connect db"),
+    );
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+    store
+        .register_site("my-blog", &token_hash("claim"), true)
+        .await
+        .expect("register site");
+    store
+        .register_room("!room:hs", &site_id, &page_slug)
+        .await
+        .expect("register room");
+    store
+        .replace_room_roles(
+            "!room:hs",
+            &[RoleEntry {
+                user_id: "@mod:hs".into(),
+                level: MODERATOR_LEVEL,
+            }],
+        )
+        .await
+        .expect("project moderator");
+    store
+        .upsert_role_claim(&NewRoleClaim {
+            site_id: "my-blog".to_string(),
+            room_id: "!room:hs".to_string(),
+            user_id: "@mod:hs".to_string(),
+            level: MODERATOR_LEVEL,
+            token_hash: "hash".to_string(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        })
+        .await
+        .expect("claim");
+    let claim = store
+        .pending_claims_for_user("@mod:hs")
+        .await
+        .expect("pending")
+        .remove(0);
+    assert!(store.mark_claim_activated(claim.id).await.unwrap());
+    let activated = store
+        .activated_unapplied_claims()
+        .await
+        .expect("activated")
+        .remove(0);
+    store
+        .mark_claim_applied(activated.id)
+        .await
+        .expect("applied");
+
+    let driver = Arc::new(
+        common::TestDriver::with_joined_members(private_members("@mod:hs")).with_power_levels(
+            "!room:hs",
+            serde_json::json!({
+                "users": { "@mod:hs": MODERATOR_LEVEL },
+                "events": { "m.room.power_levels": 75 },
+                "state_default": 50,
+            }),
+        ),
+    );
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+    assert!(
+        p.process_bot_command(&command_message(
+            "@mod:hs",
+            "!cumments site my-blog page hello moderator resign --confirm",
+        ))
+        .await
+        .expect("process")
+    );
+    assert!(
+        driver.power_levels.lock().await.get("!room:hs").unwrap()["users"]
+            .get("@mod:hs")
+            .is_none()
+    );
+    assert!(
+        store
+            .list_applied_claims()
+            .await
+            .expect("claims")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn site_registration_is_public_self_service() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("register"))
@@ -307,9 +609,9 @@ async fn site_registration_is_public_self_service() {
 }
 
 #[tokio::test]
-async fn owner_can_retire_a_page_room_with_confirm() {
+async fn admin_can_retire_a_page_room_with_confirm() {
     let store = Arc::new(
-        DbStore::connect(&test_db_url("owner-page-retire"))
+        DbStore::connect(&test_db_url("admin-page-retire"))
             .await
             .expect("connect db"),
     );
@@ -571,9 +873,9 @@ async fn sticker_site(store: &DbStore) {
 }
 
 #[tokio::test]
-async fn global_moderator_can_manage_stickers_but_not_governance() {
+async fn manager_can_manage_stickers_but_not_governance() {
     let store = Arc::new(
-        DbStore::connect(&test_db_url("global-moderator-stickers"))
+        DbStore::connect(&test_db_url("manager-stickers"))
             .await
             .expect("connect db"),
     );
@@ -595,7 +897,7 @@ async fn global_moderator_can_manage_stickers_but_not_governance() {
         common::test_policy(),
     );
 
-    // Global moderators may manage stickers (state_default 50 < 75)...
+    // Managers may manage stickers (state_default 50 < 75)...
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
@@ -613,7 +915,7 @@ async fn global_moderator_can_manage_stickers_but_not_governance() {
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
-            "!cumments site my-blog global-moderator add @carol:hs",
+            "!cumments site my-blog manager add @carol:hs",
         ))
         .await
         .expect("process")
@@ -624,7 +926,7 @@ async fn global_moderator_can_manage_stickers_but_not_governance() {
         .expect("audit");
     assert_eq!(audit[0].status, CommandAuditStatus::Denied);
 
-    // Post retirement is the same governance fence: denied for global-moderators.
+    // Post retirement is the same governance fence: denied for managers.
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",

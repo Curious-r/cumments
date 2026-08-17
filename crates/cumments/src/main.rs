@@ -150,7 +150,7 @@ async fn main() -> Result<()> {
     let sites_deferred = if let Some(cli::Commands::Sites(sites_args)) = &args.command {
         let needs_driver = matches!(
             &sites_args.command,
-            cli::SitesCommand::RemoveOwner(_) | cli::SitesCommand::RemoveGlobalModerator(_)
+            cli::SitesCommand::RemoveAdmin(_) | cli::SitesCommand::RemoveManager(_)
         );
         if !needs_driver {
             let logging = cumments_matrix::LoggingMatrixDriver;
@@ -356,6 +356,7 @@ async fn main() -> Result<()> {
             message_store: db_store.clone(),
             virtual_user_store: db_store.clone(),
             site_auth_store: db_store.clone(),
+            site_transfer_store: db_store.clone(),
             driver: driver.clone(),
             site_service: site_service.clone(),
         },

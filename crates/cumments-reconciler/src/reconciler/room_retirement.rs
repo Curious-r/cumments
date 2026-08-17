@@ -151,6 +151,7 @@ mod tests {
             message_store: store.clone(),
             virtual_user_store: store.clone(),
             site_auth_store: store.clone(),
+            site_transfer_store: store.clone(),
             driver: driver.clone(),
             site_service: Arc::new(cumments_core::site_service::SiteService::new(
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
