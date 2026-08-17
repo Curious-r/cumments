@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cumments_core::{
-    identity::derive_guest_id_from_public_key,
-    models::{CommentMedia, GuestProfile, PostSlug, RoomEventPage, SiteId},
+    identity::derive_visitor_id_from_public_key,
+    models::{CommentMedia, PageSlug, RoomEventPage, SiteId, VisitorProfile},
     ports::MatrixDriver,
 };
 use tracing::{debug, info};
@@ -15,19 +15,19 @@ impl MatrixDriver for LoggingMatrixDriver {
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
         _space_id: &str,
         _candidate_room_id: Option<&str>,
     ) -> Result<String> {
         info!(
-            "LOGGING: Ensure comment room for site={} post={}",
+            "LOGGING: Ensure comment room for site={} page={}",
             site_id.as_str(),
-            post_slug.as_str()
+            page_slug.as_str()
         );
         Ok(format!(
             "log_room_{}_{}",
             site_id.as_str(),
-            post_slug.as_str()
+            page_slug.as_str()
         ))
     }
 
@@ -59,12 +59,12 @@ impl MatrixDriver for LoggingMatrixDriver {
     async fn remove_room_alias(
         &self,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
     ) -> Result<()> {
         info!(
-            "LOGGING: Remove alias for site={} post={:?} (no-op)",
+            "LOGGING: Remove alias for site={} page={:?} (no-op)",
             site_id.as_str(),
-            post_slug.map(|slug| slug.as_str())
+            page_slug.map(|slug| slug.as_str())
         );
         Ok(())
     }
@@ -108,7 +108,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         &self,
         author_public_key: &str,
         site_id: &SiteId,
-    ) -> Result<Option<GuestProfile>> {
+    ) -> Result<Option<VisitorProfile>> {
         info!(
             "LOGGING: Get profile for {author_public_key} on site={} (no-op)",
             site_id.as_str()
@@ -133,13 +133,13 @@ impl MatrixDriver for LoggingMatrixDriver {
         submission_id: Option<i64>,
         _txn_id: &str,
     ) -> Result<String> {
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Post message to room={}. Author={} (guest={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, submission={:?}): {}",
+            "LOGGING: Post message to room={}. Author={} (visitor={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, submission={:?}): {}",
             room_id,
             display_name,
-            guest_id,
+            visitor_id,
             reply_to,
             reply_to_body,
             reply_to_sender,
@@ -216,11 +216,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         submission_id: Option<i64>,
         _txn_id: &str,
     ) -> Result<String> {
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Update message {} in room={}. Author={} (guest={}, submission={:?}): {}",
-            event_id, room_id, display_name, guest_id, submission_id, new_content
+            "LOGGING: Update message {} in room={}. Author={} (visitor={}, submission={:?}): {}",
+            event_id, room_id, display_name, visitor_id, submission_id, new_content
         );
         Ok(format!("log_update_{}", event_id))
     }
@@ -352,13 +352,13 @@ impl MatrixDriver for LoggingMatrixDriver {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
         _require_space: bool,
     ) -> Result<()> {
         info!(
             "LOGGING: Adopt {room_id} for {} ({}) (no real homeserver)",
             site_id.as_str(),
-            post_slug.as_ref().map(|s| s.as_str()).unwrap_or("-")
+            page_slug.as_ref().map(|s| s.as_str()).unwrap_or("-")
         );
         Ok(())
     }

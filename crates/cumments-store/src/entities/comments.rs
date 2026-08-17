@@ -13,7 +13,7 @@ pub struct Model {
     pub event_id: String,
     pub room_id: String,
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub sender_mxid: String,
     pub author_type: String,
     pub author_display_name: Option<String>,

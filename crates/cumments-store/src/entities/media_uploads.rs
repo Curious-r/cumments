@@ -9,12 +9,12 @@ pub struct Model {
     /// MXC URI returned by the upload endpoint.
     #[sea_orm(unique)]
     pub mxc_url: String,
-    /// Guest public key that uploaded the media.
+    /// Visitor public key that uploaded the media.
     pub author_public_key: String,
     /// Site the upload was authorized for; the post when the upload is
     /// comment-scoped, `None` for site-scoped identity media (avatars).
     pub site_id: String,
-    pub post_slug: Option<String>,
+    pub page_slug: Option<String>,
     /// When a a comment submission referencing this media was queued/sent; used by
     /// orphan cleanup.
     pub used_at: Option<DateTimeUtc>,

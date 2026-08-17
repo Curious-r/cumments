@@ -136,7 +136,7 @@ async fn expired_claims_do_not_keep_the_bot_in_a_dm() {
 }
 
 #[tokio::test]
-async fn claim_dm_rooms_are_listed_per_site_for_decommission() {
+async fn claim_dm_rooms_are_listed_per_site_for_retirement() {
     let store = DbStore::connect(&test_db_url("dm-by-site"))
         .await
         .expect("connect db");

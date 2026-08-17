@@ -118,11 +118,11 @@ impl SiteAuthStore for DbStore {
     }
 
     async fn delete_site(&self, site_id: &str) -> Result<()> {
-        crate::store::decommission::delete_site(&self.db, site_id).await
+        crate::store::retirement::delete_site(&self.db, site_id).await
     }
 
     async fn delete_room_local(&self, room_id: &str) -> Result<()> {
-        crate::store::decommission::delete_room(&self.db, room_id).await
+        crate::store::retirement::delete_room(&self.db, room_id).await
     }
 
     async fn rotate_claim_token(&self, site_id: &str, new_hash: &str) -> Result<bool> {

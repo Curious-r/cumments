@@ -7,7 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub room_id: String,
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     /// One of `active`, `quarantined`, `superseded`.
     pub status: String,
     pub created_at: DateTimeUtc,

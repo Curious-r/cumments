@@ -54,6 +54,7 @@ pub mod m20260815_000048_media_upload_submission;
 pub mod m20260815_000049_command_audit_log;
 pub mod m20260816_000050_sticker_packs;
 pub mod m20260816_000051_media_uploads_post_slug_nullable;
+pub mod m20260817_000052_terminology_rename;
 
 pub struct Migrator;
 
@@ -83,6 +84,18 @@ pub(crate) async fn column_exists(
         }
     }
     Ok(false)
+}
+
+/// The slug column name in `table`: `page_slug` on fresh entity-first
+/// databases, `post_slug` on databases created before the terminology
+/// rename. Historical migrations use it so their SQL matches whichever
+/// schema is present.
+pub(crate) async fn slug_column(manager: &SchemaManager<'_>, table: &str) -> Result<String, DbErr> {
+    if column_exists(manager, table, "page_slug").await? {
+        Ok("page_slug".to_string())
+    } else {
+        Ok("post_slug".to_string())
+    }
 }
 
 /// Whether a table exists in the current SQLite database.
@@ -156,6 +169,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000049_command_audit_log::Migration),
             Box::new(m20260816_000050_sticker_packs::Migration),
             Box::new(m20260816_000051_media_uploads_post_slug_nullable::Migration),
+            Box::new(m20260817_000052_terminology_rename::Migration),
         ]
     }
 }

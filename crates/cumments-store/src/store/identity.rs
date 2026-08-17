@@ -2,7 +2,7 @@ use super::DbStore;
 use crate::entities::virtual_users;
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::identity::derive_guest_id_from_public_key;
+use cumments_core::identity::derive_visitor_id_from_public_key;
 use cumments_core::models::SiteId;
 use cumments_core::ports::VirtualUserStore;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -16,12 +16,12 @@ impl VirtualUserStore for DbStore {
         server_name: &str,
     ) -> Result<String> {
         // 1. Compute the deterministic virtual user ID
-        let guest_id = derive_guest_id_from_public_key(author_public_key)
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .ok_or_else(|| anyhow::anyhow!("invalid author public key"))?;
         let virtual_user_id = format!(
             "@_cumments_{}_{}:{}",
             site_id.as_str(),
-            guest_id,
+            visitor_id,
             server_name
         );
 

@@ -1,4 +1,4 @@
-//! Guest media upload, site sticker packs, and the public read-only media
+//! Visitor media upload, site sticker packs, and the public read-only media
 //! proxy for Matrix MXC media.
 //!
 //! The read model stores `mxc://` references; browsers cannot download them
@@ -11,7 +11,7 @@ use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{IDEMPOTENT_REPLAYED, extract_idempotency_key, request_fingerprint};
 use crate::routes::comments::challenge_prefix;
-use crate::routes::moderation::rate_limited;
+use crate::routes::governance::rate_limited;
 use crate::trusted_proxy::TrustedProxySet;
 use axum::{
     Json,
@@ -22,7 +22,7 @@ use axum::{
 };
 use cumments_core::identity::{signature_message, verify_signature};
 use cumments_core::media_upload::MediaUploadIdempotencyInput;
-use cumments_core::models::{Content, Message, PostSlug, SiteId};
+use cumments_core::models::{Content, Message, PageSlug, SiteId};
 use cumments_core::site_auth::{constant_time_eq, is_private_ip_addr, sha256_hex};
 use cumments_core::sticker_packs::{
     AddStickerInput, StickerPackUseCaseError, add_site_sticker, list_site_sticker_packs,
@@ -46,7 +46,7 @@ use url::Url;
 pub(crate) const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
 /// How long a signed media URL stays valid.
 const MEDIA_URL_TTL_SECONDS: i64 = 15 * 60;
-/// Mime prefixes allowed for guest uploads (image, video, audio, files).
+/// Mime prefixes allowed for visitor uploads (image, video, audio, files).
 const ALLOWED_UPLOAD_MIMES: [&str; 4] = ["image/", "video/", "audio/", "application/"];
 /// Content types allowed through the proxy (prefix match).
 const ALLOWED_MEDIA_TYPES: [&str; 5] = [
@@ -574,14 +574,14 @@ async fn rollback_media_upload(state: &ApiState, url: &str) {
     }
 }
 
-/// Guest media upload: verifies PoW + author signature, then asks the
+/// Visitor media upload: verifies PoW + author signature, then asks the
 /// `MatrixDriver` to upload as the author's virtual user. The driver is the
 /// only homeserver write seam.
 pub(crate) async fn upload_media_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
@@ -591,7 +591,7 @@ pub(crate) async fn upload_media_handler(
         ));
     }
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
 
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.write_limiter.allow(&key) {
@@ -641,9 +641,9 @@ pub(crate) async fn upload_media_handler(
         request_fingerprint(
             "POST",
             &format!(
-                "/api/v1/sites/{}/posts/{}/media",
+                "/api/v1/sites/{}/pages/{}/media",
                 site_id_val.as_str(),
-                post_slug_val.as_str()
+                page_slug_val.as_str()
             ),
             &body,
         ),
@@ -667,7 +667,7 @@ pub(crate) async fn upload_media_handler(
         let message = signature_message(&[
             "UPLOAD",
             site_id_val.as_str(),
-            post_slug_val.as_str(),
+            page_slug_val.as_str(),
             &mimetype,
             &filename,
             &sha256_hex(&body),
@@ -692,7 +692,7 @@ pub(crate) async fn upload_media_handler(
     let message = signature_message(&[
         "UPLOAD",
         site_id_val.as_str(),
-        post_slug_val.as_str(),
+        page_slug_val.as_str(),
         &mimetype,
         &filename,
         &sha256_hex(&body),
@@ -714,7 +714,7 @@ pub(crate) async fn upload_media_handler(
             &url,
             &author_public_key,
             site_id_val.as_str(),
-            Some(post_slug_val.as_str()),
+            Some(page_slug_val.as_str()),
             &MediaUploadIdempotencyInput {
                 key: idempotency_key,
                 request_fingerprint: fingerprint,
@@ -748,7 +748,7 @@ pub(crate) async fn upload_media_handler(
     }
 }
 
-/// Builds the JSON response for a guest avatar write, marking idempotent
+/// Builds the JSON response for a visitor avatar write, marking idempotent
 /// replays with the same header as media uploads.
 fn avatar_response(avatar_url: &str, proxied_url: Option<String>, replayed: bool) -> Response {
     let mut response = (Json(serde_json::json!({
@@ -764,14 +764,14 @@ fn avatar_response(avatar_url: &str, proxied_url: Option<String>, replayed: bool
     response
 }
 
-/// Guest avatar upload: verifies PoW + author signature, uploads the image as
+/// Visitor avatar upload: verifies PoW + author signature, uploads the image as
 /// the author's virtual user, records the site-scoped upload idempotently,
 /// then points the virtual user's global profile at it.
 ///
 /// `UPLOAD_AVATAR` is a one-request operation (upload + set profile); the
 /// media upload machinery is shared with comment media so ownership,
 /// idempotency, rate limiting and cleanup behave identically.
-pub(crate) async fn set_guest_avatar_handler(
+pub(crate) async fn set_visitor_avatar_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -837,7 +837,7 @@ pub(crate) async fn set_guest_avatar_handler(
         "{}\n{}\n{}",
         request_fingerprint(
             "PUT",
-            &format!("/api/v1/sites/{}/guests/avatar", site_id_val.as_str()),
+            &format!("/api/v1/sites/{}/visitors/avatar", site_id_val.as_str()),
             &body,
         ),
         mimetype,
@@ -980,10 +980,10 @@ pub(crate) async fn set_guest_avatar_handler(
     }
 }
 
-/// Removes the guest's avatar: verifies PoW + author signature, then deletes
+/// Removes the visitor's avatar: verifies PoW + author signature, then deletes
 /// the virtual user's `avatar_url` profile field. Deleting a missing avatar
 /// is a successful no-op on the homeserver side.
-pub(crate) async fn delete_guest_avatar_handler(
+pub(crate) async fn delete_visitor_avatar_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
@@ -1034,7 +1034,7 @@ pub(crate) async fn delete_guest_avatar_handler(
     Ok(Json(serde_json::json!({})))
 }
 
-/// Lists a site's projected sticker packs for guests.
+/// Lists a site's projected sticker packs for visitors.
 pub(crate) async fn list_stickers_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -1638,7 +1638,7 @@ mod tests {
         let mut message = Message {
             event_id: "$e:hs".to_string(),
             site_id: "my-blog".to_string(),
-            post_slug: "hello".to_string(),
+            page_slug: "hello".to_string(),
             author: AuthorSnapshot {
                 kind: AuthorKind::Matrix,
                 display_name: None,
@@ -1702,7 +1702,7 @@ mod tests {
         let mut message = Message {
             event_id: "$e:hs".to_string(),
             site_id: "my-blog".to_string(),
-            post_slug: "hello".to_string(),
+            page_slug: "hello".to_string(),
             author: AuthorSnapshot {
                 kind: AuthorKind::Matrix,
                 display_name: None,

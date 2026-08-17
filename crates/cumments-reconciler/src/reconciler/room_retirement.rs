@@ -1,7 +1,7 @@
-//! Post-level room retirement: leaves a retired comment room's Matrix side
+//! Page-level room retirement: leaves a retired comment room's Matrix side
 //! and then clears its local projections.
 //!
-//! Order matters, same as site decommission: Matrix first (rename, alias
+//! Order matters, same as site retirement: Matrix first (rename, alias
 //! removal, AS sender and virtual users leave), local cleanup second. Once
 //! the AS sender has left, `backfill` cannot discover the room again, so
 //! deleting its local rows cannot resurrect it.
@@ -11,7 +11,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tracing::warn;
 
-/// Retires every room marked `Retired` (post-level decommission).
+/// Retires every room marked `Retired` (post-level retirement).
 pub struct RoomRetirementPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
@@ -47,8 +47,8 @@ impl RoomRetirementPass {
         };
         let site_id = SiteId::new(identity.site_id.clone())
             .map_err(|_| anyhow::anyhow!("invalid site id in registry: {}", identity.site_id))?;
-        let post_slug = PostSlug::new(identity.post_slug.clone()).map_err(|_| {
-            anyhow::anyhow!("invalid post slug in registry: {}", identity.post_slug)
+        let page_slug = PageSlug::new(identity.page_slug.clone()).map_err(|_| {
+            anyhow::anyhow!("invalid page slug in registry: {}", identity.page_slug)
         })?;
         let virtual_users = self
             .deps
@@ -60,12 +60,12 @@ impl RoomRetirementPass {
             .driver
             .set_room_name(
                 room_id,
-                &format!("[retired] {}/{}", site_id.as_str(), post_slug.as_str()),
+                &format!("[retired] {}/{}", site_id.as_str(), page_slug.as_str()),
             )
             .await?;
         self.deps
             .driver
-            .remove_room_alias(&site_id, Some(&post_slug))
+            .remove_room_alias(&site_id, Some(&page_slug))
             .await?;
         self.deps.driver.leave_room(room_id).await?;
         for user_id in &virtual_users {
@@ -94,7 +94,7 @@ impl ReconcilePass for RoomRetirementPass {
 mod tests {
     use super::*;
     use cumments_core::{
-        models::{PostSlug, SiteId},
+        models::{PageSlug, SiteId},
         ports::{RegistryStore, VirtualUserStore},
     };
     use cumments_store::DbStore;
@@ -121,9 +121,9 @@ mod tests {
                 .expect("connect db"),
         );
         let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-        let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+        let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
         store
-            .register_room("!room:hs", &site_id, &post_slug)
+            .register_room("!room:hs", &site_id, &page_slug)
             .await
             .expect("register room");
         assert!(

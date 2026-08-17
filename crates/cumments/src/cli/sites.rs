@@ -4,7 +4,7 @@ use super::args::{ExportConfigArgs, RetireSiteArgs, SiteUserIdArg, SitesArgs, Si
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
-use cumments_core::governance::{CO_MANAGER_LEVEL, OWNER_LEVEL};
+use cumments_core::governance::{GLOBAL_MODERATOR_LEVEL, OWNER_LEVEL};
 use cumments_core::models::SiteId;
 use cumments_core::operator::{
     OperatorListQuery, config_snippet_toml, list_operator_sites, operator_site,
@@ -152,12 +152,14 @@ pub async fn handle_sites_command(
             Ok(())
         }
         SitesCommand::AddOwner(args) => add_role_claim(store, args, OWNER_LEVEL).await,
-        SitesCommand::AddCoManager(args) => add_role_claim(store, args, CO_MANAGER_LEVEL).await,
+        SitesCommand::AddGlobalModerator(args) => {
+            add_role_claim(store, args, GLOBAL_MODERATOR_LEVEL).await
+        }
         SitesCommand::RemoveOwner(args) => {
             remove_role_claim(store, driver, site_service, args, OWNER_LEVEL).await
         }
-        SitesCommand::RemoveCoManager(args) => {
-            remove_role_claim(store, driver, site_service, args, CO_MANAGER_LEVEL).await
+        SitesCommand::RemoveGlobalModerator(args) => {
+            remove_role_claim(store, driver, site_service, args, GLOBAL_MODERATOR_LEVEL).await
         }
         SitesCommand::Retire(args) => retire_site(store, policy, args).await,
     }
@@ -260,7 +262,7 @@ async fn require_api_registered_site(store: &cumments_store::DbStore, site_id: &
 }
 
 /// Marks a site `retiring` (writes stop immediately). The running server's
-/// reconciler performs the Matrix decommission and local cleanup.
+/// reconciler performs the Matrix retirement and local cleanup.
 async fn retire_site(
     store: &cumments_store::DbStore,
     policy: &SiteAuthPolicy,
@@ -278,7 +280,7 @@ async fn retire_site(
         );
     }
     if !cumments_core::management::retire_site(store, site_id.as_str()).await? {
-        bail!("site not found or already decommissioned");
+        bail!("site not found or already retired");
     }
 
     if args.wait {
@@ -292,7 +294,7 @@ async fn retire_site(
                 return Ok(());
             }
         }
-        bail!("timed out waiting for the decommission to finish");
+        bail!("timed out waiting for the retirement to finish");
     }
 
     print_json(&serde_json::json!({
@@ -300,7 +302,7 @@ async fn retire_site(
         "status": "retiring",
     }))?;
     eprintln!(
-        "The running server decommissions the Matrix Space/rooms in the background; \
+        "The running server retires the Matrix Space/rooms in the background; \
          re-run with `--wait` to block until it finishes."
     );
     Ok(())

@@ -8,7 +8,7 @@ mod matrix;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
-use cumments_core::models::GuestProfile;
+use cumments_core::models::VisitorProfile;
 
 /// In-memory [`MatrixDriver`] double that records the calls each test
 /// asserts.
@@ -34,7 +34,7 @@ pub struct TestDriver {
     pub space_links: Mutex<Vec<(String, String)>>,
     pub invites: Mutex<Vec<(String, String)>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
-    pub guest_profiles: Mutex<HashMap<(String, String), GuestProfile>>,
+    pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
 }
 
 impl TestDriver {
@@ -57,7 +57,7 @@ impl TestDriver {
             space_links: Mutex::new(Vec::new()),
             invites: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
-            guest_profiles: Mutex::new(HashMap::new()),
+            visitor_profiles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -118,13 +118,13 @@ impl TestDriver {
         self
     }
 
-    pub fn with_guest_profile(
+    pub fn with_visitor_profile(
         mut self,
         site_id: impl Into<String>,
         author_public_key: impl Into<String>,
-        profile: GuestProfile,
+        profile: VisitorProfile,
     ) -> Self {
-        self.guest_profiles
+        self.visitor_profiles
             .get_mut()
             .insert((site_id.into(), author_public_key.into()), profile);
         self

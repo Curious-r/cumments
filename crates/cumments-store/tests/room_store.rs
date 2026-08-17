@@ -1,5 +1,5 @@
 use chrono::Utc;
-use cumments_core::models::{PostSlug, RoomMember, RoomStateEvent, SiteId};
+use cumments_core::models::{PageSlug, RoomMember, RoomStateEvent, SiteId};
 use cumments_core::ports::{RegistryStore, RoomStore};
 use cumments_store::DbStore;
 
@@ -146,7 +146,7 @@ async fn list_active_rooms_returns_room_ids() {
         .register_room(
             "!room:hs",
             &SiteId::from("my-blog"),
-            &PostSlug::from("hello"),
+            &PageSlug::from("hello"),
         )
         .await
         .expect("register room");

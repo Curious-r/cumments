@@ -38,7 +38,7 @@ pub struct ParsedRoomMessage {
 }
 
 impl ParsedRoomMessage {
-    /// The canonical value used to verify guest signatures: the text body for
+    /// The canonical value used to verify visitor signatures: the text body for
     /// text messages, the MXC URL for media, and the geo URI for locations.
     pub fn signable_content(&self) -> Option<&str> {
         match &self.content {
@@ -154,7 +154,7 @@ pub struct ParsedSpaceChild {
 #[derive(Deserialize)]
 struct RoomMetadata {
     site_id: String,
-    post_slug: Option<String>,
+    page_slug: Option<String>,
 }
 
 /// Resolve a `RoomIdentity` from optional metadata JSON and optional
@@ -169,11 +169,11 @@ pub fn parse_room_identity(
     // Phase 1 – Try metadata first (source of truth)
     if let Some(json) = metadata_json
         && let Ok(m) = serde_json::from_str::<RoomMetadata>(json)
-        && let Some(slug) = m.post_slug
+        && let Some(slug) = m.page_slug
     {
         return Some(RoomIdentity {
             site_id: m.site_id,
-            post_slug: slug,
+            page_slug: slug,
         });
     }
 
@@ -189,7 +189,7 @@ pub fn parse_room_identity(
     if parts.len() == 2 {
         Some(RoomIdentity {
             site_id: parts[0].to_string(),
-            post_slug: parts[1].to_string(),
+            page_slug: parts[1].to_string(),
         })
     } else {
         None
@@ -209,14 +209,14 @@ mod tests {
             identity,
             Some(RoomIdentity {
                 site_id,
-                post_slug
-            }) if site_id == "my-blog" && post_slug == "hello-world"
+                page_slug
+            }) if site_id == "my-blog" && page_slug == "hello-world"
         ));
     }
 
     #[test]
     fn parse_room_identity_prefers_metadata_over_alias() {
-        let metadata = r#"{"site_id": "meta-site", "post_slug": "meta-post"}"#;
+        let metadata = r#"{"site_id": "meta-site", "page_slug": "meta-post"}"#;
         let identity = parse_room_identity(
             Some(metadata),
             Some("#_cumments_alias-site_alias-post:example.com"),
@@ -226,8 +226,8 @@ mod tests {
             identity,
             Some(RoomIdentity {
                 site_id,
-                post_slug
-            }) if site_id == "meta-site" && post_slug == "meta-post"
+                page_slug
+            }) if site_id == "meta-site" && page_slug == "meta-post"
         ));
     }
 }

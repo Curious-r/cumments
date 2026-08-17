@@ -49,7 +49,7 @@ impl UpdatesPass {
                 let candidate_room_id = self
                     .deps
                     .registry_store
-                    .get_registered_room(&command.site_id, &command.post_slug)
+                    .get_registered_room(&command.site_id, &command.page_slug)
                     .await?;
 
                 // Quarantine gate: fail fast while a quarantined room's retry
@@ -58,7 +58,7 @@ impl UpdatesPass {
                     && let Some(room) = quarantined_room_for(
                         &self.deps,
                         &command.site_id,
-                        &command.post_slug,
+                        &command.page_slug,
                     )
                     .await?
                 {
@@ -88,7 +88,7 @@ impl UpdatesPass {
                     .driver
                     .ensure_comment_room(
                         &command.site_id,
-                        &command.post_slug,
+                        &command.page_slug,
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
@@ -115,7 +115,7 @@ impl UpdatesPass {
                 // 3b. Registry: Write back the room mapping immediately
                 self.deps
                     .registry_store
-                    .register_room(&room_id, &command.site_id, &command.post_slug)
+                    .register_room(&room_id, &command.site_id, &command.page_slug)
                     .await?;
 
                 // 4. Hands: Fetch original display name to maintain it
@@ -125,7 +125,7 @@ impl UpdatesPass {
                     .get_author_display_name(&command.event_id)
                     .await?
                     .flatten()
-                    .unwrap_or_else(|| "Guest".to_string());
+                    .unwrap_or_else(|| "Visitor".to_string());
 
                 // 5. Hands: Allocate/reuse the transaction ID, then send m.replace
                 let txn_id = if let Some(txn_id) = pending.txn_id.as_deref() {

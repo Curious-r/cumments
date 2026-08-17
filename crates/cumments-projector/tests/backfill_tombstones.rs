@@ -1,6 +1,6 @@
-use cumments_core::identity::{derive_guest_id_from_public_key, signature_message};
+use cumments_core::identity::{derive_visitor_id_from_public_key, signature_message};
 use cumments_core::models::{
-    Content, LocationContent, PollContent, PollOption, PostSlug, RoomIdentity, SiteId, TextContent,
+    Content, LocationContent, PageSlug, PollContent, PollOption, RoomIdentity, SiteId, TextContent,
     TextStyle,
 };
 use cumments_core::ports::{MessageStore, RegistryStore};
@@ -25,7 +25,7 @@ fn test_db_url(name: &str) -> String {
 fn identity() -> RoomIdentity {
     RoomIdentity {
         site_id: "my-blog".to_string(),
-        post_slug: "hello".to_string(),
+        page_slug: "hello".to_string(),
     }
 }
 
@@ -88,17 +88,17 @@ fn message(event_id: &str) -> ParsedRoomMessage {
 }
 
 #[tokio::test]
-async fn guest_location_verifies_with_locate_signature() {
+async fn visitor_location_verifies_with_locate_signature() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use ed25519_dalek::{Signer, SigningKey};
 
     let store = Arc::new(
-        DbStore::connect(&test_db_url("guest-location"))
+        DbStore::connect(&test_db_url("visitor-location"))
             .await
             .expect("connect db"),
     );
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await
@@ -107,8 +107,8 @@ async fn guest_location_verifies_with_locate_signature() {
 
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
-    let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
-    let sender = format!("@_cumments_my-blog_{}:example.com", guest_id);
+    let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
+    let sender = format!("@_cumments_my-blog_{}:example.com", visitor_id);
     let challenge = "challenge";
     let geo_uri = "geo:31.2,121.5";
     let signed_message = signature_message(&["LOCATE", "my-blog", "hello", geo_uri, challenge]);
@@ -136,7 +136,7 @@ async fn guest_location_verifies_with_locate_signature() {
             .await
             .expect("query location")
             .is_some(),
-        "guest location with a valid LOCATE signature must project"
+        "visitor location with a valid LOCATE signature must project"
     );
 
     // A POST-format signature (what text/media use) must be rejected for
@@ -164,7 +164,7 @@ async fn guest_location_verifies_with_locate_signature() {
             .await
             .expect("query wrong location")
             .is_none(),
-        "guest location signed with the POST format must be rejected"
+        "visitor location signed with the POST format must be rejected"
     );
 }
 
@@ -176,7 +176,7 @@ async fn reaction_redaction_removes_it_and_prevents_resurrection() {
             .expect("connect db"),
     );
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await
@@ -268,7 +268,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
             .expect("connect db"),
     );
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await
@@ -366,7 +366,7 @@ async fn redaction_seen_before_target_prevents_resurrection() {
             .expect("connect db"),
     );
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await
@@ -410,7 +410,7 @@ async fn message_without_tombstone_is_projected() {
             .expect("connect db"),
     );
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await

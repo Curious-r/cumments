@@ -33,7 +33,7 @@ impl MigrationTrait for Migration {
                     .name("idx_messages_site_post")
                     .table(messages::Entity)
                     .col(messages::Column::SiteId)
-                    .col(messages::Column::PostSlug)
+                    .col(messages::Column::PageSlug)
                     .to_owned(),
             )
             .await?;

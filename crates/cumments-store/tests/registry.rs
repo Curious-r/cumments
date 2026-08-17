@@ -1,6 +1,6 @@
 use cumments_core::{
     models::{
-        AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PostSlug, RoomStatus, SiteId,
+        AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, RoomStatus, SiteId,
         TextContent, TextStyle,
     },
     ports::{MessageStore, RegistryStore, SiteAuthStore},
@@ -24,10 +24,10 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
         .await
         .expect("connect db");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
 
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
     store
@@ -36,7 +36,7 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
         .expect("quarantine room");
 
     store
-        .register_room_if_absent("!room:hs", &site_id, &post_slug)
+        .register_room_if_absent("!room:hs", &site_id, &page_slug)
         .await
         .expect("register if absent");
     assert_eq!(
@@ -46,7 +46,7 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
     );
 
     store
-        .register_room_if_absent("!new-room:hs", &site_id, &post_slug)
+        .register_room_if_absent("!new-room:hs", &site_id, &page_slug)
         .await
         .expect("register new room");
     assert_eq!(
@@ -60,7 +60,7 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
         .await
         .expect("retire room");
     store
-        .register_room_if_absent("!new-room:hs", &site_id, &post_slug)
+        .register_room_if_absent("!new-room:hs", &site_id, &page_slug)
         .await
         .expect("register if absent after retire");
     assert_eq!(
@@ -69,7 +69,7 @@ async fn register_if_absent_never_resurrects_quarantined_or_superseded_rooms() {
         "backfill must not resurrect a superseded room"
     );
 
-    // Decommission enumeration must see every lifecycle state.
+    // Retirement enumeration must see every lifecycle state.
     let mut all = store
         .list_rooms_for_site(&site_id)
         .await
@@ -91,9 +91,9 @@ async fn mark_room_retired_stops_active_lookup_and_lists_retired() {
         .await
         .expect("connect db");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
 
@@ -118,7 +118,7 @@ async fn mark_room_retired_stops_active_lookup_and_lists_retired() {
 
     assert_eq!(
         store
-            .get_registered_room(&site_id, &post_slug)
+            .get_registered_room(&site_id, &page_slug)
             .await
             .expect("active lookup"),
         None,
@@ -146,18 +146,18 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
         .await
         .expect("connect db");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
 
     let message = Message {
         event_id: "$m:hs".to_string(),
         site_id: "my-blog".to_string(),
-        post_slug: "hello".to_string(),
+        page_slug: "hello".to_string(),
         author: AuthorSnapshot {
-            kind: AuthorKind::Guest,
+            kind: AuthorKind::Visitor,
             display_name: None,
             avatar_url: None,
             public_key: None,
@@ -226,6 +226,6 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
     assert_eq!(
         remaining,
         vec!["mxc://hs/avatar".to_string()],
-        "avatar media (post_slug NULL) is site-scoped and must survive"
+        "avatar media (page_slug NULL) is site-scoped and must survive"
     );
 }

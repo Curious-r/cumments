@@ -164,7 +164,7 @@ impl SubmissionStore for DbStore {
     async fn save_update_submission(&self, command: &UpdateCommentCommand) -> Result<i64> {
         let active_model = update_submissions::ActiveModel {
             site_id: Set(command.site_id.as_str().to_owned()),
-            post_slug: Set(command.post_slug.as_str().to_owned()),
+            page_slug: Set(command.page_slug.as_str().to_owned()),
             event_id: Set(command.event_id.clone()),
             content: Set(command.content.clone()),
             author_public_key: Set(Some(command.author_public_key.clone())),
@@ -298,7 +298,7 @@ impl SubmissionStore for DbStore {
 
         let active_model = update_submissions::ActiveModel {
             site_id: Set(command.site_id.as_str().to_owned()),
-            post_slug: Set(command.post_slug.as_str().to_owned()),
+            page_slug: Set(command.page_slug.as_str().to_owned()),
             event_id: Set(command.event_id.clone()),
             content: Set(command.content.clone()),
             author_public_key: Set(Some(command.author_public_key.clone())),
@@ -580,7 +580,7 @@ impl SubmissionStore for DbStore {
                 id: m.id,
                 command: UpdateCommentCommand {
                     site_id: m.site_id.into(),
-                    post_slug: m.post_slug.into(),
+                    page_slug: m.page_slug.into(),
                     event_id: m.event_id,
                     content: m.content,
                     author_public_key: m.author_public_key.unwrap_or_default(),
@@ -1397,7 +1397,7 @@ impl DbStore {
                 id: m.id,
                 command: UpdateCommentCommand {
                     site_id: m.site_id.into(),
-                    post_slug: m.post_slug.into(),
+                    page_slug: m.page_slug.into(),
                     event_id: m.event_id,
                     content: m.content,
                     author_public_key: m.author_public_key.unwrap_or_default(),

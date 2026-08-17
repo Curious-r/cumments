@@ -92,7 +92,7 @@ pub enum SitesCommand {
     /// Rotate the claim token; the new token is printed exactly once
     #[command(name = "rotate-claim-token")]
     RotateClaimToken(SiteIdArg),
-    /// Stop writes and decommission the site's Matrix Space and rooms
+    /// Stop writes and retire the site's Matrix Space and rooms
     #[command(name = "retire")]
     Retire(RetireSiteArgs),
     /// Start a pending owner claim and print its one-time verify token
@@ -101,12 +101,12 @@ pub enum SitesCommand {
     /// Revoke a pending owner claim (applied roles are managed in Matrix)
     #[command(name = "remove-owner")]
     RemoveOwner(SiteUserIdArg),
-    /// Start a pending co-manager claim and print its one-time verify token
-    #[command(name = "add-co-manager")]
-    AddCoManager(SiteUserIdArg),
-    /// Revoke a pending co-manager claim (applied roles are managed in Matrix)
-    #[command(name = "remove-co-manager")]
-    RemoveCoManager(SiteUserIdArg),
+    /// Start a pending global-moderator claim and print its one-time verify token
+    #[command(name = "add-global-moderator")]
+    AddGlobalModerator(SiteUserIdArg),
+    /// Revoke a pending global-moderator claim (applied roles are managed in Matrix)
+    #[command(name = "remove-global-moderator")]
+    RemoveGlobalModerator(SiteUserIdArg),
 }
 
 #[derive(clap::Args, Debug)]
@@ -170,7 +170,7 @@ pub struct RetireSiteArgs {
     /// Confirm the destructive operation
     #[arg(long)]
     pub yes: bool,
-    /// Poll until the background decommission finishes
+    /// Poll until the background retirement finishes
     #[arg(long)]
     pub wait: bool,
 }

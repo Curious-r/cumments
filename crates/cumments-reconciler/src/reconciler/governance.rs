@@ -150,14 +150,14 @@ impl ReconcilePass for ClaimsPass {
     }
 }
 
-/// Converges site-managed roles (owner 100 / co-manager 75) from each site
+/// Converges site-managed roles (owner 100 / global-moderator 75) from each site
 /// Space into its active comment rooms.
-pub struct ModerationPass {
+pub struct GovernanceSyncPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
 }
 
-impl ModerationPass {
+impl GovernanceSyncPass {
     pub fn new(deps: Arc<ReconcilerDeps>, config: PassConfig) -> Self {
         Self { deps, config }
     }
@@ -220,7 +220,7 @@ impl ModerationPass {
                 for role in &site_roles {
                     if let Err(e) = self.deps.driver.invite_user(&room_id, &role.user_id).await {
                         warn!(
-                            "moderation sync: invite {} to {} failed: {:#}",
+                            "governance sync: invite {} to {} failed: {:#}",
                             role.user_id, room_id, e
                         );
                     }
@@ -236,7 +236,7 @@ impl ModerationPass {
                     .await
                 {
                     warn!(
-                        "moderation sync: invite {} to space {} failed: {:#}",
+                        "governance sync: invite {} to space {} failed: {:#}",
                         role.user_id, site.matrix_space_id, e
                     );
                 }
@@ -248,7 +248,7 @@ impl ModerationPass {
 }
 
 #[async_trait]
-impl ReconcilePass for ModerationPass {
+impl ReconcilePass for GovernanceSyncPass {
     fn config(&self) -> &PassConfig {
         &self.config
     }

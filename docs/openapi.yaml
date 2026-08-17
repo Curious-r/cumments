@@ -51,10 +51,10 @@ paths:
                 $ref: "#/components/schemas/ChallengeResponse"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/comments:
+  /api/v1/sites/{site_id}/pages/{page_slug}/comments:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     post:
       tags: [Comments]
       summary: Submit a comment
@@ -165,12 +165,12 @@ paths:
       operationId: queryComments
       summary: List comments (QUERY)
       description: |
-        Sent as `QUERY /api/v1/sites/{site_id}/posts/{post_slug}/comments`
+        Sent as `QUERY /api/v1/sites/{site_id}/pages/{page_slug}/comments`
         with a JSON body. This custom verb is represented here as an OpenAPI
         extension because OpenAPI only supports standard HTTP methods.
       parameters:
         - $ref: "#/components/parameters/SiteId"
-        - $ref: "#/components/parameters/PostSlug"
+        - $ref: "#/components/parameters/PageSlug"
       requestBody:
         required: false
         content:
@@ -204,10 +204,10 @@ paths:
                     $ref: "#/components/schemas/PaginationMeta"
         "400":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}:
+  /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
       - $ref: "#/components/parameters/CommentId"
     patch:
       tags: [Comments]
@@ -242,10 +242,10 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/sse:
+  /api/v1/sites/{site_id}/pages/{page_slug}/sse:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     get:
       tags: [Comments]
       summary: Live comment events (SSE)
@@ -294,7 +294,7 @@ paths:
         - claimToken: []
       responses:
         "200":
-          description: Site marked retiring; background decommission scheduled
+          description: Site marked retiring; background retirement scheduled
           content:
             application/json:
               schema:
@@ -417,7 +417,7 @@ paths:
         - operatorToken: []
       responses:
         "200":
-          description: Site marked retiring; background decommission scheduled
+          description: Site marked retiring; background retirement scheduled
           content:
             application/json:
               schema:
@@ -617,7 +617,7 @@ paths:
       summary: Retire a comment room (operator)
       operationId: operatorRetireRoom
       description: |
-        Operator mirror of the site-level post retirement: marks the
+        Operator mirror of the site-level page retirement: marks the
         registered active room `Retired`, stopping new writes, and the
         background reconciler leaves the Matrix room (rename, alias removal,
         AS sender and virtual users) and clears local projections.
@@ -711,10 +711,10 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/room:
+  /api/v1/sites/{site_id}/pages/{page_slug}/room:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     get:
       tags: [Public]
       summary: Comment room metadata and system messages
@@ -766,18 +766,18 @@ paths:
                           type: object
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/posts/{post_slug}/media:
+  /api/v1/sites/{site_id}/pages/{page_slug}/media:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     post:
       tags: [Comments]
-      summary: Upload guest media (image/video/audio/file, voice)
+      summary: Upload visitor media (image/video/audio/file, voice)
       operationId: uploadMedia
       description: |
-        Uploads raw bytes as the guest's virtual user. Query parameters carry
+        Uploads raw bytes as the visitor's virtual user. Query parameters carry
         the PoW challenge response and an Ed25519 signature over
-        `UPLOAD/site/post/mime/filename/sha256_hex(body)/challenge`. Requires
+        `UPLOAD/site/page/mime/filename/sha256_hex(body)/challenge`. Requires
         the same `Idempotency-Key` header as comment write submissions;
         replays return the original URL with `Idempotent-Replayed: true`.
       parameters:
@@ -991,10 +991,10 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions:
+  /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
       - $ref: "#/components/parameters/CommentId"
     post:
       tags: [Comments]
@@ -1027,10 +1027,10 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes:
+  /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
       - name: poll_id
         in: path
         required: true
@@ -1067,10 +1067,10 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/location:
+  /api/v1/sites/{site_id}/pages/{page_slug}/location:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     post:
       tags: [Comments]
       summary: Post a location message
@@ -1132,16 +1132,16 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/upgrade:
+  /api/v1/sites/{site_id}/pages/{page_slug}/upgrade:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     post:
       tags: [Governance]
       summary: Upgrade a comment room
-      operationId: upgradePostRoom
+      operationId: upgradePageRoom
       description: |
-        Upgrades the site's active comment room for this post through the
+        Upgrades the site's active comment room for this page through the
         homeserver's native `/upgrade` and converges the replacement:
         metadata is repaired, the room is re-linked into the site Space,
         site roles are re-invited, and the old room is superseded. The
@@ -1162,7 +1162,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UpgradePostRoomResponse"
+                $ref: "#/components/schemas/UpgradePageRoomResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -1171,16 +1171,16 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/posts/{post_slug}:
+  /api/v1/sites/{site_id}/pages/{page_slug}:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     delete:
       tags: [Governance]
-      summary: Retire a post's comment room
-      operationId: retirePostRoom
+      summary: Retire a page's comment room
+      operationId: retirePageRoom
       description: |
-        Site-owner entry point for removing a post's comment section: marks
+        Site-owner entry point for removing a page's comment section: marks
         the active comment room `Retired`, stopping new writes, and the
         background reconciler leaves the Matrix room (rename, alias removal,
         AS sender and virtual users) and clears local projections. The
@@ -1195,11 +1195,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [site_id, post_slug, status]
+                required: [site_id, page_slug, status]
                 properties:
                   site_id:
                     type: string
-                  post_slug:
+                  page_slug:
                     type: string
                   status:
                     type: string
@@ -1208,15 +1208,15 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/guests/avatar:
+  /api/v1/sites/{site_id}/visitors/avatar:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     put:
       tags: [Comments]
-      summary: Upload and set the guest avatar
-      operationId: setGuestAvatar
+      summary: Upload and set the visitor avatar
+      operationId: setVisitorAvatar
       description: |
-        Uploads raw image bytes as the guest's virtual user and sets the
+        Uploads raw image bytes as the visitor's virtual user and sets the
         avatar on that virtual user's global profile in one request. Query
         parameters carry the PoW challenge response and an Ed25519 signature
         over
@@ -1290,10 +1290,10 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Comments]
-      summary: Remove the guest avatar
-      operationId: deleteGuestAvatar
+      summary: Remove the visitor avatar
+      operationId: deleteVisitorAvatar
       description: |
-        Removes the avatar from the guest's virtual-user profile. Query
+        Removes the avatar from the visitor's virtual-user profile. Query
         parameters carry the PoW challenge response and an Ed25519 signature
         over `DELETE_AVATAR/site/challenge`. Deleting a missing avatar is a
         successful no-op.
@@ -1328,16 +1328,16 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/guests/profile:
+  /api/v1/sites/{site_id}/visitors/profile:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     get:
       tags: [Comments]
-      summary: Get the guest's current profile for this site
-      operationId: getGuestProfile
+      summary: Get the visitor's current profile for this site
+      operationId: getVisitorProfile
       description: |
-        Public self-service read of a guest's current global profile
-        (display name and avatar) for this site, keyed by the guest's
+        Public self-service read of a visitor's current global profile
+        (display name and avatar) for this site, keyed by the visitor's
         Ed25519 public key. Unknown or privacy-hidden profiles return an
         empty profile (`null` fields) rather than an error, so clients can
         treat "no profile" as a normal state.
@@ -1349,11 +1349,11 @@ paths:
             type: string
       responses:
         "200":
-          description: Current guest profile
+          description: Current visitor profile
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GuestProfile"
+                $ref: "#/components/schemas/VisitorProfile"
         "400":
           $ref: "#/components/responses/Error"
         "429":
@@ -1411,13 +1411,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/co-managers:
+  /api/v1/sites/{site_id}/global-moderators:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
-      summary: Add a site co-manager
-      operationId: addSiteCoManager
+      summary: Add a site global-moderator
+      operationId: addSiteGlobalModerator
       security:
         - claimToken: []
       requestBody:
@@ -1443,8 +1443,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Governance]
-      summary: Remove a site co-manager
-      operationId: removeSiteCoManager
+      summary: Remove a site global-moderator
+      operationId: removeSiteGlobalModerator
       security:
         - claimToken: []
       parameters:
@@ -1464,10 +1464,10 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/posts/{post_slug}/moderators:
+  /api/v1/sites/{site_id}/pages/{page_slug}/moderators:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-      - $ref: "#/components/parameters/PostSlug"
+      - $ref: "#/components/parameters/PageSlug"
     get:
       tags: [Governance]
       summary: List projected room moderators
@@ -1598,13 +1598,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/operator/sites/{site_id}/co-managers:
+  /api/v1/operator/sites/{site_id}/global-moderators:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
-      summary: Add a site co-manager (operator)
-      operationId: operatorAddSiteCoManager
+      summary: Add a site global-moderator (operator)
+      operationId: operatorAddSiteGlobalModerator
       security:
         - operatorToken: []
       requestBody:
@@ -1630,8 +1630,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Operator]
-      summary: Remove a site co-manager (operator)
-      operationId: operatorRemoveSiteCoManager
+      summary: Remove a site global-moderator (operator)
+      operationId: operatorRemoveSiteGlobalModerator
       security:
         - operatorToken: []
       parameters:
@@ -1668,8 +1668,8 @@ components:
       schema:
         type: string
         pattern: "^[a-z0-9-]{1,64}$"
-    PostSlug:
-      name: post_slug
+    PageSlug:
+      name: page_slug
       in: path
       required: true
       schema:
@@ -1708,7 +1708,7 @@ components:
       in: header
       required: true
       description: |
-        Mandatory for all write submissions and guest media uploads. 8-255
+        Mandatory for all write submissions and visitor media uploads. 8-255
         printable ASCII characters, scoped to the author's public key.
         Retrying an accepted request with the same key and body returns the
         original result (`submission_id` or media URL) with
@@ -1781,11 +1781,11 @@ components:
         status:
           type: string
           enum: [ok]
-    GuestProfile:
+    VisitorProfile:
       type: object
-      required: [guest_id, display_name, avatar_url]
+      required: [visitor_id, display_name, avatar_url]
       properties:
-        guest_id:
+        visitor_id:
           type: string
           description: 32-hex identifier derived from the public key.
         display_name:
@@ -1833,7 +1833,7 @@ components:
       properties:
         type:
           type: string
-          enum: [guest, matrix]
+          enum: [visitor, matrix]
         display_name:
           type: string
           nullable: true
@@ -1851,7 +1851,7 @@ components:
       required:
         - event_id
         - site_id
-        - post_slug
+        - page_slug
         - room_id
         - sender_mxid
         - author
@@ -1865,7 +1865,7 @@ components:
           type: string
         site_id:
           type: string
-        post_slug:
+        page_slug:
           type: string
         room_id:
           type: string
@@ -2138,13 +2138,13 @@ components:
         new_version:
           type: string
           description: Target Matrix room version; must be newer than the room's current version.
-    UpgradePostRoomResponse:
+    UpgradePageRoomResponse:
       type: object
-      required: [site_id, post_slug, new_version, replacement_room]
+      required: [site_id, page_slug, new_version, replacement_room]
       properties:
         site_id:
           type: string
-        post_slug:
+        page_slug:
           type: string
         new_version:
           type: string
@@ -2301,7 +2301,7 @@ components:
       required:
         - room_id
         - site_id
-        - post_slug
+        - page_slug
         - quarantine_reason
         - quarantined_at
         - adoption_failures
@@ -2310,7 +2310,7 @@ components:
           type: string
         site_id:
           type: string
-        post_slug:
+        page_slug:
           type: string
         quarantine_reason:
           type: string
@@ -2417,13 +2417,13 @@ components:
           description: Non-empty when the revocation leaves a notable state (e.g. the last site owner was removed).
     SiteRolesResponse:
       type: object
-      required: [owners, co_managers]
+      required: [owners, global_moderators]
       properties:
         owners:
           type: array
           items:
             type: string
-        co_managers:
+        global_moderators:
           type: array
           items:
             type: string

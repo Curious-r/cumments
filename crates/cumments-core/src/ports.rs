@@ -5,9 +5,9 @@ use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
 use crate::models::{
-    CommentMedia, GuestProfile, Message, MessagePage, MessageRevision, PollVote, PostSlug,
-    QuarantinedRoom, Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata,
-    RoomStateEvent, RoomStatus, SiteId,
+    CommentMedia, Message, MessagePage, MessageRevision, PageSlug, PollVote, QuarantinedRoom,
+    Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
+    SiteId, VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -227,7 +227,7 @@ pub trait MessageStore: Send + Sync {
     async fn get_messages(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
         limit: i64,
         offset: i64,
     ) -> Result<MessagePage>;
@@ -288,13 +288,13 @@ pub trait MessageStore: Send + Sync {
         redacted_by: &str,
     ) -> Result<bool>;
 
-    /// Records a guest upload so comment submissions can later prove ownership.
+    /// Records a visitor upload so comment submissions can later prove ownership.
     async fn record_media_upload(
         &self,
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: Option<&str>,
+        page_slug: Option<&str>,
     ) -> Result<()>;
 
     /// Whether a media URL was uploaded by this author for this site/post.
@@ -303,7 +303,7 @@ pub trait MessageStore: Send + Sync {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: &str,
+        page_slug: &str,
     ) -> Result<bool>;
 
     /// Marks a media URL as referenced by a a comment submission.
@@ -319,7 +319,7 @@ pub trait MessageStore: Send + Sync {
     /// deleted or is unreachable).
     async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
 
-    /// Lists every recorded media MXC URL for one site, used by decommission
+    /// Lists every recorded media MXC URL for one site, used by retirement
     /// to delete the homeserver copies before the rows are dropped.
     async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>>;
 
@@ -338,7 +338,7 @@ pub trait MessageStore: Send + Sync {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: Option<&str>,
+        page_slug: Option<&str>,
         idempotency: &MediaUploadIdempotencyInput,
     ) -> Result<MediaUploadIdempotencyOutcome>;
 
@@ -407,7 +407,7 @@ pub trait RegistryStore: Send + Sync {
     async fn get_registered_room(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
     ) -> Result<Option<String>>;
 
     /// Returns the lifecycle status of a room, if it is in the registry.
@@ -420,7 +420,7 @@ pub trait RegistryStore: Send + Sync {
     async fn list_active_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
 
     /// Lists every room registered for one site, regardless of lifecycle
-    /// status. Used by decommission so quarantined/superseded rooms are
+    /// status. Used by retirement so quarantined/superseded rooms are
     /// retired too.
     async fn list_rooms_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
 
@@ -428,7 +428,7 @@ pub trait RegistryStore: Send + Sync {
     /// AS-managed memberships from rooms that were replaced.
     async fn list_superseded_rooms(&self) -> Result<Vec<String>>;
 
-    /// Lists every room marked retired (post-level decommission) that still
+    /// Lists every room marked retired (post-level retirement) that still
     /// has a registry row. Used by the room-retirement pass.
     async fn list_retired_rooms(&self) -> Result<Vec<String>>;
 
@@ -444,7 +444,7 @@ pub trait RegistryStore: Send + Sync {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
     ) -> Result<()>;
 
     /// Registers a room only when it is not already in the registry, without
@@ -454,14 +454,14 @@ pub trait RegistryStore: Send + Sync {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
     ) -> Result<()>;
 
     /// Retires a room from the registry (e.g. the room no longer exists or
     /// was replaced), keeping the row for projection history.
     async fn retire_room(&self, room_id: &str) -> Result<()>;
 
-    /// Marks an active room `Retired` (post-level decommission), stopping
+    /// Marks an active room `Retired` (post-level retirement), stopping
     /// new writes immediately. Returns `false` when the room is not in the
     /// registry or is no longer active.
     async fn mark_room_retired(&self, room_id: &str) -> Result<bool>;
@@ -614,7 +614,7 @@ pub trait RoleClaimStore: Send + Sync {
     async fn active_claims_in_dm_room(&self, user_id: &str, room_id: &str) -> Result<bool>;
 
     /// Distinct `(user_id, dm_room_id)` pairs recorded for one site's claims.
-    /// Used by decommission so the bot leaves verification DMs after the
+    /// Used by retirement so the bot leaves verification DMs after the
     /// site's claims are deleted.
     async fn claim_dm_rooms_for_site(&self, site_id: &str) -> Result<Vec<(String, String)>>;
 
@@ -644,10 +644,10 @@ pub trait SiteAuthStore: Send + Sync {
     /// not exist or is not `active`.
     async fn mark_site_retiring(&self, site_id: &str) -> Result<bool>;
 
-    /// Site ids whose decommission has been requested but not finished.
+    /// Site ids whose retirement has been requested but not finished.
     async fn list_retiring_sites(&self) -> Result<Vec<String>>;
 
-    /// Removes every local trace of a decommissioned site (auth row,
+    /// Removes every local trace of a retired site (auth row,
     /// projections, rooms, submissions). Callers must have already retired the
     /// Matrix side; this is the final, idempotent cleanup.
     async fn delete_site(&self, site_id: &str) -> Result<()>;
@@ -731,7 +731,7 @@ pub trait MatrixDriver: Send + Sync {
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
         space_id: &str,
         candidate_room_id: Option<&str>,
     ) -> Result<String>;
@@ -747,7 +747,7 @@ pub trait MatrixDriver: Send + Sync {
     /// the homeserver) are treated as success.
     async fn leave_room(&self, room_id: &str) -> Result<()>;
 
-    /// Removes a specific AS-managed user (e.g. a guest virtual user) from a
+    /// Removes a specific AS-managed user (e.g. a visitor virtual user) from a
     /// room. Rooms the user is not in are treated as success.
     async fn leave_room_as(&self, room_id: &str, user_id: &str) -> Result<()>;
 
@@ -756,9 +756,9 @@ pub trait MatrixDriver: Send + Sync {
     /// successful no-op.
     async fn join_room(&self, room_id: &str) -> Result<()>;
 
-    /// Deletes the site's Space alias (`post_slug: None`) or one comment
+    /// Deletes the site's Space alias (`page_slug: None`) or one comment
     /// room's alias from the room directory. Missing aliases are a no-op.
-    async fn remove_room_alias(&self, site_id: &SiteId, post_slug: Option<&PostSlug>)
+    async fn remove_room_alias(&self, site_id: &SiteId, page_slug: Option<&PageSlug>)
     -> Result<()>;
 
     /// Best-effort deletion of one media item on the homeserver. Returns
@@ -794,7 +794,7 @@ pub trait MatrixDriver: Send + Sync {
         avatar_url: Option<&str>,
     ) -> Result<()>;
 
-    /// Reads a guest's current global profile from the homeserver.
+    /// Reads a visitor's current global profile from the homeserver.
     ///
     /// Returns `Ok(None)` when the virtual user does not exist or the
     /// homeserver refuses to disclose the profile (`404`/`403` per MSC4170),
@@ -803,7 +803,7 @@ pub trait MatrixDriver: Send + Sync {
         &self,
         author_public_key: &str,
         site_id: &SiteId,
-    ) -> Result<Option<GuestProfile>>;
+    ) -> Result<Option<VisitorProfile>>;
 
     /// Posts a message to a specific room.
     async fn post_message(
@@ -832,7 +832,7 @@ pub trait MatrixDriver: Send + Sync {
         txn_id: &str,
     ) -> Result<String>;
 
-    /// Sends a reaction (`m.reaction`) as the guest's virtual user.
+    /// Sends a reaction (`m.reaction`) as the visitor's virtual user.
     async fn react_message(
         &self,
         room_id: &str,
@@ -844,7 +844,7 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
     ) -> Result<()>;
 
-    /// Sends a poll vote (`m.poll.response`) as the guest's virtual user.
+    /// Sends a poll vote (`m.poll.response`) as the visitor's virtual user.
     async fn vote_poll(
         &self,
         room_id: &str,
@@ -856,7 +856,7 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
     ) -> Result<()>;
 
-    /// Sends a location message (`m.location`, MSC3488) as the guest's
+    /// Sends a location message (`m.location`, MSC3488) as the visitor's
     /// virtual user. Returns the Matrix event ID and carries the submission
     /// correlation hint, like [`Self::post_message`].
     async fn post_location(
@@ -981,7 +981,7 @@ pub trait MatrixDriver: Send + Sync {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
         require_space: bool,
     ) -> Result<()>;
 
@@ -1020,7 +1020,7 @@ pub trait CommandAuditStore: Send + Sync {
 }
 
 /// Port for virtual user identity management (AppService mode).
-/// Maps Cumments guest public keys to stable Matrix virtual user IDs.
+/// Maps Cumments visitor public keys to stable Matrix virtual user IDs.
 #[async_trait]
 pub trait VirtualUserStore: Send + Sync {
     /// Returns the virtual Matrix user ID for the given author public key and site.

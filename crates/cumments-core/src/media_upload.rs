@@ -1,4 +1,4 @@
-//! Idempotency metadata for guest media uploads.
+//! Idempotency metadata for visitor media uploads.
 //!
 //! Uploads are synchronous writes that return an `mxc://` URL, so they
 //! cannot ride the submission queue. The idempotency record is stored

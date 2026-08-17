@@ -10,9 +10,9 @@ pub struct Model {
     pub event_id: String,
     pub room_id: String,
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub sender_mxid: String,
-    /// One of `guest` / `matrix` (see `AuthorKind`).
+    /// One of `visitor` / `matrix` (see `AuthorKind`).
     pub author_kind: String,
     pub author_display_name: Option<String>,
     pub author_avatar_url: Option<String>,

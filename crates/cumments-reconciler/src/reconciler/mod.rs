@@ -1,18 +1,18 @@
-mod decommission;
 mod deletions;
+mod governance;
 mod media;
-mod moderation;
 mod pass;
 mod posts;
 mod room_retirement;
 mod rooms;
+mod site_retirement;
 mod timeouts;
 mod updates;
 
 use anyhow::Result;
 use cumments_core::{
     matrix_error::MatrixError,
-    models::{PostSlug, QuarantinedRoom, SiteId},
+    models::{PageSlug, QuarantinedRoom, SiteId},
     ports::{
         GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
         SiteStore, SubmissionStore, VirtualUserStore,
@@ -166,19 +166,19 @@ impl Reconciler {
             )),
             Arc::new(updates::UpdatesPass::new(deps.clone(), schedule.updates)),
             Arc::new(timeouts::TimeoutsPass::new(deps.clone(), schedule.timeouts)),
-            Arc::new(moderation::ClaimsPass::new(deps.clone(), schedule.claims)),
-            Arc::new(moderation::ModerationPass::new(
+            Arc::new(governance::ClaimsPass::new(deps.clone(), schedule.claims)),
+            Arc::new(governance::GovernanceSyncPass::new(
                 deps.clone(),
-                schedule.moderation,
+                schedule.governance_sync,
             )),
             Arc::new(rooms::RoomCleanupPass::new(deps.clone(), schedule.rooms)),
             Arc::new(room_retirement::RoomRetirementPass::new(
                 deps.clone(),
-                schedule.retirements,
+                schedule.room_retirements,
             )),
-            Arc::new(decommission::DecommissionPass::new(
+            Arc::new(site_retirement::SiteRetirementPass::new(
                 deps.clone(),
-                schedule.decommission,
+                schedule.site_retirements,
             )),
             Arc::new(media::MediaCleanupPass::new(
                 deps.clone(),
@@ -213,10 +213,10 @@ struct PassSchedule {
     updates: PassConfig,
     timeouts: PassConfig,
     claims: PassConfig,
-    moderation: PassConfig,
+    governance_sync: PassConfig,
     rooms: PassConfig,
-    retirements: PassConfig,
-    decommission: PassConfig,
+    room_retirements: PassConfig,
+    site_retirements: PassConfig,
 }
 
 fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
@@ -242,10 +242,10 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
         updates: submission("updates"),
         timeouts: submission("timeouts"),
         claims: projection("claims"),
-        moderation: projection("moderation"),
+        governance_sync: projection("governance_sync"),
         rooms: governance("rooms"),
-        retirements: governance("retirements"),
-        decommission: governance("decommission"),
+        room_retirements: governance("room_retirements"),
+        site_retirements: governance("site_retirements"),
     }
 }
 
@@ -253,12 +253,12 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
 async fn quarantined_room_for(
     deps: &ReconcilerDeps,
     site_id: &SiteId,
-    post_slug: &PostSlug,
+    page_slug: &PageSlug,
 ) -> Result<Option<QuarantinedRoom>> {
     let rooms = deps.registry_store.get_quarantined_rooms().await?;
     Ok(rooms
         .into_iter()
-        .find(|r| r.site_id == site_id.as_str() && r.post_slug == post_slug.as_str()))
+        .find(|r| r.site_id == site_id.as_str() && r.page_slug == page_slug.as_str()))
 }
 
 /// Records one more adoption failure for a room, applying the backoff
@@ -338,13 +338,13 @@ mod tests {
             assert_eq!(config.interval, SUBMISSION_PASS_INTERVAL);
             assert!(Arc::ptr_eq(&config.wakeup, &submission), "{}", config.name);
         }
-        for config in [&schedule.claims, &schedule.moderation] {
+        for config in [&schedule.claims, &schedule.governance_sync] {
             assert_eq!(config.interval, GOVERNANCE_PASS_INTERVAL);
             assert!(Arc::ptr_eq(&config.wakeup, &projection), "{}", config.name);
         }
         assert_eq!(schedule.rooms.interval, GOVERNANCE_PASS_INTERVAL);
         assert!(Arc::ptr_eq(&schedule.rooms.wakeup, &governance));
-        assert_eq!(schedule.decommission.interval, GOVERNANCE_PASS_INTERVAL);
-        assert!(Arc::ptr_eq(&schedule.decommission.wakeup, &governance));
+        assert_eq!(schedule.site_retirements.interval, GOVERNANCE_PASS_INTERVAL);
+        assert!(Arc::ptr_eq(&schedule.site_retirements.wakeup, &governance));
     }
 }

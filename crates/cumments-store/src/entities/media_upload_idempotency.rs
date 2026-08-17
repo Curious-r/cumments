@@ -6,7 +6,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
-    /// Guest public key that owns the upload.
+    /// Visitor public key that owns the upload.
     pub author_public_key: String,
     /// Client-supplied `Idempotency-Key` header value.
     pub idempotency_key: String,

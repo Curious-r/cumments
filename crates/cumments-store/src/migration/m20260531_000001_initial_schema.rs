@@ -40,7 +40,7 @@ impl MigrationTrait for Migration {
                     .name("idx_comments_site_post")
                     .table(comments::Entity)
                     .col(comments::Column::SiteId)
-                    .col(comments::Column::PostSlug)
+                    .col(comments::Column::PageSlug)
                     .to_owned(),
             )
             .await?;
@@ -51,7 +51,7 @@ impl MigrationTrait for Migration {
                     .name("idx_room_registry_site_post")
                     .table(room_registry::Entity)
                     .col(room_registry::Column::SiteId)
-                    .col(room_registry::Column::PostSlug)
+                    .col(room_registry::Column::PageSlug)
                     .to_owned(),
             )
             .await?;

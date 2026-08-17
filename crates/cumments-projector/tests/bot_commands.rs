@@ -1,7 +1,7 @@
 use cumments_core::{
     audit::CommandAuditStatus,
     governance::{OWNER_LEVEL, RoleEntry},
-    models::{Content, PostSlug, RoomStatus, SiteId, TextContent, TextStyle},
+    models::{Content, PageSlug, RoomStatus, SiteId, TextContent, TextStyle},
     ports::{
         CommandAuditStore, GovernanceStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
     },
@@ -178,7 +178,7 @@ async fn operator_sites_list_works_and_unknown_user_is_denied() {
 }
 
 #[tokio::test]
-async fn owner_can_create_co_manager_claim_and_retire_with_confirm() {
+async fn owner_can_create_global_moderator_claim_and_retire_with_confirm() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("owner"))
             .await
@@ -223,7 +223,7 @@ async fn owner_can_create_co_manager_claim_and_retire_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog co-manager add @bob:hs",
+            "!cumments site my-blog global-moderator add @bob:hs",
         ))
         .await
         .expect("process")
@@ -307,14 +307,14 @@ async fn site_registration_is_public_self_service() {
 }
 
 #[tokio::test]
-async fn owner_can_retire_a_post_room_with_confirm() {
+async fn owner_can_retire_a_page_room_with_confirm() {
     let store = Arc::new(
-        DbStore::connect(&test_db_url("owner-post-retire"))
+        DbStore::connect(&test_db_url("owner-page-retire"))
             .await
             .expect("connect db"),
     );
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
         .register_site("my-blog", &token_hash("claim"), true)
         .await
@@ -324,7 +324,7 @@ async fn owner_can_retire_a_post_room_with_confirm() {
         .await
         .expect("attach space");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
     let driver = Arc::new(
@@ -344,7 +344,7 @@ async fn owner_can_retire_a_post_room_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog post hello retire",
+            "!cumments site my-blog page hello retire",
         ))
         .await
         .expect("process")
@@ -360,7 +360,7 @@ async fn owner_can_retire_a_post_room_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog post hello retire --confirm",
+            "!cumments site my-blog page hello retire --confirm",
         ))
         .await
         .expect("process")
@@ -382,13 +382,13 @@ async fn operator_can_retire_a_room_by_id() {
             .expect("connect db"),
     );
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
         .register_site("my-blog", &token_hash("claim"), true)
         .await
         .expect("register site");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
     let p = processor(
@@ -571,9 +571,9 @@ async fn sticker_site(store: &DbStore) {
 }
 
 #[tokio::test]
-async fn co_manager_can_manage_stickers_but_not_governance() {
+async fn global_moderator_can_manage_stickers_but_not_governance() {
     let store = Arc::new(
-        DbStore::connect(&test_db_url("co-manager-stickers"))
+        DbStore::connect(&test_db_url("global-moderator-stickers"))
             .await
             .expect("connect db"),
     );
@@ -595,7 +595,7 @@ async fn co_manager_can_manage_stickers_but_not_governance() {
         common::test_policy(),
     );
 
-    // Co-managers may manage stickers (state_default 50 < 75)...
+    // Global moderators may manage stickers (state_default 50 < 75)...
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
@@ -613,7 +613,7 @@ async fn co_manager_can_manage_stickers_but_not_governance() {
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
-            "!cumments site my-blog co-manager add @carol:hs",
+            "!cumments site my-blog global-moderator add @carol:hs",
         ))
         .await
         .expect("process")
@@ -624,11 +624,11 @@ async fn co_manager_can_manage_stickers_but_not_governance() {
         .expect("audit");
     assert_eq!(audit[0].status, CommandAuditStatus::Denied);
 
-    // Post retirement is the same governance fence: denied for co-managers.
+    // Post retirement is the same governance fence: denied for global-moderators.
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
-            "!cumments site my-blog post hello retire --confirm",
+            "!cumments site my-blog page hello retire --confirm",
         ))
         .await
         .expect("process")

@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::migration::column_exists;
+use crate::migration::{column_exists, slug_column};
 
 const TABLE: &str = "room_registry";
 const UNIQUE_INDEX: &str = "idx_room_registry_active_site_post";
@@ -16,6 +16,7 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
+        let slug = slug_column(manager, TABLE).await?;
         db.execute_unprepared(&format!("DROP INDEX IF EXISTS {UNIQUE_INDEX}"))
             .await?;
 
@@ -88,7 +89,7 @@ impl MigrationTrait for Migration {
 
         db.execute_unprepared(&format!(
             "CREATE UNIQUE INDEX IF NOT EXISTS {UNIQUE_INDEX} \
-             ON {TABLE}(site_id, post_slug) WHERE status = 'active'"
+             ON {TABLE}(site_id, {slug}) WHERE status = 'active'"
         ))
         .await?;
         Ok(())
@@ -96,6 +97,7 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
+        let slug = slug_column(manager, TABLE).await?;
         db.execute_unprepared(&format!("DROP INDEX IF EXISTS {UNIQUE_INDEX}"))
             .await?;
 
@@ -133,7 +135,7 @@ impl MigrationTrait for Migration {
 
         db.execute_unprepared(&format!(
             "CREATE UNIQUE INDEX IF NOT EXISTS {UNIQUE_INDEX} \
-             ON {TABLE}(site_id, post_slug) WHERE is_active = 1"
+             ON {TABLE}(site_id, {slug}) WHERE is_active = 1"
         ))
         .await?;
         Ok(())

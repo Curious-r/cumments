@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::migration::column_exists;
+use crate::migration::{column_exists, slug_column};
 
 const TABLE: &str = "room_registry";
 
@@ -13,31 +13,32 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
+        let slug = slug_column(manager, TABLE).await?;
         if column_exists(manager, TABLE, "is_active").await? {
             // Legacy `is_active` schema: deactivate duplicates
             // deterministically (keep the oldest row per site/post), matching
             // the `get_registered_room` convention, then index active rows.
-            db.execute_unprepared(
+            db.execute_unprepared(&format!(
                 "UPDATE room_registry SET is_active = 0, \
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
                  WHERE is_active = 1 AND rowid NOT IN ( \
                      SELECT MIN(rowid) FROM room_registry \
-                     WHERE is_active = 1 GROUP BY site_id, post_slug \
-                 )",
-            )
+                     WHERE is_active = 1 GROUP BY site_id, {slug} \
+                 )"
+            ))
             .await?;
-            db.execute_unprepared(
+            db.execute_unprepared(&format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_room_registry_active_site_post \
-                 ON room_registry(site_id, post_slug) WHERE is_active = 1",
-            )
+                 ON room_registry(site_id, {slug}) WHERE is_active = 1"
+            ))
             .await?;
         } else {
             // Entity-first fresh schema already has `status`; index the
             // canonical rows directly.
-            db.execute_unprepared(
+            db.execute_unprepared(&format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_room_registry_active_site_post \
-                 ON room_registry(site_id, post_slug) WHERE status = 'active'",
-            )
+                 ON room_registry(site_id, {slug}) WHERE status = 'active'"
+            ))
             .await?;
         }
 

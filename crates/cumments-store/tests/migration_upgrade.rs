@@ -1,7 +1,6 @@
 use chrono::Utc;
-use cumments_store::entities::comments;
 use cumments_store::migration::Migrator;
-use sea_orm::{ColumnTrait, ConnectionTrait, Database, EntityTrait, QueryFilter};
+use sea_orm::{ConnectionTrait, Database};
 use sea_orm_migration::MigratorTrait;
 
 fn test_db_url(name: &str) -> String {
@@ -33,7 +32,7 @@ async fn author_type_backfill_repairs_upgraded_rows() {
     let now = Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
         "INSERT INTO comments \
-         (event_id, room_id, site_id, post_slug, sender_mxid, author_display_name, \
+         (event_id, room_id, site_id, page_slug, sender_mxid, author_display_name, \
           content, timestamp, created_at, projected_at, author_public_key, reply_to) \
          VALUES \
          ('$guest', '!room:hs', 'my-blog', 'hello', '', 'Alice', 'hi', '{now}', '{now}', '{now}', 'pk1', NULL), \
@@ -48,21 +47,24 @@ async fn author_type_backfill_repairs_upgraded_rows() {
         .await
         .expect("migrate to 000029");
 
-    let rows = comments::Entity::find()
-        .filter(comments::Column::EventId.eq("$guest"))
-        .all(&db)
+    let rows = db
+        .query_all_raw(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT event_id, author_type FROM comments \
+             WHERE event_id IN ('$guest', '$matrix') ORDER BY event_id",
+        ))
         .await
-        .expect("query guest");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].author_type, "guest");
-
-    let rows = comments::Entity::find()
-        .filter(comments::Column::EventId.eq("$matrix"))
-        .all(&db)
-        .await
-        .expect("query matrix");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].author_type, "matrix");
+        .expect("query author types");
+    let types = rows
+        .into_iter()
+        .map(|row| {
+            let id: String = row.try_get("", "event_id").expect("event_id");
+            let ty: String = row.try_get("", "author_type").expect("author_type");
+            (id, ty)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(types.get("$guest"), Some(&"guest".to_string()));
+    assert_eq!(types.get("$matrix"), Some(&"matrix".to_string()));
 
     // The corrective statements must be idempotent.
     db.execute_unprepared(
@@ -78,13 +80,23 @@ async fn author_type_backfill_repairs_upgraded_rows() {
     .await
     .expect("re-run guest correction");
 
-    let rows = comments::Entity::find().all(&db).await.expect("query all");
+    let rows = db
+        .query_all_raw(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT event_id, author_type FROM comments ORDER BY event_id",
+        ))
+        .await
+        .expect("query all");
     let types = rows
         .iter()
-        .map(|row| (row.event_id.as_str(), row.author_type.as_str()))
+        .map(|row| {
+            let id: String = row.try_get("", "event_id").expect("event_id");
+            let ty: String = row.try_get("", "author_type").expect("author_type");
+            (id, ty)
+        })
         .collect::<std::collections::HashMap<_, _>>();
-    assert_eq!(types.get("$guest"), Some(&"guest"));
-    assert_eq!(types.get("$matrix"), Some(&"matrix"));
+    assert_eq!(types.get("$guest"), Some(&"guest".to_string()));
+    assert_eq!(types.get("$matrix"), Some(&"matrix".to_string()));
 }
 
 #[tokio::test]
@@ -105,7 +117,7 @@ async fn comment_updated_at_is_renamed_to_projected_at() {
     let now = Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
         "INSERT INTO comments \
-         (event_id, room_id, site_id, post_slug, sender_mxid, author_display_name, author_type, \
+         (event_id, room_id, site_id, page_slug, sender_mxid, author_display_name, author_type, \
           content, timestamp, created_at, updated_at, author_public_key, reply_to) \
          VALUES \
          ('$guest', '!room:hs', 'my-blog', 'hello', '', 'Alice', 'guest', 'hi', '{now}', '{now}', '{now}', 'pk1', NULL)"
@@ -116,15 +128,17 @@ async fn comment_updated_at_is_renamed_to_projected_at() {
     // One pending migration remains after 000028: apply 000029 only.
     Migrator::up(&db, Some(1)).await.expect("migrate to 000029");
 
-    let row = comments::Entity::find()
-        .filter(comments::Column::EventId.eq("$guest"))
-        .one(&db)
+    let rows = db
+        .query_all_raw(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT projected_at FROM comments WHERE event_id = '$guest'",
+        ))
         .await
-        .expect("query row")
-        .expect("row must exist after migration");
+        .expect("query row");
+    assert_eq!(rows.len(), 1, "row must exist after migration");
+    let projected_at: String = rows[0].try_get("", "projected_at").expect("projected_at");
     assert_eq!(
-        row.projected_at.to_rfc3339(),
-        now,
+        projected_at, now,
         "renamed column must preserve the stored value"
     );
 }
@@ -233,7 +247,7 @@ async fn room_quarantine_state_backfills_legacy_encoding() {
     let now = Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
         "INSERT INTO room_registry \
-         (room_id, site_id, post_slug, is_active, blocked_reason, created_at, updated_at) \
+         (room_id, site_id, page_slug, is_active, blocked_reason, created_at, updated_at) \
          VALUES \
          ('!active:hs', 'my-blog', 'active-post', 1, NULL, '{now}', '{now}'), \
          ('!quarantined:hs', 'my-blog', 'quarantined-post', 0, 'Refusing to adopt room', '{now}', '{now}'), \

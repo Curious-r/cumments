@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-/// Projected room-level governance roles (owner 100 / co-manager 75 /
+/// Projected room-level governance roles (owner 100 / global-moderator 75 /
 /// moderator 50) from a comment room's `m.room.power_levels` state.
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]

@@ -3,7 +3,7 @@
 //! the submission queue; the reconciler executes it against Matrix. The
 //! user's *intent* is a mental concept — commands are its concrete form.
 
-use crate::models::{CommentMedia, PostSlug, SiteId};
+use crate::models::{CommentMedia, PageSlug, SiteId};
 use serde::{Deserialize, Serialize};
 
 /// Represents the user's desire to post a comment.
@@ -13,7 +13,7 @@ pub struct PostCommentCommand {
     /// The site this comment belongs to.
     pub site_id: SiteId,
     /// The post/page this comment belongs to.
-    pub post_slug: PostSlug,
+    pub page_slug: PageSlug,
 
     /// The content of the comment, likely in Markdown.
     pub content: String,
@@ -27,7 +27,7 @@ pub struct PostCommentCommand {
     #[serde(default)]
     pub location: Option<LocationPayload>,
 
-    /// Display name of the author. For guests, this is provided by them.
+    /// Display name of the author. For visitors, this is provided by them.
     pub display_name: String,
 
     /// Ed25519 public key identifying the author (base64url).
@@ -44,7 +44,7 @@ pub struct PostCommentCommand {
     pub reply_to: Option<String>,
 }
 
-/// Payload for a guest location message (`m.location`, MSC3488).
+/// Payload for a visitor location message (`m.location`, MSC3488).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocationPayload {
     pub geo_uri: String,
@@ -58,7 +58,7 @@ pub struct DeleteCommentCommand {
     /// The site this comment belongs to.
     pub site_id: SiteId,
     /// The post/page this comment belongs to.
-    pub post_slug: PostSlug,
+    pub page_slug: PageSlug,
     /// The Matrix event ID of the comment to be deleted.
     pub event_id: String,
     /// The author's Ed25519 public key (base64url).
@@ -79,7 +79,7 @@ pub struct UpdateCommentCommand {
     /// The site this comment belongs to.
     pub site_id: SiteId,
     /// The post/page this comment belongs to.
-    pub post_slug: PostSlug,
+    pub page_slug: PageSlug,
     /// The Matrix event ID of the comment to be updated.
     pub event_id: String,
     /// The new content for the comment.

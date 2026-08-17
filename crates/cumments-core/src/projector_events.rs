@@ -7,24 +7,24 @@ use serde::{Deserialize, Serialize};
 pub enum ProjectorEvent {
     MessageCreated {
         site_id: String,
-        post_slug: String,
+        page_slug: String,
         message: Message,
     },
     MessageUpdated {
         site_id: String,
-        post_slug: String,
+        page_slug: String,
         message: Message,
     },
     /// A message's annotations (reactions, poll responses) changed without
     /// the message content itself being edited.
     MessageAnnotationsChanged {
         site_id: String,
-        post_slug: String,
+        page_slug: String,
         message: Message,
     },
     MessageDeleted {
         site_id: String,
-        post_slug: String,
+        page_slug: String,
         event_id: String,
         /// Queue row ID of the delete submission, when the deletion was issued
         /// through the Cumments API.

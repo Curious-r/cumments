@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
     commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand},
-    models::{PostSlug, SiteId},
+    models::{PageSlug, SiteId},
     ports::SubmissionStore,
 };
 use cumments_store::DbStore;
@@ -13,7 +13,7 @@ fn lease(duration: chrono::Duration) -> chrono::DateTime<Utc> {
 fn post_command() -> PostCommentCommand {
     PostCommentCommand {
         site_id: SiteId::from("my-blog"),
-        post_slug: PostSlug::from("hello-world"),
+        page_slug: PageSlug::from("hello-world"),
         content: "hello".to_string(),
         media: None,
         location: None,
@@ -28,7 +28,7 @@ fn post_command() -> PostCommentCommand {
 fn update_command() -> UpdateCommentCommand {
     UpdateCommentCommand {
         site_id: SiteId::from("my-blog"),
-        post_slug: PostSlug::from("hello-world"),
+        page_slug: PageSlug::from("hello-world"),
         event_id: "$original:hs".to_string(),
         content: "edited".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
@@ -40,7 +40,7 @@ fn update_command() -> UpdateCommentCommand {
 fn delete_command() -> DeleteCommentCommand {
     DeleteCommentCommand {
         site_id: SiteId::from("my-blog"),
-        post_slug: PostSlug::from("hello-world"),
+        page_slug: PageSlug::from("hello-world"),
         event_id: "$original:hs".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),

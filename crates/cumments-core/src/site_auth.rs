@@ -478,7 +478,7 @@ pub struct RegisteredSite {
 /// Lifecycle of a registered site.
 ///
 /// `Retiring` means writes are rejected and a background pass is
-/// decommissioning the Matrix Space/rooms and clearing the projections.
+/// retiring the Matrix Space/rooms and clearing the projections.
 /// `Retired` is transient: once local cleanup finishes the row is deleted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -844,14 +844,14 @@ mod tests {
             secret,
             "1723456789",
             "POST",
-            "/api/v1/sites/x/posts/y/comments",
+            "/api/v1/sites/x/pages/y/comments",
             body,
         );
         assert!(verify_site_request_signature(
             secret,
             "1723456789",
             "POST",
-            "/api/v1/sites/x/posts/y/comments",
+            "/api/v1/sites/x/pages/y/comments",
             body,
             &signature
         ));
@@ -859,7 +859,7 @@ mod tests {
             secret,
             "1723456789",
             "POST",
-            "/api/v1/sites/x/posts/y/comments",
+            "/api/v1/sites/x/pages/y/comments",
             br#"{"content":"tampered"}"#,
             &signature
         ));
@@ -867,7 +867,7 @@ mod tests {
             b"another-secret",
             "1723456789",
             "POST",
-            "/api/v1/sites/x/posts/y/comments",
+            "/api/v1/sites/x/pages/y/comments",
             body,
             &signature
         ));

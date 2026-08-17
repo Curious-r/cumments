@@ -2,7 +2,7 @@
 //!
 //! Governance state lives in Matrix `m.room.power_levels` events; the read
 //! model only projects them. These pure helpers encode the level ladder and
-//! the transformations used by room creation, the moderation sync loop and
+//! the transformations used by room creation, the governance sync loop and
 //! the governance API.
 
 use crate::ports::MatrixDriver;
@@ -29,7 +29,7 @@ pub const TOMBSTONE_LOCK_LEVEL: i64 = 150;
 
 /// Level ladder for site governance roles.
 pub const OWNER_LEVEL: i64 = 100;
-pub const CO_MANAGER_LEVEL: i64 = 75;
+pub const GLOBAL_MODERATOR_LEVEL: i64 = 75;
 pub const MODERATOR_LEVEL: i64 = 50;
 
 /// The level required to edit `m.room.power_levels` itself. Only the site
@@ -37,10 +37,10 @@ pub const MODERATOR_LEVEL: i64 = 50;
 pub const ROLE_LOCK_LEVEL: i64 = 100;
 
 /// Entries at or above this level are site-managed: they are replicated from
-/// the site Space into every comment room, and the moderation sync loop
+/// the site Space into every comment room, and the governance sync loop
 /// reconciles them. Per-room moderators (50) live below this line and are
 /// never touched by site-level reconciliation.
-pub const SITE_ROLE_MIN_LEVEL: i64 = CO_MANAGER_LEVEL;
+pub const SITE_ROLE_MIN_LEVEL: i64 = GLOBAL_MODERATOR_LEVEL;
 
 /// One projected governance entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +95,7 @@ impl FromStr for RoleClaimStatus {
 pub struct RoleClaim {
     pub id: i64,
     pub site_id: String,
-    /// Empty string for site-level roles (owner/co-manager); otherwise the
+    /// Empty string for site-level roles (owner/global-moderator); otherwise the
     /// comment room this moderator claim targets.
     pub room_id: String,
     /// The DM room the AppService bot joined to verify this claim, if any.
@@ -128,7 +128,7 @@ pub struct NewRoleClaim {
 pub enum GovernanceUserIdError {
     /// The string is not a fully qualified Matrix user id.
     Invalid,
-    /// The id belongs to a Cumments service account (AS sender or a guest
+    /// The id belongs to a Cumments service account (AS sender or a visitor
     /// virtual user).
     ServiceAccount,
 }
@@ -172,7 +172,7 @@ fn users_map_mut(power_levels: &mut Value) -> &mut Map<String, Value> {
 }
 
 /// Whether a Matrix user ID is managed by the Cumments AppService
-/// (the AS sender or a guest virtual user). These accounts are implementation
+/// (the AS sender or a visitor virtual user). These accounts are implementation
 /// details and must never be projected or treated as governance roles.
 pub fn is_as_managed_user(user_id: &str) -> bool {
     let Some(localpart) = user_id
@@ -206,7 +206,7 @@ pub fn role_entries(power_levels: &Value, min_level: i64) -> Vec<RoleEntry> {
 
 /// Initial power levels for a site Space: the creator entry (pre-v12 rooms)
 /// plus the governance locks. `state_default` is lowered to the moderator
-/// level so site co-managers can manage Space structure, but the power-levels
+/// level so site global-moderators can manage Space structure, but the power-levels
 /// event stays owner-only and the tombstone stays bot-only (150). In
 /// pre-v12 rooms (where the bot has no implicit creator power) the sender
 /// entry is set to the tombstone lock level so the bot can later upgrade the
@@ -230,7 +230,7 @@ pub fn initial_space_power_levels(sender_user_id: &str, include_sender: bool) ->
 }
 
 /// Initial power levels for a comment room, seeded from the site Space: every
-/// site-managed entry (owner and co-managers) is replicated, per-room
+/// site-managed entry (owner and global-moderators) is replicated, per-room
 /// moderators start empty, and the power-levels event is owner-locked while
 /// the tombstone is bot-only (150). The sender entry (pre-v12 rooms) is the
 /// tombstone lock level so the bot can upgrade the room later.
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn can_send_state_event_follows_spec_thresholds() {
         let pl = json!({
-            "users": { "@owner:hs": 100, "@co:hs": 75, "@guest:hs": 0 },
+            "users": { "@owner:hs": 100, "@co:hs": 75, "@visitor:hs": 0 },
             "events": { POWER_LEVELS_EVENT_TYPE: 100 },
             "state_default": 50,
             "users_default": 0,
@@ -525,7 +525,11 @@ mod tests {
         ));
         // Stickers use state_default unless overridden.
         assert!(can_send_state_event(&pl, "@co:hs", "m.room.image_pack"));
-        assert!(!can_send_state_event(&pl, "@guest:hs", "m.room.image_pack"));
+        assert!(!can_send_state_event(
+            &pl,
+            "@visitor:hs",
+            "m.room.image_pack"
+        ));
         // users_default supplies unlisted users.
         assert!(!can_send_state_event(
             &pl,

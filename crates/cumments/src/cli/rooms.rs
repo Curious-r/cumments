@@ -46,7 +46,7 @@ async fn retire_room(store: &cumments_store::DbStore, args: &RetireRoomArgs) -> 
         bail!("refusing to retire the room without `--yes`");
     }
     let retired =
-        cumments_core::management::retire_post_room_by_room_id(store, &args.room_id).await?;
+        cumments_core::management::retire_page_room_by_room_id(store, &args.room_id).await?;
     if !retired {
         bail!("room not found or not active");
     }
@@ -108,7 +108,7 @@ mod tests {
     use super::super::args::{QuarantinedListArgs, ReinstateRoomArgs, RetireRoomArgs};
     use super::super::test_support::*;
     use super::*;
-    use cumments_core::models::{PostSlug, RoomStatus, SiteId};
+    use cumments_core::models::{PageSlug, RoomStatus, SiteId};
     use cumments_store::DbStore;
 
     #[tokio::test]
@@ -117,7 +117,7 @@ mod tests {
             .await
             .expect("connect db");
         let site = SiteId::from("my-blog");
-        let slug = PostSlug::from("hello");
+        let slug = PageSlug::from("hello");
         store
             .register_room("!room:hs", &site, &slug)
             .await
@@ -173,7 +173,7 @@ mod tests {
             .await
             .expect("connect db");
         let site = SiteId::from("my-blog");
-        let slug = PostSlug::from("hello");
+        let slug = PageSlug::from("hello");
         store
             .register_room("!room:hs", &site, &slug)
             .await

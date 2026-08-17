@@ -49,7 +49,7 @@ pub(super) fn print_room_table(rooms: &[QuarantinedRoom]) {
             "{:<44} {:<16} {:<16} {:<8} {:<20} {}",
             room.room_id,
             room.site_id,
-            room.post_slug,
+            room.page_slug,
             room.adoption_failures,
             next_attempt,
             room.quarantine_reason

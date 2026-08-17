@@ -1,5 +1,5 @@
 use cumments_core::governance::{NewRoleClaim, RoleEntry};
-use cumments_core::models::{Content, PostSlug, SiteId, TextContent, TextStyle};
+use cumments_core::models::{Content, PageSlug, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{GovernanceStore, RegistryStore, RoleClaimStore, SiteStore};
 use cumments_core::site_auth::token_hash;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
@@ -63,7 +63,7 @@ async fn power_levels_project_site_and_room_roles() {
             .expect("connect db"),
     );
     let site_id = SiteId::new("my-blog".to_string()).expect("valid site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("valid post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("valid page slug");
 
     // The space and one comment room exist before the state events arrive.
     store
@@ -71,7 +71,7 @@ async fn power_levels_project_site_and_room_roles() {
         .await
         .expect("site");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("room");
 
@@ -133,7 +133,7 @@ async fn power_levels_project_site_and_room_roles() {
             },
         ]
     );
-    // Projecting a Space's power levels must wake the moderation sync.
+    // Projecting a Space's power levels must wake the governance sync.
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(100),

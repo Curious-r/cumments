@@ -8,11 +8,11 @@ use crate::entities::active_enums::SubmissionStatus;
 
 pub mod audit;
 pub mod backfill;
-pub mod decommission;
 pub mod governance;
 pub mod identity;
 pub mod messages;
 pub mod registry;
+pub mod retirement;
 pub mod role_claims;
 pub mod rooms;
 pub mod site_auth;

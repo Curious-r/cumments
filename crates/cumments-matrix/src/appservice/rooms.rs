@@ -13,7 +13,7 @@ use cumments_core::{
         SITE_ROLE_MIN_LEVEL, can_send_state_event, initial_comment_room_power_levels,
         initial_space_power_levels, role_entries,
     },
-    models::{PostSlug, SiteId},
+    models::{PageSlug, SiteId},
     protocol::ROOM_METADATA_EVENT_TYPE,
 };
 use serde::Deserialize;
@@ -82,11 +82,11 @@ impl AppServiceMatrixDriver {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
     ) -> Result<()> {
         let content = serde_json::json!({
             "site_id": site_id.as_str(),
-            "post_slug": post_slug.map(|s| s.as_str()),
+            "page_slug": page_slug.map(|s| s.as_str()),
         });
         let path = format!(
             "_matrix/client/v3/rooms/{}/state/{}",
@@ -144,11 +144,11 @@ impl AppServiceMatrixDriver {
     pub(super) async fn remove_room_alias_impl(
         &self,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
     ) -> Result<()> {
-        let alias = match post_slug {
-            Some(post_slug) => {
-                comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str())
+        let alias = match page_slug {
+            Some(page_slug) => {
+                comment_room_alias(&self.server_name, site_id.as_str(), page_slug.as_str())
             }
             None => site_space_alias(&self.server_name, site_id.as_str()),
         };
@@ -600,7 +600,7 @@ impl AppServiceMatrixDriver {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
         require_space: bool,
     ) -> Result<()> {
         if require_space && !self.is_space_room(room_id).await? {
@@ -611,10 +611,10 @@ impl AppServiceMatrixDriver {
         }
         self.ensure_room_adoptable(room_id).await?;
         if !self
-            .room_metadata_matches(room_id, site_id, post_slug)
+            .room_metadata_matches(room_id, site_id, page_slug)
             .await?
         {
-            self.set_room_metadata(room_id, site_id, post_slug).await?;
+            self.set_room_metadata(room_id, site_id, page_slug).await?;
         }
         Ok(())
     }
@@ -653,10 +653,10 @@ impl AppServiceMatrixDriver {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
     ) -> Result<bool> {
         Ok(match self.fetch_room_metadata(room_id).await? {
-            Some(meta) => metadata_matches(&meta, site_id.as_str(), post_slug.map(|s| s.as_str())),
+            Some(meta) => metadata_matches(&meta, site_id.as_str(), page_slug.map(|s| s.as_str())),
             None => false,
         })
     }
@@ -772,7 +772,7 @@ impl AppServiceMatrixDriver {
                         "state_key": "",
                         "content": {
                             "site_id": site_id_str,
-                            "post_slug": null
+                            "page_slug": null
                         }
                     },
                     {
@@ -830,11 +830,11 @@ impl AppServiceMatrixDriver {
         }
     }
 
-    #[instrument(skip(self), fields(site_id = %site_id.as_str(), post_slug = %post_slug.as_str()))]
+    #[instrument(skip(self), fields(site_id = %site_id.as_str(), page_slug = %page_slug.as_str()))]
     pub(super) async fn ensure_comment_room_impl(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
         space_id: &str,
         candidate_room_id: Option<&str>,
     ) -> Result<String> {
@@ -843,18 +843,18 @@ impl AppServiceMatrixDriver {
         // ── PHASE 0: O(1) DISCOVERY (Check Candidate) ──
         if let Some(candidate) = candidate_room_id
             && let Ok(Some(meta)) = self.fetch_room_metadata(candidate).await
-            && metadata_matches(&meta, site_id.as_str(), Some(post_slug.as_str()))
+            && metadata_matches(&meta, site_id.as_str(), Some(page_slug.as_str()))
         {
-            self.adopt_room(candidate, site_id, Some(post_slug), false)
+            self.adopt_room(candidate, site_id, Some(page_slug), false)
                 .await?;
             target_room_id = Some(candidate.to_string());
         }
 
         // ── PHASE 0.5: ALIAS RECOVERY (cold local registry) ──
         if target_room_id.is_none() {
-            let alias = comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
+            let alias = comment_room_alias(&self.server_name, site_id.as_str(), page_slug.as_str());
             if let Some(room_id) = self.resolve_room_by_alias(&alias).await? {
-                self.adopt_room(&room_id, site_id, Some(post_slug), false)
+                self.adopt_room(&room_id, site_id, Some(page_slug), false)
                     .await?;
                 info!(
                     "Recovered existing comment room {} via alias {}",
@@ -871,9 +871,9 @@ impl AppServiceMatrixDriver {
             // ── PHASE 1: Create new comment room ──
             info!("No matching room found. Creating new comment room via AppService.");
             let alias_localpart =
-                comment_room_alias_localpart(site_id.as_str(), post_slug.as_str());
+                comment_room_alias_localpart(site_id.as_str(), page_slug.as_str());
             // Site-managed roles are seeded from the Space so a new room opens
-            // with the same owner/co-manager roster (per-room moderators start
+            // with the same owner/global-moderator roster (per-room moderators start
             // empty and are appointed later).
             let space_power_levels = self
                 .get_power_levels(space_id)
@@ -903,7 +903,7 @@ impl AppServiceMatrixDriver {
                     include_sender,
                 );
                 let mut body = serde_json::json!({
-                    "name": format!("Comments: {}/{}", site_id.as_str(), post_slug.as_str()),
+                    "name": format!("Comments: {}/{}", site_id.as_str(), page_slug.as_str()),
                     "room_alias_name": alias_localpart,
                     "initial_state": [
                         {
@@ -911,7 +911,7 @@ impl AppServiceMatrixDriver {
                             "state_key": "",
                             "content": {
                                 "site_id": site_id.as_str(),
-                                "post_slug": post_slug.as_str()
+                                "page_slug": page_slug.as_str()
                             }
                         },
                         {
@@ -959,10 +959,10 @@ impl AppServiceMatrixDriver {
                     // Recovery: another attempt may have won the race, or the
                     // room already exists after a DB reset.
                     let alias =
-                        comment_room_alias(&self.server_name, site_id.as_str(), post_slug.as_str());
+                        comment_room_alias(&self.server_name, site_id.as_str(), page_slug.as_str());
                     match self.resolve_room_by_alias(&alias).await? {
                         Some(room_id) => {
-                            self.adopt_room(&room_id, site_id, Some(post_slug), false)
+                            self.adopt_room(&room_id, site_id, Some(page_slug), false)
                                 .await?;
                             info!(
                                 "Recovered comment room {} after createRoom failure via alias {}",

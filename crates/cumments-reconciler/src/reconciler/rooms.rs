@@ -75,7 +75,7 @@ impl ReconcilePass for RoomCleanupPass {
 mod tests {
     use super::*;
     use cumments_core::{
-        models::{PostSlug, SiteId},
+        models::{PageSlug, SiteId},
         ports::{RegistryStore, VirtualUserStore},
     };
     use cumments_store::DbStore;
@@ -102,9 +102,9 @@ mod tests {
                 .expect("connect db"),
         );
         let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-        let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+        let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
         store
-            .register_room("!old:hs", &site_id, &post_slug)
+            .register_room("!old:hs", &site_id, &page_slug)
             .await
             .expect("register room");
         store.retire_room("!old:hs").await.expect("supersede room");

@@ -12,9 +12,9 @@ use axum::{
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter, site_auth::enforce_site_auth};
 use cumments_core::governance::{NewRoleClaim, OWNER_LEVEL, RoleEntry};
 use cumments_core::identity::{
-    derive_guest_id_from_public_key, post_signature_message, signature_message,
+    derive_visitor_id_from_public_key, post_signature_message, signature_message,
 };
-use cumments_core::models::{GuestProfile, PostSlug, SiteId};
+use cumments_core::models::{PageSlug, SiteId, VisitorProfile};
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
     StickerPackStore,
@@ -95,9 +95,9 @@ async fn test_state_with_driver(
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        guest_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        visitor_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         public_read_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        governance_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
     };
@@ -110,15 +110,15 @@ fn middleware_router(state: ApiState) -> Router {
     }
     Router::new()
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/comments",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/comments",
             post(ok_handler).fallback(ok_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
             post(ok_handler).patch(ok_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/media",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/media",
             post(ok_handler).fallback(ok_handler),
         )
         .layer(middleware::from_fn_with_state(
@@ -228,7 +228,7 @@ async fn write_enforcement_follows_policy_and_origin() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("https://any.example.com"),
             &[],
         ))
@@ -246,7 +246,7 @@ async fn write_enforcement_follows_policy_and_origin() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[],
         ))
@@ -266,7 +266,7 @@ async fn write_enforcement_follows_policy_and_origin() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("https://any.example.com"),
             &[],
         ))
@@ -279,7 +279,7 @@ async fn write_enforcement_follows_policy_and_origin() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[],
         ))
@@ -303,7 +303,7 @@ async fn write_enforcement_follows_policy_and_origin() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("https://any.example.com"),
             &[],
         ))
@@ -318,24 +318,24 @@ async fn write_enforcement_follows_policy_and_origin() {
 }
 
 #[tokio::test]
-async fn guest_profile_returns_the_current_profile_and_guest_id() {
+async fn visitor_profile_returns_the_current_profile_and_visitor_id() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use cumments_test_utils::TestDriver;
     use ed25519_dalek::SigningKey;
 
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
-    let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
-    let driver = TestDriver::new().with_guest_profile(
+    let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
+    let driver = TestDriver::new().with_visitor_profile(
         "test-blog",
         public_key.clone(),
-        GuestProfile {
+        VisitorProfile {
             display_name: Some("Alice".to_string()),
             avatar_url: Some("mxc://hs/avatar".to_string()),
         },
     );
     let (state, store) = test_state_with_driver(
-        "guest-profile",
+        "visitor-profile",
         SiteVerificationPolicy::Disabled,
         None,
         Arc::new(driver),
@@ -347,7 +347,7 @@ async fn guest_profile_returns_the_current_profile_and_guest_id() {
         .expect("register site");
 
     let router = cumments_api::build_router(state.clone());
-    let uri = format!("/api/v1/sites/test-blog/guests/profile?author_public_key={public_key}");
+    let uri = format!("/api/v1/sites/test-blog/visitors/profile?author_public_key={public_key}");
     let response = router
         .clone()
         .oneshot(request_with_body(Method::GET, &uri, None, &[], "null"))
@@ -356,23 +356,23 @@ async fn guest_profile_returns_the_current_profile_and_guest_id() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: serde_json::Value =
         serde_json::from_str(&body_text(response).await).expect("parse profile");
-    assert_eq!(body["guest_id"], guest_id);
+    assert_eq!(body["visitor_id"], visitor_id);
     assert_eq!(body["display_name"], "Alice");
     // The media proxy is disabled in tests, so the raw MXC URI is returned.
     assert_eq!(body["avatar_url"], "mxc://hs/avatar");
 }
 
 #[tokio::test]
-async fn guest_profile_returns_empty_profile_for_unknown_guest() {
+async fn visitor_profile_returns_empty_profile_for_unknown_visitor() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use cumments_test_utils::TestDriver;
     use ed25519_dalek::SigningKey;
 
     let signing_key = SigningKey::from_bytes(&[9u8; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
-    let guest_id = derive_guest_id_from_public_key(&public_key).expect("guest id");
+    let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
     let (state, store) = test_state_with_driver(
-        "guest-profile-empty",
+        "visitor-profile-empty",
         SiteVerificationPolicy::Disabled,
         None,
         Arc::new(TestDriver::new()),
@@ -384,7 +384,7 @@ async fn guest_profile_returns_empty_profile_for_unknown_guest() {
         .expect("register site");
 
     let router = cumments_api::build_router(state.clone());
-    let uri = format!("/api/v1/sites/test-blog/guests/profile?author_public_key={public_key}");
+    let uri = format!("/api/v1/sites/test-blog/visitors/profile?author_public_key={public_key}");
     let response = router
         .clone()
         .oneshot(request_with_body(Method::GET, &uri, None, &[], "null"))
@@ -393,15 +393,15 @@ async fn guest_profile_returns_empty_profile_for_unknown_guest() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: serde_json::Value =
         serde_json::from_str(&body_text(response).await).expect("parse profile");
-    assert_eq!(body["guest_id"], guest_id);
+    assert_eq!(body["visitor_id"], visitor_id);
     assert!(body["display_name"].is_null());
     assert!(body["avatar_url"].is_null());
 }
 
 #[tokio::test]
-async fn guest_profile_rejects_an_invalid_public_key() {
+async fn visitor_profile_rejects_an_invalid_public_key() {
     let (state, store) = test_state(
-        "guest-profile-invalid",
+        "visitor-profile-invalid",
         SiteVerificationPolicy::Disabled,
         None,
     )
@@ -416,7 +416,7 @@ async fn guest_profile_rejects_an_invalid_public_key() {
         .clone()
         .oneshot(request_with_body(
             Method::GET,
-            "/api/v1/sites/test-blog/guests/profile?author_public_key=not-a-key",
+            "/api/v1/sites/test-blog/visitors/profile?author_public_key=not-a-key",
             None,
             &[],
             "null",
@@ -441,7 +441,7 @@ async fn public_reads_return_404_for_unregistered_sites() {
     let requests: Vec<(Method, String, String)> = vec![
         (
             query_method,
-            "/api/v1/sites/ghost/posts/hello/comments".to_string(),
+            "/api/v1/sites/ghost/pages/hello/comments".to_string(),
             "{}".to_string(),
         ),
         (
@@ -456,7 +456,7 @@ async fn public_reads_return_404_for_unregistered_sites() {
         ),
         (
             Method::GET,
-            format!("/api/v1/sites/ghost/guests/profile?author_public_key={public_key}"),
+            format!("/api/v1/sites/ghost/visitors/profile?author_public_key={public_key}"),
             "null".to_string(),
         ),
     ];
@@ -483,9 +483,9 @@ async fn operator_room_retire_mirror_marks_retired() {
         .await
         .expect("register site");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
 
@@ -541,7 +541,7 @@ async fn disabled_write_errors_include_wildcard_cors() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/Bad-Site/posts/hello/comments",
+            "/api/v1/sites/Bad-Site/pages/hello/comments",
             Some("null"),
             &[],
         ))
@@ -551,12 +551,12 @@ async fn disabled_write_errors_include_wildcard_cors() {
     assert_eq!(response_origin(&invalid_site).as_deref(), Some("*"));
 
     // In `disabled` mode the middleware deliberately does not buffer write
-    // bodies (guest media uploads keep the handler's 20MB cap instead of a
+    // bodies (visitor media uploads keep the handler's 20MB cap instead of a
     // 1MB middleware cap), so a large body passes through to the handler and
     // the handler response still carries wildcard CORS.
     let oversized = Request::builder()
         .method(Method::POST)
-        .uri("/api/v1/sites/test-blog/posts/hello/comments")
+        .uri("/api/v1/sites/test-blog/pages/hello/comments")
         .header(header::ORIGIN, "null")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from("x".repeat(1024 * 1024 + 1)))
@@ -584,7 +584,7 @@ async fn comment_body_endpoints_require_comment_id() {
         .oneshot(
             request(
                 Method::DELETE,
-                "/api/v1/sites/test-blog/posts/hello/comments",
+                "/api/v1/sites/test-blog/pages/hello/comments",
                 Some("null"),
                 &[],
             )
@@ -613,7 +613,7 @@ async fn comment_body_endpoints_require_comment_id() {
         .oneshot(
             request(
                 Method::PATCH,
-                "/api/v1/sites/test-blog/posts/hello/comments",
+                "/api/v1/sites/test-blog/pages/hello/comments",
                 Some("null"),
                 &[],
             )
@@ -659,7 +659,7 @@ async fn verified_site_enforces_exact_origins_and_rejects_null() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/hello/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/hello/comments",
             Some("https://blog.example.com"),
             &[],
         ))
@@ -675,7 +675,7 @@ async fn verified_site_enforces_exact_origins_and_rejects_null() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/hello/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/hello/comments",
             Some("https://evil.example.com"),
             &[],
         ))
@@ -688,7 +688,7 @@ async fn verified_site_enforces_exact_origins_and_rejects_null() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/hello/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/hello/comments",
             Some("null"),
             &[],
         ))
@@ -701,7 +701,7 @@ async fn verified_site_enforces_exact_origins_and_rejects_null() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/hello/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/hello/comments",
             None,
             &[],
         ))
@@ -723,7 +723,7 @@ async fn secret_mode_requires_a_valid_hmac_signature() {
         .await
         .expect("store secret");
     let router = middleware_router(state);
-    let uri = format!("/api/v1/sites/{site_id}/posts/hello/comments");
+    let uri = format!("/api/v1/sites/{site_id}/pages/hello/comments");
 
     let timestamp = chrono::Utc::now().timestamp().to_string();
     let signature =
@@ -774,7 +774,7 @@ async fn secret_mode_requires_a_valid_hmac_signature() {
     // The media upload route keeps the handler's 20MB cap: a >1MB body with
     // a valid HMAC must reach the handler instead of being rejected by the
     // generic 1MB body limit.
-    let media_uri = format!("/api/v1/sites/{site_id}/posts/hello/media");
+    let media_uri = format!("/api/v1/sites/{site_id}/pages/hello/media");
     let media_body = "x".repeat(1024 * 1024 + 1);
     let timestamp = chrono::Utc::now().timestamp().to_string();
     let signature = site_request_signature(
@@ -805,7 +805,7 @@ async fn preflight_and_queries_are_public() {
         .clone()
         .oneshot(request(
             Method::OPTIONS,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/hello/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/hello/comments",
             Some("https://blog.example.com"),
             &[("access-control-request-method", "QUERY".to_string())],
         ))
@@ -818,7 +818,7 @@ async fn preflight_and_queries_are_public() {
         .clone()
         .oneshot(request(
             Method::QUERY,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/hello/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/hello/comments",
             None,
             &[],
         ))
@@ -842,7 +842,7 @@ async fn avatar_preflight_allows_put_and_delete() {
             .clone()
             .oneshot(request(
                 Method::OPTIONS,
-                "/api/v1/sites/test-blog/guests/avatar",
+                "/api/v1/sites/test-blog/visitors/avatar",
                 Some("null"),
                 &[
                     ("access-control-request-method", method.to_string()),
@@ -888,7 +888,7 @@ async fn avatar_put_is_gated_by_site_auth() {
         .clone()
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/test-blog/guests/avatar",
+            "/api/v1/sites/test-blog/visitors/avatar",
             Some("https://evil.example.com"),
             &[("idempotency-key", "avatar-origin-key".to_string())],
         ))
@@ -901,7 +901,7 @@ async fn avatar_put_is_gated_by_site_auth() {
         .clone()
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/test-blog/guests/avatar",
+            "/api/v1/sites/test-blog/visitors/avatar",
             Some("https://blog.example.com"),
             &[("idempotency-key", "avatar-origin-key".to_string())],
         ))
@@ -925,7 +925,7 @@ async fn avatar_put_is_gated_by_site_auth() {
         .clone()
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/test-blog/guests/avatar",
+            "/api/v1/sites/test-blog/visitors/avatar",
             None,
             &[("idempotency-key", "avatar-secret-key".to_string())],
         ))
@@ -948,7 +948,7 @@ async fn avatar_put_requires_registered_site() {
     let response = router
         .oneshot(request(
             Method::PUT,
-            "/api/v1/sites/not-registered/guests/avatar",
+            "/api/v1/sites/not-registered/visitors/avatar",
             Some("null"),
             &[("idempotency-key", "avatar-unregistered-key".to_string())],
         ))
@@ -1286,7 +1286,7 @@ async fn operator_lists_quarantined_rooms() {
     )
     .await;
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await
@@ -1429,7 +1429,7 @@ async fn location_posts_are_queued_and_idempotent() {
     )
     .await;
     let site = SiteId::from("test-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_site("test-blog", &token_hash("claim"), false)
         .await
@@ -1467,7 +1467,7 @@ async fn location_posts_are_queued_and_idempotent() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/location",
+            "/api/v1/sites/test-blog/pages/hello/location",
             Some("null"),
             &[("idempotency-key", "locate-key-123456".to_string())],
             &body,
@@ -1500,7 +1500,7 @@ async fn location_posts_are_queued_and_idempotent() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/location",
+            "/api/v1/sites/test-blog/pages/hello/location",
             Some("null"),
             &[("idempotency-key", "locate-key-123456".to_string())],
             &body,
@@ -1552,7 +1552,7 @@ async fn comment_replay_returns_original_submission_without_consuming_pow() {
     let post = || {
         router.clone().oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[("idempotency-key", "comment-key-123456".to_string())],
             &body,
@@ -1628,7 +1628,7 @@ async fn comment_media_must_reference_an_owned_upload() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[("idempotency-key", "media-key-123456".to_string())],
             &body,
@@ -1650,7 +1650,7 @@ async fn comment_media_must_reference_an_owned_upload() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[("idempotency-key", "media-key-123456".to_string())],
             &body,
@@ -1661,7 +1661,7 @@ async fn comment_media_must_reference_an_owned_upload() {
 }
 
 #[tokio::test]
-async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
+async fn visitor_avatar_set_and_delete_are_signed_and_idempotent() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use ed25519_dalek::{Signer, SigningKey};
 
@@ -1694,7 +1694,7 @@ async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let uri = format!(
-        "/api/v1/sites/test-blog/guests/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=image%2Fpng&filename=avatar.png"
+        "/api/v1/sites/test-blog/visitors/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=image%2Fpng&filename=avatar.png"
     );
 
     let put = router
@@ -1761,7 +1761,7 @@ async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let bad_uri = format!(
-        "/api/v1/sites/test-blog/guests/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=video%2Fmp4&filename=clip.mp4"
+        "/api/v1/sites/test-blog/visitors/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}&mime=video%2Fmp4&filename=clip.mp4"
     );
     let denied = router
         .clone()
@@ -1782,7 +1782,7 @@ async fn guest_avatar_set_and_delete_are_signed_and_idempotent() {
     let message = signature_message(&["DELETE_AVATAR", "test-blog", &challenge.prefix]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let delete_uri = format!(
-        "/api/v1/sites/test-blog/guests/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}"
+        "/api/v1/sites/test-blog/visitors/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}"
     );
     let deleted = router
         .clone()
@@ -1892,7 +1892,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     }
 
     // The operator mirror works without a claim token.
-    let co_uri = format!("/api/v1/operator/sites/{site_id}/co-managers");
+    let co_uri = format!("/api/v1/operator/sites/{site_id}/global-moderators");
     let added_co = router
         .clone()
         .oneshot(request_with_body(
@@ -1965,7 +1965,10 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     let listed_json: serde_json::Value =
         serde_json::from_str(&body_text(listed).await).expect("parse response");
     assert_eq!(listed_json["owners"], serde_json::json!(["@owner:hs"]));
-    assert_eq!(listed_json["co_managers"], serde_json::json!(["@co:hs"]));
+    assert_eq!(
+        listed_json["global_moderators"],
+        serde_json::json!(["@co:hs"])
+    );
 }
 
 #[tokio::test]
@@ -2129,7 +2132,7 @@ async fn unregistered_sites_cannot_write() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/reg-site/posts/p1/comments",
+            "/api/v1/sites/reg-site/pages/p1/comments",
             Some("null"),
             &[],
         ))
@@ -2149,7 +2152,7 @@ async fn unregistered_sites_cannot_write() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/ghost-site/posts/p1/comments",
+            "/api/v1/sites/ghost-site/pages/p1/comments",
             Some("null"),
             &[],
         ))
@@ -2177,7 +2180,7 @@ async fn custom_named_sites_require_verification_in_optional_mode() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/custom-blog/posts/p1/comments",
+            "/api/v1/sites/custom-blog/pages/p1/comments",
             Some("https://blog.example.com"),
             &[],
         ))
@@ -2203,7 +2206,7 @@ async fn custom_named_sites_require_verification_in_optional_mode() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/posts/p1/comments",
+            "/api/v1/sites/a1b2c3d4e5f60718a1b2c3d4e5f60718/pages/p1/comments",
             Some("https://blog.example.com"),
             &[],
         ))
@@ -2229,7 +2232,7 @@ async fn custom_named_sites_require_verification_in_optional_mode() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/custom-blog/posts/p1/comments",
+            "/api/v1/sites/custom-blog/pages/p1/comments",
             Some("https://blog.example.com"),
             &[],
         ))
@@ -2259,7 +2262,7 @@ async fn optional_mode_rejects_orphan_rows_without_ownership_proof() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/orphan-blog/posts/p1/comments",
+            "/api/v1/sites/orphan-blog/pages/p1/comments",
             Some("https://blog.example.com"),
             &[],
         ))
@@ -2322,7 +2325,7 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v1/sites/retire-blog/posts/p1/comments",
+            "/api/v1/sites/retire-blog/pages/p1/comments",
             Some("null"),
             &[],
         ))
@@ -2570,7 +2573,7 @@ async fn comment_stickers_must_reference_the_sites_packs() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[("idempotency-key", "sticker-key-123456".to_string())],
             &body,
@@ -2616,7 +2619,7 @@ async fn comment_stickers_must_reference_the_sites_packs() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            "/api/v1/sites/test-blog/posts/hello/comments",
+            "/api/v1/sites/test-blog/pages/hello/comments",
             Some("null"),
             &[("idempotency-key", "sticker-key-123456".to_string())],
             &body,

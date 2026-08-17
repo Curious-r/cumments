@@ -15,32 +15,32 @@ pub(crate) fn site_space_alias_localpart(site_id: &str) -> String {
     format!("{}{}", ALIAS_PREFIX, site_id)
 }
 
-pub(crate) fn comment_room_alias_localpart(site_id: &str, post_slug: &str) -> String {
-    format!("{}{}_{}", ALIAS_PREFIX, site_id, post_slug)
+pub(crate) fn comment_room_alias_localpart(site_id: &str, page_slug: &str) -> String {
+    format!("{}{}_{}", ALIAS_PREFIX, site_id, page_slug)
 }
 
 pub(crate) fn site_space_alias(server_name: &str, site_id: &str) -> String {
     format!("#{}:{}", site_space_alias_localpart(site_id), server_name)
 }
 
-pub(crate) fn comment_room_alias(server_name: &str, site_id: &str, post_slug: &str) -> String {
+pub(crate) fn comment_room_alias(server_name: &str, site_id: &str, page_slug: &str) -> String {
     format!(
         "#{}:{}",
-        comment_room_alias_localpart(site_id, post_slug),
+        comment_room_alias_localpart(site_id, page_slug),
         server_name
     )
 }
 /// Whether a metadata state payload matches the expected Cumments identity.
-/// Spaces carry `post_slug: null`; comment rooms carry the post slug.
+/// Spaces carry `page_slug: null`; comment rooms carry the page slug.
 pub(crate) fn metadata_matches(
     meta: &serde_json::Value,
     site_id: &str,
-    post_slug: Option<&str>,
+    page_slug: Option<&str>,
 ) -> bool {
     let site_ok = meta.get("site_id").and_then(|v| v.as_str()) == Some(site_id);
-    let slug_ok = match post_slug {
-        Some(slug) => meta.get("post_slug").and_then(|v| v.as_str()) == Some(slug),
-        None => matches!(meta.get("post_slug"), None | Some(serde_json::Value::Null)),
+    let slug_ok = match page_slug {
+        Some(slug) => meta.get("page_slug").and_then(|v| v.as_str()) == Some(slug),
+        None => matches!(meta.get("page_slug"), None | Some(serde_json::Value::Null)),
     };
     site_ok && slug_ok
 }
@@ -168,7 +168,7 @@ pub(crate) fn build_message_body(
     }
     message_body
 }
-/// Build the `m.room.message` content for a guest media message
+/// Build the `m.room.message` content for a visitor media message
 /// (image/audio/video/file). The structured block carries the media URL as
 /// the canonical signed content.
 pub(crate) fn build_media_body(
@@ -231,7 +231,7 @@ pub(crate) fn build_media_body(
     });
     message_body
 }
-/// Build the `m.reaction` content for a guest reaction.
+/// Build the `m.reaction` content for a visitor reaction.
 pub(crate) fn build_reaction_body(
     key: &str,
     target_event_id: &str,
@@ -254,7 +254,7 @@ pub(crate) fn build_reaction_body(
     })
 }
 
-/// Build the `m.room.message` content for a guest poll vote (MSC3381).
+/// Build the `m.room.message` content for a visitor poll vote (MSC3381).
 pub(crate) fn build_poll_vote_body(
     poll_event_id: &str,
     answer_id: &str,
@@ -280,7 +280,7 @@ pub(crate) fn build_poll_vote_body(
     })
 }
 
-/// Build the `m.room.message` content for a guest location (MSC3488).
+/// Build the `m.room.message` content for a visitor location (MSC3488).
 pub(crate) fn build_location_body(
     geo_uri: &str,
     description: Option<&str>,
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn metadata_matches_space() {
-        let meta = json!({"site_id": "my-blog", "post_slug": null});
+        let meta = json!({"site_id": "my-blog", "page_slug": null});
         assert!(metadata_matches(&meta, "my-blog", None));
         assert!(!metadata_matches(&meta, "other", None));
         assert!(!metadata_matches(&meta, "my-blog", Some("hello")));
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn metadata_matches_comment_room() {
-        let meta = json!({"site_id": "my-blog", "post_slug": "hello-world"});
+        let meta = json!({"site_id": "my-blog", "page_slug": "hello-world"});
         assert!(metadata_matches(&meta, "my-blog", Some("hello-world")));
         assert!(!metadata_matches(&meta, "my-blog", None));
         assert!(!metadata_matches(&meta, "my-blog", Some("other")));
@@ -451,10 +451,10 @@ mod tests {
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("hello <b>"));
         assert_eq!(ns["submission_id"].as_i64(), Some(7));
-        assert!(ns.get("guest_id").is_none());
+        assert!(ns.get("visitor_id").is_none());
         assert!(ns.get("displayname").is_none());
 
-        assert!(body.get("cumments_guest_id").is_none());
+        assert!(body.get("cumments_visitor_id").is_none());
         assert!(body.get("cumments_submission_id").is_none());
     }
 
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(body["m.relates_to"]["event_id"], "$target:hs");
         assert_eq!(body["m.relates_to"]["key"], "👍");
         assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "👍");
-        assert!(body[MESSAGE_CONTENT_KEY].get("guest_id").is_none());
+        assert!(body[MESSAGE_CONTENT_KEY].get("visitor_id").is_none());
         assert!(body[MESSAGE_CONTENT_KEY].get("displayname").is_none());
     }
 
@@ -627,7 +627,7 @@ mod tests {
         assert_eq!(ns["challenge"].as_str(), Some("chal"));
         assert_eq!(ns["content"].as_str(), Some("edited <b>"));
         assert_eq!(ns["submission_id"].as_i64(), Some(42));
-        assert!(ns.get("guest_id").is_none());
+        assert!(ns.get("visitor_id").is_none());
         assert!(ns.get("displayname").is_none());
 
         assert!(body.get(MESSAGE_CONTENT_KEY).is_none());

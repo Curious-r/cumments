@@ -8,7 +8,7 @@
 
 use super::TestDriver;
 use cumments_core::{
-    models::{CommentMedia, GuestProfile, PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, PageSlug, RoomEventPage, SiteId, VisitorProfile},
     ports::MatrixDriver,
 };
 
@@ -19,7 +19,7 @@ impl MatrixDriver for TestDriver {
     async fn ensure_comment_room(
         &self,
         _site_id: &SiteId,
-        _post_slug: &PostSlug,
+        _page_slug: &PageSlug,
         _space_id: &str,
         _candidate_room_id: Option<&str>,
     ) -> anyhow::Result<String> {
@@ -49,7 +49,7 @@ impl MatrixDriver for TestDriver {
     async fn remove_room_alias(
         &self,
         _site_id: &SiteId,
-        _post_slug: Option<&PostSlug>,
+        _page_slug: Option<&PageSlug>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -112,9 +112,9 @@ impl MatrixDriver for TestDriver {
         &self,
         author_public_key: &str,
         site_id: &SiteId,
-    ) -> anyhow::Result<Option<GuestProfile>> {
+    ) -> anyhow::Result<Option<VisitorProfile>> {
         Ok(self
-            .guest_profiles
+            .visitor_profiles
             .lock()
             .await
             .get(&(site_id.as_str().to_string(), author_public_key.to_string()))
@@ -329,13 +329,13 @@ impl MatrixDriver for TestDriver {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
         _require_space: bool,
     ) -> anyhow::Result<()> {
         self.adoptions.lock().await.push(room_id.to_string());
         let mut metadata = serde_json::json!({ "site_id": site_id.as_str() });
-        if let Some(slug) = post_slug {
-            metadata["post_slug"] = serde_json::json!(slug.as_str());
+        if let Some(slug) = page_slug {
+            metadata["page_slug"] = serde_json::json!(slug.as_str());
         }
         self.room_metadata
             .lock()

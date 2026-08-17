@@ -50,7 +50,7 @@ impl DeletionsPass {
                 let candidate_room_id = self
                     .deps
                     .registry_store
-                    .get_registered_room(&command.site_id, &command.post_slug)
+                    .get_registered_room(&command.site_id, &command.page_slug)
                     .await?;
 
                 // Quarantine gate: fail fast while a quarantined room's retry
@@ -59,7 +59,7 @@ impl DeletionsPass {
                     && let Some(room) = quarantined_room_for(
                         &self.deps,
                         &command.site_id,
-                        &command.post_slug,
+                        &command.page_slug,
                     )
                     .await?
                 {
@@ -90,7 +90,7 @@ impl DeletionsPass {
                     .driver
                     .ensure_comment_room(
                         &command.site_id,
-                        &command.post_slug,
+                        &command.page_slug,
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
@@ -115,14 +115,14 @@ impl DeletionsPass {
                 };
                 self.deps
                     .registry_store
-                    .register_room(&room_id, &command.site_id, &command.post_slug)
+                    .register_room(&room_id, &command.site_id, &command.page_slug)
                     .await?;
 
                 // 4. Hands: Allocate/reuse the transaction ID, then redact
                 let proof = serde_json::json!({
                     (REDACTION_PROOF_KEY): {
                         "site_id": command.site_id.as_str(),
-                        "post_slug": command.post_slug.as_str(),
+                        "page_slug": command.page_slug.as_str(),
                         "target_event_id": command.event_id.as_str(),
                         "public_key": command.author_public_key.as_str(),
                         "signature": command.author_signature.as_str(),

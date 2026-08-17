@@ -11,7 +11,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use cumments_core::ephemeral::EphemeralEvent;
-use cumments_core::models::{PostSlug, SiteId};
+use cumments_core::models::{PageSlug, SiteId};
 use cumments_core::projector_events::ProjectorEvent;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -105,7 +105,7 @@ pub(crate) async fn sse_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, AppError> {
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     let now = Instant::now();
@@ -126,7 +126,7 @@ pub(crate) async fn sse_handler(
     // a rejected request can never leak a permanent +1 on the global budget
     // (the guard is created only after validation succeeds).
     let site_id_val = SiteId::new(site_id.clone()).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug.clone()).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug.clone()).map_err(AppError::Validation)?;
     if state.active_sse_connections.load(Ordering::Relaxed) >= state.max_sse_connections {
         return Err(AppError::TooManyRequests {
             detail: "too many concurrent SSE connections; try again later".to_string(),
@@ -136,7 +136,7 @@ pub(crate) async fn sse_handler(
     state.active_sse_connections.fetch_add(1, Ordering::Relaxed);
     let ephemeral_room_id = state
         .store
-        .get_registered_room(&site_id_val, &post_slug_val)
+        .get_registered_room(&site_id_val, &page_slug_val)
         .await
         .ok()
         .flatten();
@@ -195,12 +195,12 @@ pub(crate) async fn sse_handler(
             match incoming {
                 Incoming::Projector(event) => {
                     let event = *event;
-                    // Filter events by site_id and post_slug
+                    // Filter events by site_id and page_slug
                     let matches = match &event {
-                        ProjectorEvent::MessageCreated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                        ProjectorEvent::MessageUpdated { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                        ProjectorEvent::MessageAnnotationsChanged { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
-                        ProjectorEvent::MessageDeleted { site_id: s, post_slug: p, .. } => s == &site_id && p == &post_slug,
+                        ProjectorEvent::MessageCreated { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
+                        ProjectorEvent::MessageUpdated { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
+                        ProjectorEvent::MessageAnnotationsChanged { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
+                        ProjectorEvent::MessageDeleted { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
                     };
 
                     if matches {

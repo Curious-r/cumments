@@ -2,19 +2,18 @@ use crate::routes::comments::{
     delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
-use crate::routes::guests::guest_profile_handler;
+use crate::routes::governance::{
+    add_global_moderator_handler, add_owner_handler, add_room_moderator_handler,
+    list_room_moderators_handler, list_site_roles_handler, remove_global_moderator_handler,
+    remove_owner_handler, remove_room_moderator_handler, require_claim_token,
+    retire_page_room_handler, retire_site_handler, upgrade_page_room_handler,
+};
 use crate::routes::media::{
-    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_guest_avatar_handler,
-    list_stickers_handler, media_handler, remove_site_sticker_handler, set_guest_avatar_handler,
+    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_visitor_avatar_handler,
+    list_stickers_handler, media_handler, remove_site_sticker_handler, set_visitor_avatar_handler,
     upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
-use crate::routes::moderation::{
-    add_co_manager_handler, add_owner_handler, add_room_moderator_handler,
-    list_room_moderators_handler, list_site_roles_handler, remove_co_manager_handler,
-    remove_owner_handler, remove_room_moderator_handler, require_claim_token,
-    retire_post_room_handler, retire_site_handler, upgrade_post_room_handler,
-};
 use crate::routes::operator::{
     config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
     reinstate_room_handler, require_operator, retire_room_handler, revoke_secret_handler,
@@ -28,6 +27,7 @@ use crate::routes::sites::{
 };
 use crate::routes::sse::SseReconnectRegistry;
 use crate::routes::sse::sse_handler;
+use crate::routes::visitors::visitor_profile_handler;
 use crate::site_auth::{enforce_site_auth, public_cors};
 use axum::{
     Router,
@@ -123,7 +123,7 @@ pub struct ApiState {
     pub trusted_proxies: Arc<trusted_proxy::TrustedProxySet>,
     /// Allow verification of loopback/private/link-local IP-literal origins.
     pub allow_private_verification_origins: bool,
-    /// Per-client-key limiter for comment and guest-avatar write submissions
+    /// Per-client-key limiter for comment and visitor-avatar write submissions
     /// (POST/PUT/PATCH/DELETE).
     pub write_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for new SSE connections.
@@ -139,13 +139,13 @@ pub struct ApiState {
     pub media_proxy: Option<Arc<MediaProxy>>,
     /// Per-client-key limiter for media proxy requests.
     pub media_limiter: Arc<rate_limit::RateLimiter>,
-    /// Per-client-key limiter for the public guest profile endpoint.
-    pub guest_profile_limiter: Arc<rate_limit::RateLimiter>,
+    /// Per-client-key limiter for the public visitor profile endpoint.
+    pub visitor_profile_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for local public read endpoints (comment
     /// lists, room metadata, roles, moderators, sticker packs).
     pub public_read_limiter: Arc<rate_limit::RateLimiter>,
     /// Per-client-key limiter for site governance writes.
-    pub moderation_limiter: Arc<rate_limit::RateLimiter>,
+    pub governance_limiter: Arc<rate_limit::RateLimiter>,
     /// Live ephemeral events (typing/receipts/presence) for SSE.
     pub ephemeral_bus: broadcast::Sender<EphemeralEvent>,
     /// Shared typing state for SSE snapshots, when ephemeral sync is enabled.
@@ -158,7 +158,7 @@ pub fn build_router(state: ApiState) -> Router {
     // and get `Access-Control-Allow-Origin: *`.
     let comment_router = Router::new()
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/comments",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/comments",
             // POST for writing submissions, fallback handles QUERY for reading.
             post(post_comment_handler)
                 .patch(update_comment_body_handler)
@@ -166,19 +166,19 @@ pub fn build_router(state: ApiState) -> Router {
                 .fallback(query_comments_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
             patch(update_comment_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}/reactions",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions",
             post(react_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/polls/{poll_id}/votes",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes",
             post(vote_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/media",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/media",
             // The upload handler enforces the 20MB cap itself; raise axum's
             // default 2MB extractor limit accordingly so large uploads reach
             // it instead of failing at extraction.
@@ -187,13 +187,13 @@ pub fn build_router(state: ApiState) -> Router {
                 .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/location",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/location",
             post(location_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/guests/avatar",
-            put(set_guest_avatar_handler)
-                .delete(delete_guest_avatar_handler)
+            "/api/v1/sites/{site_id}/visitors/avatar",
+            put(set_visitor_avatar_handler)
+                .delete(delete_visitor_avatar_handler)
                 .fallback(method_not_allowed_handler)
                 .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
         )
@@ -206,7 +206,7 @@ pub fn build_router(state: ApiState) -> Router {
     // are self-service, and `/health` is an infrastructure endpoint.
     let public_router = Router::new()
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/sse",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/sse",
             get(sse_handler).fallback(method_not_allowed_handler),
         )
         .route(
@@ -214,7 +214,7 @@ pub fn build_router(state: ApiState) -> Router {
             get(get_challenge_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/room",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/room",
             get(room_info_handler).fallback(method_not_allowed_handler),
         )
         .route(
@@ -222,15 +222,15 @@ pub fn build_router(state: ApiState) -> Router {
             get(list_stickers_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/guests/profile",
-            get(guest_profile_handler).fallback(method_not_allowed_handler),
+            "/api/v1/sites/{site_id}/visitors/profile",
+            get(visitor_profile_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/roles",
             get(list_site_roles_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/moderators",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/moderators",
             get(list_room_moderators_handler).fallback(method_not_allowed_handler),
         )
         .route(
@@ -260,17 +260,17 @@ pub fn build_router(state: ApiState) -> Router {
         .layer(middleware::from_fn(public_cors));
 
     // Site governance writes, authenticated with the site's claim token.
-    let moderation_router = Router::new()
+    let governance_router = Router::new()
         .route(
             "/api/v1/sites/{site_id}/owners",
             post(add_owner_handler).delete(remove_owner_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/co-managers",
-            post(add_co_manager_handler).delete(remove_co_manager_handler),
+            "/api/v1/sites/{site_id}/global-moderators",
+            post(add_global_moderator_handler).delete(remove_global_moderator_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/moderators",
+            "/api/v1/sites/{site_id}/pages/{page_slug}/moderators",
             post(add_room_moderator_handler).delete(remove_room_moderator_handler),
         )
         .route(
@@ -282,12 +282,12 @@ pub fn build_router(state: ApiState) -> Router {
             axum::routing::delete(retire_site_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}/upgrade",
-            axum::routing::post(upgrade_post_room_handler).fallback(method_not_allowed_handler),
+            "/api/v1/sites/{site_id}/pages/{page_slug}/upgrade",
+            axum::routing::post(upgrade_page_room_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/posts/{post_slug}",
-            axum::routing::delete(retire_post_room_handler).fallback(method_not_allowed_handler),
+            "/api/v1/sites/{site_id}/pages/{page_slug}",
+            axum::routing::delete(retire_page_room_handler).fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -332,9 +332,9 @@ pub fn build_router(state: ApiState) -> Router {
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/co-managers",
-            axum::routing::post(add_co_manager_handler)
-                .delete(remove_co_manager_handler)
+            "/api/v1/operator/sites/{site_id}/global-moderators",
+            axum::routing::post(add_global_moderator_handler)
+                .delete(remove_global_moderator_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
@@ -366,7 +366,7 @@ pub fn build_router(state: ApiState) -> Router {
 
     Router::new()
         .merge(comment_router)
-        .merge(moderation_router)
+        .merge(governance_router)
         .merge(public_router)
         .merge(operator_router)
         .fallback(not_found_handler)
@@ -435,9 +435,9 @@ mod tests {
         let message = Message {
             event_id: "$e:hs".to_string(),
             site_id: "my-blog".to_string(),
-            post_slug: "hello".to_string(),
+            page_slug: "hello".to_string(),
             author: AuthorSnapshot {
-                kind: AuthorKind::Guest,
+                kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
                 public_key: Some("pk".to_string()),
@@ -463,7 +463,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&message).expect("serialize message");
-        assert_eq!(json["author"]["type"], "guest");
+        assert_eq!(json["author"]["type"], "visitor");
         assert_eq!(json["author"]["public_key"], "pk");
         assert_eq!(json["content"]["type"], "text");
         assert_eq!(json["content"]["body"], "hi");

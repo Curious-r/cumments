@@ -1,4 +1,4 @@
-//! Final local cleanup for a decommissioned site.
+//! Final local cleanup for a retired site.
 //!
 //! Every statement is idempotent so a crashed/retried pass converges. The
 //! caller must have retired the Matrix side first: this module only removes
@@ -69,7 +69,7 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
     delete_by_values(db, "room_registry", "site_id", &[site_id.to_string()]).await?;
 
     // Media idempotency rows are keyed by author, not site; join through the
-    // ownership row so a decommissioned site does not leave stale keys.
+    // ownership row so a retired site does not leave stale keys.
     exec(
         db,
         "DELETE FROM media_upload_idempotency WHERE mxc_url IN \
@@ -143,34 +143,34 @@ pub(crate) async fn delete_room(db: &DatabaseConnection, room_id: &str) -> Resul
 
     if let Some(identity) = &identity {
         // Pending submissions for this site/post and its media rows. Avatar
-        // media (`post_slug IS NULL`) is site-scoped and kept.
-        delete_post_submissions_for_room(db, &identity.site_id, &identity.post_slug).await?;
-        delete_delete_submissions_for_room(db, &identity.site_id, &identity.post_slug).await?;
+        // media (`page_slug IS NULL`) is site-scoped and kept.
+        delete_post_submissions_for_room(db, &identity.site_id, &identity.page_slug).await?;
+        delete_delete_submissions_for_room(db, &identity.site_id, &identity.page_slug).await?;
         exec(
             db,
-            "DELETE FROM update_submissions WHERE site_id = ? AND post_slug = ?",
+            "DELETE FROM update_submissions WHERE site_id = ? AND page_slug = ?",
             vec![
                 identity.site_id.clone().into(),
-                identity.post_slug.clone().into(),
+                identity.page_slug.clone().into(),
             ],
         )
         .await?;
         exec(
             db,
             "DELETE FROM media_upload_idempotency WHERE mxc_url IN \
-             (SELECT mxc_url FROM media_uploads WHERE site_id = ? AND post_slug = ?)",
+             (SELECT mxc_url FROM media_uploads WHERE site_id = ? AND page_slug = ?)",
             vec![
                 identity.site_id.clone().into(),
-                identity.post_slug.clone().into(),
+                identity.page_slug.clone().into(),
             ],
         )
         .await?;
         exec(
             db,
-            "DELETE FROM media_uploads WHERE site_id = ? AND post_slug = ?",
+            "DELETE FROM media_uploads WHERE site_id = ? AND page_slug = ?",
             vec![
                 identity.site_id.clone().into(),
-                identity.post_slug.clone().into(),
+                identity.page_slug.clone().into(),
             ],
         )
         .await?;
@@ -224,13 +224,13 @@ async fn delete_delete_submissions_for_site(db: &DatabaseConnection, site_id: &s
 async fn delete_post_submissions_for_room(
     db: &DatabaseConnection,
     site_id: &str,
-    post_slug: &str,
+    page_slug: &str,
 ) -> Result<()> {
     let models = post_submissions::Entity::find().all(db).await?;
     let mut ids = Vec::new();
     for model in models {
         if payload_site_post(&model.payload)
-            .is_some_and(|(site, post)| site == site_id && post == post_slug)
+            .is_some_and(|(site, post)| site == site_id && post == page_slug)
         {
             ids.push(model.id);
         }
@@ -250,13 +250,13 @@ async fn delete_post_submissions_for_room(
 async fn delete_delete_submissions_for_room(
     db: &DatabaseConnection,
     site_id: &str,
-    post_slug: &str,
+    page_slug: &str,
 ) -> Result<()> {
     let models = delete_submissions::Entity::find().all(db).await?;
     let mut ids = Vec::new();
     for model in models {
         if payload_site_post(&model.payload)
-            .is_some_and(|(site, post)| site == site_id && post == post_slug)
+            .is_some_and(|(site, post)| site == site_id && post == page_slug)
         {
             ids.push(model.id);
         }
@@ -283,7 +283,7 @@ fn payload_site_post(payload: &str) -> Option<(String, String)> {
     let value: serde_json::Value = serde_json::from_str(payload).ok()?;
     Some((
         value.get("site_id")?.as_str()?.to_string(),
-        value.get("post_slug")?.as_str()?.to_string(),
+        value.get("page_slug")?.as_str()?.to_string(),
     ))
 }
 

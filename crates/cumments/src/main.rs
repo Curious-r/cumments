@@ -150,7 +150,7 @@ async fn main() -> Result<()> {
     let sites_deferred = if let Some(cli::Commands::Sites(sites_args)) = &args.command {
         let needs_driver = matches!(
             &sites_args.command,
-            cli::SitesCommand::RemoveOwner(_) | cli::SitesCommand::RemoveCoManager(_)
+            cli::SitesCommand::RemoveOwner(_) | cli::SitesCommand::RemoveGlobalModerator(_)
         );
         if !needs_driver {
             let logging = cumments_matrix::LoggingMatrixDriver;
@@ -490,17 +490,17 @@ async fn main() -> Result<()> {
             rate_limits.media.requests,
             rate_limits.media.window,
         )),
-        guest_profile_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            rate_limits.guest_profile.requests,
-            rate_limits.guest_profile.window,
+        visitor_profile_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            rate_limits.visitor_profile.requests,
+            rate_limits.visitor_profile.window,
         )),
         public_read_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.public_read.requests,
             rate_limits.public_read.window,
         )),
-        moderation_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
-            rate_limits.moderation.requests,
-            rate_limits.moderation.window,
+        governance_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            rate_limits.governance.requests,
+            rate_limits.governance.window,
         )),
         ephemeral_bus: ephemeral_bus.clone(),
         ephemeral_state: Some(ephemeral_state),

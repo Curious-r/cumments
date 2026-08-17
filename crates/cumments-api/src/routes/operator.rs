@@ -204,7 +204,7 @@ pub(crate) async fn retire_room_handler(
     Path(room_id): Path<String>,
 ) -> Result<Json<RetireRoomResponse>, AppError> {
     let retired =
-        cumments_core::management::retire_post_room_by_room_id(state.store.as_ref(), &room_id)
+        cumments_core::management::retire_page_room_by_room_id(state.store.as_ref(), &room_id)
             .await
             .map_err(|e| AppError::Internal(format!("failed to retire room: {e}")))?;
     if !retired {

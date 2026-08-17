@@ -36,7 +36,7 @@ pub enum SiteVerificationStatus {
     Verified,
 }
 
-/// Decommission lifecycle of an API-registered site.
+/// Retirement lifecycle of an API-registered site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum SiteLifecycleStatus {

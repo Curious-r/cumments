@@ -49,7 +49,7 @@ impl PostsPass {
                 let candidate_room_id = self
                     .deps
                     .registry_store
-                    .get_registered_room(&command.site_id, &command.post_slug)
+                    .get_registered_room(&command.site_id, &command.page_slug)
                     .await?;
 
                 // Quarantine gate: without an active candidate the driver
@@ -59,7 +59,7 @@ impl PostsPass {
                     && let Some(room) = quarantined_room_for(
                         &self.deps,
                         &command.site_id,
-                        &command.post_slug,
+                        &command.page_slug,
                     )
                     .await?
                 {
@@ -89,7 +89,7 @@ impl PostsPass {
                     .driver
                     .ensure_comment_room(
                         &command.site_id,
-                        &command.post_slug,
+                        &command.page_slug,
                         &space_id,
                         candidate_room_id.as_deref(),
                     )
@@ -119,7 +119,7 @@ impl PostsPass {
                 // before any event can arrive.
                 self.deps
                     .registry_store
-                    .register_room(&room_id, &command.site_id, &command.post_slug)
+                    .register_room(&room_id, &command.site_id, &command.page_slug)
                     .await?;
 
                 // 3c. Resolve the replied-to comment from the read model so

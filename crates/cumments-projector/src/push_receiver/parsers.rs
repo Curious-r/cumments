@@ -121,7 +121,7 @@ fn namespaced_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
 
 /// Whether a Matrix sender is one of our exclusive AS virtual users.
 ///
-/// Virtual user localparts follow `_cumments_{site_id}_{guest_id}`, where
+/// Virtual user localparts follow `_cumments_{site_id}_{visitor_id}`, where
 /// the site is `[a-z0-9-]{1,64}` and the visitor is 32 lowercase hex digits.
 /// Matching the exact shape (rather than the broader `@_cumments_.*`
 /// namespace) excludes the AS sender account itself (`@_cumments_bot`) and
@@ -136,7 +136,7 @@ fn is_virtual_user_sender(sender: &str) -> bool {
     let Some(rest) = localpart.strip_prefix("_cumments_") else {
         return false;
     };
-    let Some((site_id, guest_id)) = rest.rsplit_once('_') else {
+    let Some((site_id, visitor_id)) = rest.rsplit_once('_') else {
         return false;
     };
     let site_ok = !site_id.is_empty()
@@ -144,8 +144,10 @@ fn is_virtual_user_sender(sender: &str) -> bool {
         && site_id
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    let guest_ok =
-        guest_id.len() == 32 && guest_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    let guest_ok = visitor_id.len() == 32
+        && visitor_id
+            .chars()
+            .all(|c| matches!(c, '0'..='9' | 'a'..='f'));
     site_ok && guest_ok
 }
 
@@ -172,7 +174,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
 
     // Structured Cumments fields are only trusted for our virtual users.
     // Matrix-native senders may copy a block into their event; it must be
-    // ignored so it cannot be used to impersonate a guest identity.
+    // ignored so it cannot be used to impersonate a visitor identity.
     let author_public_key = namespaced_string(content, "public_key").map(|s| s.to_string());
     let author_signature = namespaced_string(content, "signature").map(|s| s.to_string());
     let author_challenge = namespaced_string(content, "challenge").map(|s| s.to_string());
@@ -199,7 +201,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     } else {
         parse_message_content(content, msgtype)
     };
-    // For guest messages, the structured block takes precedence over the
+    // For visitor messages, the structured block takes precedence over the
     // plain-text body (only text messages are signable today).
     if is_virtual_sender
         && let Content::Text(text) = &mut parsed_content
@@ -239,7 +241,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         let new_content = content.get("m.new_content").map(|nc| {
             let nc_msgtype = nc.get("msgtype").and_then(|v| v.as_str()).or(msgtype);
             let mut parsed = parse_message_content(nc, nc_msgtype);
-            // For guest edits, the structured block inside m.new_content still
+            // For visitor edits, the structured block inside m.new_content still
             // takes precedence over the plain-text body.
             if is_virtual_sender
                 && let Content::Text(text) = &mut parsed
@@ -825,7 +827,7 @@ mod tests {
     fn virtual_user_message_without_full_block_is_untrusted() {
         let event = PushEvent {
             event_type: "m.room.message".to_string(),
-            event_id: Some("$guest:hs".to_string()),
+            event_id: Some("$visitor:hs".to_string()),
             room_id: Some("!room:hs".to_string()),
             sender: Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string()),
             origin_server_ts: Some(1000),
@@ -838,7 +840,7 @@ mod tests {
             unsigned: None,
         };
 
-        let parsed = parse_push_message(&event).expect("parse guest message");
+        let parsed = parse_push_message(&event).expect("parse visitor message");
         assert!(parsed.is_virtual_user_sender);
         assert!(parsed.author_public_key.is_none());
         assert!(parsed.author_signature.is_none());
@@ -994,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_reaction_parses_proof_block() {
+    fn visitor_reaction_parses_proof_block() {
         let mut event = event_with_content(
             "m.reaction",
             serde_json::json!({
@@ -1012,7 +1014,7 @@ mod tests {
             }),
         );
         event.sender = Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
-        let reaction = parse_push_reaction(&event).expect("parse guest reaction");
+        let reaction = parse_push_reaction(&event).expect("parse visitor reaction");
         assert!(reaction.is_virtual_user_sender);
         assert_eq!(reaction.author_public_key.as_deref(), Some("pubkey"));
         assert_eq!(reaction.author_signature.as_deref(), Some("sig"));

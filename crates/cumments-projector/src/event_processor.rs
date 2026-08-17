@@ -11,18 +11,18 @@ use crate::parsed::{
     ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction, ParsedRoomState,
     ParsedSpaceChild,
 };
-use crate::verification::{verify_delete_proof, verify_guest_event};
+use crate::verification::{verify_delete_proof, verify_visitor_event};
 use anyhow::Result;
 use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
     governance::{
-        CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry,
+        GLOBAL_MODERATOR_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry,
         SITE_ROLE_MIN_LEVEL, can_send_state_event, is_as_managed_user, role_entries,
     },
     identity::{post_signature_message, signature_message},
     models::{
-        AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PollVote,
-        PostSlug, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId,
+        AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PageSlug,
+        PollVote, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId,
         TextStyle,
     },
     ports::{
@@ -93,7 +93,7 @@ pub struct EventProcessorDeps {
     /// backfill worker).
     pub backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     pub event_bus: broadcast::Sender<ProjectorEvent>,
-    /// Wakes governance reconcile passes (decommission, role propagation)
+    /// Wakes governance reconcile passes (retirement, role propagation)
     /// after bot-driven governance writes, mirroring the API.
     pub governance_notify: Arc<Notify>,
     pub projection_notify: Arc<Notify>,
@@ -223,10 +223,10 @@ fn help_text() -> &'static str {
 !cumments site register <id>             公开注册站点
 !cumments site use <id>                  设置当前站点
 !cumments site <id> status               站点状态
-!cumments site <id> co-manager add|remove <mxid>
-!cumments site <id> post <slug> moderator add|remove <mxid>
-!cumments site <id> post <slug> upgrade <version>（站主）
-!cumments site <id> post <slug> retire --confirm（站主）
+!cumments site <id> global-moderator add|remove <mxid>
+!cumments site <id> page <slug> moderator add|remove <mxid>
+!cumments site <id> page <slug> upgrade <version>（站主）
+!cumments site <id> page <slug> retire --confirm（站主）
 !cumments site <id> stickers list
 !cumments site <id> sticker add <pack_id> <shortcode> <mxc> [body...]
 !cumments site <id> sticker remove <pack_id> <shortcode> --confirm
@@ -484,36 +484,36 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "co-manager", "add", mxid] => {
+            ["site", id, "global-moderator", "add", mxid] => {
                 self.require_site_access(event, id).await?;
                 let pending = cumments_core::management::create_role_claim(
                     self.role_claim_store.as_ref(),
                     id,
                     "",
                     mxid,
-                    CO_MANAGER_LEVEL,
+                    GLOBAL_MODERATOR_LEVEL,
                 )
                 .await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "已为 {mxid} 创建协管员认领。请对方给 bot 发送：\ncumments-claim:{}",
+                        "已为 {mxid} 创建总版主认领。请对方给 bot 发送：\ncumments-claim:{}",
                         pending.verify_token
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "co-manager", "remove", mxid] => {
+            ["site", id, "global-moderator", "remove", mxid] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id} 的协管员 {mxid}？请回复：\n!cumments site {id} co-manager remove {mxid} --confirm"
+                        "确认移除 {id} 的总版主 {mxid}？请回复：\n!cumments site {id} global-moderator remove {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "co-manager", "remove", mxid, "--confirm"] => {
+            ["site", id, "global-moderator", "remove", mxid, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let driver = self.require_driver()?;
                 let removal = cumments_core::management::remove_site_role(
@@ -523,7 +523,7 @@ impl BotCommandRouter {
                     &self.site_service,
                     id,
                     mxid,
-                    CO_MANAGER_LEVEL,
+                    GLOBAL_MODERATOR_LEVEL,
                 )
                 .await?;
                 if removal == cumments_core::management::RoleRemoval::AppliedRemoved {
@@ -531,17 +531,17 @@ impl BotCommandRouter {
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已移除 {id} 的协管员 {mxid}。"),
+                    reply: format!("已移除 {id} 的总版主 {mxid}。"),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "post", slug, "moderator", "add", mxid] => {
+            ["site", id, "page", slug, "moderator", "add", mxid] => {
                 self.require_site_access(event, id).await?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
-                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
                     .registry_store
-                    .get_registered_room(&site_id, &post_slug)
+                    .get_registered_room(&site_id, &page_slug)
                     .await?
                     .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
                 let pending = cumments_core::management::create_role_claim(
@@ -561,12 +561,12 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "post", slug, "moderator", "remove", mxid] => {
+            ["site", id, "page", slug, "moderator", "remove", mxid] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments site {id} post {slug} moderator remove {mxid} --confirm"
+                        "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments site {id} page {slug} moderator remove {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -574,7 +574,7 @@ impl BotCommandRouter {
             [
                 "site",
                 id,
-                "post",
+                "page",
                 slug,
                 "moderator",
                 "remove",
@@ -583,10 +583,10 @@ impl BotCommandRouter {
             ] => {
                 self.require_site_access(event, id).await?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
-                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
                     .registry_store
-                    .get_registered_room(&site_id, &post_slug)
+                    .get_registered_room(&site_id, &page_slug)
                     .await?
                     .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
                 let removal = cumments_core::management::remove_room_moderator(
@@ -607,27 +607,27 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "post", slug, "upgrade", version] => {
+            ["site", id, "page", slug, "upgrade", version] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认升级 {id}/{slug} 到 {version}？请回复：\n!cumments site {id} post {slug} upgrade {version} --confirm"
+                        "确认升级 {id}/{slug} 到 {version}？请回复：\n!cumments site {id} page {slug} upgrade {version} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "post", slug, "upgrade", version, "--confirm"] => {
+            ["site", id, "page", slug, "upgrade", version, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let driver = self.require_driver()?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
-                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
-                let replacement = cumments_core::management::upgrade_site_post_room(
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                let replacement = cumments_core::management::upgrade_site_page_room(
                     driver,
                     self.registry_store.as_ref(),
                     self.site_service.as_ref(),
                     &site_id,
-                    &post_slug,
+                    &page_slug,
                     version,
                 )
                 .await?;
@@ -637,24 +637,24 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "post", slug, "retire"] => {
+            ["site", id, "page", slug, "retire"] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役 {id}/{slug} 的评论区？此操作不可撤销。请回复：\n!cumments site {id} post {slug} retire --confirm"
+                        "确认退役 {id}/{slug} 的评论区？此操作不可撤销。请回复：\n!cumments site {id} page {slug} retire --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "post", slug, "retire", "--confirm"] => {
+            ["site", id, "page", slug, "retire", "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
-                let post_slug = PostSlug::new(slug.to_string()).map_err(CommandError::error)?;
-                if !cumments_core::management::retire_post_room(
+                let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
+                if !cumments_core::management::retire_page_room(
                     self.registry_store.as_ref(),
                     &site_id,
-                    &post_slug,
+                    &page_slug,
                 )
                 .await?
                 {
@@ -841,7 +841,7 @@ impl BotCommandRouter {
                 } else {
                     rooms
                         .iter()
-                        .map(|r| format!("{} ({}/{})", r.room_id, r.site_id, r.post_slug))
+                        .map(|r| format!("{} ({}/{})", r.room_id, r.site_id, r.page_slug))
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
@@ -914,7 +914,7 @@ impl BotCommandRouter {
             }
             ["room", room_id, "retire", "--confirm"] => {
                 self.require_operator(event)?;
-                if !cumments_core::management::retire_post_room_by_room_id(
+                if !cumments_core::management::retire_page_room_by_room_id(
                     self.registry_store.as_ref(),
                     room_id,
                 )
@@ -984,7 +984,7 @@ impl BotCommandRouter {
 
     /// Sticker-pack management follows the Matrix permission for writing
     /// `m.room.image_pack` state in the site Space (state_default by
-    /// default), so co-managers are allowed exactly like in a Matrix client.
+    /// default), so global-moderators are allowed exactly like in a Matrix client.
     async fn require_site_sticker_access(
         &self,
         event: &ParsedRoomMessage,
@@ -1077,24 +1077,24 @@ impl BotCommandRouter {
             .map(|r| r.user_id.clone())
             .collect::<Vec<_>>()
             .join(", ");
-        let co_managers = roles
+        let global_moderators = roles
             .iter()
-            .filter(|r| r.level == CO_MANAGER_LEVEL)
+            .filter(|r| r.level == GLOBAL_MODERATOR_LEVEL)
             .map(|r| r.user_id.clone())
             .collect::<Vec<_>>()
             .join(", ");
         Ok(format!(
-            "站点 {site_id}\n状态: {}\n站主: {}\n协管员: {}",
+            "站点 {site_id}\n状态: {}\n站主: {}\n总版主: {}",
             auth.auth_mode.as_str(),
             if owners.is_empty() {
                 "（无）"
             } else {
                 &owners
             },
-            if co_managers.is_empty() {
+            if global_moderators.is_empty() {
                 "（无）"
             } else {
-                &co_managers
+                &global_moderators
             },
         ))
     }
@@ -1246,17 +1246,17 @@ impl EventProcessor {
         }
 
         // 0. Identify the room context
-        let (site_id, post_slug) = match event.room_identity {
+        let (site_id, page_slug) = match event.room_identity {
             Some(ref id)
                 if SiteId::new(id.site_id.clone()).is_ok()
-                    && PostSlug::new(id.post_slug.clone()).is_ok() =>
+                    && PageSlug::new(id.page_slug.clone()).is_ok() =>
             {
-                (id.site_id.clone(), id.post_slug.clone())
+                (id.site_id.clone(), id.page_slug.clone())
             }
             Some(ref id) => {
                 warn!(
                     "Ignoring message from room {} with invalid identity {}/{}",
-                    event.room_id, id.site_id, id.post_slug
+                    event.room_id, id.site_id, id.page_slug
                 );
                 return Ok(());
             }
@@ -1298,7 +1298,7 @@ impl EventProcessor {
                 return Ok(());
             }
 
-            // Guest edits must carry a valid Cumments identity block and
+            // Visitor edits must carry a valid Cumments identity block and
             // signature; Matrix-native edits are governed by the sender check
             // above.
             if event.is_virtual_user_sender {
@@ -1312,12 +1312,12 @@ impl EventProcessor {
                             let message = signature_message(&[
                                 "PATCH",
                                 &site_id,
-                                &post_slug,
+                                &page_slug,
                                 &relation.target_event_id,
                                 new_content,
                                 chal,
                             ]);
-                            verify_guest_event(
+                            verify_visitor_event(
                                 self.server_name.as_deref(),
                                 &event.sender,
                                 &site_id,
@@ -1331,7 +1331,7 @@ impl EventProcessor {
                 };
                 if !valid {
                     warn!(
-                        "Rejecting guest edit for {} from {}: missing or invalid Cumments identity block",
+                        "Rejecting visitor edit for {} from {}: missing or invalid Cumments identity block",
                         relation.target_event_id, event.sender
                     );
                     return Ok(());
@@ -1385,7 +1385,7 @@ impl EventProcessor {
                 {
                     let _ = self.event_bus.send(ProjectorEvent::MessageUpdated {
                         site_id,
-                        post_slug,
+                        page_slug,
                         message,
                     });
                 }
@@ -1398,7 +1398,7 @@ impl EventProcessor {
             return Ok(());
         }
 
-        // Guest posts must carry a valid Cumments identity block and
+        // Visitor posts must carry a valid Cumments identity block and
         // signature. Matrix-native posts skip this path entirely: their
         // identity is the Matrix sender itself.
         if event.is_virtual_user_sender {
@@ -1415,14 +1415,14 @@ impl EventProcessor {
                         Content::Location(location) => signature_message(&[
                             "LOCATE",
                             &site_id,
-                            &post_slug,
+                            &page_slug,
                             &location.geo_uri,
                             chal,
                         ]),
                         _ => match event.signable_content() {
                             Some(content) => post_signature_message(
                                 &site_id,
-                                &post_slug,
+                                &page_slug,
                                 content,
                                 event.reply_to.as_deref(),
                                 chal,
@@ -1430,7 +1430,7 @@ impl EventProcessor {
                             None => return Ok(()),
                         },
                     };
-                    verify_guest_event(
+                    verify_visitor_event(
                         self.server_name.as_deref(),
                         &event.sender,
                         &site_id,
@@ -1443,7 +1443,7 @@ impl EventProcessor {
             };
             if !valid {
                 warn!(
-                    "Rejecting guest post {} from {}: missing or invalid Cumments identity block",
+                    "Rejecting visitor post {} from {}: missing or invalid Cumments identity block",
                     event.event_id, event.sender
                 );
                 return Ok(());
@@ -1460,12 +1460,12 @@ impl EventProcessor {
         let message = Message {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),
-            post_slug: post_slug.clone(),
+            page_slug: page_slug.clone(),
             author: AuthorSnapshot {
                 kind: if is_matrix_native {
                     AuthorKind::Matrix
                 } else {
-                    AuthorKind::Guest
+                    AuthorKind::Visitor
                 },
                 display_name,
                 avatar_url,
@@ -1512,7 +1512,7 @@ impl EventProcessor {
         };
         let _ = self.event_bus.send(ProjectorEvent::MessageCreated {
             site_id,
-            post_slug,
+            page_slug,
             message,
         });
         Ok(())
@@ -1542,7 +1542,7 @@ impl EventProcessor {
             debug!("Ignoring tombstoned reaction {}", event.event_id);
             return Ok(());
         }
-        // Guest reactions carry a signed proof block that must verify.
+        // Visitor reactions carry a signed proof block that must verify.
         if event.is_virtual_user_sender {
             let (Some(pk), Some(sig), Some(chal)) = (
                 event.author_public_key.as_deref(),
@@ -1550,7 +1550,7 @@ impl EventProcessor {
                 event.author_challenge.as_deref(),
             ) else {
                 warn!(
-                    "Rejecting guest reaction {} from {}: missing proof block",
+                    "Rejecting visitor reaction {} from {}: missing proof block",
                     event.event_id, event.sender
                 );
                 return Ok(());
@@ -1562,12 +1562,12 @@ impl EventProcessor {
             let message = signature_message(&[
                 "REACT",
                 &identity.site_id,
-                &identity.post_slug,
+                &identity.page_slug,
                 &event.message_event_id,
                 &event.key,
                 chal,
             ]);
-            if !verify_guest_event(
+            if !verify_visitor_event(
                 self.server_name.as_deref(),
                 &event.sender,
                 &identity.site_id,
@@ -1576,7 +1576,7 @@ impl EventProcessor {
                 &message,
             ) {
                 warn!(
-                    "Rejecting guest reaction {} from {}: invalid proof",
+                    "Rejecting visitor reaction {} from {}: invalid proof",
                     event.event_id, event.sender
                 );
                 return Ok(());
@@ -1617,7 +1617,7 @@ impl EventProcessor {
                 .event_bus
                 .send(ProjectorEvent::MessageAnnotationsChanged {
                     site_id: updated.site_id.clone(),
-                    post_slug: updated.post_slug.clone(),
+                    page_slug: updated.page_slug.clone(),
                     message: updated,
                 });
         }
@@ -1665,7 +1665,7 @@ impl EventProcessor {
                 event.author_challenge.as_deref(),
             ) else {
                 warn!(
-                    "Rejecting guest vote {} from {}: missing proof block",
+                    "Rejecting visitor vote {} from {}: missing proof block",
                     event.event_id, event.sender
                 );
                 return Ok(());
@@ -1680,12 +1680,12 @@ impl EventProcessor {
             let message = signature_message(&[
                 "VOTE",
                 &identity.site_id,
-                &identity.post_slug,
+                &identity.page_slug,
                 &event.poll_message_id,
                 answer_id,
                 chal,
             ]);
-            if !verify_guest_event(
+            if !verify_visitor_event(
                 self.server_name.as_deref(),
                 &event.sender,
                 &identity.site_id,
@@ -1694,7 +1694,7 @@ impl EventProcessor {
                 &message,
             ) {
                 warn!(
-                    "Rejecting guest vote {} from {}: invalid proof",
+                    "Rejecting visitor vote {} from {}: invalid proof",
                     event.event_id, event.sender
                 );
                 return Ok(());
@@ -1737,7 +1737,7 @@ impl EventProcessor {
                 .event_bus
                 .send(ProjectorEvent::MessageAnnotationsChanged {
                     site_id: updated.site_id.clone(),
-                    post_slug: updated.post_slug.clone(),
+                    page_slug: updated.page_slug.clone(),
                     message: updated,
                 });
         }
@@ -1842,7 +1842,7 @@ impl EventProcessor {
         }
         if event.event_type == POWER_LEVELS_EVENT_TYPE {
             let site = self.site_store.get_site_by_space_id(&event.room_id).await?;
-            // A site Space's power levels define site roles (>= co-manager);
+            // A site Space's power levels define site roles (>= global-moderator);
             // comment rooms additionally carry per-room moderators (>= 50).
             let min_level = if site.is_some() {
                 SITE_ROLE_MIN_LEVEL
@@ -2127,11 +2127,11 @@ impl EventProcessor {
                 return Ok(());
             }
             if let Some(ref identity) = event.room_identity
-                && (c.site_id != identity.site_id || c.post_slug != identity.post_slug)
+                && (c.site_id != identity.site_id || c.page_slug != identity.page_slug)
             {
                 warn!(
                     "Ignoring redaction for {} in {}: message belongs to {}/{}",
-                    target_event_id, event.room_id, c.site_id, c.post_slug
+                    target_event_id, event.room_id, c.site_id, c.page_slug
                 );
                 return Ok(());
             }
@@ -2146,7 +2146,7 @@ impl EventProcessor {
                     proof,
                     &target_event_id,
                     &c.site_id,
-                    &c.post_slug,
+                    &c.page_slug,
                     c.author.public_key.as_deref(),
                 )
             {
@@ -2176,7 +2176,7 @@ impl EventProcessor {
                     .await?;
                 let _ = self.event_bus.send(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
-                    post_slug: c.post_slug,
+                    page_slug: c.page_slug,
                     event_id: target_event_id,
                     submission_id: event.submission_id,
                 });
@@ -2230,7 +2230,7 @@ impl EventProcessor {
                         .event_bus
                         .send(ProjectorEvent::MessageAnnotationsChanged {
                             site_id: updated.site_id.clone(),
-                            post_slug: updated.post_slug.clone(),
+                            page_slug: updated.page_slug.clone(),
                             message: updated,
                         });
                 }
@@ -2283,7 +2283,7 @@ impl EventProcessor {
                         .event_bus
                         .send(ProjectorEvent::MessageAnnotationsChanged {
                             site_id: updated.site_id.clone(),
-                            post_slug: updated.post_slug.clone(),
+                            page_slug: updated.page_slug.clone(),
                             message: updated,
                         });
                 }
@@ -2323,10 +2323,10 @@ impl EventProcessor {
         if event.is_attached {
             // Register the child room if we know its identity
             if let Some(ref child_identity) = event.child_room_identity {
-                match PostSlug::new(child_identity.post_slug.clone()) {
-                    Ok(post_slug) => {
+                match PageSlug::new(child_identity.page_slug.clone()) {
+                    Ok(page_slug) => {
                         self.registry_store
-                            .register_room(&event.child_room_id, &site_id_val, &post_slug)
+                            .register_room(&event.child_room_id, &site_id_val, &page_slug)
                             .await?;
                         info!(
                             "Registered active room {} for site {}",
@@ -2334,8 +2334,8 @@ impl EventProcessor {
                         );
                     }
                     Err(_) => warn!(
-                        "Ignoring space child with invalid post slug {}",
-                        child_identity.post_slug
+                        "Ignoring space child with invalid page slug {}",
+                        child_identity.page_slug
                     ),
                 }
             }
@@ -2385,7 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_author_profile_comes_from_room_member_state() {
+    fn visitor_author_profile_comes_from_room_member_state() {
         let (display_name, avatar_url) = EventProcessor::author_profile_snapshot(Some(&member(
             Some("访客"),
             Some("mxc://hs/avatar"),

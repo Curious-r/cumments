@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use cumments_core::{
     commands::PostCommentCommand,
-    models::{PostSlug, SiteId},
+    models::{PageSlug, SiteId},
     ports::SubmissionStore,
     submissions::{IdempotencyInput, IdempotencyOutcome},
 };
@@ -11,7 +11,7 @@ use sea_orm::{Database, EntityTrait, Set};
 fn post_command() -> PostCommentCommand {
     PostCommentCommand {
         site_id: SiteId::from("my-blog"),
-        post_slug: PostSlug::from("hello-world"),
+        page_slug: PageSlug::from("hello-world"),
         content: "hello".to_string(),
         media: None,
         location: None,

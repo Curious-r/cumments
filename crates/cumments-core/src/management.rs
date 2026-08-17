@@ -4,10 +4,10 @@
 //! operation is implemented exactly once here on top of the core ports.
 
 use crate::governance::{
-    CO_MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, SITE_ROLE_MIN_LEVEL, role_entries,
+    GLOBAL_MODERATOR_LEVEL, MODERATOR_LEVEL, NewRoleClaim, SITE_ROLE_MIN_LEVEL, role_entries,
     set_role_level, validate_governance_user_id,
 };
-use crate::models::{PostSlug, RoomStatus, SiteId};
+use crate::models::{PageSlug, RoomStatus, SiteId};
 use crate::ports::{GovernanceStore, MatrixDriver, RegistryStore, RoleClaimStore, SiteAuthStore};
 use crate::site_auth::{SiteAuthPolicy, generate_token, token_hash};
 use crate::site_service::SiteService;
@@ -33,7 +33,7 @@ pub enum ManagementError {
     #[error("no pending claim or applied role for this user and level")]
     RoleNotFound,
     #[error(
-        "this user holds a site-level role; manage them through the owners or co-managers endpoint"
+        "this user holds a site-level role; manage them through the owners or global-moderators endpoint"
     )]
     SiteLevelRoleConflict,
     #[error("room {0} is not in the registry")]
@@ -42,8 +42,8 @@ pub enum ManagementError {
     RoomNotActive(String),
     #[error("invalid Matrix room version `{0}`")]
     InvalidRoomVersion(String),
-    #[error("invalid post slug `{0}`")]
-    InvalidPostSlug(String),
+    #[error("invalid page slug `{0}`")]
+    InvalidPageSlug(String),
     #[error("target room version {1} is not newer than the current version {0}")]
     RoomVersionNotNewer(String, String),
     #[error("room {0} has no m.room.create event")]
@@ -123,14 +123,14 @@ pub async fn upgrade_comment_room(
     }
     let site_id = SiteId::new(identity.site_id.clone())
         .map_err(|e| ManagementError::InvalidSiteId(e.to_string()))?;
-    let post_slug = PostSlug::new(identity.post_slug.clone())
-        .map_err(|e| ManagementError::InvalidPostSlug(e.to_string()))?;
+    let page_slug = PageSlug::new(identity.page_slug.clone())
+        .map_err(|e| ManagementError::InvalidPageSlug(e.to_string()))?;
     let space_id = site_service.ensure_space(&site_id, driver).await?;
 
     let replacement = driver.upgrade_room(room_id, new_version).await?;
 
     driver
-        .adopt_room(&replacement, &site_id, Some(&post_slug), false)
+        .adopt_room(&replacement, &site_id, Some(&page_slug), false)
         .await?;
     driver.link_room_to_space(&space_id, &replacement).await?;
 
@@ -159,31 +159,31 @@ pub async fn upgrade_comment_room(
     }
 
     registry
-        .register_room(&replacement, &site_id, &post_slug)
+        .register_room(&replacement, &site_id, &page_slug)
         .await?;
     Ok(replacement)
 }
 
 /// Site-owner entry point for [`upgrade_comment_room`]: resolves the active
-/// room for `(site_id, post_slug)` from the registry, then runs the same
+/// room for `(site_id, page_slug)` from the registry, then runs the same
 /// upgrade and convergence. Shared by the claim-token API and the bot's
 /// site-level command; the operator mirror continues to take a raw room ID.
-pub async fn upgrade_site_post_room(
+pub async fn upgrade_site_page_room(
     driver: &dyn MatrixDriver,
     registry: &dyn RegistryStore,
     site_service: &SiteService,
     site_id: &SiteId,
-    post_slug: &PostSlug,
+    page_slug: &PageSlug,
     new_version: &str,
 ) -> Result<String, ManagementError> {
     let room_id = registry
-        .get_registered_room(site_id, post_slug)
+        .get_registered_room(site_id, page_slug)
         .await?
         .ok_or_else(|| {
             ManagementError::RoomNotRegistered(format!(
                 "{}/{}",
                 site_id.as_str(),
-                post_slug.as_str()
+                page_slug.as_str()
             ))
         })?;
     upgrade_comment_room(driver, registry, site_service, &room_id, new_version).await
@@ -237,7 +237,7 @@ pub async fn create_role_claim(
 }
 
 /// Removes a site-level role: cancels a pending claim, or removes an applied
-/// role from the Space power levels (the moderation pass then propagates the
+/// role from the Space power levels (the governance pass then propagates the
 /// removal into every comment room).
 pub async fn remove_site_role(
     store: &dyn RoleClaimStore,
@@ -277,8 +277,8 @@ pub async fn remove_site_role(
 }
 
 /// Removes an already-applied room moderator from a room's power levels.
-/// Site-level roles (>= co-manager) are rejected so this cannot fight the
-/// moderation sync pass.
+/// Site-level roles (>= global-moderator) are rejected so this cannot fight the
+/// governance sync pass.
 pub async fn remove_room_moderator(
     store: &dyn RoleClaimStore,
     governance: &dyn GovernanceStore,
@@ -314,7 +314,7 @@ pub async fn remove_room_moderator(
         .find(|role| role.user_id == user_id)
         .map(|role| role.level)
         .unwrap_or(0);
-    if current_level >= CO_MANAGER_LEVEL {
+    if current_level >= GLOBAL_MODERATOR_LEVEL {
         return Err(ManagementError::SiteLevelRoleConflict);
     }
 
@@ -342,7 +342,7 @@ pub async fn rotate_claim_token(
 }
 
 /// Marks a site `retiring`; writes stop immediately and the running server's
-/// reconciler performs the Matrix decommission. Returns `false` when the
+/// reconciler performs the Matrix retirement. Returns `false` when the
 /// site does not exist or is already retired.
 pub async fn retire_site(
     store: &dyn SiteAuthStore,
@@ -351,24 +351,24 @@ pub async fn retire_site(
     Ok(store.mark_site_retiring(site_id).await?)
 }
 
-/// Marks one post's active comment room `Retired`, stopping new writes
+/// Marks one page's active comment room `Retired`, stopping new writes
 /// immediately; the running reconciler then leaves the Matrix room and
 /// clears local projections. Returns `false` when there is no active room
 /// for the site/post (or it is already retired), matching `retire_site`.
-pub async fn retire_post_room(
+pub async fn retire_page_room(
     registry: &dyn RegistryStore,
     site_id: &SiteId,
-    post_slug: &PostSlug,
+    page_slug: &PageSlug,
 ) -> Result<bool, ManagementError> {
-    let Some(room_id) = registry.get_registered_room(site_id, post_slug).await? else {
+    let Some(room_id) = registry.get_registered_room(site_id, page_slug).await? else {
         return Ok(false);
     };
     Ok(registry.mark_room_retired(&room_id).await?)
 }
 
-/// Room-id variant of [`retire_post_room`], used by the operator mirror and
+/// Room-id variant of [`retire_page_room`], used by the operator mirror and
 /// the CLI/bot room commands.
-pub async fn retire_post_room_by_room_id(
+pub async fn retire_page_room_by_room_id(
     registry: &dyn RegistryStore,
     room_id: &str,
 ) -> Result<bool, ManagementError> {
@@ -377,9 +377,9 @@ pub async fn retire_post_room_by_room_id(
     };
     let site_id = SiteId::new(identity.site_id.clone())
         .map_err(|_| ManagementError::InvalidSiteId(identity.site_id.clone()))?;
-    let post_slug = PostSlug::new(identity.post_slug.clone())
-        .map_err(|_| ManagementError::InvalidPostSlug(identity.post_slug.clone()))?;
-    retire_post_room(registry, &site_id, &post_slug).await
+    let page_slug = PageSlug::new(identity.page_slug.clone())
+        .map_err(|_| ManagementError::InvalidPageSlug(identity.page_slug.clone()))?;
+    retire_page_room(registry, &site_id, &page_slug).await
 }
 
 /// Issues a fresh HMAC secret for a site. Returns `None` when the site does

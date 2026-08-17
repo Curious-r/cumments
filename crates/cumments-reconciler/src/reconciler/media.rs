@@ -9,7 +9,7 @@ use tracing::{info, warn};
 /// An upload counts as orphaned once it has been unreferenced this long.
 const ORPHAN_AGE: chrono::Duration = chrono::Duration::hours(24);
 
-/// Periodic sweep for unreferenced guest uploads.
+/// Periodic sweep for unreferenced visitor uploads.
 pub struct MediaCleanupPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,

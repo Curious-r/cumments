@@ -3,7 +3,7 @@
 use super::*;
 use crate::wire::percent_encode;
 use anyhow::{Result, anyhow};
-use cumments_core::models::{GuestProfile, SiteId};
+use cumments_core::models::{SiteId, VisitorProfile};
 use serde::Deserialize;
 use tracing::{instrument, warn};
 
@@ -136,7 +136,7 @@ impl AppServiceMatrixDriver {
         }
     }
 
-    /// Makes a specific AS-managed user (e.g. a guest virtual user) leave a
+    /// Makes a specific AS-managed user (e.g. a visitor virtual user) leave a
     /// room. A user who is not in the room counts as already left.
     pub(super) async fn leave_room_as_impl(&self, room_id: &str, user_id: &str) -> Result<()> {
         let path = format!("_matrix/client/v3/rooms/{}/leave", percent_encode(room_id));
@@ -429,7 +429,7 @@ impl AppServiceMatrixDriver {
         &self,
         author_public_key: &str,
         site_id: &SiteId,
-    ) -> Result<Option<GuestProfile>> {
+    ) -> Result<Option<VisitorProfile>> {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
@@ -463,7 +463,7 @@ impl AppServiceMatrixDriver {
             .json()
             .await
             .map_err(|e| anyhow!("failed to parse profile response: {e}"))?;
-        Ok(Some(GuestProfile {
+        Ok(Some(VisitorProfile {
             display_name: data
                 .get("displayname")
                 .and_then(|value| value.as_str())

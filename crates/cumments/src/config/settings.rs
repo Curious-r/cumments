@@ -71,9 +71,9 @@ pub struct RateLimits {
     pub write: RateLimitBucket,
     pub sse: RateLimitBucket,
     pub media: RateLimitBucket,
-    pub guest_profile: RateLimitBucket,
+    pub visitor_profile: RateLimitBucket,
     pub public_read: RateLimitBucket,
-    pub moderation: RateLimitBucket,
+    pub governance: RateLimitBucket,
 }
 
 impl Default for RateLimits {
@@ -86,9 +86,9 @@ impl Default for RateLimits {
             write: RateLimitBucket::new(120, "1h"),
             sse: RateLimitBucket::new(20, "1h"),
             media: RateLimitBucket::new(120, "1h"),
-            guest_profile: RateLimitBucket::new(120, "1h"),
+            visitor_profile: RateLimitBucket::new(120, "1h"),
             public_read: RateLimitBucket::new(1200, "1h"),
-            moderation: RateLimitBucket::new(60, "1h"),
+            governance: RateLimitBucket::new(60, "1h"),
         }
     }
 }
@@ -122,9 +122,9 @@ pub struct ResolvedRateLimits {
     pub write: ResolvedRateLimit,
     pub sse: ResolvedRateLimit,
     pub media: ResolvedRateLimit,
-    pub guest_profile: ResolvedRateLimit,
+    pub visitor_profile: ResolvedRateLimit,
     pub public_read: ResolvedRateLimit,
-    pub moderation: ResolvedRateLimit,
+    pub governance: ResolvedRateLimit,
 }
 
 /// One validated rate-limit bucket.
@@ -146,9 +146,11 @@ impl RateLimits {
             write: self.write.resolved("rate_limit.write")?,
             sse: self.sse.resolved("rate_limit.sse")?,
             media: self.media.resolved("rate_limit.media")?,
-            guest_profile: self.guest_profile.resolved("rate_limit.guest_profile")?,
+            visitor_profile: self
+                .visitor_profile
+                .resolved("rate_limit.visitor_profile")?,
             public_read: self.public_read.resolved("rate_limit.public_read")?,
-            moderation: self.moderation.resolved("rate_limit.moderation")?,
+            governance: self.governance.resolved("rate_limit.governance")?,
         })
     }
 }

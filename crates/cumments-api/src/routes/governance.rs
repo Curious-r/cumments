@@ -1,4 +1,4 @@
-//! Site governance endpoints: owners, co-managers and room moderators.
+//! Site governance endpoints: owners, global-moderators and room moderators.
 //!
 //! Role registration is always token-DM verified: the API stores a pending
 //! claim and returns a one-time token; the target MXID sends the token to the
@@ -18,10 +18,11 @@ use axum::{
 use chrono::Utc;
 use cumments_core::{
     governance::{
-        CO_MANAGER_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, RoleEntry, validate_governance_user_id,
+        GLOBAL_MODERATOR_LEVEL, MODERATOR_LEVEL, OWNER_LEVEL, RoleEntry,
+        validate_governance_user_id,
     },
     management::ManagementError,
-    models::{PostSlug, SiteId},
+    models::{PageSlug, SiteId},
     site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, token_hash},
 };
 use serde::{Deserialize, Serialize};
@@ -36,26 +37,26 @@ pub struct UserIdRequest {
 #[derive(Debug, Serialize)]
 pub struct SiteRolesResponse {
     pub owners: Vec<String>,
-    pub co_managers: Vec<String>,
+    pub global_moderators: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpgradePostRoomRequest {
+pub struct UpgradePageRoomRequest {
     pub new_version: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct UpgradePostRoomResponse {
+pub struct UpgradePageRoomResponse {
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub new_version: String,
     pub replacement_room: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct RetirePostRoomResponse {
+pub struct RetirePageRoomResponse {
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub status: &'static str,
 }
 
@@ -156,10 +157,10 @@ pub(crate) fn rate_limited(
     addr: Option<SocketAddr>,
 ) -> Result<(), AppError> {
     let key = client_key(headers, addr, &state.trusted_proxies);
-    if !state.moderation_limiter.allow(&key) {
+    if !state.governance_limiter.allow(&key) {
         return Err(AppError::TooManyRequests {
             detail: "site governance writes are rate limited; try again later".to_string(),
-            retry_after_seconds: state.moderation_limiter.window().as_secs(),
+            retry_after_seconds: state.governance_limiter.window().as_secs(),
         });
     }
     Ok(())
@@ -168,11 +169,11 @@ pub(crate) fn rate_limited(
 async fn room_id_for(
     state: &ApiState,
     site_id: &SiteId,
-    post_slug: &PostSlug,
+    page_slug: &PageSlug,
 ) -> Result<String, AppError> {
     state
         .store
-        .get_registered_room(site_id, post_slug)
+        .get_registered_room(site_id, page_slug)
         .await
         .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
         .ok_or_else(|| AppError::NotFound("No room registered for this post.".to_string()))
@@ -185,9 +186,9 @@ fn site_roles_response(roles: Vec<RoleEntry>) -> SiteRolesResponse {
             .filter(|role| role.level == OWNER_LEVEL)
             .map(|role| role.user_id.clone())
             .collect(),
-        co_managers: roles
+        global_moderators: roles
             .iter()
-            .filter(|role| role.level == CO_MANAGER_LEVEL)
+            .filter(|role| role.level == GLOBAL_MODERATOR_LEVEL)
             .map(|role| role.user_id.clone())
             .collect(),
     }
@@ -202,7 +203,7 @@ fn map_management_error(error: ManagementError) -> AppError {
             AppError::BadRequest(message)
         }
         ManagementError::InvalidRoomVersion(message)
-        | ManagementError::InvalidPostSlug(message) => AppError::BadRequest(message),
+        | ManagementError::InvalidPageSlug(message) => AppError::BadRequest(message),
         ManagementError::RoomVersionNotNewer(message, _) => AppError::Conflict(message),
         ManagementError::RoomWithoutCreateEvent(message) => AppError::NotFound(message),
         ManagementError::RoleNotFound => AppError::NotFound(error.to_string()),
@@ -295,7 +296,7 @@ pub(crate) async fn remove_owner_handler(
     }))
 }
 
-pub(crate) async fn add_co_manager_handler(
+pub(crate) async fn add_global_moderator_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -305,12 +306,12 @@ pub(crate) async fn add_co_manager_handler(
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&req.user_id)?;
-    create_role_claim(&state, &site_id, "", &user_id, CO_MANAGER_LEVEL)
+    create_role_claim(&state, &site_id, "", &user_id, GLOBAL_MODERATOR_LEVEL)
         .await
         .map(Json)
 }
 
-pub(crate) async fn remove_co_manager_handler(
+pub(crate) async fn remove_global_moderator_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -327,7 +328,7 @@ pub(crate) async fn remove_co_manager_handler(
         &state.site_service,
         site_id.as_str(),
         &user_id,
-        CO_MANAGER_LEVEL,
+        GLOBAL_MODERATOR_LEVEL,
     )
     .await
     .map_err(map_management_error)?;
@@ -337,23 +338,23 @@ pub(crate) async fn remove_co_manager_handler(
     Ok(Json(RevokedRoleResponse {
         revoked: true,
         user_id,
-        level: CO_MANAGER_LEVEL,
+        level: GLOBAL_MODERATOR_LEVEL,
         warnings: Vec::new(),
     }))
 }
 
 pub(crate) async fn add_room_moderator_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<UserIdRequest>,
 ) -> Result<Json<PendingRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&req.user_id)?;
-    let room_id = room_id_for(&state, &site_id, &post_slug).await?;
+    let room_id = room_id_for(&state, &site_id, &page_slug).await?;
     create_role_claim(&state, &site_id, &room_id, &user_id, MODERATOR_LEVEL)
         .await
         .map(Json)
@@ -361,16 +362,16 @@ pub(crate) async fn add_room_moderator_handler(
 
 pub(crate) async fn remove_room_moderator_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
     let user_id = parse_user_id(&user_id_from_query(&query)?)?;
-    let room_id = room_id_for(&state, &site_id, &post_slug).await?;
+    let room_id = room_id_for(&state, &site_id, &page_slug).await?;
     let removal = cumments_core::management::remove_room_moderator(
         state.store.as_ref(),
         state.store.as_ref(),
@@ -427,7 +428,7 @@ pub(crate) async fn list_room_moderators_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
 ) -> Result<Json<RoomModeratorsResponse>, AppError> {
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.public_read_limiter.allow(&key) {
@@ -437,8 +438,8 @@ pub(crate) async fn list_room_moderators_handler(
         });
     }
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-    let room_id = room_id_for(&state, &site_id, &post_slug).await?;
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+    let room_id = room_id_for(&state, &site_id, &page_slug).await?;
     let moderators = state
         .store
         .list_room_roles(&room_id)
@@ -454,7 +455,7 @@ pub(crate) async fn list_room_moderators_handler(
     }))
 }
 
-/// Starts site decommission: writes are rejected immediately, then the
+/// Starts site retirement: writes are rejected immediately, then the
 /// reconciler retires the Matrix Space/rooms and clears local projections.
 pub(crate) async fn retire_site_handler(
     State(state): State<ApiState>,
@@ -466,7 +467,7 @@ pub(crate) async fn retire_site_handler(
         .map_err(map_management_error)?;
     if !marked {
         return Err(AppError::NotFound(
-            "site not found or already decommissioned".to_string(),
+            "site not found or already retired".to_string(),
         ));
     }
     state.governance_notify.notify_one();
@@ -481,14 +482,14 @@ pub(crate) async fn retire_site_handler(
 /// and clears local projections. The claim token's site scope is the whole
 /// authorization boundary; the operator mirror accepts a raw room ID under
 /// `/api/v1/operator/rooms/{room_id}`.
-pub(crate) async fn retire_post_room_handler(
+pub(crate) async fn retire_page_room_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
-) -> Result<Json<RetirePostRoomResponse>, AppError> {
+    Path((site_id, page_slug)): Path<(String, String)>,
+) -> Result<Json<RetirePageRoomResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let retired =
-        cumments_core::management::retire_post_room(state.store.as_ref(), &site_id, &post_slug)
+        cumments_core::management::retire_page_room(state.store.as_ref(), &site_id, &page_slug)
             .await
             .map_err(map_management_error)?;
     if !retired {
@@ -497,40 +498,40 @@ pub(crate) async fn retire_post_room_handler(
         ));
     }
     state.governance_notify.notify_one();
-    Ok(Json(RetirePostRoomResponse {
+    Ok(Json(RetirePageRoomResponse {
         site_id: site_id.as_str().to_string(),
-        post_slug: post_slug.as_str().to_string(),
+        page_slug: page_slug.as_str().to_string(),
         status: "retiring",
     }))
 }
 
 /// Site-owner entry point for upgrading one of the site's comment rooms.
 ///
-/// The room is resolved from the registry by `(site_id, post_slug)`, so the
+/// The room is resolved from the registry by `(site_id, page_slug)`, so the
 /// claim token's site scope is the whole authorization boundary. The upgrade
 /// itself is executed by the AS bot (the `/upgrade` caller), keeping the bot
 /// as the replacement room's creator; the operator mirror accepts a raw
 /// room ID and lives under `/api/v1/operator/rooms/{room_id}/upgrade`.
-pub(crate) async fn upgrade_post_room_handler(
+pub(crate) async fn upgrade_page_room_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
-    Json(body): Json<UpgradePostRoomRequest>,
-) -> Result<Json<UpgradePostRoomResponse>, AppError> {
+    Path((site_id, page_slug)): Path<(String, String)>,
+    Json(body): Json<UpgradePageRoomRequest>,
+) -> Result<Json<UpgradePageRoomResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug = PostSlug::new(post_slug).map_err(AppError::Validation)?;
-    let replacement_room = cumments_core::management::upgrade_site_post_room(
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+    let replacement_room = cumments_core::management::upgrade_site_page_room(
         state.driver.as_ref(),
         state.store.as_ref(),
         &state.site_service,
         &site_id,
-        &post_slug,
+        &page_slug,
         &body.new_version,
     )
     .await
     .map_err(map_management_error)?;
-    Ok(Json(UpgradePostRoomResponse {
+    Ok(Json(UpgradePageRoomResponse {
         site_id: site_id.as_str().to_string(),
-        post_slug: post_slug.as_str().to_string(),
+        page_slug: page_slug.as_str().to_string(),
         new_version: body.new_version,
         replacement_room,
     }))
@@ -561,7 +562,7 @@ mod tests {
         assert!(
             owner_removal_warnings(&[RoleEntry {
                 user_id: "@co:hs".into(),
-                level: CO_MANAGER_LEVEL,
+                level: GLOBAL_MODERATOR_LEVEL,
             }])
             .len()
                 == 1

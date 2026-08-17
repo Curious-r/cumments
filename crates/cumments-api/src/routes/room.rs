@@ -9,7 +9,7 @@ use axum::{
     extract::{ConnectInfo, Path, State},
     http::HeaderMap,
 };
-use cumments_core::models::{PostSlug, RoomMetadata, SiteId};
+use cumments_core::models::{PageSlug, RoomMetadata, SiteId};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -23,12 +23,12 @@ struct RoomInfoResponse {
     system_messages: Vec<cumments_core::models::RoomStateEvent>,
 }
 
-/// `GET /api/v1/sites/{site_id}/posts/{post_slug}/room`
+/// `GET /api/v1/sites/{site_id}/pages/{page_slug}/room`
 pub(crate) async fn room_info_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.public_read_limiter.allow(&key) {
@@ -38,11 +38,11 @@ pub(crate) async fn room_info_handler(
         });
     }
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
 
     let Some(room_id) = state
         .store
-        .get_registered_room(&site_id_val, &post_slug_val)
+        .get_registered_room(&site_id_val, &page_slug_val)
         .await
         .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
     else {

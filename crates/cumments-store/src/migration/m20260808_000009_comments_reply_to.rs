@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::migration::column_exists;
+use crate::migration::{column_exists, slug_column};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -12,6 +12,7 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        let slug = slug_column(manager, "comments").await?;
         if !column_exists(manager, "comments", "reply_to").await? {
             manager
                 .alter_table(
@@ -25,10 +26,10 @@ impl MigrationTrait for Migration {
 
         manager
             .get_connection()
-            .execute_unprepared(
+            .execute_unprepared(&format!(
                 "CREATE INDEX IF NOT EXISTS idx_comments_site_post_reply \
-                 ON comments (site_id, post_slug, reply_to)",
-            )
+                     ON comments (site_id, {slug}, reply_to)"
+            ))
             .await?;
 
         Ok(())

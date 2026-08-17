@@ -18,7 +18,7 @@ use axum::{
 use cumments_core::{
     commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
     identity::{post_signature_message, signature_message, verify_signature},
-    models::{AuthorKind, Content, MediaKind, PostSlug, SiteId},
+    models::{AuthorKind, Content, MediaKind, PageSlug, SiteId},
     submissions::{IdempotencyInput, IdempotencyOutcome},
 };
 use ruma_common::EventId;
@@ -146,7 +146,7 @@ async fn idempotency_short_circuit(
 /// fingerprint path for the endpoint form actually used.
 struct CommentWritePath {
     site_id: String,
-    post_slug: String,
+    page_slug: String,
     comment_id: String,
     fingerprint_path: String,
 }
@@ -158,13 +158,13 @@ impl CommentWritePath {
     /// or the body form.
     fn new(
         site_id: String,
-        post_slug: String,
+        page_slug: String,
         comment_id: String,
         fingerprint_path: String,
     ) -> Self {
         Self {
             site_id,
-            post_slug,
+            page_slug,
             comment_id,
             fingerprint_path,
         }
@@ -176,7 +176,7 @@ pub(crate) async fn query_comments_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     body: String,
 ) -> Result<impl IntoResponse, AppError> {
     // 1. Only QUERY method is accepted here
@@ -194,7 +194,7 @@ pub(crate) async fn query_comments_handler(
 
     // 2. Validate path params
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
 
     // The parent site must exist: a missing parent is a 404, not an empty
     // page, matching the REST convention for nested resources.
@@ -223,7 +223,7 @@ pub(crate) async fn query_comments_handler(
     tracing::debug!(
         "QUERY comments for site: {}, post: {} (page: {:?}, per_page: {:?})",
         site_id_val.as_str(),
-        post_slug_val.as_str(),
+        page_slug_val.as_str(),
         query.page,
         query.per_page,
     );
@@ -236,7 +236,7 @@ pub(crate) async fn query_comments_handler(
 
     match state
         .store
-        .get_messages(&site_id_val, &post_slug_val, limit, offset)
+        .get_messages(&site_id_val, &page_slug_val, limit, offset)
         .await
     {
         Ok(mut page_data) => {
@@ -278,7 +278,7 @@ pub(crate) async fn query_comments_handler(
 /// The handler for receiving a new comment post.
 pub(crate) async fn post_comment_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: String,
@@ -293,7 +293,7 @@ pub(crate) async fn post_comment_handler(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let fingerprint = request_fingerprint(
         "POST",
-        &format!("/api/v1/sites/{}/posts/{}/comments", site_id, post_slug),
+        &format!("/api/v1/sites/{}/pages/{}/comments", site_id, page_slug),
         body.as_bytes(),
     );
 
@@ -333,7 +333,7 @@ pub(crate) async fn post_comment_handler(
         }
         if media.kind == Some(MediaKind::Sticker) {
             // Stickers must come from the site's projected packs; the server
-            // fills the metadata from the pack so guests cannot forge it.
+            // fills the metadata from the pack so visitors cannot forge it.
             let packs =
                 state.store.list_site_packs(&site_id).await.map_err(|e| {
                     AppError::Internal(format!("failed to load sticker packs: {e}"))
@@ -369,7 +369,7 @@ pub(crate) async fn post_comment_handler(
             }
         } else if !state
             .store
-            .media_upload_owned_by(&media.url, &req.author_public_key, &site_id, &post_slug)
+            .media_upload_owned_by(&media.url, &req.author_public_key, &site_id, &page_slug)
             .await
             .map_err(|e| AppError::Internal(format!("failed to verify media ownership: {e}")))?
         {
@@ -409,7 +409,7 @@ pub(crate) async fn post_comment_handler(
         .unwrap_or(req.content.as_str());
     let message = post_signature_message(
         &site_id,
-        &post_slug,
+        &page_slug,
         signable_content,
         req.reply_to.as_deref(),
         challenge,
@@ -425,7 +425,7 @@ pub(crate) async fn post_comment_handler(
     if let Some(reply_to) = req.reply_to.as_deref() {
         match state.store.get_message(reply_to).await {
             Ok(Some(parent)) => {
-                if parent.site_id != site_id || parent.post_slug != post_slug {
+                if parent.site_id != site_id || parent.page_slug != page_slug {
                     return Err(AppError::BadRequest(
                         "reply_to must reference a comment in the same site and post.".to_string(),
                     ));
@@ -443,11 +443,11 @@ pub(crate) async fn post_comment_handler(
 
     // 3. Create the business command
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
 
     let command = PostCommentCommand {
         site_id: site_id_val,
-        post_slug: post_slug_val,
+        page_slug: page_slug_val,
         content: req.content,
         media: req.media,
         location: None,
@@ -496,7 +496,7 @@ pub(crate) async fn post_comment_handler(
 /// so opaque Matrix event IDs never need percent-encoding in the path.
 pub(crate) async fn delete_comment_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -514,8 +514,8 @@ pub(crate) async fn delete_comment_handler(
     // The collection path is constant for every DELETE: the body signature
     // already covers `comment_id`, so the idempotency fingerprint stays
     // insensitive to query percent-encoding choices.
-    let fingerprint_path = format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments");
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, fingerprint_path);
+    let fingerprint_path = format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments");
+    let path = CommentWritePath::new(site_id, page_slug, comment_id, fingerprint_path);
     delete_comment_common(state, connect, headers, path, req, body).await
 }
 
@@ -565,7 +565,7 @@ async fn delete_comment_common(
     let message = signature_message(&[
         "DELETE",
         &path.site_id,
-        &path.post_slug,
+        &path.page_slug,
         &path.comment_id,
         challenge,
     ]);
@@ -576,7 +576,7 @@ async fn delete_comment_common(
     // 2c. Authorization: the presented public key must be the comment's owner.
     match state.store.get_message(&path.comment_id).await {
         Ok(Some(message)) => {
-            if message.site_id != path.site_id || message.post_slug != path.post_slug {
+            if message.site_id != path.site_id || message.page_slug != path.page_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
             if message.author.kind == AuthorKind::Matrix {
@@ -621,10 +621,10 @@ async fn delete_comment_common(
 
     // 3. Create the business command
     let site_id_val = SiteId::new(path.site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(path.post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(path.page_slug).map_err(AppError::Validation)?;
     let command = DeleteCommentCommand {
         site_id: site_id_val,
-        post_slug: post_slug_val,
+        page_slug: page_slug_val,
         event_id: path.comment_id,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
@@ -670,7 +670,7 @@ async fn delete_comment_common(
 /// The handler for receiving a new update comment request.
 pub(crate) async fn update_comment_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
+    Path((site_id, page_slug, comment_id)): Path<(String, String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: String,
@@ -678,8 +678,8 @@ pub(crate) async fn update_comment_handler(
     let req: UpdateCommentRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let fingerprint_path =
-        format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments/{comment_id}");
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, fingerprint_path);
+        format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}");
+    let path = CommentWritePath::new(site_id, page_slug, comment_id, fingerprint_path);
     update_comment_common(state, connect, headers, path, req, body).await
 }
 
@@ -687,7 +687,7 @@ pub(crate) async fn update_comment_handler(
 /// opaque Matrix event IDs never need percent-encoding in the URL.
 pub(crate) async fn update_comment_body_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: String,
@@ -698,8 +698,8 @@ pub(crate) async fn update_comment_body_handler(
         .comment_id
         .clone()
         .ok_or_else(|| AppError::BadRequest("comment_id is required".to_string()))?;
-    let fingerprint_path = format!("/api/v1/sites/{site_id}/posts/{post_slug}/comments");
-    let path = CommentWritePath::new(site_id, post_slug, comment_id, fingerprint_path);
+    let fingerprint_path = format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments");
+    let path = CommentWritePath::new(site_id, page_slug, comment_id, fingerprint_path);
     update_comment_common(state, connect, headers, path, req, body).await
 }
 
@@ -749,7 +749,7 @@ async fn update_comment_common(
     let message = signature_message(&[
         "PATCH",
         &path.site_id,
-        &path.post_slug,
+        &path.page_slug,
         &path.comment_id,
         &req.content,
         challenge,
@@ -762,7 +762,7 @@ async fn update_comment_common(
     // and the comment must belong to the site/post in the path.
     match state.store.get_message(&path.comment_id).await {
         Ok(Some(message)) => {
-            if message.site_id != path.site_id || message.post_slug != path.post_slug {
+            if message.site_id != path.site_id || message.page_slug != path.page_slug {
                 return Err(AppError::NotFound("Comment not found.".to_string()));
             }
             if message.author.kind == AuthorKind::Matrix {
@@ -807,10 +807,10 @@ async fn update_comment_common(
 
     // 4. Create the business command
     let site_id_val = SiteId::new(path.site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(path.post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(path.page_slug).map_err(AppError::Validation)?;
     let command = UpdateCommentCommand {
         site_id: site_id_val,
-        post_slug: post_slug_val,
+        page_slug: page_slug_val,
         event_id: path.comment_id,
         content: req.content,
         author_public_key: req.author_public_key,
@@ -854,10 +854,10 @@ async fn update_comment_common(
     }
 }
 
-/// `POST /api/v1/sites/{site}/posts/{post}/comments/{comment_id}/reactions`
+/// `POST /api/v1/sites/{site}/pages/{post}/comments/{comment_id}/reactions`
 pub(crate) async fn react_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug, comment_id)): Path<(String, String, String)>,
+    Path((site_id, page_slug, comment_id)): Path<(String, String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: String,
@@ -879,7 +879,7 @@ pub(crate) async fn react_handler(
     let message = signature_message(&[
         "REACT",
         &site_id,
-        &post_slug,
+        &page_slug,
         &comment_id,
         &req.key,
         challenge,
@@ -889,7 +889,7 @@ pub(crate) async fn react_handler(
     }
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     match state
         .store
         .get_message(&comment_id)
@@ -898,12 +898,12 @@ pub(crate) async fn react_handler(
     {
         Some(message)
             if message.site_id == site_id_val.as_str()
-                && message.post_slug == post_slug_val.as_str() => {}
+                && message.page_slug == page_slug_val.as_str() => {}
         _ => return Err(AppError::NotFound("Comment not found.".to_string())),
     }
     let Some(room_id) = state
         .store
-        .get_registered_room(&site_id_val, &post_slug_val)
+        .get_registered_room(&site_id_val, &page_slug_val)
         .await
         .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
     else {
@@ -927,10 +927,10 @@ pub(crate) async fn react_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/v1/sites/{site}/posts/{post}/polls/{poll_id}/votes`
+/// `POST /api/v1/sites/{site}/pages/{post}/polls/{poll_id}/votes`
 pub(crate) async fn vote_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug, poll_id)): Path<(String, String, String)>,
+    Path((site_id, page_slug, poll_id)): Path<(String, String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: String,
@@ -952,7 +952,7 @@ pub(crate) async fn vote_handler(
     let message = signature_message(&[
         "VOTE",
         &site_id,
-        &post_slug,
+        &page_slug,
         &poll_id,
         &req.option_id,
         challenge,
@@ -962,7 +962,7 @@ pub(crate) async fn vote_handler(
     }
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let Some(poll_message) = state
         .store
         .get_message(&poll_id)
@@ -972,7 +972,7 @@ pub(crate) async fn vote_handler(
         return Err(AppError::NotFound("Poll not found.".to_string()));
     };
     if poll_message.site_id != site_id_val.as_str()
-        || poll_message.post_slug != post_slug_val.as_str()
+        || poll_message.page_slug != page_slug_val.as_str()
     {
         return Err(AppError::NotFound("Poll not found.".to_string()));
     }
@@ -984,7 +984,7 @@ pub(crate) async fn vote_handler(
     }
     let Some(room_id) = state
         .store
-        .get_registered_room(&site_id_val, &post_slug_val)
+        .get_registered_room(&site_id_val, &page_slug_val)
         .await
         .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
     else {
@@ -1008,10 +1008,10 @@ pub(crate) async fn vote_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/v1/sites/{site}/posts/{post}/location`
+/// `POST /api/v1/sites/{site}/pages/{post}/location`
 pub(crate) async fn location_handler(
     State(state): State<ApiState>,
-    Path((site_id, post_slug)): Path<(String, String)>,
+    Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: String,
@@ -1025,7 +1025,7 @@ pub(crate) async fn location_handler(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let fingerprint = request_fingerprint(
         "POST",
-        &format!("/api/v1/sites/{}/posts/{}/location", site_id, post_slug),
+        &format!("/api/v1/sites/{}/pages/{}/location", site_id, page_slug),
         body.as_bytes(),
     );
     req.validate().map_err(AppError::Validation)?;
@@ -1051,16 +1051,16 @@ pub(crate) async fn location_handler(
         return Err(AppError::InvalidPoW);
     }
     let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&["LOCATE", &site_id, &post_slug, &req.geo_uri, challenge]);
+    let message = signature_message(&["LOCATE", &site_id, &page_slug, &req.geo_uri, challenge]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
     }
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
-    let post_slug_val = PostSlug::new(post_slug).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let command = PostCommentCommand {
         site_id: site_id_val,
-        post_slug: post_slug_val,
+        page_slug: page_slug_val,
         content: String::new(),
         media: None,
         location: Some(LocationPayload {
@@ -1162,19 +1162,19 @@ mod tests {
 
     #[test]
     fn request_fingerprint_is_stable_and_sensitive_to_method_and_body() {
-        let first = request_fingerprint("POST", "/api/v1/posts/p", b"{}");
-        assert_eq!(first, request_fingerprint("POST", "/api/v1/posts/p", b"{}"));
+        let first = request_fingerprint("POST", "/api/v1/pages/p", b"{}");
+        assert_eq!(first, request_fingerprint("POST", "/api/v1/pages/p", b"{}"));
         assert_ne!(
             first,
-            request_fingerprint("POST", "/api/v1/posts/p", b"{ }")
+            request_fingerprint("POST", "/api/v1/pages/p", b"{ }")
         );
         assert_ne!(
             first,
-            request_fingerprint("PATCH", "/api/v1/posts/p", b"{}")
+            request_fingerprint("PATCH", "/api/v1/pages/p", b"{}")
         );
         assert_ne!(
             first,
-            request_fingerprint("POST", "/api/v1/posts/other", b"{}")
+            request_fingerprint("POST", "/api/v1/pages/other", b"{}")
         );
     }
 

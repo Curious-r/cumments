@@ -3,7 +3,7 @@ use crate::entities::active_enums::{SiteAuthMode, SiteVerificationStatus};
 use crate::entities::{room_registry, sites};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use cumments_core::models::{PostSlug, QuarantinedRoom, RoomIdentity, RoomStatus, Site, SiteId};
+use cumments_core::models::{PageSlug, QuarantinedRoom, RoomIdentity, RoomStatus, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteStore};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 
@@ -12,11 +12,11 @@ impl RegistryStore for DbStore {
     async fn get_registered_room(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
     ) -> Result<Option<String>> {
         let room = room_registry::Entity::find()
             .filter(room_registry::COLUMN.site_id.eq(site_id.as_str()))
-            .filter(room_registry::COLUMN.post_slug.eq(post_slug.as_str()))
+            .filter(room_registry::COLUMN.page_slug.eq(page_slug.as_str()))
             .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
             .one(&self.db)
             .await?;
@@ -97,7 +97,7 @@ impl RegistryStore for DbStore {
 
         Ok(room.map(|r| RoomIdentity {
             site_id: r.site_id,
-            post_slug: r.post_slug,
+            page_slug: r.page_slug,
         }))
     }
 
@@ -105,11 +105,11 @@ impl RegistryStore for DbStore {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
     ) -> Result<()> {
         let txn = self.db.begin().await?;
 
-        // Enforce a single active room per (site_id, post_slug): supersede
+        // Enforce a single active room per (site_id, page_slug): supersede
         // any other active rows before activating the new room.
         room_registry::Entity::update_many()
             .col_expr(
@@ -121,7 +121,7 @@ impl RegistryStore for DbStore {
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .filter(room_registry::COLUMN.site_id.eq(site_id.as_str()))
-            .filter(room_registry::COLUMN.post_slug.eq(post_slug.as_str()))
+            .filter(room_registry::COLUMN.page_slug.eq(page_slug.as_str()))
             .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
             .filter(room_registry::COLUMN.room_id.ne(room_id))
             .exec(&txn)
@@ -130,7 +130,7 @@ impl RegistryStore for DbStore {
         let active_model = room_registry::ActiveModel {
             room_id: Set(room_id.to_owned()),
             site_id: Set(site_id.as_str().to_owned()),
-            post_slug: Set(post_slug.as_str().to_owned()),
+            page_slug: Set(page_slug.as_str().to_owned()),
             status: Set(RoomStatus::Active.as_str().to_owned()),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -145,7 +145,7 @@ impl RegistryStore for DbStore {
                 sea_orm::sea_query::OnConflict::column(room_registry::Column::RoomId)
                     .update_column(room_registry::Column::Status)
                     .update_column(room_registry::Column::SiteId)
-                    .update_column(room_registry::Column::PostSlug)
+                    .update_column(room_registry::Column::PageSlug)
                     .update_column(room_registry::Column::UpdatedAt)
                     .update_column(room_registry::Column::QuarantineReason)
                     .update_column(room_registry::Column::QuarantinedAt)
@@ -165,12 +165,12 @@ impl RegistryStore for DbStore {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
     ) -> Result<()> {
         let active_model = room_registry::ActiveModel {
             room_id: Set(room_id.to_owned()),
             site_id: Set(site_id.as_str().to_owned()),
-            post_slug: Set(post_slug.as_str().to_owned()),
+            page_slug: Set(page_slug.as_str().to_owned()),
             status: Set(RoomStatus::Active.as_str().to_owned()),
             created_at: Set(chrono::Utc::now()),
             updated_at: Set(chrono::Utc::now()),
@@ -301,7 +301,7 @@ impl RegistryStore for DbStore {
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .filter(room_registry::COLUMN.site_id.eq(model.site_id.as_str()))
-            .filter(room_registry::COLUMN.post_slug.eq(model.post_slug.as_str()))
+            .filter(room_registry::COLUMN.page_slug.eq(model.page_slug.as_str()))
             .filter(room_registry::COLUMN.status.eq(RoomStatus::Active.as_str()))
             .filter(room_registry::COLUMN.room_id.ne(room_id))
             .exec(&txn)
@@ -354,7 +354,7 @@ impl RegistryStore for DbStore {
                 Ok(QuarantinedRoom {
                     room_id: m.room_id,
                     site_id: m.site_id,
-                    post_slug: m.post_slug,
+                    page_slug: m.page_slug,
                     quarantine_reason,
                     quarantined_at: m.quarantined_at.unwrap_or(m.updated_at),
                     adoption_failures: m.adoption_failures,

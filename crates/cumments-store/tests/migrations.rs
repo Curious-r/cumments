@@ -124,10 +124,83 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     assert!(claim_columns.iter().any(|c| c == "dm_room_id"));
     assert!(media_columns.iter().any(|c| c == "submission_id"));
     assert!(
-        !column_not_null(&db, "media_uploads", "post_slug").await,
-        "post_slug must be nullable so avatar uploads are site-scoped"
+        !column_not_null(&db, "media_uploads", "page_slug").await,
+        "page_slug must be nullable so avatar uploads are site-scoped"
     );
     let audit_columns = column_names(&db, "command_audit_logs").await;
     assert!(audit_columns.iter().any(|c| c == "actor_mxid"));
     assert!(audit_columns.iter().any(|c| c == "created_at"));
+}
+
+#[tokio::test]
+async fn terminology_rename_migration_converges_legacy_schema() {
+    let url = test_db_url("terminology-rename");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Entity-first migrations already create `page_slug` on fresh databases,
+    // so reshape the tables back to the pre-rename shape to simulate a
+    // database created before 000052.
+    Migrator::up(&db, Some(51))
+        .await
+        .expect("migrate to 000051");
+    for table in [
+        "messages",
+        "room_registry",
+        "media_uploads",
+        "update_submissions",
+    ] {
+        if column_names(&db, table)
+            .await
+            .iter()
+            .any(|c| c == "page_slug")
+        {
+            db.execute_unprepared(&format!(
+                "ALTER TABLE {table} RENAME COLUMN page_slug TO post_slug"
+            ))
+            .await
+            .expect("simulate pre-rename schema");
+        }
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO messages \
+         (event_id, room_id, site_id, post_slug, sender_mxid, author_kind, content_json, \
+          raw_content_json, timestamp, status, created_at, updated_at) \
+         VALUES \
+         ('$visitor:hs', '!room:hs', 'my-blog', 'hello', '@_cumments_my-blog_x:hs', 'guest', \
+          '{{}}', '{{}}', '{now}', 'active', '{now}', '{now}')"
+    ))
+    .await
+    .expect("insert legacy message");
+
+    Migrator::up(&db, None).await.expect("apply 000052");
+
+    for table in [
+        "messages",
+        "room_registry",
+        "media_uploads",
+        "update_submissions",
+    ] {
+        let columns = column_names(&db, table).await;
+        assert!(
+            columns.iter().any(|c| c == "page_slug"),
+            "{table} must use page_slug after 000052: {columns:?}"
+        );
+        assert!(
+            !columns.iter().any(|c| c == "post_slug"),
+            "{table} must not retain post_slug after 000052: {columns:?}"
+        );
+    }
+
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT author_kind FROM messages WHERE event_id = '$visitor:hs'",
+        ))
+        .await
+        .expect("query migrated message");
+    assert_eq!(rows.len(), 1);
+    let kind: String = rows[0].try_get("", "author_kind").expect("author_kind");
+    assert_eq!(kind, "visitor", "guest author kind must be rewritten");
 }

@@ -1,4 +1,4 @@
-//! Site decommission pass: retires Matrix rooms one by one and clears local
+//! Site retirement pass: retires Matrix rooms one by one and clears local
 //! projections only after the Matrix side is gone.
 //!
 //! The order matters: rooms first, then the Space, then local cleanup. Once
@@ -11,12 +11,12 @@ use async_trait::async_trait;
 use tracing::warn;
 
 /// Retires every site marked `retiring`.
-pub struct DecommissionPass {
+pub struct SiteRetirementPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
 }
 
-impl DecommissionPass {
+impl SiteRetirementPass {
     pub fn new(deps: Arc<ReconcilerDeps>, config: PassConfig) -> Self {
         Self { deps, config }
     }
@@ -25,8 +25,8 @@ impl DecommissionPass {
         let retiring = self.deps.site_auth_store.list_retiring_sites().await?;
         let mut finished = 0u64;
         for site_id in retiring {
-            if let Err(error) = self.decommission_site(&site_id).await {
-                warn!(site_id, "site decommission failed: {:#}", error);
+            if let Err(error) = self.retire_site(&site_id).await {
+                warn!(site_id, "site retirement failed: {:#}", error);
                 continue;
             }
             finished += 1;
@@ -34,7 +34,7 @@ impl DecommissionPass {
         Ok(finished)
     }
 
-    async fn decommission_site(&self, raw_site_id: &str) -> Result<()> {
+    async fn retire_site(&self, raw_site_id: &str) -> Result<()> {
         let site_id = SiteId::new(raw_site_id.to_string())
             .map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
 
@@ -72,25 +72,25 @@ impl DecommissionPass {
                 .get_registered_room_identity(room_id)
                 .await?;
             if let Some(identity) = identity {
-                let post_slug = PostSlug::from(identity.post_slug.clone());
+                let page_slug = PageSlug::from(identity.page_slug.clone());
                 self.deps
                     .driver
                     .set_room_name(
                         room_id,
-                        &format!("[retired] {}/{}", raw_site_id, post_slug.as_str()),
+                        &format!("[retired] {}/{}", raw_site_id, page_slug.as_str()),
                     )
                     .await?;
                 self.deps
                     .driver
-                    .remove_room_alias(&site_id, Some(&post_slug))
+                    .remove_room_alias(&site_id, Some(&page_slug))
                     .await?;
             } else {
                 warn!(
                     room_id,
-                    "decommission: room has no registry identity; retiring membership only"
+                    "retirement: room has no registry identity; retiring membership only"
                 );
             }
-            // The AS sender leaving is not enough: guest virtual users match
+            // The AS sender leaving is not enough: visitor virtual users match
             // the appservice namespace, so they must leave too or the
             // homeserver keeps pushing the room's events to us.
             self.deps.driver.leave_room(room_id).await?;
@@ -129,7 +129,7 @@ impl DecommissionPass {
                 continue;
             };
             if let Err(error) = self.deps.driver.delete_media(server, media_id).await {
-                warn!(url, "decommission: media deletion failed: {:#}", error);
+                warn!(url, "retirement: media deletion failed: {:#}", error);
             }
         }
         for (user_id, dm_room_id) in claim_dms {
@@ -144,7 +144,7 @@ impl DecommissionPass {
             if let Err(error) = self.deps.driver.leave_room(&dm_room_id).await {
                 warn!(
                     user_id,
-                    dm_room_id, "decommission: failed to leave claim DM: {:#}", error
+                    dm_room_id, "retirement: failed to leave claim DM: {:#}", error
                 );
             }
         }
@@ -153,7 +153,7 @@ impl DecommissionPass {
 }
 
 #[async_trait]
-impl ReconcilePass for DecommissionPass {
+impl ReconcilePass for SiteRetirementPass {
     fn config(&self) -> &PassConfig {
         &self.config
     }
@@ -168,7 +168,7 @@ mod tests {
     use super::*;
     use cumments_core::{
         governance::{NewRoleClaim, OWNER_LEVEL},
-        models::{PostSlug, SiteId},
+        models::{PageSlug, SiteId},
         ports::{
             MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore, VirtualUserStore,
         },
@@ -182,7 +182,7 @@ mod tests {
 
     fn test_db_url(name: &str) -> String {
         let path = std::path::Path::new("/tmp").join(format!(
-            "cumments-decommission-test-{}-{}.db",
+            "cumments-retirement-test-{}-{}.db",
             name,
             std::process::id()
         ));
@@ -192,9 +192,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decommission_retires_all_rooms_users_media_and_claim_dms() {
+    async fn retirement_retires_all_rooms_users_media_and_claim_dms() {
         let store = Arc::new(
-            DbStore::connect(&test_db_url("decommission"))
+            DbStore::connect(&test_db_url("retirement"))
                 .await
                 .expect("connect db"),
         );
@@ -210,13 +210,13 @@ mod tests {
         assert!(store.mark_site_retiring(site).await.unwrap());
 
         let site_id = SiteId::new(site.to_string()).expect("site id");
-        let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+        let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
         store
-            .register_room("!active:hs", &site_id, &post_slug)
+            .register_room("!active:hs", &site_id, &page_slug)
             .await
             .expect("active room");
         store
-            .register_room("!quar:hs", &site_id, &post_slug)
+            .register_room("!quar:hs", &site_id, &page_slug)
             .await
             .expect("quarantined room");
         store
@@ -224,7 +224,7 @@ mod tests {
             .await
             .expect("quarantine");
         store
-            .register_room("!old:hs", &site_id, &post_slug)
+            .register_room("!old:hs", &site_id, &page_slug)
             .await
             .expect("superseded room");
         store.retire_room("!old:hs").await.expect("retire room");
@@ -281,15 +281,15 @@ mod tests {
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
             )),
         });
-        let pass = DecommissionPass::new(
+        let pass = SiteRetirementPass::new(
             deps,
             PassConfig {
-                name: "decommission-test",
+                name: "retirement-test",
                 interval: std::time::Duration::from_secs(60),
                 wakeup: Arc::new(Notify::new()),
             },
         );
-        assert_eq!(pass.run().await.expect("decommission pass"), 1);
+        assert_eq!(pass.run().await.expect("retirement pass"), 1);
 
         let mut left = driver.left.lock().await.clone();
         left.sort();

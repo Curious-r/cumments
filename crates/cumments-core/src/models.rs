@@ -9,9 +9,9 @@ lazy_static::lazy_static! {
     /// Allowed chars: lowercase a-z, 0-9, hyphen.
     ///
     /// Uppercase and underscores are excluded deliberately: `site_id` and
-    /// `post_slug` are embedded in Matrix user IDs and room aliases, where
+    /// `page_slug` are embedded in Matrix user IDs and room aliases, where
     /// lowercase keeps user IDs spec-compliant and `_` stays a safe separator
-    /// in `#_cumments_{site}_{post}` aliases.
+    /// in `#_cumments_{site}_{page}` aliases.
     /// Length: 1–64 characters.
     pub static ref ID_REGEX: regex::Regex =
         regex::Regex::new(r"^[a-z0-9-]{1,64}$").unwrap();
@@ -53,16 +53,16 @@ impl From<&str> for SiteId {
     }
 }
 
-// A validated, owned representation of a Post Slug.
+// A validated, owned representation of a Page Slug.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(transparent)]
-pub struct PostSlug {
+pub struct PageSlug {
     #[validate(regex(path = "*crate::models::ID_REGEX"))]
     pub slug: String,
 }
 
-impl PostSlug {
-    /// Creates a new `PostSlug` with validation.
+impl PageSlug {
+    /// Creates a new `PageSlug` with validation.
     /// Returns `ValidationErrors` if the input doesn't match the expected format.
     pub fn new(slug: String) -> Result<Self, validator::ValidationErrors> {
         let this = Self { slug };
@@ -76,14 +76,14 @@ impl PostSlug {
 }
 
 // Internal use only – data must already be validated.
-// For untrusted input, use `PostSlug::new()` which runs validation.
-impl From<String> for PostSlug {
+// For untrusted input, use `PageSlug::new()` which runs validation.
+impl From<String> for PageSlug {
     fn from(slug: String) -> Self {
         Self { slug }
     }
 }
 
-impl From<&str> for PostSlug {
+impl From<&str> for PageSlug {
     fn from(s: &str) -> Self {
         Self {
             slug: s.to_string(),
@@ -97,7 +97,7 @@ impl From<&str> for PostSlug {
 pub struct Message {
     pub event_id: String,
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub author: AuthorSnapshot,
     pub content: Content,
     pub timestamp: DateTime<Utc>,
@@ -177,7 +177,7 @@ impl std::str::FromStr for MessageStatus {
 pub enum AuthorKind {
     /// Posted through the Cumments API by an AS virtual user; ownership is
     /// the Ed25519 public key embedded in the event.
-    Guest,
+    Visitor,
     /// Posted directly in Matrix by a regular account; ownership is governed
     /// by Matrix (sender identity and room power levels).
     Matrix,
@@ -186,7 +186,7 @@ pub enum AuthorKind {
 impl AuthorKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AuthorKind::Guest => "guest",
+            AuthorKind::Visitor => "visitor",
             AuthorKind::Matrix => "matrix",
         }
     }
@@ -199,7 +199,7 @@ impl AuthorKind {
 /// so display names and avatars follow live profile changes. Members who
 /// left the room keep the stored projection.
 ///
-/// - Guest messages carry `public_key`; `mxid` is intentionally not exposed
+/// - Visitor messages carry `public_key`; `mxid` is intentionally not exposed
 ///   because the virtual user ID is an implementation detail derived from the
 ///   key and site.
 /// - Matrix-native messages carry `mxid`; `public_key` is always `None`.
@@ -213,13 +213,13 @@ pub struct AuthorSnapshot {
     pub mxid: Option<String>,
 }
 
-/// A guest's current global profile as read from the homeserver.
+/// A visitor's current global profile as read from the homeserver.
 ///
 /// `None` fields mean the field is not set on the virtual user's profile.
 /// The API layer rewrites `avatar_url` (an `mxc://` URI) into a signed proxy
 /// URL before exposing it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GuestProfile {
+pub struct VisitorProfile {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
 }
@@ -393,7 +393,7 @@ pub struct PollVote {
     pub origin_server_ts: i64,
 }
 
-/// Media attached to a guest message (image/voice/file).
+/// Media attached to a visitor message (image/voice/file).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommentMedia {
     /// Explicit media kind; derived from `mimetype` when `None`.
@@ -440,7 +440,7 @@ pub struct RoomEventPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomIdentity {
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
 }
 
 /// Lifecycle state of a room in the registry.
@@ -490,7 +490,7 @@ impl std::str::FromStr for RoomStatus {
 pub struct QuarantinedRoom {
     pub room_id: String,
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub quarantine_reason: String,
     pub quarantined_at: DateTime<Utc>,
     pub adoption_failures: u32,
@@ -556,18 +556,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn site_id_and_post_slug_accept_lowercase_hyphenated_slugs() {
+    fn site_id_and_page_slug_accept_lowercase_hyphenated_slugs() {
         assert!(SiteId::new("my-blog".to_string()).is_ok());
-        assert!(PostSlug::new("hello-world".to_string()).is_ok());
+        assert!(PageSlug::new("hello-world".to_string()).is_ok());
         assert!(SiteId::new("a1-b2".to_string()).is_ok());
     }
 
     #[test]
-    fn site_id_and_post_slug_reject_underscores_and_uppercase() {
+    fn site_id_and_page_slug_reject_underscores_and_uppercase() {
         assert!(SiteId::new("my_blog".to_string()).is_err());
-        assert!(PostSlug::new("hello_world".to_string()).is_err());
+        assert!(PageSlug::new("hello_world".to_string()).is_err());
         assert!(SiteId::new("My-Blog".to_string()).is_err());
-        assert!(PostSlug::new("Hello-World".to_string()).is_err());
+        assert!(PageSlug::new("Hello-World".to_string()).is_err());
     }
 
     #[test]

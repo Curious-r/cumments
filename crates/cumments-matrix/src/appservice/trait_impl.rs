@@ -8,7 +8,7 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
-    models::{CommentMedia, GuestProfile, PostSlug, RoomEventPage, SiteId},
+    models::{CommentMedia, PageSlug, RoomEventPage, SiteId, VisitorProfile},
     ports::MatrixDriver,
 };
 
@@ -37,9 +37,9 @@ impl MatrixDriver for AppServiceMatrixDriver {
     async fn remove_room_alias(
         &self,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
     ) -> Result<()> {
-        self.remove_room_alias_impl(site_id, post_slug).await
+        self.remove_room_alias_impl(site_id, page_slug).await
     }
 
     async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool> {
@@ -72,18 +72,18 @@ impl MatrixDriver for AppServiceMatrixDriver {
         &self,
         author_public_key: &str,
         site_id: &SiteId,
-    ) -> Result<Option<GuestProfile>> {
+    ) -> Result<Option<VisitorProfile>> {
         self.get_profile_impl(author_public_key, site_id).await
     }
 
     async fn ensure_comment_room(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
         space_id: &str,
         candidate_room_id: Option<&str>,
     ) -> Result<String> {
-        self.ensure_comment_room_impl(site_id, post_slug, space_id, candidate_room_id)
+        self.ensure_comment_room_impl(site_id, page_slug, space_id, candidate_room_id)
             .await
     }
 
@@ -311,10 +311,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         &self,
         room_id: &str,
         site_id: &SiteId,
-        post_slug: Option<&PostSlug>,
+        page_slug: Option<&PageSlug>,
         require_space: bool,
     ) -> Result<()> {
-        self.adopt_room(room_id, site_id, post_slug, require_space)
+        self.adopt_room(room_id, site_id, page_slug, require_space)
             .await
     }
 

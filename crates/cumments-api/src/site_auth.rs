@@ -168,7 +168,7 @@ fn is_write_method(method: &Method) -> bool {
     )
 }
 
-/// `/api/v1/sites/{site_id}/posts/...` → the site id segment.
+/// `/api/v1/sites/{site_id}/pages/...` → the site id segment.
 pub(crate) fn site_id_from_path(path: &str) -> Option<String> {
     let segments = path
         .split('/')
@@ -177,7 +177,7 @@ pub(crate) fn site_id_from_path(path: &str) -> Option<String> {
     segments.get(3).map(|s| s.to_string())
 }
 
-/// Whether a path is a guest media upload route (post media or the
+/// Whether a path is a visitor media upload route (post media or the
 /// site-scoped avatar upload). Kept in sync with the route table in
 /// `build_router`; used only to choose the body-buffering limit for HMAC
 /// verification.
@@ -187,7 +187,7 @@ fn is_media_upload_path(path: &str) -> bool {
         && segments[0] == "api"
         && segments[1] == "v1"
         && segments[2] == "sites"
-        && segments[4] == "posts"
+        && segments[4] == "pages"
         && segments[6] == "media"
     {
         return true;
@@ -196,7 +196,7 @@ fn is_media_upload_path(path: &str) -> bool {
         && segments[0] == "api"
         && segments[1] == "v1"
         && segments[2] == "sites"
-        && segments[4] == "guests"
+        && segments[4] == "visitors"
         && segments[5] == "avatar"
 }
 
@@ -276,7 +276,7 @@ pub async fn authorize_site_write(
         .is_some_and(|info| info.lifecycle != SiteLifecycle::Active)
     {
         return Err(AppError::SiteRetired(format!(
-            "site `{site_id}` is being decommissioned and no longer accepts writes"
+            "site `{site_id}` is being retired and no longer accepts writes"
         )));
     }
 
@@ -673,7 +673,7 @@ mod tests {
             secret.as_bytes(),
             &timestamp,
             "POST",
-            "/api/v1/sites/test-site/posts/hello/comments",
+            "/api/v1/sites/test-site/pages/hello/comments",
             body,
         );
 
@@ -684,7 +684,7 @@ mod tests {
             verify_hmac(
                 secret,
                 &Method::POST,
-                "/api/v1/sites/test-site/posts/hello/comments",
+                "/api/v1/sites/test-site/pages/hello/comments",
                 &headers,
                 body
             )
@@ -700,7 +700,7 @@ mod tests {
             verify_hmac(
                 secret,
                 &Method::POST,
-                "/api/v1/sites/test-site/posts/hello/comments",
+                "/api/v1/sites/test-site/pages/hello/comments",
                 &stale,
                 body
             )
@@ -712,7 +712,7 @@ mod tests {
             verify_hmac(
                 secret,
                 &Method::POST,
-                "/api/v1/sites/test-site/posts/hello/comments",
+                "/api/v1/sites/test-site/pages/hello/comments",
                 &wrong_body,
                 br#"{"content":"tampered"}"#
             )
@@ -723,16 +723,18 @@ mod tests {
     #[test]
     fn media_upload_path_detection_matches_the_upload_route() {
         assert!(is_media_upload_path(
-            "/api/v1/sites/my-blog/posts/hello/media"
+            "/api/v1/sites/my-blog/pages/hello/media"
         ));
         assert!(!is_media_upload_path(
-            "/api/v1/sites/my-blog/posts/hello/comments"
+            "/api/v1/sites/my-blog/pages/hello/comments"
         ));
         assert!(!is_media_upload_path(
-            "/api/v1/sites/my-blog/posts/hello/media/extra"
+            "/api/v1/sites/my-blog/pages/hello/media/extra"
         ));
         assert!(!is_media_upload_path("/api/v1/sites/my-blog/media"));
-        assert!(is_media_upload_path("/api/v1/sites/my-blog/guests/avatar"));
+        assert!(is_media_upload_path(
+            "/api/v1/sites/my-blog/visitors/avatar"
+        ));
         assert!(!is_media_upload_path("/health"));
     }
 }

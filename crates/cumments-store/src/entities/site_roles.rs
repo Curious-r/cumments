@@ -1,6 +1,6 @@
 use sea_orm::entity::prelude::*;
 
-/// Projected site-level governance roles (owner 100 / co-manager 75) from
+/// Projected site-level governance roles (owner 100 / global-moderator 75) from
 /// the site Space's `m.room.power_levels` state.
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PostSlug,
+    AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PageSlug,
     RoomStatus, SiteId, TextContent, TextStyle,
 };
 use cumments_core::ports::{MessageStore, RegistryStore};
@@ -18,13 +18,13 @@ fn test_db_url(name: &str) -> String {
 
 async fn save_message(store: &DbStore, event_id: &str, room_id: &str, content: &str) {
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     let message = Message {
         event_id: event_id.to_string(),
         site_id: site.as_str().to_string(),
-        post_slug: slug.as_str().to_string(),
+        page_slug: slug.as_str().to_string(),
         author: AuthorSnapshot {
-            kind: AuthorKind::Guest,
+            kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
@@ -144,7 +144,7 @@ async fn register_room_deactivates_previous_active_room() {
         .await
         .expect("connect db");
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
 
     store
         .register_room("!room-a:hs", &site, &slug)
@@ -187,7 +187,7 @@ async fn quarantined_rooms_are_listed_and_cleared_on_register() {
         .await
         .expect("connect db");
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
 
     store
         .register_room("!room:hs", &site, &slug)
@@ -244,7 +244,7 @@ async fn quarantine_tracks_failures_and_preserves_first_time() {
         .await
         .expect("connect db");
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await
@@ -286,7 +286,7 @@ async fn reinstate_supersedes_other_active_room() {
         .await
         .expect("connect db");
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room-a:hs", &site, &slug)
         .await
@@ -333,7 +333,7 @@ async fn retire_room_marks_superseded_and_clears_schedule() {
         .await
         .expect("connect db");
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
     store
         .register_room("!room:hs", &site, &slug)
         .await

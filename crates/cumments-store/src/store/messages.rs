@@ -12,7 +12,7 @@ use cumments_core::media_upload::{
 };
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, Message, MessagePage, MessageRevision, MessageStatus,
-    PollResponseSummary, PollVote, PostSlug, Reaction, ReactionSummary, SiteId, UnknownContent,
+    PageSlug, PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, UnknownContent,
 };
 use cumments_core::ports::MessageStore;
 use sea_orm::{
@@ -36,12 +36,12 @@ fn message_from_model(model: messages::Model) -> Message {
     let kind = if model.author_kind == "matrix" {
         AuthorKind::Matrix
     } else {
-        AuthorKind::Guest
+        AuthorKind::Visitor
     };
     Message {
         event_id: model.event_id,
         site_id: model.site_id,
-        post_slug: model.post_slug,
+        page_slug: model.page_slug,
         author: AuthorSnapshot {
             kind,
             display_name: model.author_display_name,
@@ -88,16 +88,16 @@ impl MessageStore for DbStore {
     async fn get_messages(
         &self,
         site_id: &SiteId,
-        post_slug: &PostSlug,
+        page_slug: &PageSlug,
         limit: i64,
         offset: i64,
     ) -> Result<MessagePage> {
         let site_id_str = site_id.as_str();
-        let post_slug_str = post_slug.as_str();
+        let page_slug_str = page_slug.as_str();
 
         let query = messages::Entity::find()
             .filter(messages::COLUMN.site_id.eq(site_id_str))
-            .filter(messages::COLUMN.post_slug.eq(post_slug_str))
+            .filter(messages::COLUMN.page_slug.eq(page_slug_str))
             .order_by_desc(messages::Column::Timestamp)
             .order_by_asc(messages::Column::EventId);
 
@@ -130,7 +130,7 @@ impl MessageStore for DbStore {
             event_id: Set(message.event_id.clone()),
             room_id: Set(message.room_id.clone()),
             site_id: Set(message.site_id.clone()),
-            post_slug: Set(message.post_slug.clone()),
+            page_slug: Set(message.page_slug.clone()),
             sender_mxid: Set(message.sender_mxid.clone()),
             author_kind: Set(message.author.kind.as_str().to_string()),
             author_display_name: Set(message.author.display_name.clone()),
@@ -160,7 +160,7 @@ impl MessageStore for DbStore {
                     .update_columns([
                         messages::Column::RoomId,
                         messages::Column::SiteId,
-                        messages::Column::PostSlug,
+                        messages::Column::PageSlug,
                         messages::Column::SenderMxid,
                         messages::Column::AuthorKind,
                         messages::Column::AuthorDisplayName,
@@ -536,14 +536,14 @@ impl MessageStore for DbStore {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: Option<&str>,
+        page_slug: Option<&str>,
     ) -> Result<()> {
         let now = chrono::Utc::now();
         let model = media_uploads::ActiveModel {
             mxc_url: Set(mxc_url.to_owned()),
             author_public_key: Set(author_public_key.to_owned()),
             site_id: Set(site_id.to_owned()),
-            post_slug: Set(post_slug.map(str::to_string)),
+            page_slug: Set(page_slug.map(str::to_string)),
             used_at: Set(None),
             submission_id: Set(None),
             created_at: Set(now),
@@ -555,7 +555,7 @@ impl MessageStore for DbStore {
                     .update_columns([
                         media_uploads::Column::AuthorPublicKey,
                         media_uploads::Column::SiteId,
-                        media_uploads::Column::PostSlug,
+                        media_uploads::Column::PageSlug,
                         media_uploads::Column::UsedAt,
                         media_uploads::Column::SubmissionId,
                     ])
@@ -571,13 +571,13 @@ impl MessageStore for DbStore {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: &str,
+        page_slug: &str,
     ) -> Result<bool> {
         let found = media_uploads::Entity::find()
             .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
             .filter(media_uploads::Column::AuthorPublicKey.eq(author_public_key))
             .filter(media_uploads::Column::SiteId.eq(site_id))
-            .filter(media_uploads::Column::PostSlug.eq(post_slug))
+            .filter(media_uploads::Column::PageSlug.eq(page_slug))
             .one(&self.db)
             .await?;
         Ok(found.is_some())
@@ -672,7 +672,7 @@ impl MessageStore for DbStore {
         mxc_url: &str,
         author_public_key: &str,
         site_id: &str,
-        post_slug: Option<&str>,
+        page_slug: Option<&str>,
         idempotency: &MediaUploadIdempotencyInput,
     ) -> Result<MediaUploadIdempotencyOutcome> {
         let now = chrono::Utc::now();
@@ -707,7 +707,7 @@ impl MessageStore for DbStore {
             mxc_url: Set(mxc_url.to_owned()),
             author_public_key: Set(author_public_key.to_owned()),
             site_id: Set(site_id.to_owned()),
-            post_slug: Set(post_slug.map(str::to_string)),
+            page_slug: Set(page_slug.map(str::to_string)),
             used_at: Set(None),
             created_at: Set(now),
             ..Default::default()
@@ -718,7 +718,7 @@ impl MessageStore for DbStore {
                     .update_columns([
                         media_uploads::Column::AuthorPublicKey,
                         media_uploads::Column::SiteId,
-                        media_uploads::Column::PostSlug,
+                        media_uploads::Column::PageSlug,
                         media_uploads::Column::UsedAt,
                     ])
                     .to_owned(),

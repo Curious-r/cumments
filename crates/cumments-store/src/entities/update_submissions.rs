@@ -9,7 +9,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
     pub site_id: String,
-    pub post_slug: String,
+    pub page_slug: String,
     pub event_id: String,
     pub room_id: Option<String>,
     /// The replacement event ID recorded when the submission moved to

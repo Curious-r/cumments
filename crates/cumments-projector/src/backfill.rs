@@ -11,7 +11,7 @@
 //!    replayed in order, then feeds them through the same transport-agnostic
 //!    projection as live push events (idempotent upserts).
 
-use cumments_core::models::{PostSlug, SiteId};
+use cumments_core::models::{PageSlug, SiteId};
 use cumments_core::ports::{BackfillCursorStore, MatrixDriver, RegistryStore, SiteStore};
 use std::sync::Arc;
 use std::time::Duration;
@@ -211,7 +211,7 @@ impl Backfiller {
             return Ok(None);
         };
 
-        match meta.get("post_slug").and_then(|v| v.as_str()) {
+        match meta.get("page_slug").and_then(|v| v.as_str()) {
             // Space room: restores the site -> space mapping.
             None => match SiteId::new(site_id.to_owned()) {
                 Ok(site_id_val) => {
@@ -231,26 +231,26 @@ impl Backfiller {
                 ),
             },
             // Comment room: restore registry entry and backfill it.
-            Some(post_slug) => {
+            Some(page_slug) => {
                 match (
                     SiteId::new(site_id.to_owned()),
-                    PostSlug::new(post_slug.to_owned()),
+                    PageSlug::new(page_slug.to_owned()),
                 ) {
-                    (Ok(site_id_val), Ok(post_slug_val)) => {
+                    (Ok(site_id_val), Ok(page_slug_val)) => {
                         self.registry_store
-                            .register_room_if_absent(room_id, &site_id_val, &post_slug_val)
+                            .register_room_if_absent(room_id, &site_id_val, &page_slug_val)
                             .await?;
                         info!(
                             "Backfill: discovered comment room {} for {}/{}",
                             room_id,
                             site_id_val.as_str(),
-                            post_slug_val.as_str()
+                            page_slug_val.as_str()
                         );
                         return Ok(Some(DiscoveredRoom::Comment(room_id.to_string())));
                     }
                     _ => warn!(
                         "Backfill: skipping room {} with invalid identity {}/{}",
-                        room_id, site_id, post_slug
+                        room_id, site_id, page_slug
                     ),
                 }
             }
@@ -294,22 +294,22 @@ impl Backfiller {
             );
             return Ok(false);
         };
-        let Ok(post_slug) = PostSlug::new(identity.post_slug) else {
+        let Ok(page_slug) = PageSlug::new(identity.page_slug) else {
             warn!(
-                "Backfill: skipping room {} with invalid post slug from alias {}",
+                "Backfill: skipping room {} with invalid page slug from alias {}",
                 room_id, alias
             );
             return Ok(false);
         };
 
         self.registry_store
-            .register_room_if_absent(room_id, &site_id, &post_slug)
+            .register_room_if_absent(room_id, &site_id, &page_slug)
             .await?;
         info!(
             "Backfill: discovered legacy comment room {} for {}/{} via alias {}",
             room_id,
             site_id.as_str(),
-            post_slug.as_str(),
+            page_slug.as_str(),
             alias
         );
         Ok(true)

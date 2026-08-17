@@ -3,7 +3,7 @@ use cumments_core::commands::PostCommentCommand;
 use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, CommentMedia, Content, MediaContent, MediaKind, Message,
-    MessageRevision, MessageStatus, PollContent, PollOption, PollVote, PostSlug, Reaction,
+    MessageRevision, MessageStatus, PageSlug, PollContent, PollOption, PollVote, Reaction,
     RoomMember, SiteId, TextContent, TextStyle, UnknownContent,
 };
 use cumments_core::ports::{MessageStore, RoomStore, SubmissionStore, VirtualUserStore};
@@ -20,13 +20,13 @@ fn test_db_url(name: &str) -> String {
     format!("sqlite://{}", path.display())
 }
 
-fn guest_message(event_id: &str, body: &str) -> Message {
+fn visitor_message(event_id: &str, body: &str) -> Message {
     Message {
         event_id: event_id.to_string(),
         site_id: "my-blog".to_string(),
-        post_slug: "hello".to_string(),
+        page_slug: "hello".to_string(),
         author: AuthorSnapshot {
-            kind: AuthorKind::Guest,
+            kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
@@ -58,9 +58,9 @@ async fn save_message_records_typed_content_and_internal_fields() {
         .await
         .expect("connect db");
     let site = SiteId::from("my-blog");
-    let slug = PostSlug::from("hello");
+    let slug = PageSlug::from("hello");
 
-    let message = guest_message("$event:hs", "hello");
+    let message = visitor_message("$event:hs", "hello");
     store.save_message(&message).await.expect("save message");
 
     let stored = store
@@ -73,7 +73,7 @@ async fn save_message_records_typed_content_and_internal_fields() {
         stored.sender_mxid,
         "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs"
     );
-    assert_eq!(stored.author.kind, AuthorKind::Guest);
+    assert_eq!(stored.author.kind, AuthorKind::Visitor);
     assert_eq!(
         stored.author.public_key.as_deref(),
         Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc")
@@ -104,7 +104,7 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
         .await
         .expect("connect db");
 
-    let message = guest_message("$live:hs", "hello");
+    let message = visitor_message("$live:hs", "hello");
     store.save_message(&message).await.expect("save message");
 
     // No member row yet: the stored projection is the fallback.
@@ -175,7 +175,7 @@ async fn apply_edit_updates_content_and_records_revision() {
     let store = DbStore::connect(&test_db_url("message-edit"))
         .await
         .expect("connect db");
-    let message = guest_message("$event:hs", "original");
+    let message = visitor_message("$event:hs", "original");
     store.save_message(&message).await.expect("save message");
 
     let mut updated = message.clone();
@@ -231,7 +231,7 @@ async fn redact_message_marks_status_and_keeps_row() {
     let store = DbStore::connect(&test_db_url("message-redact"))
         .await
         .expect("connect db");
-    let message = guest_message("$event:hs", "hello");
+    let message = visitor_message("$event:hs", "hello");
     store.save_message(&message).await.expect("save message");
 
     let now = Utc::now();
@@ -262,7 +262,7 @@ async fn reactions_aggregate_by_key_and_ignore_redacted() {
     let store = DbStore::connect(&test_db_url("message-reactions"))
         .await
         .expect("connect db");
-    let message = guest_message("$event:hs", "hello");
+    let message = visitor_message("$event:hs", "hello");
     store.save_message(&message).await.expect("save message");
 
     for (event_id, sender) in [
@@ -328,7 +328,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
     let store = DbStore::connect(&test_db_url("message-poll"))
         .await
         .expect("connect db");
-    let mut message = guest_message("$poll:hs", "poll placeholder");
+    let mut message = visitor_message("$poll:hs", "poll placeholder");
     message.content = Content::Poll(PollContent {
         question: "best? ".to_string(),
         options: vec![
@@ -400,7 +400,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
     let store = DbStore::connect(&test_db_url("message-poll-redact"))
         .await
         .expect("connect db");
-    let mut message = guest_message("$poll:hs", "poll placeholder");
+    let mut message = visitor_message("$poll:hs", "poll placeholder");
     message.content = Content::Poll(PollContent {
         question: "best? ".to_string(),
         options: vec![PollOption {
@@ -477,7 +477,7 @@ async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
     let store = DbStore::connect(&test_db_url("message-poll-stale"))
         .await
         .expect("connect db");
-    let mut message = guest_message("$poll:hs", "poll placeholder");
+    let mut message = visitor_message("$poll:hs", "poll placeholder");
     message.content = Content::Poll(PollContent {
         question: "best? ".to_string(),
         options: vec![
@@ -540,7 +540,7 @@ async fn unknown_content_survives_roundtrip() {
     let store = DbStore::connect(&test_db_url("message-unknown"))
         .await
         .expect("connect db");
-    let mut message = guest_message("$event:hs", "unused");
+    let mut message = visitor_message("$event:hs", "unused");
     message.content = Content::Unknown(UnknownContent {
         fallback: Some("custom".to_string()),
         raw: serde_json::json!({ "custom": true }),
@@ -652,7 +652,7 @@ async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
 
     let command = PostCommentCommand {
         site_id: SiteId::from("my-blog"),
-        post_slug: PostSlug::from("hello"),
+        page_slug: PageSlug::from("hello"),
         content: "with media".to_string(),
         media: Some(CommentMedia {
             kind: Some(MediaKind::Image),
@@ -816,7 +816,7 @@ async fn media_content_survives_roundtrip() {
     let store = DbStore::connect(&test_db_url("message-media"))
         .await
         .expect("connect db");
-    let mut message = guest_message("$event:hs", "unused");
+    let mut message = visitor_message("$event:hs", "unused");
     message.content = Content::Media(MediaContent {
         kind: MediaKind::Image,
         url: "mxc://hs/abc".to_string(),

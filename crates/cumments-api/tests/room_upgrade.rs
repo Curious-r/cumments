@@ -9,8 +9,8 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter};
-use cumments_core::management::{ManagementError, upgrade_comment_room, upgrade_site_post_room};
-use cumments_core::models::{PostSlug, RoomStatus, Site, SiteId};
+use cumments_core::management::{ManagementError, upgrade_comment_room, upgrade_site_page_room};
+use cumments_core::models::{PageSlug, RoomStatus, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteAuthStore, SiteStore};
 use cumments_core::site_auth::{SiteAuthPolicy, SiteVerificationPolicy, token_hash};
 use cumments_core::site_service::SiteService;
@@ -35,9 +35,9 @@ async fn test_fixture(name: &str) -> (DbStore, TestDriver, SiteService) {
         .await
         .expect("connect test database");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
-        .register_room("!old:hs", &site_id, &post_slug)
+        .register_room("!old:hs", &site_id, &page_slug)
         .await
         .expect("register old room");
     // Pre-seed the site -> Space mapping so SiteService does not need to
@@ -117,14 +117,14 @@ async fn upgrade_comment_room_converges_the_replacement() {
         .cloned()
         .expect("replacement metadata");
     assert_eq!(metadata["site_id"], "my-blog");
-    assert_eq!(metadata["post_slug"], "hello");
+    assert_eq!(metadata["page_slug"], "hello");
 
     // Registry: the replacement is active and the old room is superseded.
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     assert_eq!(
         store
-            .get_registered_room(&site_id, &post_slug)
+            .get_registered_room(&site_id, &page_slug)
             .await
             .unwrap(),
         Some(replacement)
@@ -159,10 +159,10 @@ async fn upgrade_comment_room_reuses_an_existing_replacement() {
         vec![("!old:hs".to_string(), "13".to_string())]
     );
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     assert_eq!(
         store
-            .get_registered_room(&site_id, &post_slug)
+            .get_registered_room(&site_id, &page_slug)
             .await
             .unwrap(),
         Some("!already-upgraded:hs".to_string())
@@ -218,19 +218,19 @@ async fn upgrade_comment_room_rejects_downgrade_and_same_version() {
 }
 
 #[tokio::test]
-async fn upgrade_site_post_room_resolves_registry_then_upgrades() {
+async fn upgrade_site_page_room_resolves_registry_then_upgrades() {
     let (store, driver, site_service) = test_fixture("site-post").await;
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
 
     let replacement =
-        upgrade_site_post_room(&driver, &store, &site_service, &site_id, &post_slug, "13")
+        upgrade_site_page_room(&driver, &store, &site_service, &site_id, &page_slug, "13")
             .await
             .expect("site-post upgrade must succeed");
     assert_eq!(replacement, "!upgraded-1:hs");
     assert_eq!(
         store
-            .get_registered_room(&site_id, &post_slug)
+            .get_registered_room(&site_id, &page_slug)
             .await
             .unwrap(),
         Some(replacement)
@@ -238,7 +238,7 @@ async fn upgrade_site_post_room_resolves_registry_then_upgrades() {
 }
 
 #[tokio::test]
-async fn post_room_retire_endpoint_requires_claim_token_and_marks_retired() {
+async fn page_room_retire_endpoint_requires_claim_token_and_marks_retired() {
     let store = DbStore::connect(&test_db_url("api-post-retire"))
         .await
         .expect("connect test database");
@@ -247,14 +247,14 @@ async fn post_room_retire_endpoint_requires_claim_token_and_marks_retired() {
         .await
         .expect("register site");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
-        .register_room("!room:hs", &site_id, &post_slug)
+        .register_room("!room:hs", &site_id, &page_slug)
         .await
         .expect("register room");
 
     let app = cumments_api::build_router(api_state(TestDriver::new(), store.clone()));
-    let uri = "/api/v1/sites/my-blog/posts/hello";
+    let uri = "/api/v1/sites/my-blog/pages/hello";
 
     let missing = app
         .clone()
@@ -324,9 +324,9 @@ fn api_state(driver: TestDriver, store: DbStore) -> ApiState {
         active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        guest_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        visitor_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         public_read_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        moderation_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
+        governance_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
     }
@@ -355,7 +355,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
         .await
         .expect("register site");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
-    let post_slug = PostSlug::new("hello".to_string()).expect("post slug");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
         .save_site(&Site {
             id: site_id.as_str().to_string(),
@@ -366,7 +366,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
         .await
         .expect("save site");
     store
-        .register_room("!old:hs", &site_id, &post_slug)
+        .register_room("!old:hs", &site_id, &page_slug)
         .await
         .expect("register room");
 
@@ -385,7 +385,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
     );
 
     let app = cumments_api::build_router(api_state(driver, store.clone()));
-    let uri = "/api/v1/sites/my-blog/posts/hello/upgrade";
+    let uri = "/api/v1/sites/my-blog/pages/hello/upgrade";
 
     let missing = app
         .clone()
@@ -416,7 +416,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
     assert_eq!(data["replacement_room"], "!upgraded-1:hs");
     assert_eq!(
         store
-            .get_registered_room(&site_id, &post_slug)
+            .get_registered_room(&site_id, &page_slug)
             .await
             .unwrap(),
         Some("!upgraded-1:hs".to_string())
