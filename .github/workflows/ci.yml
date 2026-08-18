@@ -219,3 +219,25 @@ jobs:
         run: |
           pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
           mkdocs build --strict --config-file docs/mkdocs.yml
+
+# 汇总状态检查 - 始终运行，给 Ruleset 一个稳定的检查名称
+  result:
+    name: Result
+    needs:
+      - changes
+      - fmt
+      - clippy
+      - test
+      - audit
+      - frontend
+      - openapi
+      - docs
+    # 即使依赖的 job 被跳过或失败，这个 job 也必须运行
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail if any required job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
