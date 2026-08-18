@@ -7,6 +7,9 @@ on:
       - synchronize
       - ready_for_review
 
+# 仓库已开启 Allow auto-merge，PR 通过 ruleset 必填检查后自动合并。
+# 本仓库中 Bot 通过 GitHub App token 创建 PR，因此其打开的 PR 能自
+# 动触发 CI，从而能满足保护主分支的 ruleset 的要求。
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
