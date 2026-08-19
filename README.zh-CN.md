@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-**文档站：** <https://curious-r.github.io/cumments/>
+**文档站：** <https://cumments.curious.host/>
 
 Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Matrix 是**唯一事实来源**：
 每一条评论、编辑和删除都是不可变的 Matrix 事件；SQLite 只是可随时丢弃的本地读模型，
@@ -43,7 +43,7 @@ docker compose up -d
 
 ## 文档
 
-完整文档渲染在 <https://curious-r.github.io/cumments/>。
+完整文档渲染在 <https://cumments.curious.host/>。
 
 **快速开始**
 

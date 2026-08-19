@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-**Documentation:** <https://curious-r.github.io/cumments/>
+**Documentation:** <https://cumments.curious.host/>
 
 Cumments is a decentralized comment system backend built on the **Matrix
 protocol**. Matrix is the **source of truth**: every comment, edit and
@@ -47,7 +47,7 @@ troubleshooting — is in the [installation guide](docs/quick-start.md).
 
 ## Documentation
 
-The full documentation is rendered at <https://curious-r.github.io/cumments/>.
+The full documentation is rendered at <https://cumments.curious.host/>.
 
 **Getting started**
 
