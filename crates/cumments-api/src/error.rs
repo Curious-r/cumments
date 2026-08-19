@@ -2,7 +2,7 @@
 //!
 //! Error responses follow RFC 9457 (Problem Details for HTTP APIs). Every
 //! problem type has a stable `type` URI under
-//! `https://curious-r.github.io/cumments/problems/{slug}`; the `code`
+//! `https://cumments.curious.host/problems/{slug}`; the `code`
 //! member is the short machine-readable slug of that URI, and `title` is the
 //! stable human-readable name of the problem type.
 
@@ -16,8 +16,8 @@ use axum::{
 };
 use serde::Serialize;
 
-/// Base URI of the documented problem types (GitHub Pages docs site).
-pub const PROBLEM_TYPE_BASE: &str = "https://curious-r.github.io/cumments/problems";
+/// Base URI of the documented problem types (GitHub Pages docs site with custom domain).
+pub const PROBLEM_TYPE_BASE: &str = "https://cumments.curious.host/problems";
 
 /// Stable machine-readable identifiers for every problem type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,10 +314,7 @@ mod tests {
             .await
             .expect("read body");
         let body: serde_json::Value = serde_json::from_slice(&bytes).expect("valid json");
-        assert_eq!(
-            body["type"],
-            "https://curious-r.github.io/cumments/problems/#idempotency-key-reused"
-        );
+        assert_eq!(body["type"], ProblemType::IdempotencyReused.type_uri());
         assert_eq!(body["title"], "Idempotency-Key reused");
         assert_eq!(body["status"], 409);
         assert_eq!(

@@ -1,5 +1,5 @@
 site_name: Cumments
-site_url: https://curious-r.github.io/cumments/
+site_url: https://cumments.curious.host/
 # The config lives inside `docs/`; MkDocs resolves these paths relative to
 # this file, so the docs directory itself is `.` and the site stays at the
 # repository root.

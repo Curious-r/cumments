@@ -17,7 +17,7 @@ humans and must not be parsed.
 
 ## Invalid Proof-of-Work response {#invalid-pow}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#invalid-pow`
+- `type`: `https://cumments.curious.host/problems/#invalid-pow`
 - `code`: `invalid-pow`
 - `status`: `403`
 
@@ -27,7 +27,7 @@ PoW does not consume an `Idempotency-Key`.
 
 ## Invalid author signature {#invalid-signature}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#invalid-signature`
+- `type`: `https://cumments.curious.host/problems/#invalid-signature`
 - `code`: `invalid-signature`
 - `status`: `403`
 
@@ -37,7 +37,7 @@ Sign the exact message documented for the operation and retry with the same
 
 ## Input validation failed {#validation-error}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#validation-error`
+- `type`: `https://cumments.curious.host/problems/#validation-error`
 - `code`: `validation-error`
 - `status`: `400`
 
@@ -46,7 +46,7 @@ the per-field errors; correct them and resubmit.
 
 ## Resource not found {#not-found}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#not-found`
+- `type`: `https://cumments.curious.host/problems/#not-found`
 - `code`: `not-found`
 - `status`: `404`
 
@@ -55,7 +55,7 @@ verification) is not visible to this request.
 
 ## Unauthorized {#unauthorized}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#unauthorized`
+- `type`: `https://cumments.curious.host/problems/#unauthorized`
 - `code`: `unauthorized`
 - `status`: `403`
 
@@ -64,7 +64,7 @@ The presented author public key is not allowed to perform the operation
 
 ## Comment not manageable {#not-manageable}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#not-manageable`
+- `type`: `https://cumments.curious.host/problems/#not-manageable`
 - `code`: `not-manageable`
 - `status`: `403`
 
@@ -73,7 +73,7 @@ client instead of the HTTP API.
 
 ## Method not allowed {#method-not-allowed}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#method-not-allowed`
+- `type`: `https://cumments.curious.host/problems/#method-not-allowed`
 - `code`: `method-not-allowed`
 - `status`: `405`
 
@@ -82,7 +82,7 @@ writes use `POST`/`PUT`/`PATCH`/`DELETE`.
 
 ## Bad request {#bad-request}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#bad-request`
+- `type`: `https://cumments.curious.host/problems/#bad-request`
 - `code`: `bad-request`
 - `status`: `400`
 
@@ -92,7 +92,7 @@ specific problem.
 
 ## Conflict {#conflict}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#conflict`
+- `type`: `https://cumments.curious.host/problems/#conflict`
 - `code`: `conflict`
 - `status`: `409`
 
@@ -100,7 +100,7 @@ The request conflicts with the current state of the resource.
 
 ## Rate limit exceeded {#rate-limited}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#rate-limited`
+- `type`: `https://cumments.curious.host/problems/#rate-limited`
 - `code`: `rate-limited`
 - `status`: `429`
 
@@ -111,7 +111,7 @@ window (3600 seconds for hourly limits, 60 seconds for the Operator API).
 
 ## Idempotency-Key required {#idempotency-key-required}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#idempotency-key-required`
+- `type`: `https://cumments.curious.host/problems/#idempotency-key-required`
 - `code`: `idempotency-key-required`
 - `status`: `400`
 
@@ -120,7 +120,7 @@ and visitor media upload write submissions.
 
 ## Invalid Idempotency-Key {#invalid-idempotency-key}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#invalid-idempotency-key`
+- `type`: `https://cumments.curious.host/problems/#invalid-idempotency-key`
 - `code`: `invalid-idempotency-key`
 - `status`: `400`
 
@@ -128,7 +128,7 @@ The `Idempotency-Key` value must be 8-255 printable ASCII characters.
 
 ## Idempotency-Key reused {#idempotency-key-reused}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#idempotency-key-reused`
+- `type`: `https://cumments.curious.host/problems/#idempotency-key-reused`
 - `code`: `idempotency-key-reused`
 - `status`: `409`
 
@@ -138,7 +138,7 @@ replay the exact original request.
 
 ## Site verification required {#site-verification-required}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#site-verification-required`
+- `type`: `https://cumments.curious.host/problems/#site-verification-required`
 - `code`: `site-verification-required`
 - `status`: `403`
 
@@ -147,7 +147,7 @@ accepting writes. Complete the verification flow for the site first.
 
 ## Site not registered {#site-not-registered}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#site-not-registered`
+- `type`: `https://cumments.curious.host/problems/#site-not-registered`
 - `code`: `site-not-registered`
 - `status`: `404`
 
@@ -159,7 +159,7 @@ verification policy.
 
 ## Site retired {#site-retired}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#site-retired`
+- `type`: `https://cumments.curious.host/problems/#site-retired`
 - `code`: `site-retired`
 - `status`: `410`
 
@@ -169,7 +169,7 @@ projections; reads keep working until the local data is gone.
 
 ## Site origin denied {#site-origin-denied}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#site-origin-denied`
+- `type`: `https://cumments.curious.host/problems/#site-origin-denied`
 - `code`: `site-origin-denied`
 - `status`: `403`
 
@@ -179,7 +179,7 @@ use the site backend signature flow.
 
 ## Site signature invalid {#site-signature-invalid}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#site-signature-invalid`
+- `type`: `https://cumments.curious.host/problems/#site-signature-invalid`
 - `code`: `site-signature-invalid`
 - `status`: `403`
 
@@ -188,7 +188,7 @@ stale, or does not match the request.
 
 ## Internal server error {#internal-error}
 
-- `type`: `https://curious-r.github.io/cumments/problems/#internal-error`
+- `type`: `https://cumments.curious.host/problems/#internal-error`
 - `code`: `internal-error`
 - `status`: `500`
 
