@@ -508,7 +508,6 @@
                     identity = id;
                     renderIdentity();
                     await initApp();
-                    refreshOwnProfile();
                 } catch (e) {
                     renderError(
                         new Error(
@@ -2802,9 +2801,15 @@
                             settingDisplayName.value = profile.display_name;
                         }
                     }
+                    // Don't clobber an avatar we just recovered from the
+                    // comment list (see refreshOwnAvatarFromComments): the
+                    // visitor profile can lag behind the message projection.
                     if (profile.avatar_url) {
                         saveOwnAvatarCache(apiMediaUrl(profile.avatar_url));
-                    } else {
+                    } else if (
+                        !ownAvatarUrl ||
+                        ownAvatarSiteId !== cfg.siteId
+                    ) {
                         clearOwnAvatarCache();
                     }
                 } catch {
@@ -2830,9 +2835,9 @@
                         comment.author.public_key === identity.publicKey &&
                         comment.author.avatar_url
                     ) {
-                        ownAvatarUrl = apiMediaUrl(comment.author.avatar_url);
-                        ownAvatarSiteId = cfg.siteId;
-                        saveOwnAvatarCache(ownAvatarUrl);
+                        saveOwnAvatarCache(
+                            apiMediaUrl(comment.author.avatar_url),
+                        );
                         return;
                     }
                 }
@@ -3016,6 +3021,11 @@
                 state.currentPage = 1;
                 state.meta = null;
                 showLoading();
+                // Kick off profile-avatar fetch in parallel with the comment
+                // list so the composer doesn't have to wait for "mine" tab.
+                // Cached value (loadOwnAvatarCache above) already painted
+                // instant feedback; this just upgrades it when network returns.
+                refreshOwnProfile();
                 await loadRoles();
                 await loadList();
                 connectSse();
