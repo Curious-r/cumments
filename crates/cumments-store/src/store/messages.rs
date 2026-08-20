@@ -26,10 +26,13 @@ fn content_to_json(content: &Content) -> String {
 }
 
 fn content_from_json(raw: &str) -> Content {
-    serde_json::from_str(raw).unwrap_or(Content::Unknown(UnknownContent {
-        fallback: None,
-        raw: serde_json::Value::Null,
-    }))
+    serde_json::from_str(raw).unwrap_or_else(|_| {
+        tracing::warn!(raw = %raw, "falling back to unknown content for dirty content_json");
+        Content::Unknown(UnknownContent {
+            fallback: None,
+            raw: serde_json::Value::Null,
+        })
+    })
 }
 
 fn message_from_model(model: messages::Model) -> Message {
@@ -38,6 +41,9 @@ fn message_from_model(model: messages::Model) -> Message {
     } else {
         AuthorKind::Visitor
     };
+    let event_id_for_warn = model.event_id.clone();
+    let status_raw_for_warn = model.status.clone();
+    let raw_content_for_warn = model.raw_content_json.clone();
     Message {
         event_id: model.event_id,
         site_id: model.site_id,
@@ -61,14 +67,19 @@ fn message_from_model(model: messages::Model) -> Message {
         reply_to: model.reply_to,
         thread_root: model.thread_root,
         submission_id: model.submission_id,
-        status: model.status.parse().unwrap_or(MessageStatus::Active),
+        status: model.status.parse().unwrap_or_else(|_| {
+            tracing::warn!(event_id = %event_id_for_warn, raw_status = %status_raw_for_warn, "falling back to active status for unknown status value");
+            MessageStatus::Active
+        }),
         redacted_at: model.redacted_at,
         redacted_by: model.redacted_by,
         reactions: Vec::new(),
         room_id: model.room_id,
         sender_mxid: model.sender_mxid,
-        raw_content: serde_json::from_str(&model.raw_content_json)
-            .unwrap_or(serde_json::Value::Null),
+        raw_content: serde_json::from_str(&model.raw_content_json).unwrap_or_else(|_| {
+            tracing::warn!(event_id = %event_id_for_warn, raw = %raw_content_for_warn, "falling back to Null for dirty raw_content_json");
+            serde_json::Value::Null
+        }),
     }
 }
 
