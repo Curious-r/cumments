@@ -24,10 +24,10 @@ cumments-test-utils = { path = "crates/cumments-test-utils" }
 anyhow = "1.0.100"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
-axum = "0.8.8"
+axum = "0.8.9"
 base64 = "0.23.1"
 bytes = "1.12.1"
-chrono = { version = "0.4.43", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.5.57", features = ["derive"] }
 clap_complete = "4.5.57"
 config = { version = "0.15.19", features = ["toml"] }
@@ -41,7 +41,7 @@ regex = "1.11.1"
 ruma-common = "0.19.0"
 rand = "0.10.2"
 reqwest = { version = "0.13.1", features = ["json", "query", "stream", "rustls"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.101"
 serde_yaml_ng = "0.10.0"
 sha2 = "0.11.0"
@@ -51,9 +51,9 @@ url = "2.5.4"
 uuid = { version = "1.24", features = ["v4"] }
 validator = { version = "0.21", features = ["derive"] }
 wiremock = "0.6"
-tokio = { version = "1.49.0", features = ["full"] }
-sea-orm = { version = "2.0.0", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
-sea-orm-migration = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+tokio = { version = "1.53.1", features = ["full"] }
+sea-orm = { version = "2.0.2", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
+sea-orm-migration = { version = "2.0.2", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["trace"] }
