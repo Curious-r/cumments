@@ -19,33 +19,63 @@ use sha2::{Digest, Sha256};
 
 /// Build the canonical message a client signs for a given operation.
 ///
-/// All fields are joined with `\n`; the trailing challenge (the PoW challenge
-/// prefix) makes the signature single-use within its expiry window.
-pub fn signature_message(parts: &[&str]) -> String {
-    parts.join("\n")
+/// The message is a JSON array serialized with `serde_json::to_string`.
+/// `None` becomes JSON `null`, so absent relations are typed as null
+/// rather than an empty string. This makes the format unambiguous even
+/// when content contains newlines or quotes, and keeps the namespace
+/// minimal — the Matrix `host.curious.cumments.*` block already provides
+/// domain separation.
+pub fn signature_message(parts: &[Option<&str>]) -> String {
+    let values: Vec<serde_json::Value> = parts
+        .iter()
+        .map(|part| match part {
+            Some(text) => serde_json::Value::String((*text).to_string()),
+            None => serde_json::Value::Null,
+        })
+        .collect();
+    serde_json::to_string(&values).expect("signature array is valid JSON")
 }
 
 /// Build the canonical message signed when posting a comment.
 ///
-/// Only content and operation parameters are signed: site, post, content,
-/// the reply relation (always present as its own line, empty when there is
-/// no parent, so it cannot be swapped after signing) and the challenge
-/// nonce. Display data (display name, avatar) is profile state and never
-/// enters the signature.
+/// Covers site, page, content (or mxc URL for media), both reply and thread
+/// relations (each as `null` when absent), and the PoW challenge.
 pub fn post_signature_message(
     site_id: &str,
     page_slug: &str,
     content: &str,
     reply_to: Option<&str>,
+    thread_root: Option<&str>,
     challenge: &str,
 ) -> String {
     signature_message(&[
-        "POST",
-        site_id,
-        page_slug,
-        content,
-        reply_to.unwrap_or(""),
-        challenge,
+        Some("POST"),
+        Some(site_id),
+        Some(page_slug),
+        Some(content),
+        reply_to.map(|value| value as &str),
+        thread_root.map(|value| value as &str),
+        Some(challenge),
+    ])
+}
+
+/// Build the canonical message signed for a location share.
+pub fn locate_signature_message(
+    site_id: &str,
+    page_slug: &str,
+    geo_uri: &str,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
+    challenge: &str,
+) -> String {
+    signature_message(&[
+        Some("LOCATE"),
+        Some(site_id),
+        Some(page_slug),
+        Some(geo_uri),
+        reply_to.map(|value| value as &str),
+        thread_root.map(|value| value as &str),
+        Some(challenge),
     ])
 }
 
@@ -94,7 +124,13 @@ mod tests {
         let verifying_key = signing_key.verifying_key();
         let public_key_b64 = URL_SAFE_NO_PAD.encode(verifying_key.to_bytes());
 
-        let message = signature_message(&["POST", "my-blog", "hello", "content", "challenge"]);
+        let message = signature_message(&[
+            Some("POST"),
+            Some("my-blog"),
+            Some("hello"),
+            Some("content"),
+            Some("challenge"),
+        ]);
         let signature = signing_key.sign(message.as_bytes());
         let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
 
@@ -139,14 +175,85 @@ mod tests {
     }
 
     #[test]
-    fn post_signature_message_includes_reply_to_slot() {
+    fn post_signature_message_includes_reply_and_thread_slots() {
         assert_eq!(
-            post_signature_message("my-blog", "hello", "content", Some("$p:hs"), "ch"),
-            "POST\nmy-blog\nhello\ncontent\n$p:hs\nch"
+            post_signature_message("my-blog", "hello", "content", Some("$p:hs"), None, "ch"),
+            serde_json::to_string(&[
+                serde_json::Value::String("POST".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("content".to_string()),
+                serde_json::Value::String("$p:hs".to_string()),
+                serde_json::Value::Null,
+                serde_json::Value::String("ch".to_string()),
+            ])
+            .expect("valid json")
         );
         assert_eq!(
-            post_signature_message("my-blog", "hello", "content", None, "ch"),
-            "POST\nmy-blog\nhello\ncontent\n\nch"
+            post_signature_message("my-blog", "hello", "content", None, None, "ch"),
+            serde_json::to_string(&[
+                serde_json::Value::String("POST".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("content".to_string()),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::String("ch".to_string()),
+            ])
+            .expect("valid json")
+        );
+        assert_eq!(
+            post_signature_message("my-blog", "hello", "content", None, Some("$t:hs"), "ch"),
+            serde_json::to_string(&[
+                serde_json::Value::String("POST".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("content".to_string()),
+                serde_json::Value::Null,
+                serde_json::Value::String("$t:hs".to_string()),
+                serde_json::Value::String("ch".to_string()),
+            ])
+            .expect("valid json")
+        );
+        // Newline in content must not create ambiguity — JSON array handles it.
+        let with_newline = post_signature_message("my-blog", "hello", "a\nb", None, None, "ch");
+        assert!(with_newline.contains("\\n"));
+        assert!(verify_signature(
+            &URL_SAFE_NO_PAD.encode(
+                SigningKey::from_bytes(&[7u8; 32])
+                    .verifying_key()
+                    .to_bytes()
+            ),
+            &with_newline,
+            &URL_SAFE_NO_PAD.encode(
+                SigningKey::from_bytes(&[7u8; 32])
+                    .sign(with_newline.as_bytes())
+                    .to_bytes()
+            )
+        ));
+    }
+
+    #[test]
+    fn locate_signature_message_includes_both_relations() {
+        assert_eq!(
+            locate_signature_message(
+                "my-blog",
+                "hello",
+                "geo:1,2",
+                Some("$p:hs"),
+                Some("$t:hs"),
+                "ch"
+            ),
+            serde_json::to_string(&[
+                serde_json::Value::String("LOCATE".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("geo:1,2".to_string()),
+                serde_json::Value::String("$p:hs".to_string()),
+                serde_json::Value::String("$t:hs".to_string()),
+                serde_json::Value::String("ch".to_string()),
+            ])
+            .expect("valid json")
         );
     }
 }

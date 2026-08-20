@@ -22,8 +22,8 @@ pub struct PostCommentCommand {
     #[serde(default)]
     pub media: Option<CommentMedia>,
     /// A location message (MSC3488) instead of text/media. When present,
-    /// `content` is unused, `reply_to` must be `None`, and the signature
-    /// covers `location.geo_uri`.
+    /// `content` is unused and the signature covers `location.geo_uri`
+    /// plus the orthogonal relations `reply_to` / `thread_root`.
     #[serde(default)]
     pub location: Option<LocationPayload>,
 
@@ -42,6 +42,8 @@ pub struct PostCommentCommand {
 
     /// If this comment is a reply, this field holds the ID of the parent comment.
     pub reply_to: Option<String>,
+    /// Thread root event ID (`m.thread`). Orthogonal to `reply_to`.
+    pub thread_root: Option<String>,
 }
 
 /// Payload for a visitor location message (`m.location`, MSC3488).

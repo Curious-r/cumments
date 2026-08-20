@@ -80,7 +80,13 @@ pub(crate) fn verify_delete_proof(
         _ => return false,
     }
 
-    let message = signature_message(&["DELETE", site_id, page_slug, target_event_id, challenge]);
+    let message = signature_message(&[
+        Some("DELETE"),
+        Some(site_id),
+        Some(page_slug),
+        Some(target_event_id),
+        Some(challenge),
+    ]);
     verify_signature(public_key, &message, signature)
 }
 

@@ -1429,12 +1429,12 @@ impl EventProcessor {
                     (Some(pk), Some(sig), Some(chal)) => {
                         relation.signable_content().is_some_and(|new_content| {
                             let message = signature_message(&[
-                                "PATCH",
-                                &site_id,
-                                &page_slug,
-                                &relation.target_event_id,
-                                new_content,
-                                chal,
+                                Some("PATCH"),
+                                Some(site_id.as_str()),
+                                Some(page_slug.as_str()),
+                                Some(relation.target_event_id.as_str()),
+                                Some(new_content),
+                                Some(chal),
                             ]);
                             verify_visitor_event(
                                 self.server_name.as_deref(),
@@ -1532,11 +1532,13 @@ impl EventProcessor {
                         // text/media use the POST signature (which binds the
                         // content and reply relation).
                         Content::Location(location) => signature_message(&[
-                            "LOCATE",
-                            &site_id,
-                            &page_slug,
-                            &location.geo_uri,
-                            chal,
+                            Some("LOCATE"),
+                            Some(site_id.as_str()),
+                            Some(page_slug.as_str()),
+                            Some(location.geo_uri.as_str()),
+                            event.reply_to.as_deref(),
+                            event.thread_root.as_deref(),
+                            Some(chal),
                         ]),
                         _ => match event.signable_content() {
                             Some(content) => post_signature_message(
@@ -1544,6 +1546,7 @@ impl EventProcessor {
                                 &page_slug,
                                 content,
                                 event.reply_to.as_deref(),
+                                event.thread_root.as_deref(),
                                 chal,
                             ),
                             None => return Ok(()),
@@ -1679,12 +1682,12 @@ impl EventProcessor {
                 return Ok(());
             };
             let message = signature_message(&[
-                "REACT",
-                &identity.site_id,
-                &identity.page_slug,
-                &event.message_event_id,
-                &event.key,
-                chal,
+                Some("REACT"),
+                Some(identity.site_id.as_str()),
+                Some(identity.page_slug.as_str()),
+                Some(event.message_event_id.as_str()),
+                Some(event.key.as_str()),
+                Some(chal),
             ]);
             if !verify_visitor_event(
                 self.server_name.as_deref(),
@@ -1797,12 +1800,12 @@ impl EventProcessor {
                 return Ok(());
             };
             let message = signature_message(&[
-                "VOTE",
-                &identity.site_id,
-                &identity.page_slug,
-                &event.poll_message_id,
-                answer_id,
-                chal,
+                Some("VOTE"),
+                Some(identity.site_id.as_str()),
+                Some(identity.page_slug.as_str()),
+                Some(event.poll_message_id.as_str()),
+                Some(answer_id),
+                Some(chal),
             ]);
             if !verify_visitor_event(
                 self.server_name.as_deref(),
