@@ -97,6 +97,13 @@ fn validate_comment_id_format(comment_id: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+const THREAD_ROOT_FORMAT_ERROR: &str =
+    "thread_root must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
+
+fn validate_thread_root_format(thread_root: &str) -> Result<(), &'static str> {
+    validate_reply_to_format(thread_root).map_err(|_| THREAD_ROOT_FORMAT_ERROR)
+}
+
 /// Builds the `202 { submission_id }` response, marking replays explicitly.
 fn accepted_response(submission_id: i64, replayed: bool) -> Response {
     let mut response = (
@@ -318,6 +325,20 @@ pub(crate) async fn post_comment_handler(
     {
         return Err(AppError::BadRequest(msg.to_string()));
     }
+    if req
+        .thread_root
+        .as_deref()
+        .is_some_and(|thread_root| thread_root.trim().is_empty())
+    {
+        return Err(AppError::BadRequest(
+            "thread_root must not be empty when provided.".to_string(),
+        ));
+    }
+    if let Some(thread_root) = req.thread_root.as_deref()
+        && let Err(msg) = validate_thread_root_format(thread_root)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
     if let Some(media) = req.media.as_mut() {
         if !media.url.starts_with("mxc://") || media.url.len() > 512 {
             return Err(AppError::BadRequest(
@@ -412,6 +433,7 @@ pub(crate) async fn post_comment_handler(
         &page_slug,
         signable_content,
         req.reply_to.as_deref(),
+        req.thread_root.as_deref(),
         challenge,
     );
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
@@ -440,6 +462,25 @@ pub(crate) async fn post_comment_handler(
             }
         }
     }
+    if let Some(thread_root) = req.thread_root.as_deref() {
+        match state.store.get_message(thread_root).await {
+            Ok(Some(parent)) => {
+                if parent.site_id != site_id || parent.page_slug != page_slug {
+                    return Err(AppError::BadRequest(
+                        "thread_root must reference a comment in the same site and post."
+                            .to_string(),
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("Failed to validate thread root: {:?}", e);
+                return Err(AppError::Internal(
+                    "Failed to validate thread root.".to_string(),
+                ));
+            }
+        }
+    }
 
     // 3. Create the business command
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
@@ -456,6 +497,7 @@ pub(crate) async fn post_comment_handler(
         author_signature: req.author_signature,
         author_challenge: challenge.to_string(),
         reply_to: req.reply_to,
+        thread_root: req.thread_root,
     };
 
     // 4. Save the command for the reconciler, atomically with its idempotency
@@ -563,11 +605,11 @@ async fn delete_comment_common(
     // 2b. Verify the author's Ed25519 signature.
     let challenge = challenge_prefix(&req.challenge_response);
     let message = signature_message(&[
-        "DELETE",
-        &path.site_id,
-        &path.page_slug,
-        &path.comment_id,
-        challenge,
+        Some("DELETE"),
+        Some(path.site_id.as_str()),
+        Some(path.page_slug.as_str()),
+        Some(path.comment_id.as_str()),
+        Some(challenge),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
@@ -747,12 +789,12 @@ async fn update_comment_common(
     // 3b. Verify the author's Ed25519 signature.
     let challenge = challenge_prefix(&req.challenge_response);
     let message = signature_message(&[
-        "PATCH",
-        &path.site_id,
-        &path.page_slug,
-        &path.comment_id,
-        &req.content,
-        challenge,
+        Some("PATCH"),
+        Some(path.site_id.as_str()),
+        Some(path.page_slug.as_str()),
+        Some(path.comment_id.as_str()),
+        Some(req.content.as_str()),
+        Some(challenge),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
@@ -877,12 +919,12 @@ pub(crate) async fn react_handler(
     }
     let challenge = challenge_prefix(&req.challenge_response);
     let message = signature_message(&[
-        "REACT",
-        &site_id,
-        &page_slug,
-        &comment_id,
-        &req.key,
-        challenge,
+        Some("REACT"),
+        Some(site_id.as_str()),
+        Some(page_slug.as_str()),
+        Some(comment_id.as_str()),
+        Some(req.key.as_str()),
+        Some(challenge),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
@@ -950,12 +992,12 @@ pub(crate) async fn vote_handler(
     }
     let challenge = challenge_prefix(&req.challenge_response);
     let message = signature_message(&[
-        "VOTE",
-        &site_id,
-        &page_slug,
-        &poll_id,
-        &req.option_id,
-        challenge,
+        Some("VOTE"),
+        Some(site_id.as_str()),
+        Some(page_slug.as_str()),
+        Some(poll_id.as_str()),
+        Some(req.option_id.as_str()),
+        Some(challenge),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
@@ -1050,10 +1092,85 @@ pub(crate) async fn location_handler(
     if !state.pow.verify(&req.challenge_response) {
         return Err(AppError::InvalidPoW);
     }
+    if req
+        .reply_to
+        .as_deref()
+        .is_some_and(|reply_to| reply_to.trim().is_empty())
+    {
+        return Err(AppError::BadRequest(
+            "reply_to must not be empty when provided.".to_string(),
+        ));
+    }
+    if let Some(reply_to) = req.reply_to.as_deref()
+        && let Err(msg) = validate_reply_to_format(reply_to)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if req
+        .thread_root
+        .as_deref()
+        .is_some_and(|thread_root| thread_root.trim().is_empty())
+    {
+        return Err(AppError::BadRequest(
+            "thread_root must not be empty when provided.".to_string(),
+        ));
+    }
+    if let Some(thread_root) = req.thread_root.as_deref()
+        && let Err(msg) = validate_thread_root_format(thread_root)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
     let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&["LOCATE", &site_id, &page_slug, &req.geo_uri, challenge]);
+    let message = cumments_core::identity::locate_signature_message(
+        &site_id,
+        &page_slug,
+        &req.geo_uri,
+        req.reply_to.as_deref(),
+        req.thread_root.as_deref(),
+        challenge,
+    );
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
+    }
+    if let Some(reply_to) = req.reply_to.as_deref() {
+        match state.store.get_message(reply_to).await {
+            Ok(Some(parent)) => {
+                if parent.site_id != site_id || parent.page_slug != page_slug {
+                    return Err(AppError::BadRequest(
+                        "reply_to must reference a comment in the same site and post.".to_string(),
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("Failed to validate reply target: {:?}", e);
+                return Err(AppError::Internal(
+                    "Failed to validate reply target.".to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(thread_root) = req.thread_root.as_deref() {
+        match state.store.get_message(thread_root).await {
+            Ok(Some(parent)) => {
+                if parent.site_id != site_id || parent.page_slug != page_slug {
+                    return Err(AppError::BadRequest(
+                        "thread_root must reference a comment in the same site and post."
+                            .to_string(),
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("Failed to validate thread root: {:?}", e);
+                return Err(AppError::Internal(
+                    "Failed to validate thread root.".to_string(),
+                ));
+            }
+        }
     }
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
@@ -1071,7 +1188,8 @@ pub(crate) async fn location_handler(
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
         author_challenge: challenge.to_string(),
-        reply_to: None,
+        reply_to: req.reply_to,
+        thread_root: req.thread_root,
     };
 
     match state

@@ -114,7 +114,12 @@ pub struct PostCommentRequest {
     /// Ed25519 signature over the canonical POST message.
     #[validate(length(min = 1, max = 256))]
     pub author_signature: String,
+    /// Parent comment for a reply (`$event:hs`).
+    #[serde(default)]
     pub reply_to: Option<String>,
+    /// Thread root (`$event:hs`). Orthogonal to `reply_to`.
+    #[serde(default)]
+    pub thread_root: Option<String>,
     #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }
@@ -174,7 +179,8 @@ pub struct VoteRequest {
     pub challenge_response: String,
 }
 
-/// Request DTO for posting a location.
+/// Request DTO for posting a location. Like `PostCommentRequest`, it may
+/// carry `reply_to` / `thread_root` so locations can start or join threads.
 #[derive(Debug, Deserialize, Validate)]
 pub struct LocationRequest {
     #[validate(length(min = 4, max = 512))]
@@ -191,6 +197,10 @@ pub struct LocationRequest {
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]
     pub author_signature: String,
+    #[serde(default)]
+    pub reply_to: Option<String>,
+    #[serde(default)]
+    pub thread_root: Option<String>,
     #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
 }

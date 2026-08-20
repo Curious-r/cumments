@@ -664,14 +664,15 @@ pub(crate) async fn upload_media_handler(
             return Err(AppError::IdempotencyReused);
         }
         let challenge = challenge_prefix(&challenge_response);
+        let body_hash = sha256_hex(&body);
         let message = signature_message(&[
-            "UPLOAD",
-            site_id_val.as_str(),
-            page_slug_val.as_str(),
-            &mimetype,
-            &filename,
-            &sha256_hex(&body),
-            challenge,
+            Some("UPLOAD"),
+            Some(site_id_val.as_str()),
+            Some(page_slug_val.as_str()),
+            Some(mimetype.as_str()),
+            Some(filename.as_str()),
+            Some(body_hash.as_str()),
+            Some(challenge),
         ]);
         if !verify_signature(&author_public_key, &message, &author_signature) {
             return Err(AppError::InvalidSignature);
@@ -689,14 +690,15 @@ pub(crate) async fn upload_media_handler(
         return Err(AppError::InvalidPoW);
     }
     let challenge = challenge_prefix(&challenge_response);
+    let body_hash2 = sha256_hex(&body);
     let message = signature_message(&[
-        "UPLOAD",
-        site_id_val.as_str(),
-        page_slug_val.as_str(),
-        &mimetype,
-        &filename,
-        &sha256_hex(&body),
-        challenge,
+        Some("UPLOAD"),
+        Some(site_id_val.as_str()),
+        Some(page_slug_val.as_str()),
+        Some(mimetype.as_str()),
+        Some(filename.as_str()),
+        Some(body_hash2.as_str()),
+        Some(challenge),
     ]);
     if !verify_signature(&author_public_key, &message, &author_signature) {
         return Err(AppError::InvalidSignature);
@@ -844,12 +846,13 @@ pub(crate) async fn set_visitor_avatar_handler(
         filename,
     );
     let sign_message = |challenge: &str| {
+        let body_hash = sha256_hex(&body);
         signature_message(&[
-            "UPLOAD_AVATAR",
-            site_id_val.as_str(),
-            &mimetype,
-            &sha256_hex(&body),
-            challenge,
+            Some("UPLOAD_AVATAR"),
+            Some(site_id_val.as_str()),
+            Some(mimetype.as_str()),
+            Some(body_hash.as_str()),
+            Some(challenge),
         ])
     };
 
@@ -1021,7 +1024,11 @@ pub(crate) async fn delete_visitor_avatar_handler(
         return Err(AppError::InvalidPoW);
     }
     let challenge = challenge_prefix(&challenge_response);
-    let message = signature_message(&["DELETE_AVATAR", site_id_val.as_str(), challenge]);
+    let message = signature_message(&[
+        Some("DELETE_AVATAR"),
+        Some(site_id_val.as_str()),
+        Some(challenge),
+    ]);
     if !verify_signature(&author_public_key, &message, &author_signature) {
         return Err(AppError::InvalidSignature);
     }
