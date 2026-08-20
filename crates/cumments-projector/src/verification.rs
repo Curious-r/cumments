@@ -105,7 +105,7 @@ mod tests {
         let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
         let sender = format!("@_cumments_my-blog_{}:example.com", visitor_id);
         let challenge = "challenge";
-        let message = post_signature_message("my-blog", "hello", "content", None, challenge);
+        let message = post_signature_message("my-blog", "hello", "content", None, None, challenge);
         let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
 
         assert!(verify_visitor_event(
@@ -162,7 +162,13 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[11u8; 32]);
         let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
         let challenge = "challenge";
-        let message = signature_message(&["DELETE", "my-blog", "hello", "$target:hs", challenge]);
+        let message = signature_message(&[
+            Some("DELETE"),
+            Some("my-blog"),
+            Some("hello"),
+            Some("$target:hs"),
+            Some(challenge),
+        ]);
         let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
 
         let proof = serde_json::json!({

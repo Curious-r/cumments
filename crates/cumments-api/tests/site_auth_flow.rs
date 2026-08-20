@@ -1446,11 +1446,13 @@ async fn location_posts_are_queued_and_idempotent() {
     let challenge_response = solve_pow(&challenge);
     let display_name = "Alice";
     let message = signature_message(&[
-        "LOCATE",
-        "test-blog",
-        "hello",
-        "geo:31.2,121.5",
-        &challenge.prefix,
+        Some("LOCATE"),
+        Some("test-blog"),
+        Some("hello"),
+        Some("geo:31.2,121.5"),
+        None,
+        None,
+        Some(challenge.prefix.as_str()),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
@@ -1537,8 +1539,14 @@ async fn comment_replay_returns_original_submission_without_consuming_pow() {
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
     let display_name = "Alice";
-    let message =
-        post_signature_message("test-blog", "hello", "hello world", None, &challenge.prefix);
+    let message = post_signature_message(
+        "test-blog",
+        "hello",
+        "hello world",
+        None,
+        None,
+        &challenge.prefix,
+    );
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "hello world",
@@ -1607,7 +1615,14 @@ async fn comment_media_must_reference_an_owned_upload() {
     let challenge_response = solve_pow(&challenge);
     let display_name = "Alice";
     let media_url = "mxc://hs/cat";
-    let message = post_signature_message("test-blog", "hello", media_url, None, &challenge.prefix);
+    let message = post_signature_message(
+        "test-blog",
+        "hello",
+        media_url,
+        None,
+        None,
+        &challenge.prefix,
+    );
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "",
@@ -1685,12 +1700,13 @@ async fn visitor_avatar_set_and_delete_are_signed_and_idempotent() {
 
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
+    let avatar_hash = sha256_hex(&avatar_body);
     let message = signature_message(&[
-        "UPLOAD_AVATAR",
-        "test-blog",
-        "image/png",
-        &sha256_hex(&avatar_body),
-        &challenge.prefix,
+        Some("UPLOAD_AVATAR"),
+        Some("test-blog"),
+        Some("image/png"),
+        Some(avatar_hash.as_str()),
+        Some(challenge.prefix.as_str()),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let uri = format!(
@@ -1752,12 +1768,13 @@ async fn visitor_avatar_set_and_delete_are_signed_and_idempotent() {
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
     let bad_body = b"not-an-image".to_vec();
+    let bad_hash = sha256_hex(&bad_body);
     let message = signature_message(&[
-        "UPLOAD_AVATAR",
-        "test-blog",
-        "video/mp4",
-        &sha256_hex(&bad_body),
-        &challenge.prefix,
+        Some("UPLOAD_AVATAR"),
+        Some("test-blog"),
+        Some("video/mp4"),
+        Some(bad_hash.as_str()),
+        Some(challenge.prefix.as_str()),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let bad_uri = format!(
@@ -1779,7 +1796,11 @@ async fn visitor_avatar_set_and_delete_are_signed_and_idempotent() {
     // Delete removes the profile field with its own signature.
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
-    let message = signature_message(&["DELETE_AVATAR", "test-blog", &challenge.prefix]);
+    let message = signature_message(&[
+        Some("DELETE_AVATAR"),
+        Some("test-blog"),
+        Some(challenge.prefix.as_str()),
+    ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let delete_uri = format!(
         "/api/v1/sites/test-blog/visitors/avatar?author_public_key={public_key}&author_signature={signature}&challenge_response={challenge_response}"
@@ -2726,7 +2747,14 @@ async fn comment_stickers_must_reference_the_sites_packs() {
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
     let media_url = "mxc://hs/cat";
-    let message = post_signature_message("test-blog", "hello", media_url, None, &challenge.prefix);
+    let message = post_signature_message(
+        "test-blog",
+        "hello",
+        media_url,
+        None,
+        None,
+        &challenge.prefix,
+    );
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "",
