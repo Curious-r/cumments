@@ -38,8 +38,8 @@ history with `cumments backfill`.
 ## Tags
 
 - `latest` — latest build from `main`
-- `0.26.0` — versioned multi-arch release (plus `0.26.0-amd64` /
-  `0.26.0-arm64` for pinning a single architecture)
+- `0.27.0` — versioned multi-arch release (plus `0.27.0-amd64` /
+  `0.27.0-arm64` for pinning a single architecture)
 - `sha-<commit>` — manual publish builds
 
 ## Quick start

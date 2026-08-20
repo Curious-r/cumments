@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/cumments-core", "crates/cumments-store", "crates/cumments-api", "crates/cumments", "crates/cumments-reconciler", "crates/cumments-matrix", "crates/cumments-projector", "crates/cumments-test-utils"]
 
 [workspace.package]
-version = "0.26.0"
+version = "0.27.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Curious-r/cumments"
