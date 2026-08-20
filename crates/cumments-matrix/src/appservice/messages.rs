@@ -104,6 +104,7 @@ impl AppServiceMatrixDriver {
         author_challenge: &str,
         site_id: &SiteId,
         reply_to: Option<&str>,
+        thread_root: Option<&str>,
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
         submission_id: Option<i64>,
@@ -138,6 +139,7 @@ impl AppServiceMatrixDriver {
                 author_challenge,
                 submission_id,
                 reply_to,
+                thread_root,
                 reply_to_body,
                 reply_to_sender,
             ),
@@ -278,6 +280,8 @@ impl AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         submission_id: Option<i64>,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
         txn_id: &str,
     ) -> Result<String> {
         let virtual_user = self
@@ -295,6 +299,8 @@ impl AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             submission_id,
+            reply_to,
+            thread_root,
         );
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",

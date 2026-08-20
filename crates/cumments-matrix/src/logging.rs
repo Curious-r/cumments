@@ -128,6 +128,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_challenge: &str,
         _site_id: &SiteId,
         reply_to: Option<&str>,
+        _thread_root: Option<&str>,
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
         submission_id: Option<i64>,
@@ -192,6 +193,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_signature: &str,
         _author_challenge: &str,
         submission_id: Option<i64>,
+        _reply_to: Option<&str>,
+        _thread_root: Option<&str>,
         _txn_id: &str,
     ) -> Result<String> {
         info!(

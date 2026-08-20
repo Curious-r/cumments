@@ -147,6 +147,7 @@ impl MatrixDriver for TestDriver {
         _author_challenge: &str,
         _site_id: &SiteId,
         _reply_to: Option<&str>,
+        _thread_root: Option<&str>,
         _reply_to_body: Option<&str>,
         _reply_to_sender: Option<&str>,
         _submission_id: Option<i64>,
@@ -190,6 +191,8 @@ impl MatrixDriver for TestDriver {
         _author_signature: &str,
         _author_challenge: &str,
         _submission_id: Option<i64>,
+        _reply_to: Option<&str>,
+        _thread_root: Option<&str>,
         _txn_id: &str,
     ) -> anyhow::Result<String> {
         unimplemented!("not used in this test")

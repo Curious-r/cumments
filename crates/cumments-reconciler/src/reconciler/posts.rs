@@ -169,6 +169,8 @@ impl PostsPass {
                                 &command.author_signature,
                                 &command.author_challenge,
                                 Some(id),
+                                command.reply_to.as_deref(),
+                                command.thread_root.as_deref(),
                                 &txn_id,
                             )
                             .await
@@ -185,6 +187,7 @@ impl PostsPass {
                                 &command.author_challenge,
                                 &command.site_id,
                                 command.reply_to.as_deref(),
+                                command.thread_root.as_deref(),
                                 reply_to_body.as_deref(),
                                 reply_to_sender.as_deref(),
                                 Some(id),

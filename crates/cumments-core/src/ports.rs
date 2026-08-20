@@ -841,6 +841,7 @@ pub trait MatrixDriver: Send + Sync {
         author_challenge: &str,
         site_id: &SiteId,
         reply_to: Option<&str>,
+        thread_root: Option<&str>,
         // The plain-text body and sender MXID of the replied-to event, used to
         // build the rich-reply fallback quote for clients without relation
         // support. `None` when the original event is unknown.
@@ -894,6 +895,8 @@ pub trait MatrixDriver: Send + Sync {
         author_signature: &str,
         author_challenge: &str,
         submission_id: Option<i64>,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
         // See [`Self::post_message`].
         txn_id: &str,
     ) -> Result<String>;

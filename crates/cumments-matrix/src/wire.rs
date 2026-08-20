@@ -132,6 +132,7 @@ pub(crate) fn build_message_body(
     author_challenge: &str,
     submission_id: Option<i64>,
     reply_to: Option<&str>,
+    thread_root: Option<&str>,
     reply_to_body: Option<&str>,
     reply_to_sender: Option<&str>,
 ) -> serde_json::Value {
@@ -159,12 +160,26 @@ pub(crate) fn build_message_body(
         "content": content,
         "submission_id": submission_id,
     });
-    if let Some(parent_event_id) = reply_to {
-        message_body["m.relates_to"] = serde_json::json!({
-            "m.in_reply_to": {
-                "event_id": parent_event_id,
-            }
-        });
+    match (reply_to, thread_root) {
+        (Some(reply), Some(thread)) => {
+            message_body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (Some(reply), None) => {
+            message_body["m.relates_to"] = serde_json::json!({
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (None, Some(thread)) => {
+            message_body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+            });
+        }
+        (None, None) => {}
     }
     message_body
 }
@@ -288,6 +303,8 @@ pub(crate) fn build_location_body(
     author_signature: &str,
     author_challenge: &str,
     submission_id: Option<i64>,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "msgtype": "org.matrix.msc3488.location",
@@ -302,6 +319,27 @@ pub(crate) fn build_location_body(
     });
     if let Some(description) = description {
         body["body"] = serde_json::json!(description);
+    }
+    match (reply_to, thread_root) {
+        (Some(reply), Some(thread)) => {
+            body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (Some(reply), None) => {
+            body["m.relates_to"] = serde_json::json!({
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (None, Some(thread)) => {
+            body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+            });
+        }
+        (None, None) => {}
     }
     body
 }
@@ -438,6 +476,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(body["msgtype"].as_str(), Some("m.text"));
@@ -532,7 +571,16 @@ mod tests {
     #[test]
     fn location_body_carries_geo_uri_and_proof() {
         let body =
-            build_location_body("geo:31.2,121.5", Some("here"), "pk", "sig", "chal", Some(9));
+            build_location_body(
+                "geo:31.2,121.5",
+                Some("here"),
+                "pk",
+                "sig",
+                "chal",
+                Some(9),
+                None,
+                None,
+            );
         assert_eq!(body["msgtype"], "org.matrix.msc3488.location");
         assert_eq!(body["geo_uri"], "geo:31.2,121.5");
         assert_eq!(body["body"], "here");
@@ -550,6 +598,7 @@ mod tests {
             "chal",
             Some(7),
             Some("$parent:hs"),
+            None,
             Some("original line one\noriginal line two"),
             Some("@alice:hs"),
         );
@@ -579,8 +628,36 @@ mod tests {
             Some("$parent:hs"),
             None,
             None,
+            None,
         );
         assert_eq!(body["body"].as_str(), Some("hello"));
+        assert_eq!(
+            body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
+            Some("$parent:hs")
+        );
+    }
+
+    #[test]
+    fn thread_and_reply_can_coexist() {
+        let body = build_message_body(
+            "hello",
+            "pubkey",
+            "sig",
+            "chal",
+            None,
+            Some("$parent:hs"),
+            Some("$thread:hs"),
+            None,
+            None,
+        );
+        assert_eq!(
+            body["m.relates_to"]["rel_type"].as_str(),
+            Some("m.thread")
+        );
+        assert_eq!(
+            body["m.relates_to"]["event_id"].as_str(),
+            Some("$thread:hs")
+        );
         assert_eq!(
             body["m.relates_to"]["m.in_reply_to"]["event_id"].as_str(),
             Some("$parent:hs")

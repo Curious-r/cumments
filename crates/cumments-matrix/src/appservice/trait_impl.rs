@@ -99,6 +99,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_challenge: &str,
         site_id: &SiteId,
         reply_to: Option<&str>,
+        thread_root: Option<&str>,
         reply_to_body: Option<&str>,
         reply_to_sender: Option<&str>,
         submission_id: Option<i64>,
@@ -114,6 +115,7 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_challenge,
             site_id,
             reply_to,
+            thread_root,
             reply_to_body,
             reply_to_sender,
             submission_id,
@@ -177,6 +179,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
         author_signature: &str,
         author_challenge: &str,
         submission_id: Option<i64>,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
         txn_id: &str,
     ) -> Result<String> {
         self.post_location_impl(
@@ -189,6 +193,8 @@ impl MatrixDriver for AppServiceMatrixDriver {
             author_signature,
             author_challenge,
             submission_id,
+            reply_to,
+            thread_root,
             txn_id,
         )
         .await
