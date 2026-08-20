@@ -95,6 +95,7 @@ Body:
   "author_public_key": "...",
   "author_signature": "...",
   "reply_to": null,
+  "thread_root": null,
   "challenge_response": "challenge|nonce"
 }
 ```

@@ -1110,13 +1110,14 @@ paths:
                 reply_to:
                   type: string
                   nullable: true
-                  description: Reply parent event ID (m.in_reply_to).
+                  description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
                 thread_root:
                   type: string
                   nullable: true
-                  description: Thread root event ID (m.thread). Orthogonal to reply_to.
+                  description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix].
                 challenge_response:
                   type: string
+                  description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
       responses:
         "202":
           description: "Location submission accepted (replays carry Idempotent-Replayed: true)"
@@ -2175,12 +2176,14 @@ components:
         reply_to:
           type: string
           nullable: true
+          description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
         thread_root:
           type: string
           nullable: true
-          description: Thread root event ID (m.thread). Orthogonal to reply_to.
+          description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix].
         challenge_response:
           type: string
+          description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
     UpdateCommentRequest:
       type: object
       required: [content, author_public_key, author_signature, challenge_response]
