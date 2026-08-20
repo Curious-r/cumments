@@ -94,8 +94,20 @@ pub struct ChallengeResponse {
     pub difficulty: u32,
 }
 
+fn validate_post_content(req: &PostCommentRequest) -> Result<(), validator::ValidationError> {
+    // media present => content is just a filename fallback and may be empty;
+    // otherwise the comment must carry visible text.
+    if req.media.is_none() && req.content.trim().is_empty() {
+        let mut err = validator::ValidationError::new("content_empty");
+        err.message = Some("content must not be empty without a media attachment.".into());
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// Request DTO for posting a comment.
 #[derive(Debug, Deserialize, Validate)]
+#[validate(schema(function = "validate_post_content"))]
 pub struct PostCommentRequest {
     #[validate(length(max = 5000))]
     pub content: String,

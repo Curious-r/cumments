@@ -63,6 +63,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
+        description: Author signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix] (reply_to/thread_root null when absent).
         content:
           application/json:
             schema:
@@ -1079,6 +1080,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
+        description: Author signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix] (reply_to/thread_root null when absent).
         content:
           application/json:
             schema:

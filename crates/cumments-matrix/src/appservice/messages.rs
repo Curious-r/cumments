@@ -182,7 +182,7 @@ impl AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
     pub(super) async fn react_message_impl(
         &self,
         room_id: &str,
@@ -225,7 +225,7 @@ impl AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
     pub(super) async fn vote_poll_impl(
         &self,
         room_id: &str,
@@ -268,7 +268,7 @@ impl AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
     pub(super) async fn post_location_impl(
         &self,
         room_id: &str,
@@ -330,7 +330,7 @@ impl AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
     pub(super) async fn update_message_impl(
         &self,
         room_id: &str,

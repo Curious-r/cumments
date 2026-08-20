@@ -116,7 +116,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(None)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)] // logging stub mirrors the driver signature for test parity
     async fn post_message(
         &self,
         room_id: &str,

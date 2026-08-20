@@ -304,13 +304,8 @@ pub(crate) async fn post_comment_handler(
         body.as_bytes(),
     );
 
-    // 1. Validate input
+    // 1. Validate input (struct-level validator enforces non-empty content when media is absent)
     req.validate().map_err(AppError::Validation)?;
-    if req.content.trim().is_empty() && req.media.is_none() {
-        return Err(AppError::BadRequest(
-            "content must not be empty without a media attachment.".to_string(),
-        ));
-    }
     if req
         .reply_to
         .as_deref()
