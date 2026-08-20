@@ -570,17 +570,16 @@ mod tests {
 
     #[test]
     fn location_body_carries_geo_uri_and_proof() {
-        let body =
-            build_location_body(
-                "geo:31.2,121.5",
-                Some("here"),
-                "pk",
-                "sig",
-                "chal",
-                Some(9),
-                None,
-                None,
-            );
+        let body = build_location_body(
+            "geo:31.2,121.5",
+            Some("here"),
+            "pk",
+            "sig",
+            "chal",
+            Some(9),
+            None,
+            None,
+        );
         assert_eq!(body["msgtype"], "org.matrix.msc3488.location");
         assert_eq!(body["geo_uri"], "geo:31.2,121.5");
         assert_eq!(body["body"], "here");
@@ -650,10 +649,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(
-            body["m.relates_to"]["rel_type"].as_str(),
-            Some("m.thread")
-        );
+        assert_eq!(body["m.relates_to"]["rel_type"].as_str(), Some("m.thread"));
         assert_eq!(
             body["m.relates_to"]["event_id"].as_str(),
             Some("$thread:hs")

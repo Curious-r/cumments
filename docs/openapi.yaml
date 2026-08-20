@@ -1107,6 +1107,14 @@ paths:
                   type: string
                 author_signature:
                   type: string
+                reply_to:
+                  type: string
+                  nullable: true
+                  description: Reply parent event ID (m.in_reply_to).
+                thread_root:
+                  type: string
+                  nullable: true
+                  description: Thread root event ID (m.thread). Orthogonal to reply_to.
                 challenge_response:
                   type: string
       responses:
@@ -2167,6 +2175,10 @@ components:
         reply_to:
           type: string
           nullable: true
+        thread_root:
+          type: string
+          nullable: true
+          description: Thread root event ID (m.thread). Orthogonal to reply_to.
         challenge_response:
           type: string
     UpdateCommentRequest:

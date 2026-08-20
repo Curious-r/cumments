@@ -1089,9 +1089,6 @@ pub(crate) async fn location_handler(
     {
         return Ok(response);
     }
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
     if req
         .reply_to
         .as_deref()

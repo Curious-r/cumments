@@ -120,17 +120,20 @@ The projected comment (list/SSE `message_created`) carries the same
 correlate the accepted request with the final comment. Matrix-native comments
 omit `submission_id`.
 
-Signature message:
+Signature message (JSON array, `null` for absent relations):
 
-```text
-POST\n{site_id}\n{page_slug}\n{content}\n{reply_to}\n{challenge_prefix}
+```json
+["POST","{site_id}","{page_slug}","{content}",reply_to,thread_root,"{challenge_prefix}"]
 ```
 
-`reply_to` is the exact Matrix event ID of the parent comment as returned by
-the API, or an empty line when the comment is not a reply. Event IDs are
-opaque strings by spec; legacy v1/v2 IDs look like `$localpart:server` while
-room v3+ IDs are bare hashes (v3 may even contain `/`). When an event ID is
-used in a request path (the path-based edit form) or query string (delete),
+`reply_to` is the parent for `m.in_reply_to`; `thread_root` is the root for
+`m.thread` (`rel_type: "m.thread"`). Both are `null` when absent, so the
+type distinguishes missing from empty. Either may be any Matrix event ID as
+returned by the API (`reply_to` and `thread_root` are orthogonal and may be
+present together — Matrix encodes both in the same `m.relates_to`). Event IDs
+are opaque strings by spec; legacy v1/v2 IDs look like `$localpart:server`
+while room v3+ IDs are bare hashes (v3 may even contain `/`). When an event ID
+is used in a request path (the path-based edit form) or query string (delete),
 clients must percent-encode it.
 
 `display_name` is presentation data and is deliberately **not** part of the
@@ -144,8 +147,8 @@ event proof block only carries `public_key`, `signature`, `challenge`,
 
 Signature message:
 
-```text
-PATCH\n{site_id}\n{page_slug}\n{comment_id}\n{content}\n{challenge_prefix}
+```json
+["PATCH","{site_id}","{page_slug}","{comment_id}","{content}","{challenge_prefix}"]
 ```
 
 The same operation is available without embedding `comment_id` in the URL:
@@ -186,8 +189,8 @@ proof:
 
 Signature message:
 
-```text
-DELETE\n{site_id}\n{page_slug}\n{comment_id}\n{challenge_prefix}
+```json
+["DELETE","{site_id}","{page_slug}","{comment_id}","{challenge_prefix}"]
 ```
 
 The request requires the `Idempotency-Key` header.
@@ -214,9 +217,11 @@ and aggregated into the poll's response counts.
 
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/location`
 
-Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author_signature", "challenge_response" }`.
+Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author_signature", "challenge_response", "reply_to?", "thread_root?" }`.
 The signature covers
-`["LOCATE", site_id, page_slug, geo_uri, challenge]`;
+`["LOCATE", site_id, page_slug, geo_uri, reply_to, thread_root, challenge]`
+(`reply_to` / `thread_root` orthogonal, `null` when absent — same model as
+comment posts; Matrix encodes both in `m.relates_to`);
 the message is queued like a comment (same `Idempotency-Key` and
 `202 { "submission_id" }` contract) and sent as `m.location` (MSC3488) with the
 signed proof block, closing the loop through the same projection path.
