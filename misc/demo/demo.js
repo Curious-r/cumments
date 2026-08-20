@@ -1110,10 +1110,13 @@
 
             async function authorSignature(parts) {
                 const id = identity || (await ensureIdentity());
-                const signature = await signMessage(
-                    id.privateKey,
-                    parts.join("\n"),
+                // parts contains string | null; JSON array keeps null typed.
+                const message = JSON.stringify(
+                    parts.map((value) =>
+                        value === null || value === undefined ? null : String(value),
+                    ),
                 );
+                const signature = await signMessage(id.privateKey, message);
                 return { publicKey: id.publicKey, signature };
             }
 
@@ -2133,6 +2136,8 @@
                                 cfg.siteId,
                                 cfg.slug,
                                 geoUri,
+                                null,
+                                null,
                                 chal.prefix,
                             ]);
                             const res = await fetch(
@@ -2149,6 +2154,8 @@
                                         display_name: displayName,
                                         author_public_key: publicKey,
                                         author_signature: signature,
+                                        reply_to: null,
+                                        thread_root: null,
                                         challenge_response: `${chal.prefix}|${nonce}`,
                                     }),
                                 },
@@ -2220,7 +2227,8 @@
                         cfg.siteId,
                         cfg.slug,
                         signedContent,
-                        replyTo,
+                        replyTo || null,
+                        null,
                         chal.prefix,
                     ]);
 
@@ -2242,6 +2250,7 @@
                                 reply_to: state.replyingTo
                                     ? state.replyingTo.event_id
                                     : null,
+                                thread_root: null,
                                 challenge_response: `${chal.prefix}|${nonce}`,
                             }),
                         },
