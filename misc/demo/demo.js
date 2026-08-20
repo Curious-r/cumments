@@ -473,6 +473,7 @@
                 mineComments: [],
                 mineTotal: 0,
                 replyingTo: null,
+                replyingThreadRoot: null,
                 pendingComment: null,
                 presenceOnline: new Set(),
                 siteAdmins: new Set(),
@@ -1409,6 +1410,58 @@
                     return;
                 }
 
+                const { groups, nonThread } = buildThreadGroups(items);
+                if (groups.size) {
+                    const sortedThreads = renderThreadGroups(groups);
+                    sortedThreads.forEach(([key, group]) => {
+                        const section = document.createElement("section");
+                        section.className = "bg-indigo-50/40 rounded-2xl border border-indigo-100 p-3 space-y-3";
+                        const header = document.createElement("div");
+                        header.className = "text-xs text-indigo-600 font-medium flex items-center justify-between";
+                        const rootLabel = group.root ? authorName(group.root) : key.slice(0, 12);
+                        header.innerHTML = `<span>Thread · ${escapeHtml(rootLabel)}</span><span class="text-[10px] text-slate-500">${group.items.length} replies</span>`;
+                        section.appendChild(header);
+                        const COLLAPSE_AT = 3;
+                        const visible = group.items.slice(0, COLLAPSE_AT);
+                        const hidden = group.items.slice(COLLAPSE_AT);
+                        visible.forEach((c) => section.appendChild(createCommentElement(c)));
+                        if (hidden.length) {
+                            const btn = document.createElement("button");
+                            btn.className = "text-xs text-indigo-600 hover:text-indigo-700 px-2 py-1";
+                            btn.textContent = `展开 ${hidden.length} 条回复`;
+                            btn.onclick = () => {
+                                hidden.forEach((c) => section.appendChild(createCommentElement(c)));
+                                btn.remove();
+                            };
+                            section.appendChild(btn);
+                            const hint = document.createElement("div");
+                            hint.className = "text-[10px] text-slate-400";
+                            hint.textContent = "当前页外可能还有回复";
+                            section.appendChild(hint);
+                        }
+                        if (group.root) {
+                            const rootEl = createCommentElement(group.root);
+                            rootEl.classList.add("opacity-90");
+                            section.insertBefore(rootEl, header.nextSibling);
+                        }
+                        container.appendChild(section);
+                    });
+                    // Render non-thread items with existing reply tree, excluding those already in threads
+                    const threadIds = new Set();
+                    for (const g of groups.values()) {
+                        for (const c of g.items) threadIds.add(c.event_id);
+                        if (g.root) threadIds.add(g.root.event_id);
+                    }
+                    const remaining = nonThread.filter((c) => !threadIds.has(c.event_id));
+                    if (remaining.length) {
+                        const { roots, byParent } = buildReplyTree(remaining);
+                        roots.forEach((comment) => {
+                            container.appendChild(renderCommentBranch(comment, byParent, 0));
+                        });
+                    }
+                    return;
+                }
+
                 const { roots, byParent } = buildReplyTree(items);
                 roots.forEach((comment) => {
                     container.appendChild(renderCommentBranch(comment, byParent, 0));
@@ -1578,6 +1631,36 @@
                 return { roots, byParent };
             }
 
+            function buildThreadGroups(items) {
+                const byId = new Map(items.map((c) => [c.event_id, c]));
+                const groups = new Map(); // thread_root -> { root, items: [] }
+                const nonThread = [];
+                for (const c of items) {
+                    if (c.thread_root) {
+                        const key = c.thread_root;
+                        if (!groups.has(key)) {
+                            groups.set(key, { root: byId.get(key) || null, items: [] });
+                        }
+                        groups.get(key).items.push(c);
+                    } else {
+                        nonThread.push(c);
+                    }
+                }
+                for (const g of groups.values()) {
+                    g.items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                }
+                return { groups, nonThread, byId };
+            }
+
+            function renderThreadGroups(groups, byId) {
+                const sorted = Array.from(groups.entries()).sort((a, b) => {
+                    const ra = a[1].root ? new Date(a[1].root.timestamp) : new Date(a[1].items[0]?.timestamp || 0);
+                    const rb = b[1].root ? new Date(b[1].root.timestamp) : new Date(b[1].items[0]?.timestamp || 0);
+                    return rb - ra;
+                });
+                return sorted;
+            }
+
             function renderCommentBranch(comment, byParent, depth) {
                 const wrapper = document.createElement("div");
                 wrapper.appendChild(createCommentElement(comment));
@@ -1621,6 +1704,7 @@
                         : null;
                 const time = formatTime(comment.timestamp);
                 const edited = comment.edited_at ? ` · ${t("edited")}` : "";
+                const threadTag = comment.thread_root ? `<span class="text-[10px] text-indigo-500 bg-indigo-50 rounded px-1 py-0.5">thread</span>` : "";
                 const isVisitor =
                     comment.author && comment.author.type === "visitor";
                 const badge = isVisitor
@@ -1649,10 +1733,11 @@
                                     ${identityTag}
                                     ${governanceBadge(comment)}
                                 </div>
-                                <div class="text-xs text-slate-400 mt-0.5">${time}${edited}</div>
+                                <div class="text-xs text-slate-400 mt-0.5 flex items-center gap-2">${time}${edited} ${threadTag}</div>
                             </div>
                         </div>
                         <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                            <button class="thread-btn text-xs text-slate-500 hover:text-indigo-600 px-1.5 py-1">Thread</button>
                             <button class="reply-btn text-xs text-slate-500 hover:text-indigo-600 px-1.5 py-1">${t("reply")}</button>
                             ${own ? `
                             <button class="edit-btn text-xs text-slate-500 hover:text-indigo-600 px-1.5 py-1">${t("edit")}</button>
@@ -1695,6 +1780,13 @@
                     });
                 }
                 el.querySelector(".reply-btn").onclick = () => startReply(comment);
+                const threadBtn = el.querySelector(".thread-btn");
+                if (threadBtn) {
+                    threadBtn.onclick = () => {
+                        const root = comment.thread_root || comment.event_id;
+                        startReply(comment, { threadRoot: root });
+                    };
+                }
                 el.querySelector(".react-btn").onclick = () => pickReaction(comment);
                 el.querySelectorAll(".poll-option").forEach((btn) => {
                     btn.onclick = () => submitVote(comment.event_id, btn.dataset.option);
@@ -1807,14 +1899,25 @@
             // 发布 / 编辑 / 删除
             // ==========================================
 
-            function startReply(comment) {
+            function startReply(comment, opts) {
+                opts = opts || {};
                 state.replyingTo = comment;
+                if (opts.threadRoot) {
+                    state.replyingThreadRoot = opts.threadRoot;
+                } else if (comment.thread_root) {
+                    state.replyingThreadRoot = comment.thread_root;
+                } else if (opts.asThread && comment.event_id) {
+                    state.replyingThreadRoot = comment.event_id;
+                } else {
+                    state.replyingThreadRoot = null;
+                }
                 updateReplyBanner();
                 document.getElementById("composerContent").focus();
             }
 
             function cancelReply() {
                 state.replyingTo = null;
+                state.replyingThreadRoot = null;
                 updateReplyBanner();
             }
 
@@ -1822,11 +1925,17 @@
                 const banner = document.getElementById("replyBanner");
                 const name = document.getElementById("replyTargetName");
                 if (state.replyingTo) {
-                    name.textContent =
-                        authorName(state.replyingTo);
+                    const suffix = state.replyingThreadRoot ? " · thread" : "";
+                    name.textContent = authorName(state.replyingTo) + suffix;
                     banner.classList.remove("hidden");
                 } else {
                     banner.classList.add("hidden");
+                }
+                const composer = document.getElementById("composerContent");
+                if (composer) {
+                    composer.placeholder = state.replyingThreadRoot
+                        ? t("placeholder_content") + " (thread)"
+                        : t("placeholder_content");
                 }
             }
 
@@ -2222,13 +2331,14 @@
                     });
                     const nonce = await solvePow(chal.prefix, chal.difficulty);
                     status.textContent = t("status_signing");
+                    const threadRoot = state.replyingThreadRoot || null;
                     const { publicKey, signature } = await authorSignature([
                         "POST",
                         cfg.siteId,
                         cfg.slug,
                         signedContent,
                         replyTo || null,
-                        null,
+                        threadRoot,
                         chal.prefix,
                     ]);
 
@@ -2250,7 +2360,7 @@
                                 reply_to: state.replyingTo
                                     ? state.replyingTo.event_id
                                     : null,
-                                thread_root: null,
+                                thread_root: state.replyingThreadRoot || null,
                                 challenge_response: `${chal.prefix}|${nonce}`,
                             }),
                         },
@@ -2271,6 +2381,7 @@
                     state.draftMedia = null;
                     renderMediaPreview(null);
                     state.replyingTo = null;
+                    state.replyingThreadRoot = null;
                     updateReplyBanner();
                     state.pendingComment = {
                         submissionId,
