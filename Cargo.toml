@@ -21,32 +21,32 @@ cumments-projector = { path = "crates/cumments-projector" }
 cumments-test-utils = { path = "crates/cumments-test-utils" }
 
 # External dependencies
-anyhow = "1.0.100"
+anyhow = "1.0.104"
 async-stream = "0.3.6"
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 axum = "0.8.9"
 base64 = "0.23.1"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", features = ["serde"] }
-clap = { version = "4.5.57", features = ["derive"] }
-clap_complete = "4.5.57"
-config = { version = "0.15.19", features = ["toml"] }
+clap = { version = "4.6.6", features = ["derive"] }
+clap_complete = "4.6.6"
+config = { version = "0.15.25", features = ["toml"] }
 dotenvy = "0.15.7"
 ed25519-dalek = "3.0.0"
 hex = "0.4.3"
 hmac = "0.13.0"
-humantime = "2.3.0"
+humantime = "2.4.0"
 lazy_static = "1.5.0"
-regex = "1.11.1"
+regex = "1.13.1"
 ruma-common = "0.19.0"
 rand = "0.10.2"
-reqwest = { version = "0.13.1", features = ["json", "query", "stream", "rustls"] }
+reqwest = { version = "0.13.4", features = ["json", "query", "stream", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.101"
+serde_json = "1.0.151"
 serde_yaml_ng = "0.10.0"
 sha2 = "0.11.0"
 subtle = "2.6.1"
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 url = "2.5.4"
 uuid = { version = "1.24", features = ["v4"] }
 validator = { version = "0.21", features = ["derive"] }
@@ -54,10 +54,10 @@ wiremock = "0.6"
 tokio = { version = "1.53.1", features = ["full"] }
 sea-orm = { version = "2.0.2", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
 sea-orm-migration = { version = "2.0.2", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
-tokio-stream = { version = "0.1.18", features = ["sync"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["trace"] }
 hickory-resolver = { version = "0.26.1", features = ["tokio", "system-config"] }
 ipnet = { version = "2.12.1", features = ["serde"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
