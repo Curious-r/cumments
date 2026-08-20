@@ -22,6 +22,7 @@ fn post_command() -> PostCommentCommand {
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
         author_challenge: "1728000000.deadbeef.sig".to_string(),
         reply_to: None,
+        thread_root: None,
     }
 }
 

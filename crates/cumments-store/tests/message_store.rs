@@ -670,6 +670,7 @@ async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
         author_signature: "sig".to_string(),
         author_challenge: "chal".to_string(),
         reply_to: None,
+        thread_root: None,
     };
     let id = store
         .save_post_submission(&command)
