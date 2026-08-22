@@ -1402,6 +1402,19 @@ impl EventProcessor {
                 .get_message(&relation.target_event_id)
                 .await?;
 
+            // A redacted original is a terminal tombstone. This check also
+            // prevents an edit that raced the redaction from restoring content.
+            if existing
+                .as_ref()
+                .is_some_and(|message| message.status == MessageStatus::Redacted)
+            {
+                debug!(
+                    "Ignoring edit for {}: target is redacted",
+                    relation.target_event_id
+                );
+                return Ok(());
+            }
+
             // Integrity: Matrix does not enforce same-sender on m.replace, so
             // verify the replacement was sent by the original message's author
             // virtual user. Legacy rows without a recorded sender are accepted

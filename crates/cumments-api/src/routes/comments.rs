@@ -18,7 +18,7 @@ use axum::{
 use cumments_core::{
     commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
     identity::{post_signature_message, signature_message, verify_signature},
-    models::{AuthorKind, Content, MediaKind, PageSlug, SiteId},
+    models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
     submissions::{IdempotencyInput, IdempotencyOutcome},
 };
 use ruma_common::EventId;
@@ -51,6 +51,23 @@ const REPLY_TO_FORMAT_ERROR: &str =
     "reply_to must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
 const COMMENT_ID_FORMAT_ERROR: &str =
     "comment_id must be a Matrix event ID (e.g. \"$event\" or \"$event:server\")";
+
+/// Rejects a target that belongs to another page or is already a tombstone.
+fn active_target_in_page(
+    message: &Message,
+    site_id: &str,
+    page_slug: &str,
+) -> Result<(), AppError> {
+    if message.site_id != site_id || message.page_slug != page_slug {
+        return Err(AppError::NotFound("Comment not found.".to_string()));
+    }
+    if message.status != MessageStatus::Active {
+        return Err(AppError::Conflict(
+            "The target comment has been deleted.".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// Loose MSC3488 / RFC 5870 shape check: `geo:lat,lon` with optional
 /// `;key=value` parameters, where the coordinates are decimal numbers in
@@ -442,11 +459,12 @@ pub(crate) async fn post_comment_handler(
     if let Some(reply_to) = req.reply_to.as_deref() {
         match state.store.get_message(reply_to).await {
             Ok(Some(parent)) => {
-                if parent.site_id != site_id || parent.page_slug != page_slug {
-                    return Err(AppError::BadRequest(
-                        "reply_to must reference a comment in the same site and post.".to_string(),
-                    ));
-                }
+                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
+                    AppError::BadRequest(
+                        "reply_to must reference an active comment in the same site and post."
+                            .to_string(),
+                    )
+                })?;
             }
             Ok(None) => {}
             Err(e) => {
@@ -460,12 +478,12 @@ pub(crate) async fn post_comment_handler(
     if let Some(thread_root) = req.thread_root.as_deref() {
         match state.store.get_message(thread_root).await {
             Ok(Some(parent)) => {
-                if parent.site_id != site_id || parent.page_slug != page_slug {
-                    return Err(AppError::BadRequest(
-                        "thread_root must reference a comment in the same site and post."
+                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
+                    AppError::BadRequest(
+                        "thread_root must reference an active comment in the same site and post."
                             .to_string(),
-                    ));
-                }
+                    )
+                })?;
             }
             Ok(None) => {}
             Err(e) => {
@@ -620,6 +638,11 @@ async fn delete_comment_common(
                 return Err(AppError::NotManageable(
                     "This comment was posted by a Matrix user; manage it from a Matrix client."
                         .to_string(),
+                ));
+            }
+            if message.status != MessageStatus::Active {
+                return Err(AppError::Conflict(
+                    "The target comment has been deleted.".to_string(),
                 ));
             }
             match state.store.get_author_public_key(&path.comment_id).await {
@@ -808,6 +831,11 @@ async fn update_comment_common(
                         .to_string(),
                 ));
             }
+            if message.status != MessageStatus::Active {
+                return Err(AppError::Conflict(
+                    "The target comment has been deleted.".to_string(),
+                ));
+            }
             match state.store.get_author_public_key(&path.comment_id).await {
                 Ok(Some(expected)) if expected == req.author_public_key => {}
                 Ok(Some(_)) => {
@@ -927,17 +955,18 @@ pub(crate) async fn react_handler(
 
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
-    match state
+    let target = state
         .store
         .get_message(&comment_id)
         .await
-        .map_err(|e| AppError::Internal(format!("failed to verify target: {e}")))?
-    {
-        Some(message)
-            if message.site_id == site_id_val.as_str()
-                && message.page_slug == page_slug_val.as_str() => {}
-        _ => return Err(AppError::NotFound("Comment not found.".to_string())),
-    }
+        .map_err(|e| AppError::Internal(format!("failed to verify target: {e}")))?;
+    active_target_in_page(
+        target
+            .as_ref()
+            .ok_or_else(|| AppError::NotFound("Comment not found.".to_string()))?,
+        site_id_val.as_str(),
+        page_slug_val.as_str(),
+    )?;
     let Some(room_id) = state
         .store
         .get_registered_room(&site_id_val, &page_slug_val)
@@ -1008,11 +1037,7 @@ pub(crate) async fn vote_handler(
     else {
         return Err(AppError::NotFound("Poll not found.".to_string()));
     };
-    if poll_message.site_id != site_id_val.as_str()
-        || poll_message.page_slug != page_slug_val.as_str()
-    {
-        return Err(AppError::NotFound("Poll not found.".to_string()));
-    }
+    active_target_in_page(&poll_message, site_id_val.as_str(), page_slug_val.as_str())?;
     let Content::Poll(poll) = &poll_message.content else {
         return Err(AppError::BadRequest("target is not a poll".to_string()));
     };
@@ -1130,11 +1155,12 @@ pub(crate) async fn location_handler(
     if let Some(reply_to) = req.reply_to.as_deref() {
         match state.store.get_message(reply_to).await {
             Ok(Some(parent)) => {
-                if parent.site_id != site_id || parent.page_slug != page_slug {
-                    return Err(AppError::BadRequest(
-                        "reply_to must reference a comment in the same site and post.".to_string(),
-                    ));
-                }
+                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
+                    AppError::BadRequest(
+                        "reply_to must reference an active comment in the same site and post."
+                            .to_string(),
+                    )
+                })?;
             }
             Ok(None) => {}
             Err(e) => {
@@ -1148,12 +1174,12 @@ pub(crate) async fn location_handler(
     if let Some(thread_root) = req.thread_root.as_deref() {
         match state.store.get_message(thread_root).await {
             Ok(Some(parent)) => {
-                if parent.site_id != site_id || parent.page_slug != page_slug {
-                    return Err(AppError::BadRequest(
-                        "thread_root must reference a comment in the same site and post."
+                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
+                    AppError::BadRequest(
+                        "thread_root must reference an active comment in the same site and post."
                             .to_string(),
-                    ));
-                }
+                    )
+                })?;
             }
             Ok(None) => {}
             Err(e) => {

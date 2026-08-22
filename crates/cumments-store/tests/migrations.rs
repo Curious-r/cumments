@@ -72,6 +72,81 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260816_000051_media_uploads_post_slug_nullable".to_string()),
         "000051 must be registered or site-scoped avatar uploads cannot share the upload table"
     );
+    assert!(
+        names.contains(&"m20260823_000054_redacted_content".to_string()),
+        "000054 must be registered or existing redacted comments retain deleted content"
+    );
+}
+
+#[tokio::test]
+async fn redacted_content_migration_sanitizes_existing_rows() {
+    let url = test_db_url("redacted-content");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(53))
+        .await
+        .expect("migrate to 000053");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO messages \
+         (event_id, room_id, site_id, page_slug, sender_mxid, author_kind, content_json, \
+          raw_content_json, timestamp, status, last_edit_ts, reply_to, thread_root, \
+          submission_id, created_at, updated_at) \
+         VALUES \
+         ('$redacted:hs', '!room:hs', 'my-blog', 'hello', '@alice:hs', 'visitor', \
+          '{{\"body\":\"secret\"}}', '{{\"body\":\"secret\"}}', '{now}', 'redacted', \
+          123, '$parent:hs', '$thread:hs', 42, '{now}', '{now}')"
+    ))
+    .await
+    .expect("insert redacted message");
+    db.execute_unprepared(&format!(
+        "INSERT INTO message_revisions \
+         (event_id, message_event_id, content_json, edited_at, editor_mxid, created_at) \
+         VALUES \
+         ('$edit:hs', '$redacted:hs', '{{\"body\":\"edited secret\"}}', '{now}', \
+          '@alice:hs', '{now}')"
+    ))
+    .await
+    .expect("insert redacted revision");
+
+    Migrator::up(&db, None).await.expect("apply 000054");
+
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT content_json, raw_content_json, last_edit_ts, reply_to, thread_root, \
+             submission_id FROM messages WHERE event_id = '$redacted:hs'",
+        ))
+        .await
+        .expect("query migrated redaction");
+    assert_eq!(rows.len(), 1);
+    let content: String = rows[0].try_get("", "content_json").expect("content");
+    let raw: String = rows[0]
+        .try_get("", "raw_content_json")
+        .expect("raw content");
+    let last_edit_ts: Option<i64> = rows[0].try_get("", "last_edit_ts").expect("last edit");
+    let reply_to: Option<String> = rows[0].try_get("", "reply_to").expect("reply");
+    let thread_root: Option<String> = rows[0].try_get("", "thread_root").expect("thread root");
+    let submission_id: Option<i64> = rows[0].try_get("", "submission_id").expect("submission");
+    assert_eq!(content, r#"{"type":"redacted"}"#);
+    assert_eq!(raw, "{}");
+    assert_eq!(last_edit_ts, None);
+    assert_eq!(reply_to, None);
+    assert_eq!(thread_root, None);
+    assert_eq!(submission_id, None);
+
+    let revisions = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT event_id FROM message_revisions \
+             WHERE message_event_id = '$redacted:hs'",
+        ))
+        .await
+        .expect("query migrated revisions");
+    assert!(
+        revisions.is_empty(),
+        "edit history for a redacted comment must be removed"
+    );
 }
 
 #[tokio::test]

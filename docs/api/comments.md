@@ -69,12 +69,18 @@ Response:
 - `media`: `{ "type": "media", "kind": "image|video|audio|file|sticker", "url": "mxc://… or /api/v1/media/…", "filename": …, "mimetype": …, "size": …, "width": …, "height": …, "thumbnail_url": …, "alt_text": …, "voice": false }`
 - `location`: `{ "type": "location", "geo_uri": "geo:30.2,120.1", "description": …, "thumbnail_url": … }`
 - `poll`: `{ "type": "poll", "question": …, "options": [{ "id": …, "text": … }], "responses": [{ "option_index": 0, "count": 3 }] }`
+- `redacted`: `{ "type": "redacted" }`
 - `encrypted`: `{ "type": "encrypted", "algorithm": "m.megolm.v1.aes-sha2", "sender_key": … }`
 - `unknown`: `{ "type": "unknown", "fallback": …, "raw": { … } }`
 
 Media URLs and author avatars (`author.avatar_url`) are rewritten to signed
 proxy URLs when the media proxy is enabled (avatars through the 96×96 crop
 variant); see [Media proxy](media.md#media-proxy).
+
+A redacted comment remains as a tombstone with `status: "redacted"` and
+`content: {"type": "redacted"}`. It does not expose the original body, media,
+relations or raw Matrix payload. Edits, deletes, replies, reactions and poll
+votes cannot target it.
 
 `author.display_name` and `author.avatar_url` render the author's **current**
 joined `m.room.member` profile: renaming or changing the avatar updates old

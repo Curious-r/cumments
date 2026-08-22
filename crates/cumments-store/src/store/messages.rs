@@ -44,6 +44,44 @@ fn message_from_model(model: messages::Model) -> Message {
     let event_id_for_warn = model.event_id.clone();
     let status_raw_for_warn = model.status.clone();
     let raw_content_for_warn = model.raw_content_json.clone();
+    let status = model.status.parse().unwrap_or_else(|_| {
+        tracing::warn!(
+            event_id = %event_id_for_warn,
+            raw_status = %status_raw_for_warn,
+            "falling back to active status for unknown status value"
+        );
+        MessageStatus::Active
+    });
+    // Defense in depth for rows written by an old binary or before migration.
+    let (content, raw_content, edited_at, reply_to, thread_root, submission_id) =
+        if status == MessageStatus::Redacted {
+            (
+                Content::redacted(),
+                serde_json::json!({}),
+                None,
+                None,
+                None,
+                None,
+            )
+        } else {
+            (
+                content_from_json(&model.content_json),
+                serde_json::from_str(&model.raw_content_json).unwrap_or_else(|_| {
+                    tracing::warn!(
+                        event_id = %event_id_for_warn,
+                        raw = %raw_content_for_warn,
+                        "falling back to Null for dirty raw_content_json"
+                    );
+                    serde_json::Value::Null
+                }),
+                model
+                    .last_edit_ts
+                    .and_then(chrono::DateTime::from_timestamp_millis),
+                model.reply_to,
+                model.thread_root,
+                model.submission_id,
+            )
+        };
     Message {
         event_id: model.event_id,
         site_id: model.site_id,
@@ -59,27 +97,19 @@ fn message_from_model(model: messages::Model) -> Message {
                 None
             },
         },
-        content: content_from_json(&model.content_json),
+        content,
         timestamp: model.timestamp,
-        edited_at: model
-            .last_edit_ts
-            .and_then(chrono::DateTime::from_timestamp_millis),
-        reply_to: model.reply_to,
-        thread_root: model.thread_root,
-        submission_id: model.submission_id,
-        status: model.status.parse().unwrap_or_else(|_| {
-            tracing::warn!(event_id = %event_id_for_warn, raw_status = %status_raw_for_warn, "falling back to active status for unknown status value");
-            MessageStatus::Active
-        }),
+        edited_at,
+        reply_to,
+        thread_root,
+        submission_id,
+        status,
         redacted_at: model.redacted_at,
         redacted_by: model.redacted_by,
         reactions: Vec::new(),
         room_id: model.room_id,
         sender_mxid: model.sender_mxid,
-        raw_content: serde_json::from_str(&model.raw_content_json).unwrap_or_else(|_| {
-            tracing::warn!(event_id = %event_id_for_warn, raw = %raw_content_for_warn, "falling back to Null for dirty raw_content_json");
-            serde_json::Value::Null
-        }),
+        raw_content,
     }
 }
 
@@ -227,6 +257,7 @@ impl MessageStore for DbStore {
             )
             .filter(messages::COLUMN.event_id.eq(message.event_id.clone()))
             .filter(messages::COLUMN.room_id.eq(message.room_id.clone()))
+            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
             .filter(recency)
             .exec(&txn)
             .await?;
@@ -259,7 +290,20 @@ impl MessageStore for DbStore {
         redacted_at: chrono::DateTime<chrono::Utc>,
         redacted_by: &str,
     ) -> Result<bool> {
+        // Redaction is a projection rewrite, not just a lifecycle flag: the
+        // homeserver strips the original event, so the read model must do the
+        // same. Revisions are removed in the same transaction because each one
+        // contains an earlier displayable version of the deleted comment.
+        let txn = self.db.begin().await?;
         let result = messages::Entity::update_many()
+            .col_expr(
+                messages::Column::ContentJson,
+                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
+            )
+            .col_expr(
+                messages::Column::RawContentJson,
+                sea_orm::sea_query::Expr::value("{}".to_owned()),
+            )
             .col_expr(
                 messages::Column::Status,
                 sea_orm::sea_query::Expr::value(MessageStatus::Redacted.as_str()),
@@ -273,14 +317,45 @@ impl MessageStore for DbStore {
                 sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
             )
             .col_expr(
+                messages::Column::LastEditTs,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .col_expr(
+                messages::Column::LastEditEventId,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                messages::Column::ReplyTo,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                messages::Column::ThreadRoot,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                messages::Column::SubmissionId,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .col_expr(
                 messages::Column::UpdatedAt,
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .filter(messages::COLUMN.event_id.eq(event_id))
             .filter(messages::COLUMN.room_id.eq(room_id))
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
-        Ok(result.rows_affected > 0)
+
+        if result.rows_affected == 0 {
+            txn.rollback().await?;
+            return Ok(false);
+        }
+
+        message_revisions::Entity::delete_many()
+            .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
+        Ok(true)
     }
 
     async fn get_author_display_name(&self, event_id: &str) -> Result<Option<Option<String>>> {
@@ -865,11 +940,19 @@ impl DbStore {
         if message_event_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows = reactions::Entity::find()
+        let mut rows = reactions::Entity::find()
             .filter(reactions::Column::MessageEventId.is_in(message_event_ids.iter().cloned()))
             .filter(reactions::Column::RedactedAt.is_null())
             .all(&self.db)
             .await?;
+        let active_parents = active_message_ids(
+            &self.db,
+            rows.iter()
+                .map(|row| row.message_event_id.clone())
+                .collect(),
+        )
+        .await?;
+        rows.retain(|row| active_parents.contains(&row.message_event_id));
 
         let mut senders_by_key: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
         for row in rows {
@@ -905,11 +988,17 @@ impl DbStore {
         if poll_message_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows = poll_responses::Entity::find()
+        let mut rows = poll_responses::Entity::find()
             .filter(poll_responses::Column::PollMessageId.is_in(poll_message_ids.iter().cloned()))
             .filter(poll_responses::Column::RedactedAt.is_null())
             .all(&self.db)
             .await?;
+        let active_parents = active_message_ids(
+            &self.db,
+            rows.iter().map(|row| row.poll_message_id.clone()).collect(),
+        )
+        .await?;
+        rows.retain(|row| active_parents.contains(&row.poll_message_id));
 
         let mut counts_by_poll: HashMap<String, HashMap<i64, i64>> = HashMap::new();
         for row in rows {
@@ -934,4 +1023,21 @@ impl DbStore {
             })
             .collect())
     }
+}
+
+/// Annotation aggregates are part of a live comment's public view; suppress
+/// them when the parent is redacted or has disappeared from the read model.
+async fn active_message_ids(
+    db: &sea_orm::DatabaseConnection,
+    event_ids: Vec<String>,
+) -> Result<std::collections::HashSet<String>> {
+    if event_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let models = messages::Entity::find()
+        .filter(messages::COLUMN.event_id.is_in(event_ids))
+        .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
+        .all(db)
+        .await?;
+    Ok(models.into_iter().map(|model| model.event_id).collect())
 }

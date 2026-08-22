@@ -2021,7 +2021,7 @@ components:
       properties:
         type:
           type: string
-          enum: [text, media, location, poll, encrypted, unknown]
+          enum: [text, media, location, poll, redacted, encrypted, unknown]
         # text
         body:
           type: string
@@ -2081,6 +2081,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PollResponseSummary"
+        # redacted tombstone; no original fields are retained
         # encrypted
         algorithm:
           type: string

@@ -14,7 +14,10 @@ use cumments_core::governance::{NewRoleClaim, RoleEntry, SITE_ADMIN_LEVEL};
 use cumments_core::identity::{
     derive_visitor_id_from_public_key, post_signature_message, signature_message,
 };
-use cumments_core::models::{PageSlug, SiteId, VisitorProfile};
+use cumments_core::models::{
+    AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, SiteId, TextContent,
+    TextStyle, VisitorProfile,
+};
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
     SiteTransferStore, StickerPackStore,
@@ -1593,6 +1596,124 @@ async fn comment_replay_returns_original_submission_without_consuming_pow() {
             .len(),
         1,
         "replay must not queue a second submission"
+    );
+}
+
+#[tokio::test]
+async fn redacted_comment_reads_as_tombstone_and_rejects_new_reaction() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let (state, store) =
+        test_state("redacted-tombstone", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("test-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+
+    let mut deleted = Message {
+        event_id: "$deleted:hs".to_string(),
+        site_id: "test-blog".to_string(),
+        page_slug: "hello".to_string(),
+        author: AuthorSnapshot {
+            kind: AuthorKind::Visitor,
+            display_name: Some("Alice".to_string()),
+            avatar_url: None,
+            public_key: Some("visitor-key".to_string()),
+            mxid: None,
+        },
+        content: Content::Text(TextContent {
+            body: "deleted secret".to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
+        timestamp: chrono::Utc::now(),
+        edited_at: None,
+        reply_to: None,
+        thread_root: None,
+        submission_id: Some(42),
+        status: MessageStatus::Redacted,
+        redacted_at: Some(chrono::Utc::now()),
+        redacted_by: Some("@moderator:hs".to_string()),
+        reactions: Vec::new(),
+        room_id: "!room:hs".to_string(),
+        sender_mxid: "@_cumments_test-blog_abcd:hs".to_string(),
+        raw_content: serde_json::json!({"body": "deleted secret"}),
+    };
+    // Simulate a live row written before R1 so the public contract test also
+    // covers the stable shape served after projection/migration sanitization.
+    deleted.content = Content::Text(TextContent {
+        body: "deleted secret".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    store.save_message(&deleted).await.expect("save message");
+
+    let router = cumments_api::build_router(state.clone());
+    let query = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            "",
+        ))
+        .await
+        .expect("query comments");
+    assert_eq!(query.status(), StatusCode::OK);
+    let page: serde_json::Value = serde_json::from_str(&body_text(query).await).expect("json");
+    assert_eq!(page["data"][0]["status"], "redacted");
+    assert_eq!(page["data"][0]["content"]["type"], "redacted");
+    assert!(
+        !page.to_string().contains("deleted secret"),
+        "redacted comment leaked original content: {page}"
+    );
+
+    let signing_key = SigningKey::from_bytes(&[8u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let challenge_response = solve_pow(&state.pow.generate_challenge());
+    let challenge_prefix = challenge_response.split('|').next().expect("challenge");
+    let signed_message = signature_message(&[
+        Some("REACT"),
+        Some("test-blog"),
+        Some("hello"),
+        Some("$deleted:hs"),
+        Some("👍"),
+        Some(challenge_prefix),
+    ]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "key": "👍",
+        "author_public_key": public_key,
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+
+    let reaction = router
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/comments/$deleted%3Ahs/reactions",
+            Some("null"),
+            &[],
+            &body,
+        ))
+        .await
+        .expect("react to deleted comment");
+    assert_eq!(reaction.status(), StatusCode::CONFLICT);
+    assert!(
+        body_text(reaction)
+            .await
+            .contains("The target comment has been deleted.")
     );
 }
 

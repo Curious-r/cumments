@@ -62,6 +62,7 @@ their `mxid` and never a `public_key`.
 | `media` | `kind` (image/video/audio/file/sticker), `url`, optional filename, mimetype, size, dimensions, thumbnail, alt text, `voice` flag |
 | `location` | `geo_uri`, optional description and thumbnail |
 | `poll` | `question`, `options`, aggregated `responses` |
+| `redacted` | Stable empty tombstone; no original body, URL, relations or raw payload |
 | `encrypted` | algorithm and sender key placeholder only |
 | `unknown` | optional `fallback` text plus the original raw JSON |
 
@@ -79,7 +80,7 @@ their `mxid` and never a `public_key`.
 | `m.poll.response` | Aggregated into `PollContent.responses` |
 | `m.reaction` | Reaction annotation, aggregated into `Message.reactions` |
 | `m.replace` | Edit; appends a revision and updates `edited_at` |
-| `m.room.redaction` | `status = redacted` |
+| `m.room.redaction` | `status = redacted`; content becomes `{"type":"redacted"}` |
 | `m.room.encrypted` | `Content::Encrypted` placeholder |
 | Anything else | `Content::Unknown` with the raw payload kept |
 

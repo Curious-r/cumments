@@ -232,6 +232,7 @@ pub enum Content {
     Media(MediaContent),
     Location(LocationContent),
     Poll(PollContent),
+    Redacted,
     Encrypted(EncryptedPlaceholder),
     Unknown(UnknownContent),
 }
@@ -243,9 +244,17 @@ impl Content {
             Content::Media(_) => "media",
             Content::Location(_) => "location",
             Content::Poll(_) => "poll",
+            Content::Redacted => "redacted",
             Content::Encrypted(_) => "encrypted",
             Content::Unknown(_) => "unknown",
         }
+    }
+}
+
+impl Content {
+    /// The stable tombstone payload exposed after Matrix strips an event.
+    pub fn redacted() -> Self {
+        Self::Redacted
     }
 }
 

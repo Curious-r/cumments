@@ -227,12 +227,46 @@ async fn apply_edit_updates_content_and_records_revision() {
 }
 
 #[tokio::test]
-async fn redact_message_marks_status_and_keeps_row() {
+async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates() {
     let store = DbStore::connect(&test_db_url("message-redact"))
         .await
         .expect("connect db");
-    let message = visitor_message("$event:hs", "hello");
+    let message = visitor_message("$event:hs", "secret");
     store.save_message(&message).await.expect("save message");
+
+    let edited_at = Utc::now();
+    let mut updated = message.clone();
+    updated.content = Content::Text(TextContent {
+        body: "edited secret".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    updated.edited_at = Some(edited_at);
+    assert!(
+        store
+            .apply_edit(
+                &updated,
+                &MessageRevision {
+                    event_id: "$edit:hs".to_string(),
+                    content: updated.content.clone(),
+                    edited_at,
+                    editor_mxid: message.sender_mxid.clone(),
+                },
+            )
+            .await
+            .expect("apply edit")
+    );
+    store
+        .save_reaction(&Reaction {
+            event_id: "$reaction:hs".to_string(),
+            message_event_id: "$event:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            key: "👍".to_string(),
+            origin_server_ts: 1,
+            redacted_at: None,
+        })
+        .await
+        .expect("save reaction");
 
     let now = Utc::now();
     assert!(
@@ -248,6 +282,34 @@ async fn redact_message_marks_status_and_keeps_row() {
         .expect("message exists");
     assert_eq!(stored.status, MessageStatus::Redacted);
     assert_eq!(stored.redacted_by.as_deref(), Some(":hs"));
+    assert_eq!(stored.content, Content::Redacted);
+    assert_eq!(stored.raw_content, serde_json::json!({}));
+    assert!(stored.edited_at.is_none());
+    assert!(stored.reply_to.is_none());
+    assert!(stored.thread_root.is_none());
+    assert!(stored.submission_id.is_none());
+    assert!(stored.reactions.is_empty());
+
+    // A late or replayed replacement cannot restore deleted content.
+    updated.edited_at = Some(Utc::now());
+    assert!(
+        !store
+            .apply_edit(
+                &updated,
+                &MessageRevision {
+                    event_id: "$late-edit:hs".to_string(),
+                    content: Content::Text(TextContent {
+                        body: "restored".to_string(),
+                        formatted_body: None,
+                        style: TextStyle::Normal,
+                    }),
+                    edited_at: updated.edited_at.expect("edited at"),
+                    editor_mxid: message.sender_mxid.clone(),
+                }
+            )
+            .await
+            .expect("late edit rejected")
+    );
 
     assert!(
         !store
