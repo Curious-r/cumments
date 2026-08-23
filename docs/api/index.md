@@ -148,15 +148,16 @@ registry is documented in [Problem types](../problems/index.md).
 rate limited per client IP (10/hour and 20/hour by default). Limit exceeded
 returns `429 code=rate-limited`. Verification `confirm` is limited to
 30/hour, comment and visitor-avatar writes (`POST`/`PUT`/`PATCH`/`DELETE`) to
-120/hour, visitor profile reads to 120/hour, and SSE connection attempts to a
-bounded token-bucket budget of 120/hour with a burst of 8 by default. A global
-semaphore caps the instance at 500 concurrently open streams. Local public
-reads (comment lists, room metadata, roles, moderators, sticker packs) share a
-generous `public_read` budget of 1200/hour per client key, which covers normal
-page loads without the anonymous-low-quota problems Giscus-style embeds hit on
-GitHub's 60/hour limit. Site governance writes are limited to 60/hour. Every
-budget is configurable under `[rate_limit]` and applied at startup; see
-[Configuration](../configuration.md#rate-limits).
+120/hour, visitor profile reads to 120/hour, claim-token authentication
+attempts to 60/minute, and SSE connection attempts to a bounded token-bucket
+budget of 120/hour with a burst of 8 by default. A global semaphore caps the
+instance at 500 concurrently open streams. Local public reads (comment lists,
+room metadata, roles, moderators, sticker packs) share a generous
+`public_read` budget of 1200/hour per client key, which covers normal page
+loads without the anonymous-low-quota problems Giscus-style embeds hit on
+GitHub's 60/hour limit. Site governance writes are limited to 60/hour after
+authentication. Every budget is configurable under `[rate_limit]` and applied
+at startup; see [Configuration](../configuration.md#rate-limits).
 
 Rate limiting is layered by cost: endpoints that trigger external work
 (media proxy, visitor profile lookups) or long-lived connections (SSE) get
@@ -177,6 +178,11 @@ when the peer is inside a `server.trusted_proxies` preset or CIDR; the list
 is then walked right-to-left, skipping trusted proxies, and the nearest
 untrusted IP address is used as the client key. A malformed untrusted value
 falls back to the direct peer address instead of becoming a limiter key.
+
+Claim-token endpoints use a separate pre-auth admission bucket. Missing,
+invalid, and valid-looking attempts all consume it before the token hash is
+loaded; successful owner operations then consume their normal endpoint/governance
+budget.
 
 Verification origins must be public by default: loopback/private/link-local
 IP-literal origins are rejected unless

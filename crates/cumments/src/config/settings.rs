@@ -68,6 +68,7 @@ pub struct RateLimits {
     pub verification: RateLimitBucket,
     pub confirm: RateLimitBucket,
     pub operator: RateLimitBucket,
+    pub claim_token: RateLimitBucket,
     pub write: RateLimitBucket,
     pub sse: SseRateLimitBucket,
     pub media: RateLimitBucket,
@@ -83,6 +84,7 @@ impl Default for RateLimits {
             verification: RateLimitBucket::new(20, "1h"),
             confirm: RateLimitBucket::new(30, "1h"),
             operator: RateLimitBucket::new(60, "1m"),
+            claim_token: RateLimitBucket::new(60, "1m"),
             write: RateLimitBucket::new(120, "1h"),
             sse: SseRateLimitBucket::new(120, "1h", 8),
             media: RateLimitBucket::new(120, "1h"),
@@ -143,6 +145,7 @@ pub struct ResolvedRateLimits {
     pub verification: ResolvedRateLimit,
     pub confirm: ResolvedRateLimit,
     pub operator: ResolvedRateLimit,
+    pub claim_token: ResolvedRateLimit,
     pub write: ResolvedRateLimit,
     pub sse: ResolvedSseRateLimit,
     pub media: ResolvedRateLimit,
@@ -167,6 +170,7 @@ impl RateLimits {
             verification: self.verification.resolved("rate_limit.verification")?,
             confirm: self.confirm.resolved("rate_limit.confirm")?,
             operator: self.operator.resolved("rate_limit.operator")?,
+            claim_token: self.claim_token.resolved("rate_limit.claim_token")?,
             write: self.write.resolved("rate_limit.write")?,
             sse: self.sse.resolved("rate_limit.sse")?,
             media: self.media.resolved("rate_limit.media")?,
@@ -688,6 +692,8 @@ mode = "logging"
         assert_eq!(resolved.registration.window, Duration::from_secs(3600));
         assert_eq!(resolved.operator.requests, 60);
         assert_eq!(resolved.operator.window, Duration::from_secs(60));
+        assert_eq!(resolved.claim_token.requests, 60);
+        assert_eq!(resolved.claim_token.window, Duration::from_secs(60));
         assert_eq!(resolved.write.requests, 120);
         assert_eq!(resolved.sse.requests, 120);
         assert_eq!(resolved.sse.window, Duration::from_secs(3600));

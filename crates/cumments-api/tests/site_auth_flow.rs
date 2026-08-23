@@ -64,6 +64,16 @@ async fn test_state_with_driver(
     operator_token: Option<&str>,
     driver: Arc<dyn cumments_core::ports::MatrixDriver>,
 ) -> (ApiState, DbStore) {
+    test_state_with_driver_and_claim_limit(name, policy, operator_token, driver, 1000).await
+}
+
+async fn test_state_with_driver_and_claim_limit(
+    name: &str,
+    policy: SiteVerificationPolicy,
+    operator_token: Option<&str>,
+    driver: Arc<dyn cumments_core::ports::MatrixDriver>,
+    claim_token_requests: usize,
+) -> (ApiState, DbStore) {
     let store = DbStore::connect(&test_db_url(name))
         .await
         .expect("connect test database");
@@ -85,6 +95,10 @@ async fn test_state_with_driver(
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         operator_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
+        claim_token_limiter: Arc::new(RateLimiter::new(
+            claim_token_requests,
+            Duration::from_secs(60),
+        )),
         confirm_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         trusted_proxies: Arc::new(Default::default()),
         // The existing integration test verifies against 127.0.0.1.
@@ -1965,6 +1979,122 @@ async fn visitor_avatar_set_and_delete_are_signed_and_idempotent() {
         updates.last(),
         Some(&(public_key, "test-blog".to_string(), None))
     );
+}
+
+#[tokio::test]
+async fn claim_token_authentication_attempts_are_rate_limited() {
+    let (state, store) = test_state_with_driver_and_claim_limit(
+        "claim-auth-limit",
+        SiteVerificationPolicy::Required,
+        None,
+        Arc::new(cumments_matrix::LoggingMatrixDriver),
+        2,
+    )
+    .await;
+    store
+        .register_site("claim-limit", &token_hash("valid-token"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+    let uri = "/api/v1/sites/claim-limit/admins";
+    let body = serde_json::json!({ "user_id": "@owner:hs" }).to_string();
+
+    // Missing and invalid credentials both count against the same source-IP
+    // admission bucket; they must not bypass it by varying the credential.
+    for (token, expected) in [
+        (None, StatusCode::FORBIDDEN),
+        (Some("invalid-token".to_string()), StatusCode::FORBIDDEN),
+        (
+            Some("another-invalid-token".to_string()),
+            StatusCode::TOO_MANY_REQUESTS,
+        ),
+    ] {
+        let request = match token {
+            None => request_with_body(Method::POST, uri, None, &[], &body),
+            Some(value) => request_with_body(
+                Method::POST,
+                uri,
+                None,
+                &[("x-cumments-claim-token", value)],
+                &body,
+            ),
+        };
+        let response = router.clone().oneshot(request).await.expect("call router");
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
+async fn claim_token_is_checked_before_verification_origin_parsing() {
+    let (state, store) = test_state(
+        "claim-auth-before-origin",
+        SiteVerificationPolicy::Optional,
+        None,
+    )
+    .await;
+    store
+        .register_site("origin-order", &token_hash("valid-token"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+
+    // If claim authentication ran inside the handler, this malformed origin
+    // would become a 400 before the token was checked.
+    let response = router
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/origin-order/verifications",
+            None,
+            &[("x-cumments-claim-token", "invalid-token".to_string())],
+            &serde_json::json!({
+                "origins": ["not-an-origin"],
+                "methods": ["well-known"],
+            })
+            .to_string(),
+        ))
+        .await
+        .expect("call router");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(body_text(response).await.contains("invalid claim token"));
+}
+
+#[tokio::test]
+async fn issue_secret_claims_share_the_pre_auth_rate_limit() {
+    let (state, store) = test_state_with_driver_and_claim_limit(
+        "issue-secret-claim-limit",
+        SiteVerificationPolicy::Optional,
+        None,
+        Arc::new(cumments_matrix::LoggingMatrixDriver),
+        1,
+    )
+    .await;
+    store
+        .register_site("secret-limit", &token_hash("valid-token"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state);
+    let uri = "/api/v1/sites/secret-limit/secret";
+
+    let missing = router
+        .clone()
+        .oneshot(request_with_body(Method::POST, uri, None, &[], "{}"))
+        .await
+        .expect("call router");
+    assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+    let invalid = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            uri,
+            None,
+            &[("x-cumments-claim-token", "invalid".to_string())],
+            "{}",
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(invalid.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]

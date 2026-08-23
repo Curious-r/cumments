@@ -128,17 +128,40 @@ pub async fn require_claim_token(
     let Some(site_id) = crate::site_auth::site_id_from_path(req.uri().path()) else {
         return AppError::Unauthorized("missing site id in path".to_string()).into_response();
     };
-    match verify_claim_token(&state, &site_id, req.headers()).await {
+    let peer_addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied()
+        .map(|connect| connect.0);
+    match authorize_claim_token(&state, &site_id, req.headers(), peer_addr).await {
         Ok(()) => next.run(req).await,
         Err(error) => error.into_response(),
     }
 }
 
-async fn verify_claim_token(
+/// Admission control for every claim-token-authenticated request.
+///
+/// The source-IP bucket is consumed before the header is inspected or the
+/// token hash is loaded: missing/garbage credentials are still traffic that
+/// must not be able to drive SQLite queries. Site-id syntax is checked first
+/// because it is cheap and prevents malformed path segments from reaching the
+/// store.
+pub(crate) async fn authorize_claim_token(
     state: &ApiState,
     site_id: &str,
     headers: &HeaderMap,
+    peer_addr: Option<SocketAddr>,
 ) -> Result<(), AppError> {
+    SiteId::new(site_id.to_owned()).map_err(AppError::Validation)?;
+    let key = client_key(headers, peer_addr, &state.trusted_proxies);
+    if !state.claim_token_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "claim-token authentication attempts are rate limited; try again later"
+                .to_string(),
+            retry_after_seconds: state.claim_token_limiter.window().as_secs(),
+        });
+    }
+
     let presented = headers
         .get(CLAIM_TOKEN_HEADER)
         .and_then(|value| value.to_str().ok())

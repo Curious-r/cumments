@@ -467,6 +467,10 @@ async fn main() -> Result<()> {
             rate_limits.operator.requests,
             rate_limits.operator.window,
         )),
+        claim_token_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+            rate_limits.claim_token.requests,
+            rate_limits.claim_token.window,
+        )),
         confirm_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.confirm.requests,
             rate_limits.confirm.window,

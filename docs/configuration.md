@@ -212,6 +212,7 @@ registration = { requests = 10,  window = "1h" }
 verification  = { requests = 20,  window = "1h" }
 confirm       = { requests = 30,  window = "1h" }
 operator         = { requests = 60,  window = "1m" }
+claim_token   = { requests = 60,  window = "1m" }
 write         = { requests = 120, window = "1h" }
 sse           = { requests = 120, window = "1h", burst = 8 }
 media         = { requests = 120, window = "1h" }
@@ -221,6 +222,10 @@ governance    = { requests = 60,  window = "1h" }
 ```
 
 - `requests` is the maximum per window, per client key; it must be at least 1.
+- `claim_token` is a pre-auth admission budget for all claim-token
+  authentication attempts, including missing/invalid credentials. Successful
+  site-owner operations are still governed by `governance` and other endpoint
+  budgets.
 - For SSE, `requests` is the sustained refill rate and `burst` is the bucket
   capacity for short-term reconnects/page reloads; both must be at least 1.
 - `window` accepts human durations (`"500ms"`, `"30s"`, `"1h"`) and must be

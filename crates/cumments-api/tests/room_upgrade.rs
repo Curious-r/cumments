@@ -312,6 +312,7 @@ fn api_state(driver: TestDriver, store: DbStore) -> ApiState {
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         operator_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
+        claim_token_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
         confirm_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         trusted_proxies: Arc::new(Default::default()),
         allow_private_verification_origins: true,

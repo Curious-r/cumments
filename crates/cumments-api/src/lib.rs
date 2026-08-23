@@ -119,6 +119,8 @@ pub struct ApiState {
     pub verification_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-brute-force limiter for the Operator API.
     pub operator_limiter: Arc<rate_limit::RateLimiter>,
+    /// Pre-auth admission limiter for claim-token-authenticated endpoints.
+    pub claim_token_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-abuse limiter for verification confirm (outbound probes).
     pub confirm_limiter: Arc<rate_limit::RateLimiter>,
     /// Reverse proxies trusted to set `X-Forwarded-For` for rate limiting.
@@ -243,21 +245,30 @@ pub fn build_router(state: ApiState) -> Router {
             post(register_site_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/verifications",
-            post(start_verification_handler).fallback(method_not_allowed_handler),
-        )
-        .route(
             "/api/v1/sites/{site_id}/verifications/confirm",
             post(confirm_verification_handler).fallback(method_not_allowed_handler),
-        )
-        .route(
-            "/api/v1/sites/{site_id}/secret",
-            post(issue_secret_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/health",
             get(health_handler).fallback(method_not_allowed_handler),
         )
+        .layer(middleware::from_fn(public_cors));
+
+    // Claim-token self-service routes authenticate before their bodies are
+    // parsed or outbound origin probes are made.
+    let claim_token_router = Router::new()
+        .route(
+            "/api/v1/sites/{site_id}/verifications",
+            post(start_verification_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/secret",
+            post(issue_secret_handler).fallback(method_not_allowed_handler),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_claim_token,
+        ))
         .layer(middleware::from_fn(public_cors));
 
     // Site governance writes, authenticated with the site's claim token.
@@ -380,6 +391,7 @@ pub fn build_router(state: ApiState) -> Router {
     Router::new()
         .merge(comment_router)
         .merge(governance_router)
+        .merge(claim_token_router)
         .merge(public_router)
         .merge(operator_router)
         .fallback(not_found_handler)
