@@ -12,7 +12,8 @@ signature is an HMAC over
 `server/media_id/width/height/method/expires` (absent thumbnail parameters
 are signed as their defaults) and expires after 15 minutes. Requests are
 rate limited, restricted to the configured homeserver, size-capped, and
-filtered by content type. When `server.public_base_url` is configured the
+filtered by content type. Media IDs must follow the Matrix whitelist
+(`A-Za-z0-9_-`, at most 255 bytes). When `server.public_base_url` is configured the
 URLs are absolute against it; otherwise the base is derived from the request
 (`Host`, plus `X-Forwarded-Proto`/`X-Forwarded-Host` from trusted proxies),
 so URLs are absolute for each client. They only stay API-relative when the
@@ -26,6 +27,15 @@ in the URL. Two size presets are used by the API itself:
 
 - message/location thumbnails: 320×240, `scale`;
 - avatars: 96×96, `crop` (the spec's recommended avatar bucket).
+
+Responses use a canonical MIME type and a server-generated filename; the
+opaque media ID is never placed in `Content-Disposition`. Matrix's inline-safe
+MIME types are served with `Content-Disposition: inline`; SVG, PDF,
+octet-stream, and uncommon image/video/audio types are served as
+`attachment`. All successful media responses include a sandbox CSP,
+`X-Content-Type-Options: nosniff`,
+`Cross-Origin-Resource-Policy: cross-origin`, and
+`Referrer-Policy: no-referrer`.
 
 ## Visitor media upload
 

@@ -224,8 +224,9 @@ and other comment-shaped writes go through the async submission queue with an
 `mxc://` URIs require Matrix credentials to download, so Cumments exposes a
 public, read-only proxy with short-lived signed URLs. The proxy is limited
 to the configured homeserver, rate limited, size-capped, filtered by content
-type, and answers media and thumbnail requests through the authenticated
-`/_matrix/client/v1/media` endpoints (MSC3916) with the AppService token.
+type, answers media and thumbnail requests through the authenticated
+`/_matrix/client/v1/media` endpoints (MSC3916) with the AppService token, and
+applies Matrix media-id/CSP/disposition safety rules.
 Thumbnail requests carry signed `width`/`height`/`method` parameters;
 message thumbnails default to 320×240 `scale` and avatars to 96×96 `crop`.
 It is deliberately read-only: site administrators browse media directly in

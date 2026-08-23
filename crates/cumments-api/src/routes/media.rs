@@ -48,13 +48,47 @@ pub(crate) const MEDIA_MAX_BYTES: usize = 20 * 1024 * 1024;
 const MEDIA_URL_TTL_SECONDS: i64 = 15 * 60;
 /// Mime prefixes allowed for visitor uploads (image, video, audio, files).
 const ALLOWED_UPLOAD_MIMES: [&str; 4] = ["image/", "video/", "audio/", "application/"];
-/// Content types allowed through the proxy (prefix match).
-const ALLOWED_MEDIA_TYPES: [&str; 5] = [
-    "image/",
-    "video/",
-    "audio/",
-    "application/pdf",
-    "application/octet-stream",
+/// Maximum opaque media-id length accepted by the proxy. This is an
+/// operational cap aligned with other Matrix identifier limits; it prevents
+/// unbounded path/header/signing input.
+const MAX_MEDIA_ID_BYTES: usize = 255;
+/// Exact MIME types Matrix identifies as safe to serve inline.
+const INLINE_CONTENT_TYPES: [&str; 26] = [
+    "text/css",
+    "text/plain",
+    "text/csv",
+    "application/json",
+    "application/ld+json",
+    "image/jpeg",
+    "image/gif",
+    "image/png",
+    "image/apng",
+    "image/webp",
+    "image/avif",
+    "video/mp4",
+    "video/webm",
+    "video/ogg",
+    "video/quicktime",
+    "audio/mp4",
+    "audio/webm",
+    "audio/aac",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wave",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/x-pn-wav",
+    "audio/flac",
+    "audio/x-flac",
+];
+/// Thumbnail responses are a small, browser-safe image set per the Matrix
+/// content-repository specification.
+const THUMBNAIL_CONTENT_TYPES: [&str; 5] = [
+    "image/jpeg",
+    "image/png",
+    "image/apng",
+    "image/gif",
+    "image/webp",
 ];
 /// Default thumbnail requested for avatars: the spec's recommended avatar
 /// bucket and the size Element-family clients converge on for square avatars.
@@ -73,10 +107,19 @@ const CONTENT_THUMBNAIL: ThumbParams = ThumbParams {
 /// Upper bound for requested thumbnail dimensions; the homeserver must never
 /// upscale, so oversized requests are rejected before they reach it.
 const MAX_THUMBNAIL_DIMENSION: u32 = 4096;
-/// CSP applied to proxied SVG documents: they render (inline styles and
-/// `data:` images) but cannot execute scripts, even when opened directly as a
-/// top-level document in the Cumments origin.
-const SVG_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
+/// CSP applied to every proxied media response. This matches the Matrix
+/// recommendation: content is sandboxed into a unique origin, scripts cannot
+/// run, and only benign inline styling / PDF plugin behavior is retained.
+const MEDIA_CONTENT_SECURITY_POLICY: &str = "sandbox; default-src 'none'; script-src 'none'; \
+     plugin-types application/pdf; style-src 'unsafe-inline'; object-src 'self';";
+
+/// How a successfully fetched upstream payload may be presented.
+struct MediaPresentation {
+    /// Canonical MIME type sent to the browser (upstream parameters removed).
+    content_type: String,
+    disposition: &'static str,
+    filename: String,
+}
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -226,6 +269,9 @@ impl MediaProxy {
         if !is_valid_media_server(server) {
             return None;
         }
+        if !is_valid_media_id(media_id) {
+            return None;
+        }
         if !self.allow_private_servers
             && let Ok(ip) = server.parse::<IpAddr>()
             && is_private_ip_addr(ip)
@@ -295,7 +341,7 @@ impl MediaProxy {
         expires: i64,
         signature: &str,
     ) -> bool {
-        if !is_valid_media_server(server) || media_id.is_empty() || media_id.contains('/') {
+        if !is_valid_media_server(server) || !is_valid_media_id(media_id) {
             return false;
         }
         let thumb = match thumb {
@@ -331,7 +377,7 @@ impl MediaProxy {
         media_id: &str,
         thumb: Option<ThumbParams>,
     ) -> anyhow::Result<reqwest::Response> {
-        if !is_valid_media_server(server) || media_id.is_empty() || media_id.contains('/') {
+        if !is_valid_media_server(server) || !is_valid_media_id(media_id) {
             anyhow::bail!("invalid mxc server/media id in media proxy request");
         }
         if let Some(thumb) = thumb {
@@ -519,6 +565,83 @@ fn is_valid_media_server(server: &str) -> bool {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     })
+}
+
+/// Whether an opaque Matrix media-id is safe for signing, upstream requests,
+/// and URL construction. This is the whitelist required by the Matrix content
+/// repository security rules: `A-Za-z0-9_-`.
+fn is_valid_media_id(media_id: &str) -> bool {
+    !media_id.is_empty()
+        && media_id.len() <= MAX_MEDIA_ID_BYTES
+        && media_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Parses and classifies an upstream Content-Type.
+///
+/// Upstream parameters are intentionally discarded. Only a canonical MIME type
+/// is forwarded to browsers. Safe types are served inline per the Matrix allow
+/// list; other accepted media (including uncommon image/video/audio codecs,
+/// SVG, PDF, and opaque data) are forced to attachment.
+fn classify_media_content_type(raw: &str, thumbnail: bool) -> Option<MediaPresentation> {
+    let content_type = raw.split(';').next()?.trim().to_ascii_lowercase();
+    if content_type.is_empty() {
+        return None;
+    }
+
+    let (disposition, filename) = if thumbnail {
+        if !THUMBNAIL_CONTENT_TYPES.contains(&content_type.as_str()) {
+            return None;
+        }
+        ("inline", "thumbnail")
+    } else if INLINE_CONTENT_TYPES.contains(&content_type.as_str()) {
+        ("inline", "media")
+    } else if content_type.starts_with("image/")
+        || content_type.starts_with("video/")
+        || content_type.starts_with("audio/")
+        || matches!(
+            content_type.as_str(),
+            "application/pdf" | "application/octet-stream"
+        )
+    {
+        ("attachment", "download")
+    } else {
+        return None;
+    };
+
+    let extension = media_file_extension(&content_type);
+    Some(MediaPresentation {
+        content_type,
+        disposition,
+        filename: format!("{filename}.{extension}"),
+    })
+}
+
+fn media_file_extension(content_type: &str) -> &'static str {
+    match content_type {
+        "text/css" => "css",
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/json" | "application/ld+json" => "json",
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/apng" => "apng",
+        "image/webp" => "webp",
+        "image/avif" => "avif",
+        "image/svg+xml" => "svg",
+        "video/mp4" | "audio/mp4" => "mp4",
+        "video/webm" | "audio/webm" => "webm",
+        "video/ogg" | "audio/ogg" => "ogg",
+        "video/quicktime" => "mov",
+        "audio/aac" => "aac",
+        "audio/mpeg" => "mp3",
+        "audio/wave" | "audio/wav" | "audio/x-wav" | "audio/x-pn-wav" => "wav",
+        "audio/flac" | "audio/x-flac" => "flac",
+        "application/pdf" => "pdf",
+        _ => "bin",
+    }
 }
 
 fn media_upload_response(
@@ -1218,6 +1341,12 @@ pub(crate) async fn media_handler(
         ));
     };
 
+    // Validate the identity before doing rate-limit bookkeeping or upstream
+    // I/O. The same rule is enforced again by verify/fetch as a boundary.
+    if !is_valid_media_id(&media_id) {
+        return Err(AppError::BadRequest("invalid media id".to_string()));
+    }
+
     let key = client_key(&headers, Some(addr), &state.trusted_proxies);
     if !state.media_limiter.allow(&key) {
         return Err(AppError::TooManyRequests {
@@ -1284,14 +1413,8 @@ pub(crate) async fn media_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    if !ALLOWED_MEDIA_TYPES
-        .iter()
-        .any(|allowed| content_type.starts_with(allowed))
-    {
-        return Err(AppError::BadRequest(format!(
-            "unsupported media type {content_type}"
-        )));
-    }
+    let presentation = classify_media_content_type(&content_type, thumb.is_some())
+        .ok_or_else(|| AppError::BadRequest("unsupported media type".to_string()))?;
 
     // Reject obviously oversized responses from the header before reading, so
     // the 400 is a proper error envelope rather than a truncated stream.
@@ -1321,34 +1444,29 @@ pub(crate) async fn media_handler(
         bytes.extend_from_slice(&chunk);
     }
 
-    let mut response = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, &content_type)
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("inline; filename=\"{}\"", media_id),
-        )
-        .header(header::CACHE_CONTROL, "public, max-age=86400")
-        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
-        .body(Body::from(bytes))
-        .expect("static response builds");
-    if is_svg_content_type(&content_type) {
-        response.headers_mut().insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(SVG_CSP),
-        );
-    }
-    Ok(response)
+    Ok(media_response(presentation, bytes))
 }
 
-/// Whether a media content type is an SVG document. Parameters (e.g.
-/// `image/svg+xml; charset=utf-8`) are ignored, matching how the upstream
-/// content-type is normally emitted.
-fn is_svg_content_type(content_type: &str) -> bool {
-    content_type
-        .split(';')
-        .next()
-        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/svg+xml"))
+/// Builds the public response from an already-classified upstream payload.
+fn media_response(presentation: MediaPresentation, bytes: Vec<u8>) -> Response {
+    let disposition = format!(
+        "{}; filename=\"{}\"",
+        presentation.disposition, presentation.filename
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, presentation.content_type)
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(MEDIA_CONTENT_SECURITY_POLICY),
+        )
+        .header("cross-origin-resource-policy", "cross-origin")
+        .header(header::REFERRER_POLICY, "no-referrer")
+        .body(Body::from(bytes))
+        .expect("static response builds")
 }
 
 fn now_epoch_seconds() -> i64 {
@@ -1740,11 +1858,106 @@ mod tests {
     }
 
     #[test]
-    fn svg_content_type_detection_handles_parameters_and_case() {
-        assert!(is_svg_content_type("image/svg+xml"));
-        assert!(is_svg_content_type("image/svg+xml; charset=utf-8"));
-        assert!(is_svg_content_type("IMAGE/SVG+XML"));
-        assert!(!is_svg_content_type("image/png"));
-        assert!(!is_svg_content_type("text/html"));
+    fn media_id_validation_follows_the_matrix_whitelist() {
+        assert!(is_valid_media_id("abc-_XYZ123"));
+        assert!(is_valid_media_id(&"a".repeat(MAX_MEDIA_ID_BYTES)));
+
+        assert!(!is_valid_media_id(""));
+        assert!(!is_valid_media_id(&"a".repeat(MAX_MEDIA_ID_BYTES + 1)));
+        assert!(!is_valid_media_id("a/b"));
+        assert!(!is_valid_media_id("../secret"));
+        assert!(!is_valid_media_id("%2Fsecret"));
+        assert!(!is_valid_media_id("cat.png"));
+        assert!(!is_valid_media_id("cat png"));
+        assert!(!is_valid_media_id("cat\"png"));
+        assert!(!is_valid_media_id("cat;png"));
+        assert!(!is_valid_media_id("cat\npng"));
+        assert!(!is_valid_media_id("cat🐱"));
+    }
+
+    #[test]
+    fn proxify_rejects_unsafe_media_ids() {
+        let p = proxy();
+        for media_id in [
+            "",
+            "a/b",
+            "../secret",
+            "%2Fsecret",
+            "cat.png",
+            "cat png",
+            "cat\"png",
+            "cat;png",
+            "cat\npng",
+            "cat🐱",
+        ] {
+            let url = format!("mxc://hs/{media_id}");
+            assert!(
+                p.proxify(&url, "").is_none(),
+                "unsafe media id must not be signed: {media_id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_unsafe_media_ids_before_network_io() {
+        let p = proxy();
+        assert!(p.fetch("hs", "cat\"png", None).await.is_err());
+        assert!(p.fetch("hs", "../../secret", None).await.is_err());
+    }
+
+    #[test]
+    fn media_content_types_are_classified_and_canonicalized() {
+        let png = classify_media_content_type("Image/PNG; charset=utf-8", false)
+            .expect("PNG is inline-safe");
+        assert_eq!(png.content_type, "image/png");
+        assert_eq!(png.disposition, "inline");
+        assert_eq!(png.filename, "media.png");
+
+        let svg = classify_media_content_type("IMAGE/SVG+XML", false).expect("SVG can download");
+        assert_eq!(svg.content_type, "image/svg+xml");
+        assert_eq!(svg.disposition, "attachment");
+        assert_eq!(svg.filename, "download.svg");
+
+        assert!(
+            classify_media_content_type("application/pdf", false)
+                .is_some_and(|pdf| pdf.disposition == "attachment")
+        );
+        assert!(classify_media_content_type("text/html", false).is_none());
+    }
+
+    #[test]
+    fn thumbnail_content_types_are_restricted_to_matrix_allowlist() {
+        let webp = classify_media_content_type("image/webp", true).expect("thumbnail type");
+        assert_eq!(webp.disposition, "inline");
+        assert_eq!(webp.filename, "thumbnail.webp");
+
+        assert!(classify_media_content_type("image/svg+xml", true).is_none());
+        assert!(classify_media_content_type("application/pdf", true).is_none());
+    }
+
+    #[test]
+    fn media_response_headers_are_fixed_and_safe() {
+        let presentation =
+            classify_media_content_type("IMAGE/PNG; bogus-parameter=1", false).expect("classify");
+        let response = media_response(presentation, b"bytes".to_vec());
+        let headers = response.headers();
+
+        assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            "inline; filename=\"media.png\""
+        );
+        assert_eq!(
+            headers[header::CONTENT_SECURITY_POLICY],
+            MEDIA_CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(headers["cross-origin-resource-policy"], "cross-origin");
+        assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+        assert!(
+            !headers[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .contains("media-id")
+        );
     }
 }

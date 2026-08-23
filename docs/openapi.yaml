@@ -654,6 +654,7 @@ paths:
         required: true
         schema:
           type: string
+          pattern: "^[A-Za-z0-9_-]{1,255}$"
     get:
       tags: [Public]
       summary: Proxy a Matrix media file (signed URL)
@@ -664,7 +665,9 @@ paths:
         optional thumbnail `width`/`height`/`method` so minted URLs cannot
         be resized into larger or arbitrary thumbnail requests. Requests are
         rate limited, restricted to the configured homeserver and filtered
-        by size/content type. The homeserver is queried through the
+        by size/content type. Media IDs must follow the Matrix whitelist.
+        Responses use a canonical MIME type, sandbox CSP, and inline only for
+        Matrix-safe MIME types. The homeserver is queried through the
         authenticated `/_matrix/client/v1/media` endpoints (MSC3916) with
         the AppService token.
       parameters:
