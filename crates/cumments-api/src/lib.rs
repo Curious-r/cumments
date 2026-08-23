@@ -26,7 +26,6 @@ use crate::routes::sites::{
     confirm_verification_handler, issue_secret_handler, register_site_handler,
     start_verification_handler,
 };
-use crate::routes::sse::SseReconnectRegistry;
 use crate::routes::sse::sse_handler;
 use crate::routes::visitors::visitor_profile_handler;
 use crate::site_auth::{enforce_site_auth, public_cors};
@@ -47,9 +46,8 @@ use cumments_core::{
     site_auth::SiteAuthPolicy,
     site_service::SiteService,
 };
-use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
-use tokio::sync::{Notify, broadcast};
+use std::sync::Arc;
+use tokio::sync::{Notify, Semaphore, broadcast};
 use tower_http::trace::TraceLayer;
 
 pub mod error;
@@ -130,15 +128,10 @@ pub struct ApiState {
     /// Per-client-key limiter for comment and visitor-avatar write submissions
     /// (POST/PUT/PATCH/DELETE).
     pub write_limiter: Arc<rate_limit::RateLimiter>,
-    /// Per-client-key limiter for new SSE connections.
-    pub sse_limiter: Arc<rate_limit::RateLimiter>,
-    /// Reconnect bookkeeping for SSE, so EventSource reconnects do not count
-    /// against the new-connection budget.
-    pub sse_reconnect: Arc<Mutex<SseReconnectRegistry>>,
-    /// Global cap on concurrent SSE connections.
-    pub max_sse_connections: usize,
-    /// Live SSE connection count.
-    pub active_sse_connections: Arc<AtomicUsize>,
+    /// Bounded token-bucket limiter for SSE connection attempts.
+    pub sse_limiter: Arc<rate_limit::SseRateLimiter>,
+    /// Global cap on concurrently open SSE response streams.
+    pub sse_semaphore: Arc<Semaphore>,
     /// Optional public media proxy for Matrix MXC media.
     pub media_proxy: Option<Arc<MediaProxy>>,
     /// Per-client-key limiter for media proxy requests.

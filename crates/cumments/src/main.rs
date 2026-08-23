@@ -477,15 +477,12 @@ async fn main() -> Result<()> {
             rate_limits.write.requests,
             rate_limits.write.window,
         )),
-        sse_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
+        sse_limiter: Arc::new(cumments_api::rate_limit::SseRateLimiter::new(
             rate_limits.sse.requests,
             rate_limits.sse.window,
+            rate_limits.sse.burst,
         )),
-        sse_reconnect: Arc::new(std::sync::Mutex::new(
-            cumments_api::routes::sse::SseReconnectRegistry::default(),
-        )),
-        max_sse_connections: 500,
-        active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        sse_semaphore: Arc::new(tokio::sync::Semaphore::new(500)),
         media_proxy,
         media_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.media.requests,

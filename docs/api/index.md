@@ -148,14 +148,15 @@ registry is documented in [Problem types](../problems/index.md).
 rate limited per client IP (10/hour and 20/hour by default). Limit exceeded
 returns `429 code=rate-limited`. Verification `confirm` is limited to
 30/hour, comment and visitor-avatar writes (`POST`/`PUT`/`PATCH`/`DELETE`) to
-120/hour, visitor profile reads to 120/hour, and new SSE connections to
-20/hour with a global cap of 500 concurrent streams. Local public reads
-(comment lists, room metadata, roles, moderators, sticker packs) share a
-generous `public_read` budget of 1200/hour per client key, which covers
-normal page loads without the anonymous-low-quota problems Giscus-style
-embeds hit on GitHub's 60/hour limit. Site governance writes are limited to
-60/hour. Every budget is configurable under `[rate_limit]` and applied at
-startup; see [Configuration](../configuration.md#rate-limits).
+120/hour, visitor profile reads to 120/hour, and SSE connection attempts to a
+bounded token-bucket budget of 120/hour with a burst of 8 by default. A global
+semaphore caps the instance at 500 concurrently open streams. Local public
+reads (comment lists, room metadata, roles, moderators, sticker packs) share a
+generous `public_read` budget of 1200/hour per client key, which covers normal
+page loads without the anonymous-low-quota problems Giscus-style embeds hit on
+GitHub's 60/hour limit. Site governance writes are limited to 60/hour. Every
+budget is configurable under `[rate_limit]` and applied at startup; see
+[Configuration](../configuration.md#rate-limits).
 
 Rate limiting is layered by cost: endpoints that trigger external work
 (media proxy, visitor profile lookups) or long-lived connections (SSE) get
@@ -166,15 +167,16 @@ Every `429` response carries a `Retry-After` header set to the endpoint's
 fixed limit window (3600 seconds for hourly limits, 60 seconds for the operator
 API). It is a conservative constant, not the exact remaining time for the
 requesting client.
-SSE reconnects within 30 seconds of a disconnect do not consume the hourly
-new-connection budget (bounded to 20 free reconnects per client per 5-minute
-window), so EventSource auto-reconnect and normal page refreshes do not
-silently exhaust the quota.
+SSE uses a token bucket rather than separate reconnect bookkeeping: the burst
+capacity absorbs EventSource auto-reconnects and normal page refreshes, while
+the sustained rate prevents connection floods. A global semaphore separately
+bounds concurrently open streams.
 
 Client keys are the peer IP by default. `X-Forwarded-For` is honored only
 when the peer is inside a `server.trusted_proxies` preset or CIDR; the list
 is then walked right-to-left, skipping trusted proxies, and the nearest
-untrusted address is used as the client key.
+untrusted IP address is used as the client key. A malformed untrusted value
+falls back to the direct peer address instead of becoming a limiter key.
 
 Verification origins must be public by default: loopback/private/link-local
 IP-literal origins are rejected unless

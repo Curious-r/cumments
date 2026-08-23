@@ -5,7 +5,7 @@
 //! which behind a reverse proxy depends on `X-Forwarded-For` being set
 //! correctly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -15,6 +15,9 @@ use crate::trusted_proxy::TrustedProxySet;
 /// Upper bound on tracked keys; beyond it, new keys are refused instead of
 /// growing memory without limit (keys are client-controlled via XFF).
 const MAX_KEYS: usize = 10_000;
+/// Upper bound on SSE limiter keys. Eviction keeps attacker-controlled keys
+/// from growing process memory; the semaphore remains the hard concurrency cap.
+const MAX_SSE_KEYS: usize = 10_000;
 
 /// Best-effort client key.
 ///
@@ -39,10 +42,14 @@ pub fn client_key(
                 if entry.is_empty() {
                     continue;
                 }
-                if entry
-                    .parse::<IpAddr>()
-                    .is_ok_and(|ip| trusted_proxies.contains(ip))
-                {
+                // Only an IP can identify a downstream client safely. A
+                // malformed untrusted value means the proxy chain violates the
+                // XFF contract; stop instead of adopting attacker-controlled
+                // text (of arbitrary length) as a limiter key.
+                let Ok(ip) = entry.parse::<IpAddr>() else {
+                    break;
+                };
+                if trusted_proxies.contains(ip) {
                     // This hop is another trusted proxy; keep walking toward
                     // the client.
                     continue;
@@ -99,6 +106,121 @@ impl RateLimiter {
         }
         bucket.push(now);
         true
+    }
+}
+
+/// Bounded token-bucket limiter for expensive, long-lived SSE connections.
+///
+/// `burst` is the bucket capacity and `requests / window` is the refill rate.
+/// Unlike a fixed window, this absorbs EventSource reconnects and page reloads
+/// without remembering disconnect history, while still enforcing a sustained
+/// connection-establishment rate. Keys are LRU-evicted so a flood of spoofed or
+/// rotating addresses cannot grow the map without bound.
+pub struct SseRateLimiter {
+    requests: usize,
+    window: Duration,
+    burst: usize,
+    buckets: Mutex<SseBuckets>,
+}
+
+#[derive(Default)]
+struct SseBuckets {
+    buckets: HashMap<String, SseBucket>,
+    lru: VecDeque<String>,
+}
+
+struct SseBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl SseRateLimiter {
+    pub fn new(requests: usize, window: Duration, burst: usize) -> Self {
+        Self {
+            requests,
+            window,
+            burst,
+            buckets: Mutex::new(SseBuckets::default()),
+        }
+    }
+
+    /// Consumes one connection token or returns how long to wait for the next.
+    pub fn acquire(&self, key: &str) -> Result<(), Duration> {
+        let now = Instant::now();
+        let mut state = self.buckets.lock().expect("SSE limiter mutex poisoned");
+        state.retain(&now, self.capacity_seconds());
+
+        let tokens = match state.buckets.get_mut(key) {
+            Some(bucket) => {
+                bucket.refill(now, self.refill_rate(), self.burst);
+                if bucket.tokens < 1.0 {
+                    let wait = Duration::from_secs_f64((1.0 - bucket.tokens) / self.refill_rate());
+                    state.touch(key);
+                    return Err(wait);
+                }
+                bucket.tokens -= 1.0;
+                bucket.last_refill = now;
+                bucket.tokens
+            }
+            None => {
+                state.insert(
+                    key.to_string(),
+                    SseBucket {
+                        tokens: self.burst as f64 - 1.0,
+                        last_refill: now,
+                    },
+                );
+                self.burst as f64 - 1.0
+            }
+        };
+
+        state.touch(key);
+        debug_assert!(tokens >= 0.0);
+        Ok(())
+    }
+
+    fn refill_rate(&self) -> f64 {
+        self.requests as f64 / self.window.as_secs_f64()
+    }
+
+    fn capacity_seconds(&self) -> f64 {
+        self.burst as f64 / self.refill_rate()
+    }
+}
+
+impl SseBuckets {
+    fn insert(&mut self, key: String, bucket: SseBucket) {
+        while self.lru.len() >= MAX_SSE_KEYS {
+            let Some(oldest) = self.lru.pop_front() else {
+                break;
+            };
+            self.buckets.remove(&oldest);
+        }
+        self.lru.push_back(key.clone());
+        self.buckets.insert(key, bucket);
+    }
+
+    fn touch(&mut self, key: &str) {
+        if let Some(index) = self.lru.iter().position(|entry| entry == key)
+            && let Some(entry) = self.lru.remove(index)
+        {
+            self.lru.push_back(entry);
+        }
+    }
+
+    fn retain(&mut self, now: &Instant, capacity_seconds: f64) {
+        let ttl = Duration::from_secs_f64(capacity_seconds.max(1.0));
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_refill) < ttl);
+        self.lru.retain(|key| self.buckets.contains_key(key));
+    }
+}
+
+impl SseBucket {
+    fn refill(&mut self, now: Instant, refill_rate: f64, capacity: usize) {
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * refill_rate).min(capacity as f64);
+        self.last_refill = now;
     }
 }
 
@@ -217,6 +339,65 @@ mod tests {
 
         let key = client_key(&headers, Some(peer), &trusted);
         assert_eq!(key, "203.0.113.9");
+    }
+
+    #[test]
+    fn malformed_trusted_proxy_xff_falls_back_to_peer() {
+        let mut headers = axum::http::HeaderMap::new();
+        // The rightmost entry is the value this hop would use as a client.
+        // If it is not an IP, we cannot establish a safe per-client identity.
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.9, definitely-not-an-ip"),
+        );
+        let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 1234));
+        let trusted = trusted_proxies(&["127.0.0.1/32"]);
+
+        let key = client_key(&headers, Some(peer), &trusted);
+        assert_eq!(key, "127.0.0.1");
+    }
+
+    #[test]
+    fn sse_token_bucket_allows_burst_then_reports_next_token_wait() {
+        let limiter = SseRateLimiter::new(1, Duration::from_secs(2), 2);
+        let key = "client";
+
+        assert!(limiter.acquire(key).is_ok());
+        assert!(limiter.acquire(key).is_ok());
+
+        let wait = limiter.acquire(key).expect_err("burst is exhausted");
+        assert!(
+            wait >= Duration::from_millis(1900),
+            "unexpected wait {wait:?}"
+        );
+    }
+
+    #[test]
+    fn sse_limiter_evicts_the_oldest_key_at_capacity() {
+        let limiter = SseRateLimiter::new(1, Duration::from_secs(3600), 1);
+        for i in 0..MAX_SSE_KEYS {
+            assert!(
+                limiter.acquire(&format!("key-{i}")).is_ok(),
+                "failed to insert key {i}"
+            );
+        }
+        assert_eq!(
+            limiter.buckets.lock().expect("buckets").buckets.len(),
+            MAX_SSE_KEYS
+        );
+
+        assert!(limiter.acquire("new-key").is_ok());
+        assert_eq!(
+            limiter.buckets.lock().expect("buckets").buckets.len(),
+            MAX_SSE_KEYS
+        );
+
+        // The oldest key was evicted, so its next attempt starts a fresh bucket.
+        assert!(limiter.acquire("key-0").is_ok());
+        assert_eq!(
+            limiter.buckets.lock().expect("buckets").buckets.len(),
+            MAX_SSE_KEYS
+        );
     }
 
     #[test]

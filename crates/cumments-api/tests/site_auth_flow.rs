@@ -90,12 +90,12 @@ async fn test_state_with_driver(
         // The existing integration test verifies against 127.0.0.1.
         allow_private_verification_origins: true,
         write_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        sse_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
-        sse_reconnect: Arc::new(std::sync::Mutex::new(
-            cumments_api::routes::sse::SseReconnectRegistry::default(),
+        sse_limiter: Arc::new(cumments_api::rate_limit::SseRateLimiter::new(
+            1000,
+            Duration::from_secs(3600),
+            100,
         )),
-        max_sse_connections: 100,
-        active_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        sse_semaphore: Arc::new(tokio::sync::Semaphore::new(100)),
         media_proxy: None,
         media_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         visitor_profile_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
@@ -829,6 +829,34 @@ async fn preflight_and_queries_are_public() {
         .expect("call router");
     assert_eq!(read.status(), StatusCode::OK);
     assert_eq!(response_origin(&read).as_deref(), Some("*"));
+}
+
+#[tokio::test]
+async fn sse_for_unregistered_page_returns_404_without_taking_stream_slot() {
+    let (state, store) =
+        test_state("sse-missing-room", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+
+    let response = router
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/sse",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("call router");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        state.sse_semaphore.available_permits(),
+        100,
+        "a missing room must not consume a concurrent stream slot"
+    );
 }
 
 #[tokio::test]

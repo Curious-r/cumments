@@ -213,7 +213,7 @@ verification  = { requests = 20,  window = "1h" }
 confirm       = { requests = 30,  window = "1h" }
 operator         = { requests = 60,  window = "1m" }
 write         = { requests = 120, window = "1h" }
-sse           = { requests = 20,  window = "1h" }
+sse           = { requests = 120, window = "1h", burst = 8 }
 media         = { requests = 120, window = "1h" }
 visitor_profile = { requests = 120, window = "1h" }
 public_read   = { requests = 1200, window = "1h" }
@@ -221,6 +221,8 @@ governance    = { requests = 60,  window = "1h" }
 ```
 
 - `requests` is the maximum per window, per client key; it must be at least 1.
+- For SSE, `requests` is the sustained refill rate and `burst` is the bucket
+  capacity for short-term reconnects/page reloads; both must be at least 1.
 - `window` accepts human durations (`"500ms"`, `"30s"`, `"1h"`) and must be
   at least one second.
 - Environment variables follow the usual mapping, e.g.

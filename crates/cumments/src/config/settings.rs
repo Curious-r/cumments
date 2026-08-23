@@ -69,7 +69,7 @@ pub struct RateLimits {
     pub confirm: RateLimitBucket,
     pub operator: RateLimitBucket,
     pub write: RateLimitBucket,
-    pub sse: RateLimitBucket,
+    pub sse: SseRateLimitBucket,
     pub media: RateLimitBucket,
     pub visitor_profile: RateLimitBucket,
     pub public_read: RateLimitBucket,
@@ -84,7 +84,7 @@ impl Default for RateLimits {
             confirm: RateLimitBucket::new(30, "1h"),
             operator: RateLimitBucket::new(60, "1m"),
             write: RateLimitBucket::new(120, "1h"),
-            sse: RateLimitBucket::new(20, "1h"),
+            sse: SseRateLimitBucket::new(120, "1h", 8),
             media: RateLimitBucket::new(120, "1h"),
             visitor_profile: RateLimitBucket::new(120, "1h"),
             public_read: RateLimitBucket::new(1200, "1h"),
@@ -112,6 +112,30 @@ impl RateLimitBucket {
     }
 }
 
+/// SSE rate-limit bucket: a sustained connection-establishment rate plus the
+/// short-term burst needed for page reloads and EventSource reconnects.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SseRateLimitBucket {
+    /// Sustained connections per window, per client key; this is the refill
+    /// rate of the token bucket.
+    pub requests: usize,
+    /// Human-readable window (`"30s"`, `"1h"`), parsed with humantime.
+    pub window: String,
+    /// Maximum immediately available connection attempts (bucket capacity).
+    pub burst: usize,
+}
+
+impl SseRateLimitBucket {
+    fn new(requests: usize, window: &str, burst: usize) -> Self {
+        Self {
+            requests,
+            window: window.to_string(),
+            burst,
+        }
+    }
+}
+
 /// Rate-limit budgets after validation, ready for limiter construction.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedRateLimits {
@@ -120,7 +144,7 @@ pub struct ResolvedRateLimits {
     pub confirm: ResolvedRateLimit,
     pub operator: ResolvedRateLimit,
     pub write: ResolvedRateLimit,
-    pub sse: ResolvedRateLimit,
+    pub sse: ResolvedSseRateLimit,
     pub media: ResolvedRateLimit,
     pub visitor_profile: ResolvedRateLimit,
     pub public_read: ResolvedRateLimit,
@@ -168,6 +192,35 @@ impl RateLimitBucket {
         Ok(ResolvedRateLimit {
             requests: self.requests,
             window,
+        })
+    }
+}
+
+/// Validated SSE limiter settings ready for construction.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedSseRateLimit {
+    pub requests: usize,
+    pub window: Duration,
+    pub burst: usize,
+}
+
+impl SseRateLimitBucket {
+    fn resolved(&self, field: &str) -> Result<ResolvedSseRateLimit> {
+        if self.requests == 0 {
+            bail!("`{field}.requests` must be at least 1");
+        }
+        let window = humantime::parse_duration(&self.window)
+            .map_err(|error| anyhow!("`{field}.window` is not a valid duration: {error}"))?;
+        if window < Duration::from_secs(1) {
+            bail!("`{field}.window` must be at least 1 second");
+        }
+        if self.burst == 0 {
+            bail!("`{field}.burst` must be at least 1");
+        }
+        Ok(ResolvedSseRateLimit {
+            requests: self.requests,
+            window,
+            burst: self.burst,
         })
     }
 }
@@ -636,6 +689,9 @@ mode = "logging"
         assert_eq!(resolved.operator.requests, 60);
         assert_eq!(resolved.operator.window, Duration::from_secs(60));
         assert_eq!(resolved.write.requests, 120);
+        assert_eq!(resolved.sse.requests, 120);
+        assert_eq!(resolved.sse.window, Duration::from_secs(3600));
+        assert_eq!(resolved.sse.burst, 8);
     }
 
     #[test]
@@ -659,12 +715,19 @@ mode = "logging"
 [rate_limit.registration]
 requests = 3
 window = "30s"
+
+[rate_limit.sse]
+requests = 60
+window = "1h"
+burst = 5
 "#,
         )
         .expect("parse settings");
         let resolved = settings.rate_limit.resolved().expect("resolved limits");
         assert_eq!(resolved.registration.requests, 3);
         assert_eq!(resolved.registration.window, Duration::from_secs(30));
+        assert_eq!(resolved.sse.requests, 60);
+        assert_eq!(resolved.sse.burst, 5);
     }
 
     #[test]
@@ -697,6 +760,10 @@ mode = "logging"
 
         settings.rate_limit.write.window = "500ms".to_string();
         assert!(settings.rate_limit.resolved().is_err(), "sub-second window");
+
+        settings.rate_limit.write.window = "1h".to_string();
+        settings.rate_limit.sse.burst = 0;
+        assert!(settings.rate_limit.resolved().is_err(), "zero burst");
     }
 
     #[test]
