@@ -1004,6 +1004,10 @@ paths:
       tags: [Comments]
       summary: React to a comment
       operationId: reactToComment
+      description: |
+        Natural-idempotent synchronous operation; no Idempotency-Key is used.
+        A deterministic Matrix transaction ID is derived from the signed
+        request and single-use PoW challenge.
       requestBody:
         required: true
         content:
@@ -1044,6 +1048,10 @@ paths:
       tags: [Comments]
       summary: Vote on a poll
       operationId: votePoll
+      description: |
+        Natural-idempotent synchronous operation; no Idempotency-Key is used.
+        A deterministic Matrix transaction ID is derived from the signed
+        request and single-use PoW challenge.
       requestBody:
         required: true
         content:
@@ -1307,7 +1315,8 @@ paths:
       summary: Remove the visitor avatar
       operationId: deleteVisitorAvatar
       description: |
-        Removes the avatar from the visitor's virtual-user profile. Query
+        Removes the avatar from the visitor's virtual-user profile. This is a
+        natural-idempotent operation and does not use Idempotency-Key. Query
         parameters carry the PoW challenge response and an Ed25519 signature
         over `DELETE_AVATAR/site/challenge`. Deleting a missing avatar is a
         successful no-op.
@@ -1813,8 +1822,9 @@ components:
       in: header
       required: true
       description: |
-        Mandatory for all write submissions and visitor media uploads. 8-255
-        printable ASCII characters, scoped to the author's public key.
+        Mandatory for durable submission endpoints and visitor media/avatar
+        uploads. 8-255 printable ASCII characters, scoped to the author's
+        public key.
         Retrying an accepted request with the same key and body returns the
         original result (`submission_id` or media URL) with
         `Idempotent-Replayed: true`; a different body with the same key

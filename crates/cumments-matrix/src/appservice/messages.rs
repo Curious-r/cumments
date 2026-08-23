@@ -192,6 +192,7 @@ impl AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
+        txn_id: &str,
     ) -> Result<()> {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
@@ -204,7 +205,6 @@ impl AppServiceMatrixDriver {
             author_signature,
             author_challenge,
         );
-        let txn_id = fresh_transaction_id("react");
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.reaction/{}",
             percent_encode(room_id),
@@ -235,6 +235,7 @@ impl AppServiceMatrixDriver {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
+        txn_id: &str,
     ) -> Result<()> {
         let virtual_user = self
             .resolve_virtual_user(author_public_key, site_id)
@@ -247,7 +248,6 @@ impl AppServiceMatrixDriver {
             author_signature,
             author_challenge,
         );
-        let txn_id = fresh_transaction_id("vote");
         let path = format!(
             "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
             percent_encode(room_id),

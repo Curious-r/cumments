@@ -867,6 +867,7 @@ pub trait MatrixDriver: Send + Sync {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
+        txn_id: &str,
     ) -> Result<()>;
 
     /// Sends a poll vote (`m.poll.response`) as the visitor's virtual user.
@@ -879,6 +880,7 @@ pub trait MatrixDriver: Send + Sync {
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
+        txn_id: &str,
     ) -> Result<()>;
 
     /// Sends a location message (`m.location`, MSC3488) as the visitor's

@@ -2098,6 +2098,126 @@ async fn issue_secret_claims_share_the_pre_auth_rate_limit() {
 }
 
 #[tokio::test]
+async fn reaction_retries_do_not_require_idempotency_key_and_reuse_matrix_txn() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "reaction-natural-idempotency",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("test-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+    store
+        .save_message(&Message {
+            event_id: "$comment:hs".to_string(),
+            site_id: "test-blog".to_string(),
+            page_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Matrix,
+                display_name: None,
+                avatar_url: None,
+                public_key: None,
+                mxid: Some("@alice:hs".to_string()),
+            },
+            content: Content::Text(TextContent {
+                body: "hello".to_string(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            }),
+            timestamp: chrono::Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            submission_id: None,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            raw_content: serde_json::Value::Null,
+        })
+        .await
+        .expect("save comment");
+
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[12u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let signed_message = signature_message(&[
+        Some("REACT"),
+        Some("test-blog"),
+        Some("hello"),
+        Some("$comment:hs"),
+        Some("👍"),
+        Some(challenge.prefix.as_str()),
+    ]);
+    let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "key": "👍",
+        "author_public_key": public_key,
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+    let uri = "/api/v1/sites/test-blog/pages/hello/comments/$comment%3Ahs/reactions";
+
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            uri,
+            Some("null"),
+            &[],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let reactions = driver.reactions.lock().await.clone();
+    assert_eq!(reactions.len(), 1);
+    assert!(
+        reactions[0].3.starts_with("cumments_react_"),
+        "reaction must use a namespaced Matrix transaction ID"
+    );
+
+    // The PoW challenge is single-use, so an HTTP-level retry cannot create a
+    // second reaction. A genuine network retry after the homeserver accepted
+    // the first request is additionally protected by the deterministic txn ID.
+    let retry = router
+        .oneshot(request_with_body(
+            Method::POST,
+            uri,
+            Some("null"),
+            &[],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(retry.status(), StatusCode::FORBIDDEN);
+    assert!(body_text(retry).await.contains("Proof-of-Work"));
+    assert_eq!(driver.reactions.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     let (state, store) = test_state(
         "governance",

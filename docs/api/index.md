@@ -56,10 +56,10 @@ Authors come in two forms:
 
 ## Idempotent writes
 
-`POST`, `PATCH`, `DELETE`, visitor media uploads and visitor avatar writes are
-writes: comment submissions accept a submission and return
-`202 { "submission_id": ... }` before the comment actually lands in Matrix,
-while media and avatar uploads return their result synchronously.
+Comment post/edit/delete/location, visitor media upload, and visitor avatar
+upload are durable submissions. Comment/location submissions accept work and
+return `202 { "submission_id": ... }` before the comment actually lands in
+Matrix; media and avatar uploads return their result synchronously.
 If the client loses the response (network failure, timeout, browser crash) it
 can retry the exact same request with the same `Idempotency-Key` header; the
 server detects the duplicate and returns the original `submission_id` again with
@@ -87,6 +87,13 @@ Rules:
   JSON) do not consume the key.
 - Records are kept for 24 hours, aligned with Stripe's idempotency retention;
   after that the key can be reused.
+
+Reactions, poll votes, and visitor avatar DELETE are natural-idempotent
+synchronous operations and do not use this header. Reaction/vote retries derive
+a deterministic Matrix transaction ID from the exact signed request and PoW
+challenge. The PoW challenge itself is single-use, so an HTTP retry after an
+accepted action returns invalid-PoW rather than duplicating the effect; avatar
+DELETE simply sets the profile field to absent again.
 
 Clients should generate a fresh key per logical write (e.g. `crypto.randomUUID()`)
 and reuse that exact key when retrying the same request. Use the same endpoint

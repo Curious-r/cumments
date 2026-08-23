@@ -5,6 +5,7 @@
 //! idempotency contract.
 
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// Generate a fresh, namespaced transaction ID for a submission-driven
@@ -19,6 +20,25 @@ use uuid::Uuid;
 /// only a confirmed-absent event clears it and allocates a new one.
 pub fn fresh_transaction_id(kind: &str) -> String {
     format!("cumments_{}_{}", kind, Uuid::new_v4())
+}
+
+/// Derive a stable transaction ID for a synchronous Matrix write whose retry
+/// payload is byte-for-byte identical.
+///
+/// Reactions and poll votes do not have a durable submission row. Their
+/// semantic identity plus the signed PoW challenge acts as the attempt nonce:
+/// an exact network retry reuses the same Matrix transaction ID, while a new
+/// user action gets a fresh challenge and therefore a fresh transaction.
+pub fn deterministic_transaction_id(kind: &str, identity_parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(kind.as_bytes());
+    for part in identity_parts {
+        // Length-prefix each field so embedded separators cannot create
+        // ambiguous identities.
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("cumments_{kind}_{}", hex::encode(hasher.finalize()))
 }
 
 /// Idempotency metadata attached to one write request.
@@ -100,7 +120,7 @@ pub struct StuckUpdateSubmission {
 
 #[cfg(test)]
 mod tests {
-    use super::fresh_transaction_id;
+    use super::{deterministic_transaction_id, fresh_transaction_id};
     use uuid::Uuid;
 
     #[test]
@@ -116,5 +136,35 @@ mod tests {
             let uuid = Uuid::parse_str(tail).expect("v4 uuid tail");
             assert_eq!(uuid.get_version(), Some(uuid::Version::Random));
         }
+    }
+
+    #[test]
+    fn deterministic_transaction_ids_are_stable_and_scope_sensitive() {
+        let parts = ["site", "room", "$target", "like", "challenge|nonce"];
+        let first = deterministic_transaction_id("react", &parts);
+        let second = deterministic_transaction_id("react", &parts);
+        assert_eq!(first, second);
+        assert!(first.starts_with("cumments_react_"));
+
+        let mut changed = parts;
+        changed[3] = "award";
+        assert_ne!(
+            first,
+            deterministic_transaction_id("react", &changed),
+            "semantic payload must change the Matrix transaction"
+        );
+        assert_ne!(
+            first,
+            deterministic_transaction_id("vote", &parts),
+            "action namespaces must not collide"
+        );
+    }
+
+    #[test]
+    fn deterministic_transaction_id_encoding_is_unambiguous() {
+        assert_ne!(
+            deterministic_transaction_id("react", &["a", "bc"]),
+            deterministic_transaction_id("react", &["ab", "c"])
+        );
     }
 }

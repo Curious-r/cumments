@@ -163,6 +163,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
+        _txn_id: &str,
     ) -> Result<()> {
         info!("LOGGING: React to {target_event_id} in {room_id} with {key}");
         Ok(())
@@ -177,6 +178,7 @@ impl MatrixDriver for LoggingMatrixDriver {
         _author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
+        _txn_id: &str,
     ) -> Result<()> {
         info!("LOGGING: Vote on poll {poll_event_id} in {room_id} with {answer_id}");
         Ok(())

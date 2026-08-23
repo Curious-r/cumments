@@ -33,6 +33,8 @@ pub struct TestDriver {
     pub adoptions: Mutex<Vec<String>>,
     pub space_links: Mutex<Vec<(String, String)>>,
     pub invites: Mutex<Vec<(String, String)>>,
+    pub reactions: Mutex<Vec<(String, String, String, String)>>,
+    pub poll_votes: Mutex<Vec<(String, String, String, String)>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
     pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
 }
@@ -56,6 +58,8 @@ impl TestDriver {
             adoptions: Mutex::new(Vec::new()),
             space_links: Mutex::new(Vec::new()),
             invites: Mutex::new(Vec::new()),
+            reactions: Mutex::new(Vec::new()),
+            poll_votes: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),
         }

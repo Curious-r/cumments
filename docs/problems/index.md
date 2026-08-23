@@ -115,8 +115,9 @@ window (3600 seconds for hourly limits, 60 seconds for the Operator API).
 - `code`: `idempotency-key-required`
 - `status`: `400`
 
-The `Idempotency-Key` header is mandatory on `POST`, `PUT`, `PATCH`, `DELETE`
-and visitor media upload write submissions.
+The `Idempotency-Key` header is mandatory on durable submission endpoints:
+comment post/edit/delete/location, visitor media upload, and visitor avatar
+upload.
 
 ## Invalid Idempotency-Key {#invalid-idempotency-key}
 

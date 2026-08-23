@@ -19,7 +19,7 @@ use cumments_core::{
     commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
     identity::{post_signature_message, signature_message, verify_signature},
     models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
-    submissions::{IdempotencyInput, IdempotencyOutcome},
+    submissions::{IdempotencyInput, IdempotencyOutcome, deterministic_transaction_id},
 };
 use ruma_common::EventId;
 use std::net::SocketAddr;
@@ -987,9 +987,21 @@ pub(crate) async fn react_handler(
             &req.author_public_key,
             &req.author_signature,
             challenge,
+            &deterministic_transaction_id(
+                "react",
+                &[
+                    site_id_val.as_str(),
+                    page_slug_val.as_str(),
+                    room_id.as_str(),
+                    comment_id.as_str(),
+                    req.author_public_key.as_str(),
+                    req.key.as_str(),
+                    req.challenge_response.as_str(),
+                ],
+            ),
         )
         .await
-        .map_err(|e| AppError::Internal(format!("failed to send reaction: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("failed to send vote: {e}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1064,6 +1076,18 @@ pub(crate) async fn vote_handler(
             &req.author_public_key,
             &req.author_signature,
             challenge,
+            &deterministic_transaction_id(
+                "vote",
+                &[
+                    site_id_val.as_str(),
+                    page_slug_val.as_str(),
+                    room_id.as_str(),
+                    poll_id.as_str(),
+                    req.author_public_key.as_str(),
+                    req.option_id.as_str(),
+                    req.challenge_response.as_str(),
+                ],
+            ),
         )
         .await
         .map_err(|e| AppError::Internal(format!("failed to send vote: {e}")))?;

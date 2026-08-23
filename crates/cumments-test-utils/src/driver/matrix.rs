@@ -164,8 +164,15 @@ impl MatrixDriver for TestDriver {
         _author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
+        _txn_id: &str,
     ) -> anyhow::Result<()> {
-        unimplemented!("not used in this test")
+        self.reactions.lock().await.push((
+            _room_id.to_string(),
+            _target_event_id.to_string(),
+            _key.to_string(),
+            _txn_id.to_string(),
+        ));
+        Ok(())
     }
     async fn vote_poll(
         &self,
@@ -176,8 +183,15 @@ impl MatrixDriver for TestDriver {
         _author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
+        _txn_id: &str,
     ) -> anyhow::Result<()> {
-        unimplemented!("not used in this test")
+        self.poll_votes.lock().await.push((
+            _room_id.to_string(),
+            _poll_event_id.to_string(),
+            _answer_id.to_string(),
+            _txn_id.to_string(),
+        ));
+        Ok(())
     }
     #[allow(clippy::too_many_arguments)]
     async fn post_location(

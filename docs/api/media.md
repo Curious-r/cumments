@@ -79,7 +79,8 @@ so the same visitor has independent avatars per site.
 
 Removes the avatar. The signature covers
 `["DELETE_AVATAR", site_id, challenge]`; deleting a missing avatar is a
-successful no-op.
+successful no-op. This natural-idempotent operation does not use
+`Idempotency-Key`.
 
 ## Site sticker packs
 

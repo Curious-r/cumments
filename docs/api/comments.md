@@ -6,9 +6,10 @@ the request must carry `X-Cumments-Timestamp` and `X-Cumments-Signature`
 (HMAC-SHA256 over `timestamp\nMETHOD\npath\nsha256(body)`, ±5 minutes).
 See [Site trust](../site-trust.md) for the policy.
 
-Every write also carries the author proof described in the
-[API overview](index.md#authors) and an
-[`Idempotency-Key`](index.md#idempotent-writes) header.
+Every write carries the author proof described in the
+[API overview](index.md#authors). Durable submission endpoints also require an
+[`Idempotency-Key`](index.md#idempotent-writes) header; reactions, poll votes,
+and visitor avatar deletion are natural-idempotent exceptions described below.
 
 ## List comments
 
@@ -210,6 +211,12 @@ Body: `{ "key", "author_public_key", "author_signature", "challenge_response" }`
 The signature covers `["REACT", site_id, page_slug, comment_id, key, challenge]`;
 the reaction is sent as the visitor's virtual user (`m.reaction` with the
 signed proof block) and projected into the message's reaction counts.
+This endpoint does not use `Idempotency-Key`. Matrix uses a deterministic
+transaction ID derived from the signed request and PoW challenge, so retrying
+the exact same Matrix request does not create another aggregate reaction. The
+PoW challenge is single-use at the HTTP API boundary, however, so a repeated
+HTTP request after success returns invalid-PoW instead of duplicating the
+effect.
 
 ## Vote on a poll
 
@@ -219,6 +226,11 @@ Body: `{ "option_id", "author_public_key", "author_signature", "challenge_respon
 The signature covers `["VOTE", site_id, page_slug, poll_id, option_id, challenge]`;
 the vote is sent as `m.poll.response` (MSC3381) with the signed proof block
 and aggregated into the poll's response counts.
+This endpoint does not use `Idempotency-Key`. Matrix uses a deterministic
+transaction ID derived from the signed request and PoW challenge, so retrying
+the exact same Matrix request does not create another vote event. The PoW
+challenge is single-use at the HTTP API boundary, however, so a repeated HTTP
+request after success returns invalid-PoW instead of duplicating the effect.
 
 ## Post a location
 
