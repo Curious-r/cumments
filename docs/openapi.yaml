@@ -1,4 +1,5 @@
-openapi: 3.0.3
+openapi: 3.2.0
+$self: https://cumments.curious.host/openapi.yaml
 info:
   title: Cumments API
   version: 0.27.0
@@ -10,9 +11,8 @@ info:
     POST/PATCH/DELETE accept a submission and return `202 { "submission_id" }`;
     the projected comment later carries the same `submission_id`.
 
-    Comment reads use the RFC 10008 `QUERY` method. OpenAPI does not support
-    custom verbs, so each QUERY operation is represented with Redocly's
-    `x-query` extension and is sent as `QUERY` on the wire.
+    Comment reads use the RFC 10008 `QUERY` method, modeled natively by
+    OpenAPI 3.2.
 servers:
   - url: "{scheme}://{host}"
     description: Cumments API origin
@@ -175,13 +175,12 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-    x-query:
+    query:
       operationId: queryComments
       summary: List comments (QUERY)
       description: |
         Sent as `QUERY /api/v1/sites/{site_id}/pages/{page_slug}/comments`
-        with a JSON body. This custom verb is represented here as an OpenAPI
-        extension because OpenAPI only supports standard HTTP methods.
+        with a JSON body.
       parameters:
         - $ref: "#/components/parameters/SiteId"
         - $ref: "#/components/parameters/PageSlug"
@@ -394,7 +393,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
   /api/v1/operator/sites:
-    x-query:
+    query:
       tags: [Operator]
       summary: List managed sites (QUERY)
       operationId: listOperatorSites
@@ -545,7 +544,7 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
   /api/v1/operator/rooms/quarantined:
-    x-query:
+    query:
       tags: [Operator]
       summary: List quarantined rooms (QUERY)
       operationId: listQuarantinedRooms
@@ -748,17 +747,13 @@ paths:
                   room_id:
                     type: string
                   name:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
                   topic:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
                   avatar_url:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
                   avatar_thumbnail_url:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
                     description: >
                       Same image through the 96×96 crop thumbnail variant
                       (signed proxy URL when the proxy is enabled).
@@ -1125,8 +1120,7 @@ paths:
                 geo_uri:
                   type: string
                 description:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                 display_name:
                   type: string
                   minLength: 1
@@ -1140,12 +1134,10 @@ paths:
                 author_signature:
                   type: string
                 reply_to:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                   description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
                 thread_root:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                   description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix].
                 challenge_response:
                   type: string
@@ -1912,8 +1904,7 @@ components:
           type: string
           description: Stable machine-readable slug; the fragment (after `#`) of `type`
         details:
-          type: object
-          nullable: true
+          type: [object, "null"]
     HealthResponse:
       type: object
       required: [status]
@@ -1929,12 +1920,10 @@ components:
           type: string
           description: 32-hex identifier derived from the public key.
         display_name:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Current Matrix profile display name, or null when unset.
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Signed proxy URL (96×96 crop variant when the media proxy is
             enabled; the raw MXC URL otherwise), or null when unset.
@@ -1975,17 +1964,13 @@ components:
           type: string
           enum: [visitor, matrix]
         display_name:
-          type: string
-          nullable: true
+          type: [string, "null"]
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
         public_key:
-          type: string
-          nullable: true
+          type: [string, "null"]
         mxid:
-          type: string
-          nullable: true
+          type: [string, "null"]
     Message:
       type: object
       required:
@@ -2019,30 +2004,24 @@ components:
           type: string
           format: date-time
         edited_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
           description: Matrix `origin_server_ts` of the last applied edit
         reply_to:
-          type: string
-          nullable: true
+          type: [string, "null"]
         thread_root:
-          type: string
-          nullable: true
+          type: [string, "null"]
         submission_id:
-          type: integer
+          type: [integer, "null"]
           format: int64
-          nullable: true
         status:
           type: string
           enum: [active, redacted]
         redacted_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         redacted_by:
-          type: string
-          nullable: true
+          type: [string, "null"]
         reactions:
           type: array
           items:
@@ -2064,8 +2043,7 @@ components:
         body:
           type: string
         formatted_body:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: HTML body; renderers MUST sanitize it
         style:
           type: string
@@ -2078,27 +2056,20 @@ components:
           type: string
           description: MXC URI or signed media-proxy URL after proxying
         filename:
-          type: string
-          nullable: true
+          type: [string, "null"]
         mimetype:
-          type: string
-          nullable: true
+          type: [string, "null"]
         size:
-          type: integer
+          type: [integer, "null"]
           format: int64
-          nullable: true
         width:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         height:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         thumbnail_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
         alt_text:
-          type: string
-          nullable: true
+          type: [string, "null"]
         voice:
           type: boolean
           description: MSC3245 voice message marker (media only)
@@ -2106,8 +2077,7 @@ components:
         geo_uri:
           type: string
         description:
-          type: string
-          nullable: true
+          type: [string, "null"]
         # poll
         question:
           type: string
@@ -2124,12 +2094,10 @@ components:
         algorithm:
           type: string
         sender_key:
-          type: string
-          nullable: true
+          type: [string, "null"]
         # unknown
         fallback:
-          type: string
-          nullable: true
+          type: [string, "null"]
         raw:
           type: object
           description: Raw content of an unknown message type
@@ -2177,28 +2145,24 @@ components:
           required: [url]
           properties:
             kind:
-              type: string
-              enum: [image, video, audio, file, sticker]
-              nullable: true
+              oneOf:
+                - type: string
+                  enum: [image, video, audio, file, sticker]
+                - type: "null"
             url:
               type: string
               description: MXC URI returned by the media upload endpoint
             filename:
-              type: string
-              nullable: true
+              type: [string, "null"]
             mimetype:
-              type: string
-              nullable: true
+              type: [string, "null"]
             size:
-              type: integer
+              type: [integer, "null"]
               format: int64
-              nullable: true
             width:
-              type: integer
-              nullable: true
+              type: [integer, "null"]
             height:
-              type: integer
-              nullable: true
+              type: [integer, "null"]
             voice:
               type: boolean
               default: false
@@ -2215,12 +2179,10 @@ components:
         author_signature:
           type: string
         reply_to:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
         thread_root:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix].
         challenge_response:
           type: string
@@ -2408,17 +2370,15 @@ components:
           items:
             $ref: "#/components/schemas/OperatorOrigin"
         verified_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         has_secret:
           type: boolean
         has_claim_token:
           type: boolean
         updated_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
     OperatorSitePage:
       type: object
       required: [data, meta]
@@ -2468,9 +2428,8 @@ components:
           type: integer
           minimum: 1
         next_attempt_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
     OperatorQuarantinedRoomPage:
       type: object
       required: [data, meta]
@@ -2647,14 +2606,11 @@ components:
           type: string
           description: Matrix `m.room.image_pack` state key.
         display_name:
-          type: string
-          nullable: true
+          type: [string, "null"]
         avatar_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
         avatar_proxy_url:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Signed preview URL for the pack avatar (96×96 crop variant).
         images:
           type: array
@@ -2671,11 +2627,9 @@ components:
                 type: string
                 description: Signed preview URL served by the media proxy.
               body:
-                type: string
-                nullable: true
+                type: [string, "null"]
               info:
-                type: object
-                nullable: true
+                type: [object, "null"]
                 description: Matrix ImageInfo (`w`/`h`, `mimetype`, `size`, ...).
   requestBodies:
     AddSticker:
