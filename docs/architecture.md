@@ -1,9 +1,11 @@
 # Architecture
 
 Cumments is a decentralized comment system backend built on the **Matrix
-protocol**. Matrix is the **source of truth**: every comment, edit and
-deletion is an immutable Matrix event. SQLite is a disposable local read model
-that can be rebuilt from Matrix history with `cumments backfill`.
+protocol**. Matrix is the source of truth for visible room facts: comments,
+edits, reactions, votes, roles and state are Matrix events or homeserver state.
+SQLite holds a projection plus local coordination state; the fact projection can
+be rebuilt with `cumments backfill`, while control-plane rows have the narrower
+durability contract described below.
 
 How Matrix events are shaped into the typed comment model is documented in
 [Data model](data-model.md).
@@ -28,6 +30,21 @@ Everything below follows from three invariants:
    back, the projector updates the read model, and the reconciler confirms
    its work. The same idempotent projection also serves `backfill`; Logging
    mode has no homeserver push and therefore no closed loop.
+
+### Local data layers
+
+The SQLite database deliberately contains three kinds of state:
+
+| Layer | Examples | Contract |
+|---|---|---|
+| Fact projection | messages, edit revisions, reactions, poll responses, room members/state events, governance role snapshots, sticker packs | Derived from visible Matrix facts and rebuildable by backfill. Deleted content is sanitized rather than retained forever. |
+| Derived views | current content, `edited_at`, reaction/poll summaries, live author profile | Always recomputable from fact rows and Matrix state. |
+| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, backfill cursors/tombstones, media-upload ownership | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
+
+A few columns cross layers for operational reasons: for example,
+`messages.submission_id` correlates a projected Matrix fact with a local
+submission. Such correlation fields do not turn the fact into authoritative
+state, but they must be included in consistency tests.
 
 Together these collapse the design space into one conceptual skeleton:
 durable local submission of the user's intent, background convergence on

@@ -5,9 +5,12 @@ that the API and SSE stream expose. It documents the mapping and the storage
 layout; the runtime system around them is covered in
 [architecture](architecture.md).
 
-The read model is disposable: every row can be rebuilt from Matrix history
-with `cumments backfill`. Nothing here is the source of truth — Matrix events
-are.
+The read model separates Matrix-derived facts from local control state. Fact
+projection rows can be rebuilt from Matrix history with `cumments backfill`;
+submission queues, idempotency records, claims, secrets, audit entries,
+quarantine decisions and anti-resurrection tombstones are local control-plane
+state with their own durability rules (see
+[architecture](architecture.md)).
 
 ## Design principles
 
@@ -45,8 +48,10 @@ Message {
 }
 ```
 
-The full revision history of every edit is kept in a dedicated
-`message_revisions` table, but the API currently exposes only `edited_at`.
+Edit revisions are stored in a dedicated `message_revisions` table, but the API
+currently exposes only `edited_at`. A revision is an immutable relation fact;
+redacting an edit hides that revision and the displayed content falls back to
+the latest surviving revision or the original message.
 `room_id`, `sender_mxid` and the raw Matrix `content` are internal integrity
 fields and are never serialized to API or SSE clients.
 
@@ -166,6 +171,10 @@ poll_responses (
 
 Notes on the layout:
 
+- Edit revisions include redaction metadata so removing one replacement can
+  roll the public view back deterministically.
+- Parent deletion sanitizes the parent and removes all of its revisions; late
+  replacements cannot restore deleted content.
 - The author proof (`signature`, `challenge`) is verified at projection time
   and is **not** stored in the read model; only the public key is kept for
   edit/delete authorization.
