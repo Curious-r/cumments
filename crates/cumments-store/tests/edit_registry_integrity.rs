@@ -1,7 +1,7 @@
 use chrono::Utc;
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PageSlug,
-    RoomStatus, SiteId, TextContent, TextStyle,
+    AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message, MessageRevision,
+    MessageStatus, PageSlug, RoomStatus, SiteId, TextContent, TextStyle,
 };
 use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_store::DbStore;
@@ -59,9 +59,9 @@ async fn apply_edit(
     body: &str,
     ts_millis: i64,
     edit_event_id: &str,
-) -> bool {
+) -> EditProjectionOutcome {
     let Some(mut updated) = store.get_message(event_id).await.expect("get message") else {
-        return false;
+        return EditProjectionOutcome::Rejected;
     };
     updated.room_id = room_id.to_string();
     updated.content = Content::Text(TextContent {
@@ -93,7 +93,7 @@ async fn edit_from_different_room_is_rejected() {
     save_message(&store, "$event:hs", "!room-a:hs", "original").await;
 
     let applied = apply_edit(&store, "$event:hs", "!room-b:hs", "edited", 200, "$edit:hs").await;
-    assert!(!applied, "edit from another room must be rejected");
+    assert_eq!(applied, EditProjectionOutcome::Rejected);
 
     let stored = store
         .get_message("$event:hs")
@@ -111,10 +111,10 @@ async fn stale_edit_is_rejected_and_event_id_breaks_ties() {
     save_message(&store, "$event:hs", "!room-a:hs", "original").await;
 
     let applied = apply_edit(&store, "$event:hs", "!room-a:hs", "two", 200, "$e2:hs").await;
-    assert!(applied);
+    assert_eq!(applied, EditProjectionOutcome::AppliedCurrent);
 
     let applied = apply_edit(&store, "$event:hs", "!room-a:hs", "one", 100, "$e1:hs").await;
-    assert!(!applied, "older edit must be ignored");
+    assert_eq!(applied, EditProjectionOutcome::Superseded);
 
     let applied = apply_edit(
         &store,
@@ -125,13 +125,14 @@ async fn stale_edit_is_rejected_and_event_id_breaks_ties() {
         "$e0:hs",
     )
     .await;
-    assert!(
-        !applied,
+    assert_eq!(
+        applied,
+        EditProjectionOutcome::Superseded,
         "equal timestamp with smaller event id must be ignored"
     );
 
     let applied = apply_edit(&store, "$event:hs", "!room-a:hs", "three", 300, "$e3:hs").await;
-    assert!(applied);
+    assert_eq!(applied, EditProjectionOutcome::AppliedCurrent);
 
     let stored = store
         .get_message("$event:hs")

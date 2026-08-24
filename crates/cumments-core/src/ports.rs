@@ -5,9 +5,10 @@ use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
 use crate::models::{
-    CommentMedia, Message, MessagePage, MessageRevision, PageSlug, PollVote, QuarantinedRoom,
-    Reaction, RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus,
-    SiteId, VisitorProfile,
+    CommentMedia, EditProjectionOutcome, Message, MessagePage, MessageRedactionOutcome,
+    MessageRevision, MessageSaveOutcome, PageSlug, PollVote, QuarantinedRoom, Reaction,
+    RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus, SiteId,
+    VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -232,25 +233,25 @@ pub trait MessageStore: Send + Sync {
         offset: i64,
     ) -> Result<MessagePage>;
 
-    /// Saves a new message or updates an existing one (on conflict by
-    /// event_id).
-    async fn save_message(&self, message: &Message) -> Result<()>;
+    /// Saves a new message without overwriting an already-projected event.
+    async fn save_message(&self, message: &Message) -> Result<MessageSaveOutcome>;
 
-    /// Applies an edit to a message and records the revision. Bound to the
-    /// room the edit arrived from and ordered by edit recency. Returns
-    /// `false` when the target is missing, lives in another room, or the edit
-    /// is older than the content already stored.
-    async fn apply_edit(&self, message: &Message, revision: &MessageRevision) -> Result<bool>;
+    /// Applies an edit to a message and records every valid replacement,
+    /// including stale revisions that are not currently displayed.
+    async fn apply_edit(
+        &self,
+        message: &Message,
+        revision: &MessageRevision,
+    ) -> Result<EditProjectionOutcome>;
 
     /// Marks a message as redacted (kept in the read model as a tombstone).
-    /// Returns `false` when the message is missing or lives in another room.
     async fn redact_message(
         &self,
         event_id: &str,
         room_id: &str,
         redacted_at: chrono::DateTime<chrono::Utc>,
         redacted_by: &str,
-    ) -> Result<bool>;
+    ) -> Result<MessageRedactionOutcome>;
 
     /// Looks up an `m.replace` revision by its own Matrix event ID.
     async fn get_message_revision(&self, event_id: &str) -> Result<Option<MessageRevision>>;

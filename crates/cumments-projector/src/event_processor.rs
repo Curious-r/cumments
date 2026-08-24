@@ -22,9 +22,9 @@ use cumments_core::{
     },
     identity::{post_signature_message, signature_message},
     models::{
-        AuthorKind, AuthorSnapshot, Content, Message, MessageRevision, MessageStatus, PageSlug,
-        PollVote, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId,
-        TextStyle,
+        AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
+        MessageRedactionOutcome, MessageRevision, MessageStatus, PageSlug, PollVote, Reaction,
+        RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId, TextStyle,
     },
     ports::{
         CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, RegistryStore,
@@ -1483,7 +1483,17 @@ impl EventProcessor {
                 redacted_at: None,
             };
 
-            if self.message_store.apply_edit(&updated, &revision).await? {
+            let outcome = self.message_store.apply_edit(&updated, &revision).await?;
+            let should_complete = match outcome {
+                EditProjectionOutcome::AppliedCurrent | EditProjectionOutcome::AlreadyKnown => true,
+                // A correlated stale command was still observed on the
+                // homeserver; an uncorrelated stale event must not close a
+                // different queued edit.
+                EditProjectionOutcome::Superseded => event.submission_id.is_some(),
+                EditProjectionOutcome::Rejected => false,
+            };
+
+            if should_complete {
                 info!("Successfully updated message {}", relation.target_event_id);
                 // Closed-loop only after the projection succeeded: the
                 // correlation ID lets concurrent edits close independently;
@@ -1518,8 +1528,8 @@ impl EventProcessor {
                 }
             } else {
                 debug!(
-                    "Edit ignored for {}: target missing, in another room, or stale",
-                    relation.target_event_id
+                    ?outcome,
+                    "Edit not eligible for closure: {}", relation.target_event_id
                 );
             }
             return Ok(());
@@ -1623,8 +1633,12 @@ impl EventProcessor {
             raw_content: event.raw_content.clone(),
         };
 
-        self.message_store.save_message(&message).await?;
-        info!("Successfully projected message event {}", event.event_id);
+        let outcome = self.message_store.save_message(&message).await?;
+        info!(
+            ?outcome,
+            event_id = %event.event_id,
+            "Observed projected message event"
+        );
         // Closed-loop only after the projection succeeded. Prefer the
         // correlation ID when present – the push may arrive before the
         // reconciler's write-back, so the event_id is not yet stored on the
@@ -2350,11 +2364,14 @@ impl EventProcessor {
                 return Ok(());
             }
 
-            if self
+            let outcome = self
                 .message_store
                 .redact_message(&target_event_id, &event.room_id, redacted_at, &redacted_by)
-                .await?
-            {
+                .await?;
+            if matches!(
+                outcome,
+                MessageRedactionOutcome::Redacted | MessageRedactionOutcome::AlreadyRedacted
+            ) {
                 // Keep a persistent tombstone so a later re-delivery of the
                 // original event (push retry, resumed backfill) cannot insert
                 // it again.

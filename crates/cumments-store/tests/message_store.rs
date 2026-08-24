@@ -2,9 +2,10 @@ use chrono::Utc;
 use cumments_core::commands::PostCommentCommand;
 use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, CommentMedia, Content, MediaContent, MediaKind, Message,
-    MessageRevision, MessageStatus, PageSlug, PollContent, PollOption, PollVote, Reaction,
-    RoomMember, SiteId, TextContent, TextStyle, UnknownContent,
+    AuthorKind, AuthorSnapshot, CommentMedia, Content, EditProjectionOutcome, MediaContent,
+    MediaKind, Message, MessageRedactionOutcome, MessageRevision, MessageSaveOutcome,
+    MessageStatus, PageSlug, PollContent, PollOption, PollVote, Reaction, RoomMember, SiteId,
+    TextContent, TextStyle, UnknownContent,
 };
 use cumments_core::ports::{MessageStore, RoomStore, SubmissionStore, VirtualUserStore};
 use cumments_store::DbStore;
@@ -195,11 +196,12 @@ async fn apply_edit_updates_content_and_records_revision() {
         redacted_at: None,
     };
 
-    assert!(
+    assert_eq!(
         store
             .apply_edit(&updated, &revision)
             .await
-            .expect("apply edit")
+            .expect("apply edit"),
+        EditProjectionOutcome::AppliedCurrent
     );
     let stored = store
         .get_message("$event:hs")
@@ -223,11 +225,12 @@ async fn apply_edit_updates_content_and_records_revision() {
         editor_mxid: "someone".to_string(),
         redacted_at: None,
     };
-    assert!(
-        !store
+    assert_eq!(
+        store
             .apply_edit(&updated, &stale)
             .await
-            .expect("stale edit rejected")
+            .expect("stale edit stored"),
+        EditProjectionOutcome::Superseded
     );
 
     // The stale replacement remains an immutable relation fact even though it
@@ -257,7 +260,10 @@ async fn duplicate_original_projection_preserves_the_edited_view() {
         .await
         .expect("connect db");
     let message = visitor_message("$event:hs", "original");
-    store.save_message(&message).await.expect("save message");
+    assert_eq!(
+        store.save_message(&message).await.expect("save message"),
+        MessageSaveOutcome::Inserted
+    );
     let edited_at = Utc::now();
     let mut updated = message.clone();
     updated.content = Content::Text(TextContent {
@@ -266,7 +272,7 @@ async fn duplicate_original_projection_preserves_the_edited_view() {
         style: TextStyle::Normal,
     });
     updated.edited_at = Some(edited_at);
-    assert!(
+    assert_eq!(
         store
             .apply_edit(
                 &updated,
@@ -280,12 +286,16 @@ async fn duplicate_original_projection_preserves_the_edited_view() {
                 },
             )
             .await
-            .expect("apply edit")
+            .expect("apply edit"),
+        EditProjectionOutcome::AppliedCurrent
     );
 
     // A homeserver retry of the immutable original is a no-op; it must not
     // overwrite the derived current content with the pre-edit payload.
-    store.save_message(&message).await.expect("replay original");
+    assert_eq!(
+        store.save_message(&message).await.expect("replay original"),
+        MessageSaveOutcome::AlreadyProjected
+    );
     let stored = store
         .get_message("$event:hs")
         .await
@@ -314,7 +324,7 @@ async fn redacting_the_latest_revision_rolls_back_to_an_older_revision() {
             style: TextStyle::Normal,
         });
         updated.edited_at = Some(base + chrono::Duration::seconds(offset_secs));
-        assert!(
+        assert_eq!(
             store
                 .apply_edit(
                     &updated,
@@ -329,6 +339,7 @@ async fn redacting_the_latest_revision_rolls_back_to_an_older_revision() {
                 )
                 .await
                 .unwrap_or_else(|error| panic!("apply {event_id}: {error:#}")),
+            EditProjectionOutcome::AppliedCurrent,
             "{event_id} should become current"
         );
     }
@@ -370,7 +381,7 @@ async fn redacting_the_only_revision_restores_the_original() {
         style: TextStyle::Normal,
     });
     updated.edited_at = Some(edited_at);
-    assert!(
+    assert_eq!(
         store
             .apply_edit(
                 &updated,
@@ -384,7 +395,8 @@ async fn redacting_the_only_revision_restores_the_original() {
                 },
             )
             .await
-            .expect("apply edit")
+            .expect("apply edit"),
+        EditProjectionOutcome::AppliedCurrent
     );
 
     assert!(
@@ -421,7 +433,7 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
         style: TextStyle::Normal,
     });
     updated.edited_at = Some(edited_at);
-    assert!(
+    assert_eq!(
         store
             .apply_edit(
                 &updated,
@@ -435,7 +447,8 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
                 },
             )
             .await
-            .expect("apply edit")
+            .expect("apply edit"),
+        EditProjectionOutcome::AppliedCurrent
     );
     store
         .save_reaction(&Reaction {
@@ -450,11 +463,12 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
         .expect("save reaction");
 
     let now = Utc::now();
-    assert!(
+    assert_eq!(
         store
             .redact_message("$event:hs", "!room:hs", now, ":hs")
             .await
-            .expect("redact message")
+            .expect("redact message"),
+        MessageRedactionOutcome::Redacted
     );
     let stored = store
         .get_message("$event:hs")
@@ -473,8 +487,8 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
 
     // A late or replayed replacement cannot restore deleted content.
     updated.edited_at = Some(Utc::now());
-    assert!(
-        !store
+    assert_eq!(
+        store
             .apply_edit(
                 &updated,
                 &MessageRevision {
@@ -491,14 +505,16 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
                 }
             )
             .await
-            .expect("late edit rejected")
+            .expect("late edit rejected"),
+        EditProjectionOutcome::Rejected
     );
 
-    assert!(
-        !store
+    assert_eq!(
+        store
             .redact_message("$missing:hs", "!room:hs", now, ":hs")
             .await
-            .expect("missing target")
+            .expect("missing target"),
+        MessageRedactionOutcome::Rejected
     );
 }
 

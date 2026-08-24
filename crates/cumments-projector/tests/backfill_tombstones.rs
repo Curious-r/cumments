@@ -1,9 +1,10 @@
+use cumments_core::commands::UpdateCommentCommand;
 use cumments_core::identity::{derive_visitor_id_from_public_key, signature_message};
 use cumments_core::models::{
     Content, LocationContent, PageSlug, PollContent, PollOption, RoomIdentity, SiteId, TextContent,
     TextStyle,
 };
-use cumments_core::ports::{MessageStore, RegistryStore};
+use cumments_core::ports::{MessageStore, RegistryStore, SubmissionStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
     ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction,
@@ -263,6 +264,96 @@ async fn edit_redaction_rolls_the_parent_back_to_original_content() {
         .expect("query revision")
         .expect("revision remains as a redacted fact");
     assert!(revision.redacted_at.is_some());
+}
+
+#[tokio::test]
+async fn replayed_edit_closes_a_submission_after_a_projection_crash() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("edit-replay-closure"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("my-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+    let processor = processor(store.clone()).await;
+    processor
+        .process_room_message(message("$original:hs"))
+        .await
+        .expect("process original");
+
+    // Simulate a crash after the fact was committed but before the local
+    // submission was completed.
+    let mut parent = store
+        .get_message("$original:hs")
+        .await
+        .expect("query parent")
+        .expect("parent exists");
+    let edited_at = chrono::DateTime::from_timestamp_millis(200).expect("valid timestamp");
+    parent.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    parent.edited_at = Some(edited_at);
+    store
+        .apply_edit(
+            &parent,
+            &cumments_core::models::MessageRevision {
+                event_id: "$replace:hs".to_string(),
+                message_event_id: "$original:hs".to_string(),
+                content: parent.content.clone(),
+                edited_at,
+                editor_mxid: parent.sender_mxid.clone(),
+                redacted_at: None,
+            },
+        )
+        .await
+        .expect("seed applied revision");
+
+    let submission_id = store
+        .save_update_submission(&UpdateCommentCommand {
+            site_id: SiteId::from("my-blog"),
+            page_slug: PageSlug::from("hello"),
+            event_id: "$original:hs".to_string(),
+            content: "edited".to_string(),
+            author_public_key: String::new(),
+            author_signature: String::new(),
+            author_challenge: String::new(),
+        })
+        .await
+        .expect("queue update");
+
+    let mut replacement = message("$replace:hs");
+    replacement.submission_id = Some(submission_id);
+    replacement.origin_server_ts = 200;
+    replacement.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    replacement.relates_to = Some(ParsedRelation {
+        target_event_id: "$original:hs".to_string(),
+        new_content: replacement.content.clone(),
+    });
+    processor
+        .process_room_message(replacement)
+        .await
+        .expect("replay replacement");
+
+    assert!(
+        store
+            .get_pending_update_submissions(10)
+            .await
+            .expect("query pending submissions")
+            .is_empty(),
+        "already-known replacement must close its correlated submission"
+    );
 }
 
 #[tokio::test]

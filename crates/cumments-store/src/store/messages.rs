@@ -11,8 +11,9 @@ use cumments_core::media_upload::{
     MediaUploadIdempotencyOutcome,
 };
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, Content, Message, MessagePage, MessageRevision, MessageStatus,
-    PageSlug, PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, UnknownContent,
+    AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message, MessagePage,
+    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
+    PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, UnknownContent,
 };
 use cumments_core::ports::MessageStore;
 use sea_orm::{
@@ -173,7 +174,7 @@ impl MessageStore for DbStore {
         })
     }
 
-    async fn save_message(&self, message: &Message) -> Result<()> {
+    async fn save_message(&self, message: &Message) -> Result<MessageSaveOutcome> {
         let now = chrono::Utc::now();
         let active_model = messages::ActiveModel {
             event_id: Set(message.event_id.clone()),
@@ -214,16 +215,19 @@ impl MessageStore for DbStore {
             .exec(&self.db)
             .await
         {
-            Ok(_) => {}
+            Ok(_) => Ok(MessageSaveOutcome::Inserted),
             // A replayed immutable original is a no-op; preserving the current
             // derived view is especially important after later edits.
-            Err(sea_orm::DbErr::RecordNotInserted) => {}
+            Err(sea_orm::DbErr::RecordNotInserted) => Ok(MessageSaveOutcome::AlreadyProjected),
             Err(error) => return Err(error.into()),
         }
-        Ok(())
     }
 
-    async fn apply_edit(&self, message: &Message, revision: &MessageRevision) -> Result<bool> {
+    async fn apply_edit(
+        &self,
+        message: &Message,
+        revision: &MessageRevision,
+    ) -> Result<EditProjectionOutcome> {
         let txn = self.db.begin().await?;
         let edit_ts = revision.edited_at.timestamp_millis();
 
@@ -238,7 +242,7 @@ impl MessageStore for DbStore {
             .is_some()
         {
             txn.commit().await?;
-            return Ok(false);
+            return Ok(EditProjectionOutcome::AlreadyKnown);
         }
 
         let parent = messages::Entity::find()
@@ -249,7 +253,7 @@ impl MessageStore for DbStore {
             .await?;
         let Some(parent) = parent else {
             txn.rollback().await?;
-            return Ok(false);
+            return Ok(EditProjectionOutcome::Rejected);
         };
 
         let revision_model = message_revisions::ActiveModel {
@@ -280,13 +284,13 @@ impl MessageStore for DbStore {
             .await?;
         let Some(current) = current else {
             txn.rollback().await?;
-            return Ok(false);
+            return Ok(EditProjectionOutcome::Rejected);
         };
         if current.event_id != revision.event_id {
             // The valid replacement remains stored as a fact, but it does not
             // become the public view until a newer revision is redacted.
             txn.commit().await?;
-            return Ok(false);
+            return Ok(EditProjectionOutcome::Superseded);
         }
 
         let mut active: messages::ActiveModel = parent.into();
@@ -297,7 +301,7 @@ impl MessageStore for DbStore {
         active.update(&txn).await?;
 
         txn.commit().await?;
-        Ok(true)
+        Ok(EditProjectionOutcome::AppliedCurrent)
     }
 
     async fn redact_message(
@@ -306,13 +310,27 @@ impl MessageStore for DbStore {
         room_id: &str,
         redacted_at: chrono::DateTime<chrono::Utc>,
         redacted_by: &str,
-    ) -> Result<bool> {
+    ) -> Result<MessageRedactionOutcome> {
         // Redaction is a projection rewrite, not just a lifecycle flag: the
         // homeserver strips the original event, so the read model must do the
         // same. Revisions are removed in the same transaction because each one
         // contains an earlier displayable version of the deleted comment.
+        let existing = messages::Entity::find()
+            .filter(messages::COLUMN.event_id.eq(event_id))
+            .one(&self.db)
+            .await?;
+        let Some(existing) = existing else {
+            return Ok(MessageRedactionOutcome::Rejected);
+        };
+        if existing.room_id != room_id {
+            return Ok(MessageRedactionOutcome::Rejected);
+        }
+        if existing.status == MessageStatus::Redacted.as_str() {
+            return Ok(MessageRedactionOutcome::AlreadyRedacted);
+        }
+
         let txn = self.db.begin().await?;
-        let result = messages::Entity::update_many()
+        messages::Entity::update_many()
             .col_expr(
                 messages::Column::ContentJson,
                 sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
@@ -362,17 +380,12 @@ impl MessageStore for DbStore {
             .exec(&txn)
             .await?;
 
-        if result.rows_affected == 0 {
-            txn.rollback().await?;
-            return Ok(false);
-        }
-
         message_revisions::Entity::delete_many()
             .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
             .exec(&txn)
             .await?;
         txn.commit().await?;
-        Ok(true)
+        Ok(MessageRedactionOutcome::Redacted)
     }
 
     async fn get_message_revision(&self, event_id: &str) -> Result<Option<MessageRevision>> {

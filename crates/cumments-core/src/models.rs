@@ -398,6 +398,32 @@ pub struct MessageRevision {
     pub redacted_at: Option<DateTime<Utc>>,
 }
 
+/// Whether projecting an immutable original created a fact or met one that
+/// already existed. Both successful states allow closed-loop completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageSaveOutcome {
+    Inserted,
+    AlreadyProjected,
+}
+
+/// Result of applying one `m.replace` relation. Valid stale replacements are
+/// retained as facts even when they do not become the current view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditProjectionOutcome {
+    AppliedCurrent,
+    AlreadyKnown,
+    Superseded,
+    Rejected,
+}
+
+/// Result of redacting an original message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageRedactionOutcome {
+    Redacted,
+    AlreadyRedacted,
+    Rejected,
+}
+
 /// A poll vote record (one row per voter; the latest vote wins).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PollVote {
