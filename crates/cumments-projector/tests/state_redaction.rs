@@ -91,6 +91,17 @@ async fn redacting_current_room_name_removes_it_from_metadata() {
     processor
         .process_room_state(state(
             "!room:hs",
+            "$create:hs",
+            50,
+            "m.room.create",
+            "",
+            json!({ "room_version": "12" }),
+        ))
+        .await
+        .expect("save create");
+    processor
+        .process_room_state(state(
+            "!room:hs",
             "$name:hs",
             100,
             "m.room.name",
@@ -130,6 +141,17 @@ async fn redacting_an_old_state_version_keeps_the_current_projection() {
             .expect("connect db"),
     );
     let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(state(
+            "!room:hs",
+            "$create:hs",
+            50,
+            "m.room.create",
+            "",
+            json!({ "room_version": "12" }),
+        ))
+        .await
+        .expect("save create");
     processor
         .process_room_state(state(
             "!room:hs",
@@ -190,6 +212,17 @@ async fn redacting_power_levels_keeps_protected_keys_and_roles() {
     processor
         .process_room_state(state(
             "!space:hs",
+            "$create:hs",
+            50,
+            "m.room.create",
+            "",
+            json!({ "room_version": "12" }),
+        ))
+        .await
+        .expect("save create");
+    processor
+        .process_room_state(state(
+            "!space:hs",
             "$pl:hs",
             100,
             "m.room.power_levels",
@@ -234,6 +267,17 @@ async fn redacting_member_keeps_membership_and_drops_profile() {
             .expect("connect db"),
     );
     let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(state(
+            "!room:hs",
+            "$create:hs",
+            50,
+            "m.room.create",
+            "",
+            json!({ "room_version": "12" }),
+        ))
+        .await
+        .expect("save create");
     processor
         .process_room_state(state(
             "!room:hs",
@@ -312,4 +356,48 @@ async fn leaving_member_keeps_the_last_known_profile() {
         "leave events must not wipe the last known profile"
     );
     assert_eq!(member.avatar_url.as_deref(), Some("mxc://hs/a"));
+}
+
+#[tokio::test]
+async fn unknown_room_versions_fail_closed_without_tombstoning() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("unknown-version"))
+            .await
+            .expect("connect db"),
+    );
+    let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(state(
+            "!room:hs",
+            "$create:hs",
+            50,
+            "m.room.create",
+            "",
+            json!({ "room_version": "custom-experimental" }),
+        ))
+        .await
+        .expect("save create");
+    processor
+        .process_room_state(state(
+            "!room:hs",
+            "$name:hs",
+            100,
+            "m.room.name",
+            "",
+            json!({ "name": "secret" }),
+        ))
+        .await
+        .expect("save name");
+
+    processor
+        .process_room_redaction(redaction("!room:hs", "$red:hs", 200, "$name:hs"))
+        .await
+        .expect("process redaction");
+
+    let raw = store
+        .get_state_event("$name:hs")
+        .await
+        .expect("get raw")
+        .expect("state survives");
+    assert_eq!(raw.content_json, json!({ "name": "secret" }));
 }

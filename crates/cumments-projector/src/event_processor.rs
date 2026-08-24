@@ -33,7 +33,7 @@ use cumments_core::{
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
     rate_limit::SlidingWindowRateLimiter,
-    redaction::redact_state_content,
+    redaction::{UnsupportedRoomVersion, redact_state_content_for_version},
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, constant_time_eq, generate_token, sha256_hex, token_hash,
     },
@@ -2196,7 +2196,32 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
-            let stripped = redact_state_content(&state.event_type, &state.content_json);
+            let room_version = self
+                .room_store
+                .get_latest_state_event(&event.room_id, "m.room.create", "")
+                .await?
+                .and_then(|create| {
+                    create
+                        .content_json
+                        .get("room_version")
+                        .and_then(|version| version.as_str())
+                        .map(str::to_string)
+                });
+            let stripped = match redact_state_content_for_version(
+                &state.event_type,
+                &state.content_json,
+                room_version.as_deref(),
+            ) {
+                Ok(stripped) => stripped,
+                Err(UnsupportedRoomVersion(version)) => {
+                    warn!(
+                        room_id = %event.room_id,
+                        version = ?version,
+                        "Refusing state redaction with unknown room version"
+                    );
+                    return Ok(());
+                }
+            };
             self.room_store
                 .update_state_event_content(&target_event_id, &stripped)
                 .await?;
