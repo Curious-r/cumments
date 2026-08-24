@@ -605,6 +605,45 @@ async fn reactions_aggregate_by_key_and_ignore_redacted() {
 }
 
 #[tokio::test]
+async fn relations_to_redacted_parents_are_hidden_from_the_child_view() {
+    let store = DbStore::connect(&test_db_url("child-dangling-relations"))
+        .await
+        .expect("connect db");
+    let parent = visitor_message("$parent:hs", "parent");
+    store.save_message(&parent).await.expect("save parent");
+
+    let mut child = visitor_message("$child:hs", "reply");
+    child.reply_to = Some("$parent:hs".to_string());
+    child.thread_root = Some("$parent:hs".to_string());
+    store.save_message(&child).await.expect("save child");
+
+    assert!(child.reply_to.is_some());
+    let visible = store
+        .get_message("$child:hs")
+        .await
+        .expect("get child")
+        .expect("child");
+    assert_eq!(visible.reply_to.as_deref(), Some("$parent:hs"));
+
+    assert_eq!(
+        store
+            .redact_message("$parent:hs", "!room:hs", Utc::now(), ":hs")
+            .await
+            .expect("redact parent"),
+        MessageRedactionOutcome::Redacted
+    );
+
+    let visible = store
+        .get_message("$child:hs")
+        .await
+        .expect("get child after parent redaction")
+        .expect("child exists");
+    assert_eq!(visible.status, MessageStatus::Active);
+    assert!(visible.reply_to.is_none());
+    assert!(visible.thread_root.is_none());
+}
+
+#[tokio::test]
 async fn poll_votes_aggregate_and_latest_vote_wins() {
     let store = DbStore::connect(&test_db_url("message-poll"))
         .await

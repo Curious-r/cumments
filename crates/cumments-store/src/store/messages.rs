@@ -930,6 +930,8 @@ impl DbStore {
                 .await?;
             poll.responses = responses.remove(&message.event_id).unwrap_or_default();
         }
+        self.sanitize_relations(std::slice::from_mut(&mut message))
+            .await?;
         self.enrich_author_profiles(std::slice::from_mut(&mut message))
             .await?;
         Ok(message)
@@ -946,7 +948,49 @@ impl DbStore {
                 poll.responses = responses.remove(&message.event_id).unwrap_or_default();
             }
         }
+        self.sanitize_relations(messages).await?;
         self.enrich_author_profiles(messages).await?;
+        Ok(())
+    }
+
+    /// Relations to deleted or missing messages are not part of the public
+    /// contract. Clear them in the derived view while preserving the child's
+    /// immutable Matrix fact.
+    async fn sanitize_relations(&self, messages: &mut [Message]) -> Result<()> {
+        let targets: Vec<String> = messages
+            .iter()
+            .filter_map(|message| {
+                message
+                    .reply_to
+                    .clone()
+                    .or_else(|| message.thread_root.clone())
+            })
+            .collect();
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        let active_targets: HashSet<String> = messages::Entity::find()
+            .filter(messages::COLUMN.event_id.is_in(targets))
+            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|model| model.event_id)
+            .collect();
+
+        for message in messages {
+            if let Some(reply_to) = &message.reply_to
+                && !active_targets.contains(reply_to)
+            {
+                message.reply_to = None;
+            }
+            if let Some(thread_root) = &message.thread_root
+                && !active_targets.contains(thread_root)
+            {
+                message.thread_root = None;
+            }
+        }
         Ok(())
     }
 

@@ -23,6 +23,8 @@ state with their own durability rules (see
 3. **Relations are not content.** Replies, edits, threads, reactions and
    deletions are attributes or edges of a message, modeled separately from
    the body.
+   Public reads hide a reply/thread edge when its target is deleted or no
+   longer visible; the child remains an ordinary comment.
 4. **Authors follow live profiles.** Display name and avatar render from the
    author's current joined `m.room.member` profile, so renames and avatar
    changes propagate to old comments. The values captured at projection time
