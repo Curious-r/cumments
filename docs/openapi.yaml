@@ -2,16 +2,29 @@ openapi: 3.0.3
 info:
   title: Cumments API
   version: 0.27.0
+  license:
+    name: MIT
+    url: https://github.com/Curious-r/cumments/blob/main/LICENSE
   description: |
     Backend-only comment API backed by Matrix. Writes are asynchronous:
     POST/PATCH/DELETE accept a submission and return `202 { "submission_id" }`;
     the projected comment later carries the same `submission_id`.
 
     Comment reads use the RFC 10008 `QUERY` method. OpenAPI does not support
-    custom verbs, so each QUERY operation is represented with the
-    `x-cumments-query` extension and is sent as `QUERY` on the wire.
+    custom verbs, so each QUERY operation is represented with Redocly's
+    `x-query` extension and is sent as `QUERY` on the wire.
 servers:
-  - url: http://localhost:7931
+  - url: "{scheme}://{host}"
+    description: Cumments API origin
+    variables:
+      scheme:
+        default: https
+        enum: [http, https]
+      host:
+        default: cumments.curious.host
+        description: |
+          API host and optional port. For local development use
+          `localhost:7931`.
 tags:
   - name: Comments
     description: Comment reads, writes, and live events
@@ -162,7 +175,7 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-    x-cumments-query:
+    x-query:
       operationId: queryComments
       summary: List comments (QUERY)
       description: |
@@ -381,7 +394,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
   /api/v1/operator/sites:
-    x-cumments-query:
+    x-query:
       tags: [Operator]
       summary: List managed sites (QUERY)
       operationId: listOperatorSites
@@ -532,7 +545,7 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
   /api/v1/operator/rooms/quarantined:
-    x-cumments-query:
+    x-query:
       tags: [Operator]
       summary: List quarantined rooms (QUERY)
       operationId: listQuarantinedRooms
@@ -873,6 +886,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/StickerPack"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/packs/{pack_id}/stickers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
@@ -1631,6 +1650,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SiteRolesResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/operator/sites/{site_id}/admins:
     parameters:
       - $ref: "#/components/parameters/SiteId"

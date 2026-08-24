@@ -14,6 +14,7 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
+use cumments_core::management::ManagementError;
 use serde::Serialize;
 
 /// Base URI of the documented problem types (GitHub Pages docs site with custom domain).
@@ -163,6 +164,29 @@ pub enum AppError {
     SiteOriginDenied(String),
     SiteSignatureInvalid(String),
     Internal(String),
+}
+
+/// Maps shared management failures onto HTTP problem responses. Infra errors
+/// stay internal; the remaining variants are caller mistakes or state
+/// conflicts that deserve a 4xx status.
+pub(crate) fn map_management_error(error: ManagementError) -> AppError {
+    match error {
+        ManagementError::InvalidUserId(message) | ManagementError::InvalidSiteId(message) => {
+            AppError::BadRequest(message)
+        }
+        ManagementError::InvalidRoomVersion(message)
+        | ManagementError::InvalidPageSlug(message) => AppError::BadRequest(message),
+        ManagementError::RoomVersionNotNewer(message, _) => AppError::Conflict(message),
+        ManagementError::RoomWithoutCreateEvent(message) => AppError::NotFound(message),
+        ManagementError::RoleNotFound => AppError::NotFound(error.to_string()),
+        ManagementError::SiteLevelRoleConflict => AppError::Conflict(error.to_string()),
+        ManagementError::RoomNotRegistered(message) => AppError::NotFound(message),
+        ManagementError::RoomNotActive(message) => AppError::Conflict(message),
+        ManagementError::SiteNotApiRegistered(message) => AppError::Conflict(message),
+        ManagementError::Infra(error) => {
+            AppError::Internal(format!("management operation failed: {error}"))
+        }
+    }
 }
 
 impl IntoResponse for AppError {

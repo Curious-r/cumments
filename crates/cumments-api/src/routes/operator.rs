@@ -5,7 +5,7 @@
 //! config files, they manage runtime state and print adoption snippets.
 
 use crate::ApiState;
-use crate::error::AppError;
+use crate::error::{AppError, map_management_error};
 use crate::rate_limit::client_key;
 use crate::routes::comments::{ACCEPT_QUERY, QUERY_METHOD};
 use axum::extract::Request;
@@ -190,7 +190,7 @@ pub(crate) async fn upgrade_room_handler(
         &body.new_version,
     )
     .await
-    .map_err(|e| AppError::Internal(format!("failed to upgrade room: {e}")))?;
+    .map_err(map_management_error)?;
     Ok(Json(UpgradeRoomResponse {
         room_id,
         new_version: body.new_version,

@@ -197,7 +197,7 @@ jobs:
           node-version: 24
 
       - name: Lint OpenAPI contract
-        run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
+        run: npx --yes @redocly/cli@2.47.0 lint --config redocly.yaml docs/openapi.yaml
 
   docs:
     name: Docs

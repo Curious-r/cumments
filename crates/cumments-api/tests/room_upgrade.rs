@@ -6,6 +6,7 @@
 
 use axum::{
     body::Body,
+    extract::connect_info::ConnectInfo,
     http::{Method, Request, StatusCode, header},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter};
@@ -17,6 +18,7 @@ use cumments_core::site_service::SiteService;
 use cumments_store::DbStore;
 use cumments_test_utils::TestDriver;
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceExt;
@@ -235,6 +237,51 @@ async fn upgrade_site_page_room_resolves_registry_then_upgrades() {
             .unwrap(),
         Some(replacement)
     );
+}
+
+#[tokio::test]
+async fn operator_upgrade_endpoint_maps_management_errors_to_http_statuses() {
+    let (store, driver, _) = test_fixture("operator-error-mapping").await;
+    let mut state = api_state(driver, store.clone());
+    state.operator_token_hash = Some(token_hash("operator"));
+    let app = cumments_api::build_router(state);
+
+    let cases = [
+        ("!unknown:hs", "12", StatusCode::NOT_FOUND, "not-found"),
+        (
+            "!old:hs",
+            "bad version!",
+            StatusCode::BAD_REQUEST,
+            "bad-request",
+        ),
+        ("!old:hs", "11", StatusCode::CONFLICT, "conflict"),
+    ];
+
+    for (room_id, new_version, expected_status, expected_code) in cases {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1/operator/rooms/{room_id}/upgrade"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer operator")
+            .body(Body::from(
+                json!({ "new_version": new_version }).to_string(),
+            ))
+            .expect("build request");
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+
+        let response = app.clone().oneshot(request).await.expect("call router");
+        let status = response.status();
+
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("read body");
+        let data: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(status, expected_status, "room {room_id}");
+        assert_eq!(data["code"], expected_code);
+    }
 }
 
 #[tokio::test]

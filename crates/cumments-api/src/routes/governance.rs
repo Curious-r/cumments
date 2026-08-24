@@ -6,7 +6,7 @@
 //! Revocations remove either the pending claim or the applied Matrix role.
 
 use crate::ApiState;
-use crate::error::AppError;
+use crate::error::{AppError, map_management_error};
 use crate::rate_limit::client_key;
 use axum::{
     Json,
@@ -20,7 +20,6 @@ use cumments_core::{
     governance::{
         MANAGER_LEVEL, MODERATOR_LEVEL, RoleEntry, SITE_ADMIN_LEVEL, validate_governance_user_id,
     },
-    management::ManagementError,
     models::{PageSlug, SiteId},
     site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, token_hash},
 };
@@ -241,29 +240,6 @@ fn site_roles_response(roles: Vec<RoleEntry>) -> SiteRolesResponse {
             .filter(|role| role.level == MANAGER_LEVEL)
             .map(|role| role.user_id.clone())
             .collect(),
-    }
-}
-
-/// Maps shared management failures onto HTTP problem responses. Infra errors
-/// stay internal; the remaining variants are caller mistakes or state
-/// conflicts that deserve a 4xx status.
-fn map_management_error(error: ManagementError) -> AppError {
-    match error {
-        ManagementError::InvalidUserId(message) | ManagementError::InvalidSiteId(message) => {
-            AppError::BadRequest(message)
-        }
-        ManagementError::InvalidRoomVersion(message)
-        | ManagementError::InvalidPageSlug(message) => AppError::BadRequest(message),
-        ManagementError::RoomVersionNotNewer(message, _) => AppError::Conflict(message),
-        ManagementError::RoomWithoutCreateEvent(message) => AppError::NotFound(message),
-        ManagementError::RoleNotFound => AppError::NotFound(error.to_string()),
-        ManagementError::SiteLevelRoleConflict => AppError::Conflict(error.to_string()),
-        ManagementError::RoomNotRegistered(message) => AppError::NotFound(message),
-        ManagementError::RoomNotActive(message) => AppError::Conflict(message),
-        ManagementError::SiteNotApiRegistered(message) => AppError::Conflict(message),
-        ManagementError::Infra(error) => {
-            AppError::Internal(format!("management operation failed: {error}"))
-        }
     }
 }
 
