@@ -1972,6 +1972,51 @@ impl EventProcessor {
                 })
                 .await?;
         }
+
+        // A native tombstone is trusted only when the AS sender issued it.
+        // Cumments deliberately locks `m.room.tombstone` to the bot, so a
+        // non-bot sender means the governance invariant was bypassed. Never
+        // auto-adopt that replacement: quarantine the old active mapping for
+        // manual review instead of letting it hijack a site/page identity.
+        if event.event_type == "m.room.tombstone" {
+            let Some(replacement) = event
+                .content
+                .get("replacement_room")
+                .and_then(|v| v.as_str())
+            else {
+                return Ok(());
+            };
+            if matches!(
+                self.registry_store.get_room_status(&event.room_id).await?,
+                Some(RoomStatus::Active)
+            ) {
+                let as_sender = self
+                    .driver
+                    .as_ref()
+                    .and_then(|driver| driver.sender_user_id());
+                if event.sender != as_sender.unwrap_or_default() {
+                    self.registry_store
+                        .quarantine_room(
+                            &event.room_id,
+                            &format!(
+                                "unexpected native room upgrade by {}; manual successor review required",
+                                event.sender
+                            ),
+                            1,
+                            None,
+                        )
+                        .await?;
+                    warn!(
+                        old_room = %event.room_id,
+                        new_room = %replacement,
+                        sender = %event.sender,
+                        "Non-bot native room upgrade quarantined; refusing automatic adoption"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
         if event.event_type == "m.room.encryption"
             && self
                 .role_claim_store

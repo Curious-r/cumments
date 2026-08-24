@@ -1,13 +1,14 @@
 use cumments_core::commands::UpdateCommentCommand;
 use cumments_core::identity::{derive_visitor_id_from_public_key, signature_message};
 use cumments_core::models::{
-    Content, LocationContent, PageSlug, PollContent, PollOption, RoomIdentity, SiteId, TextContent,
-    TextStyle,
+    Content, LocationContent, PageSlug, PollContent, PollOption, RoomIdentity, RoomStatus, SiteId,
+    TextContent, TextStyle,
 };
 use cumments_core::ports::{MessageStore, RegistryStore, SubmissionStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
     ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction,
+    ParsedRoomState,
 };
 use cumments_store::DbStore;
 use std::sync::Arc;
@@ -544,6 +545,46 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
         .await
         .expect("re-deliver vote");
     assert_eq!(vote_count().await, 0, "tombstoned vote must not resurrect");
+}
+
+#[tokio::test]
+async fn non_bot_native_upgrade_quarantines_the_active_room() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("native-upgrade-guard"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_room(
+            "!old:hs",
+            &SiteId::from("my-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register old room");
+    let processor = processor(store.clone()).await;
+
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: "!old:hs".to_string(),
+            event_id: "$tombstone:hs".to_string(),
+            sender: "@site-admin:hs".to_string(),
+            event_type: "m.room.tombstone".to_string(),
+            state_key: String::new(),
+            origin_server_ts: 300,
+            content: serde_json::json!({
+                "body": "room upgraded",
+                "replacement_room": "!successor:hs",
+            }),
+        })
+        .await
+        .expect("process unexpected tombstone");
+
+    assert_eq!(
+        store.get_room_status("!old:hs").await.expect("room status"),
+        Some(RoomStatus::Quarantined),
+        "a non-bot native successor must enter manual review"
+    );
 }
 
 #[tokio::test]
