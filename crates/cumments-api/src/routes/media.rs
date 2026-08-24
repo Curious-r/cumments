@@ -1794,6 +1794,7 @@ mod tests {
             reactions: Vec::new(),
             room_id: "!room:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
+            matrix_event_type: "m.room.message".to_string(),
             raw_content: serde_json::Value::Null,
         };
         p.proxify_message(&mut message, "");
@@ -1851,6 +1852,7 @@ mod tests {
             reactions: Vec::new(),
             room_id: "!room:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
+            matrix_event_type: "m.room.message".to_string(),
             raw_content: serde_json::Value::Null,
         };
         p.proxify_message(&mut message, "");

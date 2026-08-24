@@ -1403,19 +1403,24 @@ impl EventProcessor {
                 return Ok(());
             }
 
-            // Integrity: Matrix does not enforce same-sender on m.replace, so
-            // verify the replacement was sent by the original message's author
-            // virtual user. Legacy rows without a recorded sender are accepted
-            // until re-projected by backfill.
-            if let Some(ref existing) = existing
-                && !existing.sender_mxid.is_empty()
-                && existing.sender_mxid != event.sender
-            {
-                warn!(
-                    "Rejecting edit for {} from {}: sender does not match original author {}",
-                    relation.target_event_id, event.sender, existing.sender_mxid
-                );
-                return Ok(());
+            // Replacement validity: same Matrix event type and same sender.
+            // Legacy rows without a recorded sender are accepted until
+            // re-projected by backfill.
+            if let Some(existing) = existing.as_ref() {
+                if existing.matrix_event_type != event.event_type {
+                    debug!(
+                        "Ignoring edit for {}: replacement type {} does not match {}",
+                        relation.target_event_id, event.event_type, existing.matrix_event_type
+                    );
+                    return Ok(());
+                }
+                if !existing.sender_mxid.is_empty() && existing.sender_mxid != event.sender {
+                    warn!(
+                        "Rejecting edit for {} from {}: sender does not match original author {}",
+                        relation.target_event_id, event.sender, existing.sender_mxid
+                    );
+                    return Ok(());
+                }
             }
 
             // Visitor edits must carry a valid Cumments identity block and
@@ -1471,9 +1476,11 @@ impl EventProcessor {
             updated.edited_at = Some(edited_at);
             let revision = MessageRevision {
                 event_id: event.event_id.clone(),
+                message_event_id: updated.event_id.clone(),
                 content: updated.content.clone(),
                 edited_at,
                 editor_mxid: event.sender.clone(),
+                redacted_at: None,
             };
 
             if self.message_store.apply_edit(&updated, &revision).await? {
@@ -1600,6 +1607,7 @@ impl EventProcessor {
                 },
             },
             content: event.content.clone(),
+            matrix_event_type: event.event_type.clone(),
             timestamp: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
             edited_at: None,
@@ -2223,6 +2231,68 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
+        }
+
+        // Replacement revisions are relation facts with their own redaction
+        // state. Redacting one rolls the parent back to the latest surviving
+        // edit or to its original content.
+        let redacted_at = chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+        let redacted_by = event
+            .sender
+            .clone()
+            .unwrap_or_else(|| event.event_id.clone());
+        if let Some(revision) = self
+            .message_store
+            .get_message_revision(&target_event_id)
+            .await?
+        {
+            let Some(parent) = self
+                .message_store
+                .get_message(&revision.message_event_id)
+                .await?
+            else {
+                debug!(
+                    "Redaction tombstoned for revision {}: parent unknown",
+                    target_event_id
+                );
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                return Ok(());
+            };
+            if parent.room_id != event.room_id {
+                warn!(
+                    "Ignoring revision redaction {} in {}: edit lives in {}",
+                    target_event_id, event.room_id, parent.room_id
+                );
+                return Ok(());
+            }
+            if self
+                .message_store
+                .redact_message_revision(
+                    &target_event_id,
+                    &event.room_id,
+                    redacted_at,
+                    redacted_by.as_str(),
+                )
+                .await?
+            {
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                info!("Successfully redacted edit {}", target_event_id);
+                if let Some(updated) = self.message_store.get_message(&parent.event_id).await? {
+                    let _ = self
+                        .event_bus
+                        .send(ProjectorEvent::MessageAnnotationsChanged {
+                            site_id: updated.site_id.clone(),
+                            page_slug: updated.page_slug.clone(),
+                            message: updated,
+                        });
+                }
+            }
+            return Ok(());
         }
 
         info!(

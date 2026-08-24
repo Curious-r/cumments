@@ -57,6 +57,7 @@ pub mod m20260816_000051_media_uploads_post_slug_nullable;
 pub mod m20260817_000052_terminology_rename;
 pub mod m20260817_000053_site_transfers;
 pub mod m20260823_000054_redacted_content;
+pub mod m20260824_000055_edit_revision_facts;
 
 pub struct Migrator;
 
@@ -174,6 +175,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260817_000052_terminology_rename::Migration),
             Box::new(m20260817_000053_site_transfers::Migration),
             Box::new(m20260823_000054_redacted_content::Migration),
+            Box::new(m20260824_000055_edit_revision_facts::Migration),
         ]
     }
 }

@@ -168,6 +168,7 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
             formatted_body: None,
             style: TextStyle::Normal,
         }),
+        matrix_event_type: "m.room.message".to_string(),
         timestamp: chrono::Utc::now(),
         edited_at: None,
         reply_to: None,

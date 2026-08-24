@@ -76,6 +76,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260823_000054_redacted_content".to_string()),
         "000054 must be registered or existing redacted comments retain deleted content"
     );
+    assert!(
+        names.contains(&"m20260824_000055_edit_revision_facts".to_string()),
+        "000055 must be registered or edit revisions cannot be redacted independently"
+    );
 }
 
 #[tokio::test]
@@ -90,12 +94,13 @@ async fn redacted_content_migration_sanitizes_existing_rows() {
     db.execute_unprepared(&format!(
         "INSERT INTO messages \
          (event_id, room_id, site_id, page_slug, sender_mxid, author_kind, content_json, \
-          raw_content_json, timestamp, status, last_edit_ts, reply_to, thread_root, \
-          submission_id, created_at, updated_at) \
+          raw_content_json, matrix_event_type, timestamp, status, last_edit_ts, reply_to, thread_root, \
+          submission_id, original_content_json, created_at, updated_at) \
          VALUES \
          ('$redacted:hs', '!room:hs', 'my-blog', 'hello', '@alice:hs', 'visitor', \
-          '{{\"body\":\"secret\"}}', '{{\"body\":\"secret\"}}', '{now}', 'redacted', \
-          123, '$parent:hs', '$thread:hs', 42, '{now}', '{now}')"
+          '{{\"body\":\"secret\"}}', '{{\"body\":\"secret\"}}', 'm.room.message', '{now}', \
+          'redacted', 123, '$parent:hs', '$thread:hs', 42, \
+          '{{\"type\":\"redacted\"}}', '{now}', '{now}')"
     ))
     .await
     .expect("insert redacted message");
@@ -241,10 +246,10 @@ async fn terminology_rename_migration_converges_legacy_schema() {
     db.execute_unprepared(&format!(
         "INSERT INTO messages \
          (event_id, room_id, site_id, post_slug, sender_mxid, author_kind, content_json, \
-          raw_content_json, timestamp, status, created_at, updated_at) \
+          raw_content_json, matrix_event_type, timestamp, status, original_content_json, created_at, updated_at) \
          VALUES \
          ('$visitor:hs', '!room:hs', 'my-blog', 'hello', '@_cumments_my-blog_x:hs', 'guest', \
-          '{{}}', '{{}}', '{now}', 'active', '{now}', '{now}')"
+          '{{}}', 'm.room.message', '{now}', '{now}', 'active', '{{}}', '{now}', '{now}')"
     ))
     .await
     .expect("insert legacy message");

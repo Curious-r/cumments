@@ -8,6 +8,8 @@ use serde::Deserialize;
 pub struct ParsedRoomMessage {
     pub room_id: String,
     pub event_id: String,
+    /// The Matrix top-level event type; replacements must match the target.
+    pub event_type: String,
     /// The Matrix user ID of the sender.
     pub sender: String,
     /// The typed, displayable content of the message.

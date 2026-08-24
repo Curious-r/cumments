@@ -35,6 +35,7 @@ async fn save_message(store: &DbStore, event_id: &str, room_id: &str, content: &
             formatted_body: None,
             style: TextStyle::Normal,
         }),
+        matrix_event_type: "m.room.message".to_string(),
         timestamp: Utc::now(),
         edited_at: None,
         reply_to: None,
@@ -72,9 +73,11 @@ async fn apply_edit(
     updated.edited_at = Some(edited_at);
     let revision = MessageRevision {
         event_id: edit_event_id.to_string(),
+        message_event_id: event_id.to_string(),
         content: updated.content.clone(),
         edited_at,
         editor_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
+        redacted_at: None,
     };
     store
         .apply_edit(&updated, &revision)

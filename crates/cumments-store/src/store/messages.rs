@@ -16,8 +16,8 @@ use cumments_core::models::{
 };
 use cumments_core::ports::MessageStore;
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -32,6 +32,13 @@ fn content_from_json(raw: &str) -> Content {
             fallback: None,
             raw: serde_json::Value::Null,
         })
+    })
+}
+
+fn unknown_content() -> Content {
+    Content::Unknown(UnknownContent {
+        fallback: None,
+        raw: serde_json::Value::Null,
     })
 }
 
@@ -98,6 +105,7 @@ fn message_from_model(model: messages::Model) -> Message {
             },
         },
         content,
+        matrix_event_type: model.matrix_event_type,
         timestamp: model.timestamp,
         edited_at,
         reply_to,
@@ -178,6 +186,8 @@ impl MessageStore for DbStore {
             author_avatar_url: Set(message.author.avatar_url.clone()),
             author_public_key: Set(message.author.public_key.clone()),
             content_json: Set(content_to_json(&message.content)),
+            original_content_json: Set(content_to_json(&message.content)),
+            matrix_event_type: Set(message.matrix_event_type.clone()),
             raw_content_json: Set(
                 serde_json::to_string(&message.raw_content).unwrap_or_else(|_| "null".to_string())
             ),
@@ -195,30 +205,21 @@ impl MessageStore for DbStore {
             ..Default::default()
         };
 
-        messages::Entity::insert(active_model)
+        match messages::Entity::insert(active_model)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::column(messages::Column::EventId)
-                    .update_columns([
-                        messages::Column::RoomId,
-                        messages::Column::SiteId,
-                        messages::Column::PageSlug,
-                        messages::Column::SenderMxid,
-                        messages::Column::AuthorKind,
-                        messages::Column::AuthorDisplayName,
-                        messages::Column::AuthorAvatarUrl,
-                        messages::Column::AuthorPublicKey,
-                        messages::Column::ContentJson,
-                        messages::Column::RawContentJson,
-                        messages::Column::Timestamp,
-                        messages::Column::ReplyTo,
-                        messages::Column::ThreadRoot,
-                        messages::Column::SubmissionId,
-                        messages::Column::UpdatedAt,
-                    ])
+                    .do_nothing()
                     .to_owned(),
             )
             .exec(&self.db)
-            .await?;
+            .await
+        {
+            Ok(_) => {}
+            // A replayed immutable original is a no-op; preserving the current
+            // derived view is especially important after later edits.
+            Err(sea_orm::DbErr::RecordNotInserted) => {}
+            Err(error) => return Err(error.into()),
+        }
         Ok(())
     }
 
@@ -226,46 +227,30 @@ impl MessageStore for DbStore {
         let txn = self.db.begin().await?;
         let edit_ts = revision.edited_at.timestamp_millis();
 
-        // Only apply when the edit is newer than the last applied edit
-        // (missing last_edit means the original is current), with the edit
-        // event ID as the deterministic tie-breaker.
-        let recency = Condition::any()
-            .add(messages::Column::LastEditTs.is_null())
-            .add(messages::Column::LastEditTs.lt(edit_ts))
-            .add(
-                Condition::all()
-                    .add(messages::Column::LastEditTs.eq(edit_ts))
-                    .add(messages::Column::LastEditEventId.lt(revision.event_id.clone())),
-            );
+        if message_revisions::Entity::find()
+            .filter(
+                message_revisions::COLUMN
+                    .event_id
+                    .eq(revision.event_id.clone()),
+            )
+            .one(&txn)
+            .await?
+            .is_some()
+        {
+            txn.commit().await?;
+            return Ok(false);
+        }
 
-        let result = messages::Entity::update_many()
-            .col_expr(
-                messages::Column::ContentJson,
-                sea_orm::sea_query::Expr::value(content_to_json(&message.content)),
-            )
-            .col_expr(
-                messages::Column::LastEditTs,
-                sea_orm::sea_query::Expr::value(edit_ts),
-            )
-            .col_expr(
-                messages::Column::LastEditEventId,
-                sea_orm::sea_query::Expr::value(revision.event_id.clone()),
-            )
-            .col_expr(
-                messages::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
-            )
+        let parent = messages::Entity::find()
             .filter(messages::COLUMN.event_id.eq(message.event_id.clone()))
             .filter(messages::COLUMN.room_id.eq(message.room_id.clone()))
             .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
-            .filter(recency)
-            .exec(&txn)
+            .one(&txn)
             .await?;
-
-        if result.rows_affected == 0 {
+        let Some(parent) = parent else {
             txn.rollback().await?;
             return Ok(false);
-        }
+        };
 
         let revision_model = message_revisions::ActiveModel {
             event_id: Set(revision.event_id.clone()),
@@ -273,12 +258,44 @@ impl MessageStore for DbStore {
             content_json: Set(content_to_json(&revision.content)),
             edited_at: Set(revision.edited_at),
             editor_mxid: Set(revision.editor_mxid.clone()),
+            redacted_at: Set(None),
+            redacted_by: Set(None),
             created_at: Set(chrono::Utc::now()),
             ..Default::default()
         };
         message_revisions::Entity::insert(revision_model)
             .exec(&txn)
             .await?;
+
+        let current = message_revisions::Entity::find()
+            .filter(
+                message_revisions::COLUMN
+                    .message_event_id
+                    .eq(message.event_id.clone()),
+            )
+            .filter(message_revisions::COLUMN.redacted_at.is_null())
+            .order_by_desc(message_revisions::Column::EditedAt)
+            .order_by_desc(message_revisions::Column::EventId)
+            .one(&txn)
+            .await?;
+        let Some(current) = current else {
+            txn.rollback().await?;
+            return Ok(false);
+        };
+        if current.event_id != revision.event_id {
+            // The valid replacement remains stored as a fact, but it does not
+            // become the public view until a newer revision is redacted.
+            txn.commit().await?;
+            return Ok(false);
+        }
+
+        let mut active: messages::ActiveModel = parent.into();
+        active.content_json = Set(content_to_json(&message.content));
+        active.last_edit_ts = Set(Some(edit_ts));
+        active.last_edit_event_id = Set(Some(revision.event_id.clone()));
+        active.updated_at = Set(chrono::Utc::now());
+        active.update(&txn).await?;
+
         txn.commit().await?;
         Ok(true)
     }
@@ -354,6 +371,101 @@ impl MessageStore for DbStore {
             .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
             .exec(&txn)
             .await?;
+        txn.commit().await?;
+        Ok(true)
+    }
+
+    async fn get_message_revision(&self, event_id: &str) -> Result<Option<MessageRevision>> {
+        let model = message_revisions::Entity::find()
+            .filter(message_revisions::COLUMN.event_id.eq(event_id))
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| MessageRevision {
+            event_id: m.event_id,
+            message_event_id: m.message_event_id,
+            content: content_from_json(&m.content_json),
+            edited_at: m.edited_at,
+            editor_mxid: m.editor_mxid,
+            redacted_at: m.redacted_at,
+        }))
+    }
+
+    async fn redact_message_revision(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+    ) -> Result<bool> {
+        let txn = self.db.begin().await?;
+        let revision = message_revisions::Entity::find()
+            .filter(message_revisions::COLUMN.event_id.eq(event_id))
+            .one(&txn)
+            .await?;
+        let Some(revision) = revision else {
+            txn.rollback().await?;
+            return Ok(false);
+        };
+
+        let parent = messages::Entity::find()
+            .filter(
+                messages::COLUMN
+                    .event_id
+                    .eq(revision.message_event_id.clone()),
+            )
+            .filter(messages::COLUMN.room_id.eq(room_id))
+            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
+            .one(&txn)
+            .await?;
+        let Some(parent) = parent else {
+            txn.rollback().await?;
+            return Ok(false);
+        };
+
+        message_revisions::Entity::update_many()
+            .col_expr(
+                message_revisions::Column::RedactedAt,
+                sea_orm::sea_query::Expr::value(Some(redacted_at)),
+            )
+            .col_expr(
+                message_revisions::Column::RedactedBy,
+                sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
+            )
+            .filter(message_revisions::COLUMN.event_id.eq(event_id))
+            .exec(&txn)
+            .await?;
+
+        let current = message_revisions::Entity::find()
+            .filter(
+                message_revisions::COLUMN
+                    .message_event_id
+                    .eq(parent.event_id.clone()),
+            )
+            .filter(message_revisions::COLUMN.redacted_at.is_null())
+            .order_by_desc(message_revisions::Column::EditedAt)
+            .order_by_desc(message_revisions::Column::EventId)
+            .one(&txn)
+            .await?;
+        let original_content_json = parent.original_content_json.clone();
+        let mut active: messages::ActiveModel = parent.into();
+        match current {
+            Some(current) => {
+                let content: Content = serde_json::from_str(&current.content_json)
+                    .unwrap_or_else(|_| unknown_content());
+                active.content_json = Set(content_to_json(&content));
+                active.last_edit_ts = Set(Some(current.edited_at.timestamp_millis()));
+                active.last_edit_event_id = Set(Some(current.event_id));
+            }
+            None => {
+                let original: Content =
+                    serde_json::from_str(&original_content_json).unwrap_or(unknown_content());
+                active.content_json = Set(content_to_json(&original));
+                active.last_edit_ts = Set(None);
+                active.last_edit_event_id = Set(None);
+            }
+        }
+        active.updated_at = Set(chrono::Utc::now());
+        active.update(&txn).await?;
         txn.commit().await?;
         Ok(true)
     }

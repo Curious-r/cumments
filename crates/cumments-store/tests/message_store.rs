@@ -37,6 +37,7 @@ fn visitor_message(event_id: &str, body: &str) -> Message {
             formatted_body: None,
             style: TextStyle::Normal,
         }),
+        matrix_event_type: "m.room.message".to_string(),
         timestamp: Utc::now(),
         edited_at: None,
         reply_to: Some("$parent:hs".to_string()),
@@ -187,9 +188,11 @@ async fn apply_edit_updates_content_and_records_revision() {
     updated.edited_at = Some(Utc::now());
     let revision = MessageRevision {
         event_id: "$edit:hs".to_string(),
+        message_event_id: "$event:hs".to_string(),
         content: updated.content.clone(),
         edited_at: updated.edited_at.unwrap(),
         editor_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
+        redacted_at: None,
     };
 
     assert!(
@@ -214,9 +217,11 @@ async fn apply_edit_updates_content_and_records_revision() {
     let stale_ts = revision.edited_at - chrono::Duration::seconds(1);
     let stale = MessageRevision {
         event_id: "$stale:hs".to_string(),
+        message_event_id: "$event:hs".to_string(),
         content: updated.content.clone(),
         edited_at: stale_ts,
         editor_mxid: "someone".to_string(),
+        redacted_at: None,
     };
     assert!(
         !store
@@ -224,6 +229,180 @@ async fn apply_edit_updates_content_and_records_revision() {
             .await
             .expect("stale edit rejected")
     );
+
+    // The stale replacement remains an immutable relation fact even though it
+    // does not become the public view. A newer edit's redaction must be able
+    // to select it later.
+    let stored_stale = store
+        .get_message_revision("$stale:hs")
+        .await
+        .expect("get stale revision")
+        .expect("stale revision exists");
+    assert_eq!(stored_stale.message_event_id, "$event:hs");
+    assert!(stored_stale.redacted_at.is_none());
+    let current = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert!(
+        matches!(current.content, Content::Text(ref text) if text.body == "edited"),
+        "a stale edit must not replace the current view"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_original_projection_preserves_the_edited_view() {
+    let store = DbStore::connect(&test_db_url("duplicate-original"))
+        .await
+        .expect("connect db");
+    let message = visitor_message("$event:hs", "original");
+    store.save_message(&message).await.expect("save message");
+    let edited_at = Utc::now();
+    let mut updated = message.clone();
+    updated.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    updated.edited_at = Some(edited_at);
+    assert!(
+        store
+            .apply_edit(
+                &updated,
+                &MessageRevision {
+                    event_id: "$edit:hs".to_string(),
+                    message_event_id: "$event:hs".to_string(),
+                    content: updated.content.clone(),
+                    edited_at,
+                    editor_mxid: message.sender_mxid.clone(),
+                    redacted_at: None,
+                },
+            )
+            .await
+            .expect("apply edit")
+    );
+
+    // A homeserver retry of the immutable original is a no-op; it must not
+    // overwrite the derived current content with the pre-edit payload.
+    store.save_message(&message).await.expect("replay original");
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert!(
+        matches!(stored.content, Content::Text(ref text) if text.body == "edited"),
+        "original replay must not resurrect pre-edit content"
+    );
+}
+
+#[tokio::test]
+async fn redacting_the_latest_revision_rolls_back_to_an_older_revision() {
+    let store = DbStore::connect(&test_db_url("revision-redact-older"))
+        .await
+        .expect("connect db");
+    let message = visitor_message("$event:hs", "original");
+    store.save_message(&message).await.expect("save message");
+
+    let base = Utc::now();
+    for (event_id, body, offset_secs) in [("$older:hs", "older", 0), ("$newer:hs", "newer", 2)] {
+        let mut updated = message.clone();
+        updated.content = Content::Text(TextContent {
+            body: body.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        });
+        updated.edited_at = Some(base + chrono::Duration::seconds(offset_secs));
+        assert!(
+            store
+                .apply_edit(
+                    &updated,
+                    &MessageRevision {
+                        event_id: event_id.to_string(),
+                        message_event_id: "$event:hs".to_string(),
+                        content: updated.content.clone(),
+                        edited_at: updated.edited_at.unwrap(),
+                        editor_mxid: message.sender_mxid.clone(),
+                        redacted_at: None,
+                    },
+                )
+                .await
+                .unwrap_or_else(|error| panic!("apply {event_id}: {error:#}")),
+            "{event_id} should become current"
+        );
+    }
+
+    let now = Utc::now();
+    assert!(
+        store
+            .redact_message_revision("$newer:hs", "!room:hs", now, "@moderator:hs")
+            .await
+            .expect("redact newer revision"),
+    );
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert!(
+        matches!(stored.content, Content::Text(ref text) if text.body == "older"),
+        "redacting the newest edit must reveal the older surviving edit"
+    );
+    assert_eq!(
+        stored.edited_at.map(|at| at.timestamp_millis()),
+        Some(base.timestamp_millis())
+    );
+}
+
+#[tokio::test]
+async fn redacting_the_only_revision_restores_the_original() {
+    let store = DbStore::connect(&test_db_url("revision-redact-only"))
+        .await
+        .expect("connect db");
+    let message = visitor_message("$event:hs", "original");
+    store.save_message(&message).await.expect("save message");
+    let edited_at = Utc::now();
+    let mut updated = message.clone();
+    updated.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    updated.edited_at = Some(edited_at);
+    assert!(
+        store
+            .apply_edit(
+                &updated,
+                &MessageRevision {
+                    event_id: "$edit:hs".to_string(),
+                    message_event_id: "$event:hs".to_string(),
+                    content: updated.content.clone(),
+                    edited_at,
+                    editor_mxid: message.sender_mxid.clone(),
+                    redacted_at: None,
+                },
+            )
+            .await
+            .expect("apply edit")
+    );
+
+    assert!(
+        store
+            .redact_message_revision("$edit:hs", "!room:hs", Utc::now(), "@moderator:hs")
+            .await
+            .expect("redact revision")
+    );
+    let stored = store
+        .get_message("$event:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert!(
+        matches!(stored.content, Content::Text(ref text) if text.body == "original"),
+        "redacting the only edit must restore the original"
+    );
+    assert!(stored.edited_at.is_none());
 }
 
 #[tokio::test]
@@ -248,9 +427,11 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
                 &updated,
                 &MessageRevision {
                     event_id: "$edit:hs".to_string(),
+                    message_event_id: "$event:hs".to_string(),
                     content: updated.content.clone(),
                     edited_at,
                     editor_mxid: message.sender_mxid.clone(),
+                    redacted_at: None,
                 },
             )
             .await
@@ -298,6 +479,7 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
                 &updated,
                 &MessageRevision {
                     event_id: "$late-edit:hs".to_string(),
+                    message_event_id: "$event:hs".to_string(),
                     content: Content::Text(TextContent {
                         body: "restored".to_string(),
                         formatted_body: None,
@@ -305,6 +487,7 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
                     }),
                     edited_at: updated.edited_at.expect("edited at"),
                     editor_mxid: message.sender_mxid.clone(),
+                    redacted_at: None,
                 }
             )
             .await

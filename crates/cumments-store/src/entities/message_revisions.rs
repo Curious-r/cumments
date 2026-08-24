@@ -15,6 +15,8 @@ pub struct Model {
     pub content_json: String,
     pub edited_at: DateTimeUtc,
     pub editor_mxid: String,
+    pub redacted_at: Option<DateTimeUtc>,
+    pub redacted_by: Option<String>,
     pub created_at: DateTimeUtc,
 }
 

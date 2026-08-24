@@ -484,6 +484,7 @@ mod tests {
             reactions: Vec::new(),
             room_id: "!room:hs".to_string(),
             sender_mxid: "@_cumments_my-blog_abcd:hs".to_string(),
+            matrix_event_type: "m.room.message".to_string(),
             raw_content: serde_json::Value::Null,
         };
 

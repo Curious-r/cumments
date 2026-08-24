@@ -269,6 +269,7 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     Some(ParsedRoomMessage {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
+        event_type: event.event_type.clone(),
         sender: sender.clone(),
         content: parsed_content,
         author_public_key: if trusted_block {

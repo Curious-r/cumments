@@ -136,6 +136,10 @@ pub struct Message {
     /// edits (m.replace) and never exposed through the API/SSE.
     #[serde(skip)]
     pub sender_mxid: String,
+    /// Matrix event type of the original message. Internal integrity check
+    /// for replacements; never exposed through the API/SSE.
+    #[serde(skip)]
+    pub matrix_event_type: String,
     /// The raw Matrix event content, kept as an escape hatch for forward
     /// compatibility; never exposed through the API/SSE.
     #[serde(skip)]
@@ -386,9 +390,12 @@ pub struct Reaction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageRevision {
     pub event_id: String,
+    /// The edited message's event ID.
+    pub message_event_id: String,
     pub content: Content,
     pub edited_at: DateTime<Utc>,
     pub editor_mxid: String,
+    pub redacted_at: Option<DateTime<Utc>>,
 }
 
 /// A poll vote record (one row per voter; the latest vote wins).

@@ -1688,6 +1688,7 @@ async fn redacted_comment_reads_as_tombstone_and_rejects_new_reaction() {
         reactions: Vec::new(),
         room_id: "!room:hs".to_string(),
         sender_mxid: "@_cumments_test-blog_abcd:hs".to_string(),
+        matrix_event_type: "m.room.message".to_string(),
         raw_content: serde_json::json!({"body": "deleted secret"}),
     };
     // Simulate a live row written before R1 so the public contract test also
@@ -2151,6 +2152,7 @@ async fn reaction_retries_do_not_require_idempotency_key_and_reuse_matrix_txn() 
             reactions: Vec::new(),
             room_id: "!room:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
+            matrix_event_type: "m.room.message".to_string(),
             raw_content: serde_json::Value::Null,
         })
         .await

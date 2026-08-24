@@ -35,6 +35,7 @@ fn claim_message(sender: &str, body: &str) -> ParsedRoomMessage {
     ParsedRoomMessage {
         room_id: "!dm:hs".to_string(),
         event_id: "$dm:hs".to_string(),
+        event_type: "m.room.message".to_string(),
         sender: sender.to_string(),
         content: Content::Text(TextContent {
             body: body.to_string(),

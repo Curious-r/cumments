@@ -252,6 +252,19 @@ pub trait MessageStore: Send + Sync {
         redacted_by: &str,
     ) -> Result<bool>;
 
+    /// Looks up an `m.replace` revision by its own Matrix event ID.
+    async fn get_message_revision(&self, event_id: &str) -> Result<Option<MessageRevision>>;
+
+    /// Marks one replacement redacted and recomputes the parent's current
+    /// content from the latest surviving revision or the original payload.
+    async fn redact_message_revision(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+    ) -> Result<bool>;
+
     /// Gets the author display name for a specific event.
     /// `None` means the message is missing; `Some(None)` means the message
     /// exists without a display name; `Some(Some(name))` is a stored name.

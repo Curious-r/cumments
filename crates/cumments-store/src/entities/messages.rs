@@ -19,6 +19,10 @@ pub struct Model {
     pub author_public_key: Option<String>,
     /// Serialized `Content` (the read-model payload).
     pub content_json: String,
+    /// Serialized displayable `Content` before any replacement was applied.
+    pub original_content_json: String,
+    /// Matrix event type required to match valid `m.replace` events.
+    pub matrix_event_type: String,
     /// Raw Matrix event content (forward-compatibility escape hatch).
     pub raw_content_json: String,
     pub timestamp: DateTimeUtc,

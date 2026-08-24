@@ -6,7 +6,7 @@ use cumments_core::models::{
 use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
-    ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction,
+    ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction,
 };
 use cumments_store::DbStore;
 use std::sync::Arc;
@@ -67,6 +67,7 @@ fn message(event_id: &str) -> ParsedRoomMessage {
     ParsedRoomMessage {
         room_id: "!room:hs".to_string(),
         event_id: event_id.to_string(),
+        event_type: "m.room.message".to_string(),
         sender: "@alice:hs".to_string(),
         content: Content::Text(TextContent {
             body: "resurrected".to_string(),
@@ -182,6 +183,86 @@ async fn visitor_location_verifies_with_locate_signature() {
             .is_none(),
         "visitor location signed with the POST format must be rejected"
     );
+}
+
+#[tokio::test]
+async fn edit_redaction_rolls_the_parent_back_to_original_content() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("edit-redaction"))
+            .await
+            .expect("connect db"),
+    );
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("my-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+    let processor = processor(store.clone()).await;
+
+    processor
+        .process_room_message(message("$original:hs"))
+        .await
+        .expect("process original");
+
+    let mut replacement = message("$replace:hs");
+    replacement.origin_server_ts = 200;
+    replacement.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    replacement.relates_to = Some(ParsedRelation {
+        target_event_id: "$original:hs".to_string(),
+        new_content: replacement.content.clone(),
+    });
+    processor
+        .process_room_message(replacement)
+        .await
+        .expect("process replacement");
+
+    let edited = store
+        .get_message("$original:hs")
+        .await
+        .expect("query edited parent")
+        .expect("parent exists");
+    assert!(
+        matches!(edited.content, Content::Text(ref text) if text.body == "edited"),
+        "replacement must become the current view"
+    );
+
+    processor
+        .process_room_redaction(ParsedRoomRedaction {
+            room_id: "!room:hs".to_string(),
+            event_id: "$redaction:hs".to_string(),
+            sender: Some("@alice:hs".to_string()),
+            origin_server_ts: 300,
+            redacts: Some("$replace:hs".to_string()),
+            proof: None,
+            submission_id: None,
+            room_identity: Some(identity()),
+        })
+        .await
+        .expect("redact replacement");
+
+    let rolled_back = store
+        .get_message("$original:hs")
+        .await
+        .expect("query rolled-back parent")
+        .expect("parent exists");
+    assert!(
+        matches!(rolled_back.content, Content::Text(ref text) if text.body == "resurrected"),
+        "redacting the only replacement must restore original content"
+    );
+    assert!(rolled_back.edited_at.is_none());
+    let revision = store
+        .get_message_revision("$replace:hs")
+        .await
+        .expect("query revision")
+        .expect("revision remains as a redacted fact");
+    assert!(revision.redacted_at.is_some());
 }
 
 #[tokio::test]
