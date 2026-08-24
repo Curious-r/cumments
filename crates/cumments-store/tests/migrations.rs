@@ -84,6 +84,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260824_000056_poll_response_events".to_string()),
         "000056 must be registered or poll votes remain lossy per-voter rows"
     );
+    assert!(
+        names.contains(&"m20260825_000057_appservice_txn_dedupe".to_string()),
+        "000057 must be registered or AppService transaction dedupe is not durable"
+    );
 }
 
 #[tokio::test]

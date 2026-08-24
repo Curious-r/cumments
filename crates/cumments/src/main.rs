@@ -401,6 +401,7 @@ async fn main() -> Result<()> {
                 tracing::info!("PushReceiver listening on {}", listener.local_addr()?);
                 let push_app = cumments_projector::push_receiver::push_router_standalone(
                     event_processor.clone(),
+                    db_store.clone() as Arc<dyn cumments_core::ports::AppServiceTxnStore>,
                     as_conf.hs_token.clone(),
                 );
                 tokio::spawn(async move {
@@ -446,7 +447,7 @@ async fn main() -> Result<()> {
     });
     let rate_limits = settings.rate_limit.resolved()?;
     let api_state = cumments_api::ApiState {
-        store: db_store,
+        store: db_store.clone(),
         driver: driver.clone(),
         site_service: site_service.clone(),
         pow: Arc::new(pow),
@@ -517,6 +518,7 @@ async fn main() -> Result<()> {
             // Merge push routes into the API server
             let push_router = cumments_projector::push_receiver::push_router(
                 event_processor,
+                db_store.clone() as Arc<dyn cumments_core::ports::AppServiceTxnStore>,
                 as_conf.hs_token.clone(),
             );
             api_router.merge(push_router)

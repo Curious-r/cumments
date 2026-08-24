@@ -370,6 +370,16 @@ pub trait MessageStore: Send + Sync {
     async fn has_backfill_tombstone(&self, event_id: &str, room_id: &str) -> Result<bool>;
 }
 
+/// Durable fast-path deduplication for acknowledged AppService transactions.
+#[async_trait]
+pub trait AppServiceTxnStore: Send + Sync {
+    async fn has_processed_txn(&self, txn_id: &str) -> Result<bool>;
+
+    /// Records a transaction as processed. Implementations may bound this
+    /// cache; event projection must remain idempotent for evicted IDs.
+    async fn mark_processed_txn(&self, txn_id: &str) -> Result<()>;
+}
+
 /// The port for room-level metadata: member profiles and the system-message
 /// (state event) feed. Independent from the message read model.
 #[async_trait]

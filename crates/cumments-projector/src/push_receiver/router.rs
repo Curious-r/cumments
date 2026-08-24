@@ -2,7 +2,7 @@
 
 use super::auth::hs_token_matches;
 use super::parsers::process_single_event;
-use super::state::{ProcessedTxnSet, PushState};
+use super::state::PushState;
 use super::types::Transaction;
 use crate::event_processor::EventProcessor;
 use axum::{
@@ -12,10 +12,8 @@ use axum::{
     response::IntoResponse,
     routing::{post, put},
 };
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use cumments_core::ports::AppServiceTxnStore;
+use std::{collections::HashMap, sync::Arc};
 
 // ── Axum router ──────────────────────────────────────────────────
 
@@ -26,11 +24,15 @@ use std::{
 /// (with the legacy `?hs_token=` query parameter as a fallback) and compared
 /// against the configured value. Requests without a valid token are rejected
 /// with 403 FORBIDDEN, matching the AppService API's `M_FORBIDDEN` error.
-pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Router {
+pub fn push_router(
+    processor: Arc<EventProcessor>,
+    txn_store: Arc<dyn AppServiceTxnStore>,
+    hs_token: String,
+) -> axum::Router {
     let state = Arc::new(PushState {
         processor,
         hs_token,
-        processed_txns: Mutex::new(ProcessedTxnSet::new()),
+        txn_store,
     });
 
     axum::Router::new()
@@ -50,8 +52,12 @@ pub fn push_router(processor: Arc<EventProcessor>, hs_token: String) -> axum::Ro
 /// owns every unmatched path. When the push routes are merged into the API
 /// router, axum allows only one fallback per merged router, so the shared-port
 /// build keeps the API router's behaviour.
-pub fn push_router_standalone(processor: Arc<EventProcessor>, hs_token: String) -> axum::Router {
-    push_router(processor, hs_token).fallback(handle_unknown)
+pub fn push_router_standalone(
+    processor: Arc<EventProcessor>,
+    txn_store: Arc<dyn AppServiceTxnStore>,
+    hs_token: String,
+) -> axum::Router {
+    push_router(processor, txn_store, hs_token).fallback(handle_unknown)
 }
 
 /// Respond to unknown AppService routes with the spec's `M_UNRECOGNIZED`
@@ -113,12 +119,7 @@ async fn handle_transaction(
         );
     }
 
-    if state
-        .processed_txns
-        .lock()
-        .expect("processed txns mutex poisoned")
-        .contains(&txn_id)
-    {
+    if let Ok(true) = state.txn_store.has_processed_txn(&txn_id).await {
         return (StatusCode::OK, Json(serde_json::json!({})));
     }
 
@@ -142,11 +143,16 @@ async fn handle_transaction(
         );
     }
 
-    let mut processed = state
-        .processed_txns
-        .lock()
-        .expect("processed txns mutex poisoned");
-    processed.insert(txn_id);
+    if let Err(error) = state.txn_store.mark_processed_txn(&txn_id).await {
+        tracing::error!("Failed to record processed push transaction: {error:#}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "errcode": "M_UNKNOWN",
+                "error": "Failed to record transaction"
+            })),
+        );
+    }
 
     // The AppService protocol requires an empty JSON object response.
     (StatusCode::OK, Json(serde_json::json!({})))

@@ -15,6 +15,7 @@ pub mod messages;
 pub mod poll_response_events;
 pub mod poll_responses;
 pub mod post_submissions;
+pub mod processed_appservice_transactions;
 pub mod reactions;
 pub mod role_claims;
 pub mod room_members;

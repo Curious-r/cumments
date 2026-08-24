@@ -7,7 +7,9 @@ use cumments_core::models::{
     MessageStatus, PageSlug, PollContent, PollOption, PollVote, Reaction, RoomMember, SiteId,
     TextContent, TextStyle, UnknownContent,
 };
-use cumments_core::ports::{MessageStore, RoomStore, SubmissionStore, VirtualUserStore};
+use cumments_core::ports::{
+    AppServiceTxnStore, MessageStore, RoomStore, SubmissionStore, VirtualUserStore,
+};
 use cumments_store::DbStore;
 
 /// Unique SQLite file per test to avoid shared in-memory state.
@@ -641,6 +643,27 @@ async fn relations_to_redacted_parents_are_hidden_from_the_child_view() {
     assert_eq!(visible.status, MessageStatus::Active);
     assert!(visible.reply_to.is_none());
     assert!(visible.thread_root.is_none());
+}
+
+#[tokio::test]
+async fn processed_appservice_transactions_are_durable_and_idempotent() {
+    let store = DbStore::connect(&test_db_url("appservice-txn-dedupe"))
+        .await
+        .expect("connect db");
+
+    assert!(
+        !store
+            .has_processed_txn("txn-1")
+            .await
+            .expect("query transaction"),
+    );
+    store.mark_processed_txn("txn-1").await.expect("mark txn");
+    assert!(
+        store
+            .has_processed_txn("txn-1")
+            .await
+            .expect("query marked transaction"),
+    );
 }
 
 #[tokio::test]

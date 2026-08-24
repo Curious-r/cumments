@@ -2,7 +2,8 @@ use super::DbStore;
 use super::is_unique_violation;
 use crate::entities::{
     backfill_tombstones, media_upload_idempotency, media_uploads, message_revisions, messages,
-    poll_response_events, post_submissions, reactions, room_members,
+    poll_response_events, post_submissions, processed_appservice_transactions, reactions,
+    room_members,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -15,10 +16,10 @@ use cumments_core::models::{
     MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
     PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, UnknownContent,
 };
-use cumments_core::ports::MessageStore;
+use cumments_core::ports::{AppServiceTxnStore, MessageStore};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -119,6 +120,49 @@ fn message_from_model(model: messages::Model) -> Message {
         room_id: model.room_id,
         sender_mxid: model.sender_mxid,
         raw_content,
+    }
+}
+
+#[async_trait]
+impl AppServiceTxnStore for DbStore {
+    async fn has_processed_txn(&self, txn_id: &str) -> Result<bool> {
+        Ok(
+            processed_appservice_transactions::Entity::find_by_id(txn_id.to_string())
+                .one(&self.db)
+                .await?
+                .is_some(),
+        )
+    }
+
+    async fn mark_processed_txn(&self, txn_id: &str) -> Result<()> {
+        let now = chrono::Utc::now();
+        processed_appservice_transactions::Entity::insert(
+            processed_appservice_transactions::ActiveModel {
+                txn_id: Set(txn_id.to_string()),
+                processed_at: Set(now),
+            },
+        )
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(
+                processed_appservice_transactions::Column::TxnId,
+            )
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(&self.db)
+        .await?;
+
+        self.db
+            .execute_unprepared(
+                r"DELETE FROM processed_appservice_transactions
+                  WHERE txn_id NOT IN (
+                      SELECT txn_id FROM processed_appservice_transactions
+                      ORDER BY processed_at DESC, txn_id DESC
+                      LIMIT 10000
+                  )",
+            )
+            .await?;
+        Ok(())
     }
 }
 
