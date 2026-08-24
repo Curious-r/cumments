@@ -18,6 +18,15 @@ assert(!/x-query|x-cumments-query/.test(contract), "contract must use native QUE
 
 const queryOperations = [...contract.matchAll(/^ {4}query:$/gm)].length;
 assert(queryOperations === 3, `expected 3 native query operations, found ${queryOperations}`);
+assert(
+  /^\s+itemSchema:\n\s+\$ref: "#\/components\/schemas\/CommentSseFrame"$/m.test(contract),
+  "SSE response must describe each parsed event frame with itemSchema",
+);
+assert(
+  /contentMediaType: application\/json/.test(contract) &&
+    /contentSchema:/.test(contract),
+  "JSON-valued SSE data must declare contentMediaType and contentSchema",
+);
 
 for (const operationId of ["queryComments", "listOperatorSites", "listQuarantinedRooms"]) {
   assert(new RegExp(`^      operationId: ${operationId}$`, "m").test(contract), `missing ${operationId}`);

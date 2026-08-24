@@ -48,6 +48,7 @@ nav:
           - Operator: api/operator.md
           - Media: api/media.md
           - Visitors: api/visitors.md
+          - OpenAPI 3.2 status: openapi-3-2.md
       - Configuration: configuration.md
       - CLI: cli.md
       - Problem types: problems/index.md

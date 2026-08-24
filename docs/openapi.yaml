@@ -200,6 +200,12 @@ paths:
                   minimum: 1
                   maximum: 100
                   default: 20
+            examples:
+              firstPage:
+                summary: First page at the default page size
+                value:
+                  page: 1
+                  per_page: 20
       responses:
         "200":
           description: Paginated comments
@@ -215,6 +221,41 @@ paths:
                       $ref: "#/components/schemas/Message"
                   meta:
                     $ref: "#/components/schemas/PaginationMeta"
+              examples:
+                activeComment:
+                  summary: Active comment with unset optional metadata
+                  value:
+                    data:
+                      - event_id: "$comment:hs"
+                        site_id: my-blog
+                        page_slug: hello
+                        room_id: "!room:hs"
+                        author:
+                          type: visitor
+                          display_name: Alice
+                          avatar_url: null
+                          public_key: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc
+                          mxid: null
+                        content:
+                          type: text
+                          body: Hello
+                          style: normal
+                        timestamp: "2026-08-25T04:00:00Z"
+                        edited_at: null
+                        reply_to: null
+                        thread_root: null
+                        submission_id: null
+                        status: active
+                        redacted_at: null
+                        redacted_by: null
+                        reactions: []
+                        sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs"
+                        raw_content: {}
+                    meta:
+                      total: 1
+                      page: 1
+                      per_page: 20
+                      total_pages: 1
         "400":
           $ref: "#/components/responses/Error"
   /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}:
@@ -268,8 +309,19 @@ paths:
           description: Server-sent event stream
           content:
             text/event-stream:
-              schema:
-                type: string
+              itemSchema:
+                $ref: "#/components/schemas/CommentSseFrame"
+              examples:
+                messageCreated:
+                  summary: A new projected comment
+                  serializedValue: |
+                    event: message_created
+                    data: {"type":"message_created","payload":{"site_id":"my-blog","page_slug":"hello","message":{"event_id":"$comment:hs"}}}
+                ephemeralTyping:
+                  summary: Initial or incremental typing state
+                  serializedValue: |
+                    event: ephemeral
+                    data: {"type":"typing","room_id":"!room:hs","user_id":"@alice:hs","typing":true,"display_name":"Alice"}
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/sites:
@@ -2631,6 +2683,168 @@ components:
               info:
                 type: [object, "null"]
                 description: Matrix ImageInfo (`w`/`h`, `mimetype`, `size`, ...).
+    CommentSseFrame:
+      type: object
+      description: |
+        One parsed Server-Sent Events frame. `event` routes the frame in the
+        browser; `data` contains JSON whose schema depends on `event`.
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          enum:
+            - message_created
+            - message_updated
+            - message_annotations_changed
+            - message_deleted
+            - ephemeral
+        data:
+          type: string
+          contentMediaType: application/json
+          contentSchema:
+            oneOf:
+              - $ref: "#/components/schemas/ProjectorEvent"
+              - $ref: "#/components/schemas/EphemeralEvent"
+        id:
+          type: string
+        retry:
+          type: integer
+          minimum: 0
+    ProjectorEvent:
+      type: object
+      description: Projection update for a registered page.
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+        payload:
+          type: object
+      oneOf:
+        - $ref: "#/components/schemas/MessageCreatedEvent"
+        - $ref: "#/components/schemas/MessageUpdatedEvent"
+        - $ref: "#/components/schemas/MessageAnnotationsChangedEvent"
+        - $ref: "#/components/schemas/MessageDeletedEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          message_created: "#/components/schemas/MessageCreatedEvent"
+          message_updated: "#/components/schemas/MessageUpdatedEvent"
+          message_annotations_changed: "#/components/schemas/MessageAnnotationsChangedEvent"
+          message_deleted: "#/components/schemas/MessageDeletedEvent"
+    MessageCreatedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [message_created]
+        payload:
+          $ref: "#/components/schemas/PageMessagePayload"
+    MessageUpdatedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [message_updated]
+        payload:
+          $ref: "#/components/schemas/PageMessagePayload"
+    MessageAnnotationsChangedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [message_annotations_changed]
+        payload:
+          $ref: "#/components/schemas/PageMessagePayload"
+    PageMessagePayload:
+      type: object
+      required: [site_id, page_slug, message]
+      properties:
+        site_id:
+          type: string
+        page_slug:
+          type: string
+        message:
+          $ref: "#/components/schemas/Message"
+    MessageDeletedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [message_deleted]
+        payload:
+          type: object
+          required: [site_id, page_slug, event_id]
+          properties:
+            site_id:
+              type: string
+            page_slug:
+              type: string
+            event_id:
+              type: string
+            submission_id:
+              type: integer
+              format: int64
+    EphemeralEvent:
+      type: object
+      description: Live typing, read receipt or presence update.
+      required: [type]
+      properties:
+        type:
+          type: string
+      oneOf:
+        - $ref: "#/components/schemas/EphemeralTypingEvent"
+        - $ref: "#/components/schemas/EphemeralReadReceiptEvent"
+        - $ref: "#/components/schemas/EphemeralPresenceEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          typing: "#/components/schemas/EphemeralTypingEvent"
+          receipt: "#/components/schemas/EphemeralReadReceiptEvent"
+          presence: "#/components/schemas/EphemeralPresenceEvent"
+    EphemeralTypingEvent:
+      type: object
+      required: [type, room_id, user_id, typing]
+      properties:
+        type:
+          type: string
+          enum: [typing]
+        room_id:
+          type: string
+        user_id:
+          type: string
+        typing:
+          type: boolean
+        display_name:
+          type: [string, "null"]
+    EphemeralReadReceiptEvent:
+      type: object
+      required: [type, room_id, event_id, user_id]
+      properties:
+        type:
+          type: string
+          enum: [receipt]
+        room_id:
+          type: string
+        event_id:
+          type: string
+        user_id:
+          type: string
+    EphemeralPresenceEvent:
+      type: object
+      required: [type, user_id, presence]
+      properties:
+        type:
+          type: string
+          enum: [presence]
+        user_id:
+          type: string
+        presence:
+          type: string
+          description: Homeserver presence value, commonly `online` or `offline`.
   requestBodies:
     AddSticker:
       required: true
