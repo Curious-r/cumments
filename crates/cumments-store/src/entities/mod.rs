@@ -22,6 +22,7 @@ pub mod room_members;
 pub mod room_registry;
 pub mod room_roles;
 pub mod room_state_events;
+pub mod room_state_snapshots;
 pub mod site_roles;
 pub mod site_transfers;
 pub mod site_verified_origins;

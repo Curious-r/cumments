@@ -478,12 +478,14 @@ the backup command.
   across rooms) is still open, and a Space upgrade would require re-linking
   every child room plus copying sticker-pack state. Image-pack handling
   across room upgrades (MSC4433) is not implemented.
-- State resolution is approximated with latest-wins on
-  `(origin_server_ts, event_id)`. This is fine on a single homeserver but is
-  not a full DAG/mainline state resolution, so forked or federated rooms may
-  diverge from the homeserver's resolved state.
+- Governance reconciliation captures the homeserver's resolved power levels
+  and room version into `room_state_snapshots`; local historical state events
+  are audit/replay data rather than an independent state-resolution engine.
+  Timeline ordering remains latest-wins on `(origin_server_ts, event_id)`, so
+  forked or federated rooms still require homeserver snapshot freshness.
 - Redaction of state events follows the room-version 11+ algorithm in the
   projector (protected keys are kept, other content is emptied in place);
-  membership, redaction acceptance and state resolution themselves are
+  the algorithm is selected by the resolved room version, while unsupported
+  versions fail closed. Redaction acceptance and full state resolution remain
   delegated to the homeserver and have only been verified against a
   single-server tuwunel deployment.

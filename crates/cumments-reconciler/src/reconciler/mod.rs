@@ -14,8 +14,8 @@ use cumments_core::{
     matrix_error::MatrixError,
     models::{PageSlug, QuarantinedRoom, SiteId},
     ports::{
-        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore,
-        SiteStore, SiteTransferStore, SubmissionStore, VirtualUserStore,
+        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
+        SiteAuthStore, SiteStore, SiteTransferStore, SubmissionStore, VirtualUserStore,
     },
     site_service::SiteService,
 };
@@ -129,6 +129,7 @@ pub struct ReconcilerDeps {
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub governance_store: Arc<dyn GovernanceStore>,
     pub message_store: Arc<dyn MessageStore>,
+    pub room_store: Arc<dyn RoomStore>,
     pub virtual_user_store: Arc<dyn VirtualUserStore>,
     pub site_auth_store: Arc<dyn SiteAuthStore>,
     pub site_transfer_store: Arc<dyn SiteTransferStore>,

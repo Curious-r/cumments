@@ -84,6 +84,8 @@ async fn save_message_records_typed_content_and_internal_fields() {
     let site = SiteId::from("my-blog");
     let slug = PageSlug::from("hello");
 
+    let parent = visitor_message("$parent:hs", "parent");
+    store.save_message(&parent).await.expect("save parent");
     let message = visitor_message("$event:hs", "hello");
     store.save_message(&message).await.expect("save message");
 
@@ -118,7 +120,7 @@ async fn save_message_records_typed_content_and_internal_fields() {
         .get_messages(&site, &slug, 10, 0)
         .await
         .expect("query messages");
-    assert_eq!(page.total, 1);
+    assert_eq!(page.total, 2);
     assert_eq!(page.items[0].event_id, "$event:hs");
 }
 
@@ -199,6 +201,8 @@ async fn apply_edit_updates_content_and_records_revision() {
     let store = DbStore::connect(&test_db_url("message-edit"))
         .await
         .expect("connect db");
+    let parent = visitor_message("$parent:hs", "parent");
+    store.save_message(&parent).await.expect("save parent");
     let message = visitor_message("$event:hs", "original");
     store.save_message(&message).await.expect("save message");
 

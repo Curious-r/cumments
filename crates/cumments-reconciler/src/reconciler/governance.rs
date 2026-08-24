@@ -13,7 +13,7 @@ use cumments_core::governance::{
     reconcile_site_roles, role_entries, set_role_level,
 };
 use cumments_core::management::complete_owner_transfer;
-use cumments_core::models::SiteId;
+use cumments_core::models::{RoomStateSnapshot, SiteId};
 use tracing::{info, warn};
 
 /// Applies role claims that the target MXID verified through the DM token
@@ -205,6 +205,7 @@ impl GovernanceSyncPass {
             if site.matrix_space_id.is_empty() {
                 continue;
             }
+            capture_room_state_snapshot(self.deps.as_ref(), &site.matrix_space_id).await?;
             let Some(space_power_levels) = self
                 .deps
                 .driver
@@ -237,6 +238,7 @@ impl GovernanceSyncPass {
                 .list_active_rooms_for_site(&site_id)
                 .await?
             {
+                capture_room_state_snapshot(self.deps.as_ref(), &room_id).await?;
                 let Some(room_power_levels) =
                     self.deps.driver.get_room_power_levels(&room_id).await?
                 else {
@@ -290,12 +292,39 @@ impl ReconcilePass for GovernanceSyncPass {
     }
 }
 
+/// Replaces the local snapshot with the homeserver's resolved current state.
+///
+/// Historical events in `room_state_events` are useful for audit and replay,
+/// but redaction rules and governance decisions must use what the homeserver
+/// currently resolves—not a latest-wins reconstruction of a timeline.
+async fn capture_room_state_snapshot(deps: &ReconcilerDeps, room_id: &str) -> Result<()> {
+    let create_content = deps
+        .driver
+        .get_room_state(room_id, "m.room.create", "")
+        .await?;
+    let power_levels = deps.driver.get_room_power_levels(room_id).await?;
+    deps.room_store
+        .save_room_state_snapshot(&RoomStateSnapshot {
+            room_id: room_id.to_string(),
+            room_version: create_content
+                .as_ref()
+                .and_then(|content| content.get("room_version"))
+                .and_then(|version| version.as_str())
+                .map(str::to_string),
+            create_content_json: create_content,
+            power_levels_json: power_levels,
+            resolved_at: chrono::Utc::now(),
+        })
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cumments_core::{
         governance::{NewRoleClaim, RoleEntry, SITE_ADMIN_LEVEL},
-        ports::{RoleClaimStore, SiteAuthStore, SiteTransferStore},
+        ports::{RoleClaimStore, RoomStore, SiteAuthStore, SiteTransferStore},
         site_auth::token_hash,
         site_service::SiteService,
     };
@@ -399,6 +428,7 @@ mod tests {
             role_claim_store: store.clone(),
             governance_store: store.clone(),
             message_store: store.clone(),
+            room_store: store.clone(),
             virtual_user_store: store.clone(),
             site_auth_store: store.clone(),
             site_transfer_store: store.clone(),
@@ -447,5 +477,79 @@ mod tests {
                 .iter()
                 .any(|(room, body)| room == "!dm:hs" && body.contains("新 claim token"))
         );
+    }
+
+    #[tokio::test]
+    async fn governance_sync_captures_homeserver_state_snapshots() {
+        let store = Arc::new(
+            DbStore::connect(&test_db_url("state-snapshots"))
+                .await
+                .expect("connect db"),
+        );
+        store
+            .register_site("snapshot-site", &token_hash("claim"), true)
+            .await
+            .expect("register site");
+        store
+            .ensure_site_exists("snapshot-site", "!space:hs")
+            .await
+            .expect("attach space");
+        store
+            .register_room(
+                "!room:hs",
+                &SiteId::from("snapshot-site"),
+                &PageSlug::from("hello"),
+            )
+            .await
+            .expect("register room");
+
+        let create = serde_json::json!({ "room_version": "12" });
+        let power_levels = serde_json::json!({
+            "users": { "@_cumments_bot:hs": 150 },
+            "events": { "m.room.power_levels": 100, "m.room.tombstone": 150 },
+            "state_default": 50,
+        });
+        let driver = Arc::new(
+            TestDriver::new()
+                .with_power_levels("!space:hs", power_levels.clone())
+                .with_power_levels("!room:hs", power_levels.clone())
+                .with_room_state("!space:hs", "m.room.create", "", create.clone())
+                .with_room_state("!room:hs", "m.room.create", "", create),
+        );
+        let deps = Arc::new(ReconcilerDeps {
+            submission_store: store.clone(),
+            registry_store: store.clone(),
+            site_store: store.clone(),
+            role_claim_store: store.clone(),
+            governance_store: store.clone(),
+            message_store: store.clone(),
+            room_store: store.clone(),
+            virtual_user_store: store.clone(),
+            site_auth_store: store.clone(),
+            site_transfer_store: store.clone(),
+            driver: driver.clone(),
+            site_service: Arc::new(SiteService::new(
+                store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+            )),
+        });
+        let pass = GovernanceSyncPass::new(
+            deps,
+            PassConfig {
+                name: "state-snapshot-test",
+                interval: std::time::Duration::from_secs(60),
+                wakeup: Arc::new(Notify::new()),
+            },
+        );
+        assert_eq!(pass.run().await.expect("governance sync"), 1);
+
+        for room_id in ["!space:hs", "!room:hs"] {
+            let snapshot = store
+                .get_room_state_snapshot(room_id)
+                .await
+                .expect("get snapshot")
+                .unwrap_or_else(|| panic!("missing snapshot for {room_id}"));
+            assert_eq!(snapshot.room_version.as_deref(), Some("12"));
+            assert_eq!(snapshot.power_levels_json, Some(power_levels.clone()));
+        }
     }
 }

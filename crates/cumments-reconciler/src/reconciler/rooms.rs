@@ -130,6 +130,7 @@ mod tests {
             role_claim_store: store.clone(),
             governance_store: store.clone(),
             message_store: store.clone(),
+            room_store: store.clone(),
             virtual_user_store: store.clone(),
             site_auth_store: store.clone(),
             site_transfer_store: store.clone(),

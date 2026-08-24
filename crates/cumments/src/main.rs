@@ -354,6 +354,7 @@ async fn main() -> Result<()> {
             role_claim_store: db_store.clone(),
             governance_store: db_store.clone(),
             message_store: db_store.clone(),
+            room_store: db_store.clone(),
             virtual_user_store: db_store.clone(),
             site_auth_store: db_store.clone(),
             site_transfer_store: db_store.clone(),

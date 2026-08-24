@@ -2196,17 +2196,26 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
-            let room_version = self
+            let resolved_snapshot = self
                 .room_store
-                .get_latest_state_event(&event.room_id, "m.room.create", "")
+                .get_room_state_snapshot(&event.room_id)
                 .await?
-                .and_then(|create| {
-                    create
-                        .content_json
-                        .get("room_version")
-                        .and_then(|version| version.as_str())
-                        .map(str::to_string)
-                });
+                .map(|snapshot| snapshot.room_version);
+            let room_version = match resolved_snapshot {
+                // The reconciler's homeserver-resolved state is authoritative.
+                Some(room_version) => room_version,
+                None => self
+                    .room_store
+                    .get_latest_state_event(&event.room_id, "m.room.create", "")
+                    .await?
+                    .and_then(|create| {
+                        create
+                            .content_json
+                            .get("room_version")
+                            .and_then(|version| version.as_str())
+                            .map(str::to_string)
+                    }),
+            };
             let stripped = match redact_state_content_for_version(
                 &state.event_type,
                 &state.content_json,

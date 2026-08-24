@@ -7,8 +7,8 @@ use crate::media_upload::{
 use crate::models::{
     CommentMedia, EditProjectionOutcome, Message, MessagePage, MessageRedactionOutcome,
     MessageRevision, MessageSaveOutcome, PageSlug, PollVote, QuarantinedRoom, Reaction,
-    RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStatus, SiteId,
-    VisitorProfile,
+    RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot,
+    RoomStatus, SiteId, VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -422,6 +422,12 @@ pub trait RoomStore: Send + Sync {
         room_id: &str,
         limit: i64,
     ) -> Result<Vec<RoomStateEvent>>;
+
+    /// Reads the homeserver-resolved state snapshot captured by reconciliation.
+    async fn get_room_state_snapshot(&self, room_id: &str) -> Result<Option<RoomStateSnapshot>>;
+
+    /// Replaces the homeserver-resolved state snapshot for a room.
+    async fn save_room_state_snapshot(&self, snapshot: &RoomStateSnapshot) -> Result<()>;
 }
 
 /// Port for managing the local room registry cache (Mirror of Space relationships).

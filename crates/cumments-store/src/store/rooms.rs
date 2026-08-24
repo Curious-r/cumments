@@ -1,8 +1,8 @@
 use super::DbStore;
-use crate::entities::{room_members, room_state_events};
+use crate::entities::{room_members, room_state_events, room_state_snapshots};
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::models::{RoomMember, RoomMetadata, RoomStateEvent};
+use cumments_core::models::{RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot};
 use cumments_core::ports::RoomStore;
 use sea_orm::{
     ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
@@ -212,5 +212,50 @@ impl RoomStore for DbStore {
             .all(&self.db)
             .await?;
         Ok(models.into_iter().map(state_event_from_model).collect())
+    }
+
+    async fn get_room_state_snapshot(&self, room_id: &str) -> Result<Option<RoomStateSnapshot>> {
+        let model = room_state_snapshots::Entity::find_by_id(room_id.to_string())
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| RoomStateSnapshot {
+            room_id: m.room_id,
+            room_version: m.room_version,
+            create_content_json: m
+                .create_content_json
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            power_levels_json: m
+                .power_levels_json
+                .and_then(|json| serde_json::from_str(&json).ok()),
+            resolved_at: m.resolved_at,
+        }))
+    }
+
+    async fn save_room_state_snapshot(&self, snapshot: &RoomStateSnapshot) -> Result<()> {
+        let model = room_state_snapshots::ActiveModel {
+            room_id: Set(snapshot.room_id.clone()),
+            room_version: Set(snapshot.room_version.clone()),
+            create_content_json: Set(snapshot.create_content_json.as_ref().map(|content| {
+                serde_json::to_string(content).unwrap_or_else(|_| "null".to_string())
+            })),
+            power_levels_json: Set(snapshot.power_levels_json.as_ref().map(|content| {
+                serde_json::to_string(content).unwrap_or_else(|_| "null".to_string())
+            })),
+            resolved_at: Set(snapshot.resolved_at),
+        };
+        room_state_snapshots::Entity::insert(model)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(room_state_snapshots::Column::RoomId)
+                    .update_columns([
+                        room_state_snapshots::Column::RoomVersion,
+                        room_state_snapshots::Column::CreateContentJson,
+                        room_state_snapshots::Column::PowerLevelsJson,
+                        room_state_snapshots::Column::ResolvedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 }

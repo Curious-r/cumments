@@ -595,6 +595,16 @@ pub struct RoomMetadata {
     pub member_count: i64,
 }
 
+/// Homeserver-resolved current-state fields used by reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomStateSnapshot {
+    pub room_id: String,
+    pub room_version: Option<String>,
+    pub create_content_json: Option<serde_json::Value>,
+    pub power_levels_json: Option<serde_json::Value>,
+    pub resolved_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
