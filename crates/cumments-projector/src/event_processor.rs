@@ -15,6 +15,7 @@ use crate::verification::{verify_delete_proof, verify_visitor_event};
 use anyhow::Result;
 use cumments_core::audit::{CommandAuditStatus, NewCommandAuditEntry};
 use cumments_core::{
+    collections::BoundedLruMap,
     governance::{
         MANAGER_LEVEL, MODERATOR_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry, SITE_ADMIN_LEVEL,
         SITE_ROLE_MIN_LEVEL, can_send_state_event, is_as_managed_user, role_entries,
@@ -31,6 +32,7 @@ use cumments_core::{
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
+    rate_limit::SlidingWindowRateLimiter,
     redaction::redact_state_content,
     site_auth::{
         SiteAuthMode, SiteAuthPolicy, constant_time_eq, generate_token, sha256_hex, token_hash,
@@ -40,9 +42,8 @@ use cumments_core::{
         add_site_sticker, list_site_sticker_packs, parse_image_pack_content, remove_site_sticker,
     },
 };
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration as StdDuration, Instant};
+use std::time::Duration as StdDuration;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tracing::{debug, info, instrument, warn};
 
@@ -114,8 +115,11 @@ pub struct BotCommandRouter {
     site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
     operator_mxids: Vec<String>,
-    command_rate: Mutex<HashMap<String, VecDeque<Instant>>>,
-    active_sites: Mutex<HashMap<String, String>>,
+    /// Protects the private-channel membership lookup from prefix floods.
+    command_ingress: SlidingWindowRateLimiter,
+    /// Authoritative per-MXID budget applied after the channel is verified.
+    command_rate: SlidingWindowRateLimiter,
+    active_sites: Mutex<BoundedLruMap<String>>,
     backfill_tx: Option<mpsc::Sender<BackfillRequest>>,
     governance_notify: Arc<Notify>,
 }
@@ -134,8 +138,17 @@ impl BotCommandRouter {
             site_service: deps.site_service.clone(),
             driver: deps.driver.clone(),
             operator_mxids: deps.operator_mxids.clone(),
-            command_rate: Mutex::new(HashMap::new()),
-            active_sites: Mutex::new(HashMap::new()),
+            command_ingress: SlidingWindowRateLimiter::new(
+                Self::COMMAND_INGRESS_LIMIT,
+                Self::COMMAND_RATE_WINDOW,
+                1,
+            ),
+            command_rate: SlidingWindowRateLimiter::new(
+                Self::COMMAND_RATE_LIMIT,
+                Self::COMMAND_RATE_WINDOW,
+                Self::COMMAND_RATE_MAX_SENDERS,
+            ),
+            active_sites: Mutex::new(BoundedLruMap::new(Self::ACTIVE_SITES_MAX_USERS)),
             backfill_tx: deps.backfill_tx.clone(),
             governance_notify: deps.governance_notify.clone(),
         }
@@ -271,41 +284,11 @@ async fn is_private_channel(
 }
 
 impl BotCommandRouter {
+    const COMMAND_INGRESS_LIMIT: usize = 600;
     const COMMAND_RATE_LIMIT: usize = 10;
     const COMMAND_RATE_WINDOW: StdDuration = StdDuration::from_secs(60);
-    const COMMAND_RATE_MAX_USERS: usize = 10_000;
+    const COMMAND_RATE_MAX_SENDERS: usize = 10_000;
     const ACTIVE_SITES_MAX_USERS: usize = 10_000;
-
-    /// Per-sender sliding-window command rate limit.
-    async fn command_rate_allowed(&self, sender: &str) -> bool {
-        let now = Instant::now();
-        let mut rates = self.command_rate.lock().await;
-        let expired = {
-            let Some(queue) = rates.get_mut(sender) else {
-                return true;
-            };
-            while queue
-                .front()
-                .is_some_and(|t| now.duration_since(*t) > Self::COMMAND_RATE_WINDOW)
-            {
-                queue.pop_front();
-            }
-            queue.is_empty()
-        };
-        if expired {
-            rates.remove(sender);
-            return true;
-        }
-        if rates.len() >= Self::COMMAND_RATE_MAX_USERS {
-            rates.clear();
-        }
-        let queue = rates.entry(sender.to_string()).or_default();
-        if queue.len() >= Self::COMMAND_RATE_LIMIT {
-            return false;
-        }
-        queue.push_back(now);
-        true
-    }
 
     async fn reply(&self, event: &ParsedRoomMessage, body: &str) {
         if let Some(driver) = &self.driver
@@ -360,6 +343,13 @@ impl BotCommandRouter {
         };
         let line = rest.trim();
 
+        // Prefix floods must not turn into homeserver membership reads. The
+        // fixed global key makes this a cheap process-wide admission gate.
+        if !self.command_ingress.allow("global") {
+            debug!("Dropping !cumments prefix flood before private-channel check");
+            return Ok(true);
+        }
+
         // Commands only act inside a verified private channel; elsewhere the
         // message is consumed silently so it never becomes a comment.
         if !is_private_channel(event, &self.driver).await? {
@@ -369,11 +359,12 @@ impl BotCommandRouter {
             );
             return Ok(true);
         }
-        if !self.command_rate_allowed(&event.sender).await {
-            let msg = "命令过于频繁，请稍后再试。";
-            self.reply(event, msg).await;
-            self.record_audit(event, line, None, CommandAuditStatus::RateLimited, None)
-                .await;
+        if !self.command_rate.allow(&event.sender) {
+            debug!(
+                sender = %event.sender,
+                room_id = %event.room_id,
+                "Ignoring rate-limited !cumments command"
+            );
             return Ok(true);
         }
         if line.is_empty() {
@@ -444,12 +435,7 @@ impl BotCommandRouter {
             ["site", "use", id] => {
                 SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let mut active = self.active_sites.lock().await;
-                if !active.contains_key(&event.sender)
-                    && active.len() >= Self::ACTIVE_SITES_MAX_USERS
-                {
-                    active.clear();
-                }
-                active.insert(event.sender.clone(), id.to_string());
+                active.put(event.sender.clone(), id.to_string());
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!("当前站点已设为 {id}"),
@@ -1152,9 +1138,11 @@ impl BotCommandRouter {
     }
 
     async fn active_site_for(&self, event: &ParsedRoomMessage) -> Result<String, CommandError> {
-        if let Some(id) = self.active_sites.lock().await.get(&event.sender).cloned() {
+        let mut active_sites = self.active_sites.lock().await;
+        if let Some(id) = active_sites.get(&event.sender).cloned() {
             return Ok(id);
         }
+        drop(active_sites);
         // Fall back to the sites the sender administers: a single site is
         // automatic, multiple sites list the ambiguity instead of guessing.
         let mut owned = Vec::new();

@@ -138,6 +138,94 @@ async fn unknown_command_replies_with_help() {
 }
 
 #[tokio::test]
+async fn per_sender_limit_counts_the_first_command_and_silently_consumes_denials() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("per-sender-limit"))
+            .await
+            .expect("connect db"),
+    );
+    let sender = "@alice:hs";
+    let driver = Arc::new(common::TestDriver::with_joined_members(private_members(
+        sender,
+    )));
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+
+    for _ in 0..10 {
+        assert!(
+            p.process_bot_command(&command_message(sender, "!cumments"))
+                .await
+                .expect("process")
+        );
+    }
+
+    assert!(
+        p.process_bot_command(&command_message(sender, "!cumments"))
+            .await
+            .expect("denial must be consumed")
+    );
+    let audits = store
+        .list_command_audit(Some(sender), 20)
+        .await
+        .expect("audit");
+    assert_eq!(audits.len(), 10);
+    assert_eq!(driver.replies.lock().await.len(), 10);
+}
+
+#[tokio::test]
+async fn exhausted_ingress_budget_does_not_query_membership_or_audit() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("ingress-limit"))
+            .await
+            .expect("connect db"),
+    );
+    let sender = "@alice:hs";
+    let driver = Arc::new(common::TestDriver::with_joined_members(private_members(
+        sender,
+    )));
+    let p = processor_with_driver(
+        store.clone(),
+        driver.clone(),
+        Vec::new(),
+        None,
+        common::test_policy(),
+    );
+
+    for _ in 0..600 {
+        assert!(
+            p.process_bot_command(&command_message("@outside:hs", "!cumments"))
+                .await
+                .expect("prefix event")
+        );
+    }
+
+    let queries_before = driver.joined_member_queries.lock().await.len();
+    assert_eq!(queries_before, 600);
+    assert!(
+        p.process_bot_command(&command_message(sender, "!cumments"))
+            .await
+            .expect("throttled event must be consumed")
+    );
+    assert_eq!(
+        driver.joined_member_queries.lock().await.len(),
+        queries_before
+    );
+    assert!(driver.replies.lock().await.is_empty());
+    assert!(
+        store
+            .list_command_audit(Some(sender), 10)
+            .await
+            .expect("audit")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn operator_sites_list_works_and_unknown_user_is_denied() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("sites-list"))

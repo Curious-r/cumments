@@ -71,7 +71,11 @@ impl MatrixDriver for TestDriver {
     async fn get_joined_rooms(&self) -> anyhow::Result<Vec<String>> {
         Ok(self.joined_rooms.lock().await.clone())
     }
-    async fn get_joined_members(&self, _room_id: &str) -> anyhow::Result<Vec<String>> {
+    async fn get_joined_members(&self, room_id: &str) -> anyhow::Result<Vec<String>> {
+        self.joined_member_queries
+            .lock()
+            .await
+            .push(room_id.to_string());
         Ok(self.joined_members.lock().await.clone())
     }
     fn sender_user_id(&self) -> Option<String> {

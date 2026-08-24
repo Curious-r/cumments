@@ -19,6 +19,7 @@ use cumments_core::models::VisitorProfile;
 pub struct TestDriver {
     pub joined: Mutex<Vec<String>>,
     pub joined_members: Mutex<Vec<String>>,
+    pub joined_member_queries: Mutex<Vec<String>>,
     pub left: Mutex<Vec<String>>,
     pub left_as: Mutex<Vec<(String, String)>>,
     pub replies: Mutex<Vec<(String, String)>>,
@@ -44,6 +45,7 @@ impl TestDriver {
         Self {
             joined: Mutex::new(Vec::new()),
             joined_members: Mutex::new(Vec::new()),
+            joined_member_queries: Mutex::new(Vec::new()),
             left: Mutex::new(Vec::new()),
             left_as: Mutex::new(Vec::new()),
             replies: Mutex::new(Vec::new()),

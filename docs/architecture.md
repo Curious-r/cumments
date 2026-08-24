@@ -218,9 +218,13 @@ Security model:
   and moderators, issue secrets, and switch the active site; managers may
   appoint/revoke room moderators; public self-service (`site register`,
   `site use`, `site status`) needs no operator configuration.
-- Each sender is rate-limited in-process, and every command is written to the
-  command audit trail with a status (ok / invalid / denied / error /
-  rate-limited).
+- Prefix messages pass through an in-process global admission budget before
+  the private-channel membership lookup. Once a channel is verified, each
+  sender has a bounded per-MXID command budget. Throttled commands are
+  consumed silently so they do not produce bot replies, audit writes, or
+  AppService retries.
+- Commands that pass admission are written to the command audit trail with a
+  status (ok / invalid / denied / error).
 - Role claims are capabilities. The bot auto-joins a DM only when the inviter
   has a pending claim, so it cannot be pulled into arbitrary rooms. Claim DMs
   must stay unencrypted because the token is plain text; an
@@ -441,7 +445,7 @@ the backup command.
 - Distributed/global rate limiting, multi-instance/Postgres support, and
   operational monitoring are not implemented yet. In-process rate limits
   cover site registration/verification, verification confirm, comment
-  writes, SSE connections, and the Operator API.
+  writes, SSE connections, the Operator API, and Matrix bot commands.
 - Matrix-native comments bypass the API's PoW by design; spam in that path is
   governed by Matrix room moderation (power levels, bans, etc.).
 - `m.space.child` events only refresh rooms already known to the local
