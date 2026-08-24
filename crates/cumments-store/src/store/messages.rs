@@ -2,7 +2,7 @@ use super::DbStore;
 use super::is_unique_violation;
 use crate::entities::{
     backfill_tombstones, media_upload_idempotency, media_uploads, message_revisions, messages,
-    poll_responses, post_submissions, reactions, room_members,
+    poll_response_events, post_submissions, reactions, room_members,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -573,96 +573,32 @@ impl MessageStore for DbStore {
 
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()> {
         let txn = self.db.begin().await?;
-        let mut existing = poll_responses::Entity::find()
-            .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
-            .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
+        if poll_response_events::Entity::find()
+            .filter(
+                poll_response_events::COLUMN
+                    .event_id
+                    .eq(vote.event_id.clone()),
+            )
             .one(&txn)
-            .await?;
-        let now = chrono::Utc::now();
-
-        if existing.is_none() {
-            // Insert if no row exists yet; on a concurrent race the unique
-            // `(poll_message_id, sender_mxid)` index makes the loser a no-op
-            // and the re-read below picks up the winner's row.
-            let active_model = poll_responses::ActiveModel {
-                event_id: Set(Some(vote.event_id.clone())),
-                poll_message_id: Set(vote.poll_message_id.clone()),
-                sender_mxid: Set(vote.sender_mxid.clone()),
-                option_index: Set(vote.option_index),
-                origin_server_ts: Set(vote.origin_server_ts),
-                redacted_at: Set(None),
-                redacted_by: Set(None),
-                created_at: Set(now),
-                updated_at: Set(now),
-                ..Default::default()
-            };
-            poll_responses::Entity::insert(active_model)
-                .on_conflict(
-                    sea_orm::sea_query::OnConflict::columns([
-                        poll_responses::Column::PollMessageId,
-                        poll_responses::Column::SenderMxid,
-                    ])
-                    .do_nothing()
-                    .to_owned(),
-                )
-                .exec(&txn)
-                .await?;
-            existing = poll_responses::Entity::find()
-                .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
-                .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
-                .one(&txn)
-                .await?;
-        }
-
-        let Some(existing) = existing else {
-            txn.commit().await?;
-            return Ok(());
-        };
-
-        // Re-delivering the same vote event (push retry / backfill) must not
-        // resurrect a redacted vote.
-        if existing.event_id.as_deref() == Some(vote.event_id.as_str())
-            && existing.redacted_at.is_some()
+            .await?
+            .is_some()
         {
             txn.commit().await?;
             return Ok(());
         }
-        // Stale re-deliveries must not overwrite a newer vote ("the latest
-        // vote wins").
-        if vote.origin_server_ts < existing.origin_server_ts {
-            txn.commit().await?;
-            return Ok(());
-        }
 
-        // Any other (newer or equal-timestamp) event supersedes the stored
-        // vote and clears its redaction state.
-        poll_responses::Entity::update_many()
-            .col_expr(
-                poll_responses::Column::EventId,
-                sea_orm::sea_query::Expr::value(Some(vote.event_id.clone())),
-            )
-            .col_expr(
-                poll_responses::Column::OptionIndex,
-                sea_orm::sea_query::Expr::value(vote.option_index),
-            )
-            .col_expr(
-                poll_responses::Column::OriginServerTs,
-                sea_orm::sea_query::Expr::value(vote.origin_server_ts),
-            )
-            .col_expr(
-                poll_responses::Column::RedactedAt,
-                sea_orm::sea_query::Expr::value(None::<chrono::DateTime<chrono::Utc>>),
-            )
-            .col_expr(
-                poll_responses::Column::RedactedBy,
-                sea_orm::sea_query::Expr::value(None::<String>),
-            )
-            .col_expr(
-                poll_responses::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(now),
-            )
-            .filter(poll_responses::Column::PollMessageId.eq(&vote.poll_message_id))
-            .filter(poll_responses::Column::SenderMxid.eq(&vote.sender_mxid))
+        let active_model = poll_response_events::ActiveModel {
+            event_id: Set(vote.event_id.clone()),
+            poll_message_id: Set(vote.poll_message_id.clone()),
+            sender_mxid: Set(vote.sender_mxid.clone()),
+            option_index: Set(vote.option_index),
+            origin_server_ts: Set(vote.origin_server_ts),
+            redacted_at: Set(None),
+            redacted_by: Set(None),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        poll_response_events::Entity::insert(active_model)
             .exec(&txn)
             .await?;
         txn.commit().await?;
@@ -670,12 +606,12 @@ impl MessageStore for DbStore {
     }
 
     async fn get_poll_vote_by_event(&self, event_id: &str) -> Result<Option<PollVote>> {
-        let model = poll_responses::Entity::find()
-            .filter(poll_responses::Column::EventId.eq(event_id))
+        let model = poll_response_events::Entity::find()
+            .filter(poll_response_events::COLUMN.event_id.eq(event_id))
             .one(&self.db)
             .await?;
         Ok(model.map(|m| PollVote {
-            event_id: m.event_id.unwrap_or_default(),
+            event_id: m.event_id,
             poll_message_id: m.poll_message_id,
             sender_mxid: m.sender_mxid,
             option_index: m.option_index,
@@ -689,20 +625,16 @@ impl MessageStore for DbStore {
         redacted_at: chrono::DateTime<chrono::Utc>,
         redacted_by: &str,
     ) -> Result<bool> {
-        let result = poll_responses::Entity::update_many()
+        let result = poll_response_events::Entity::update_many()
             .col_expr(
-                poll_responses::Column::RedactedAt,
+                poll_response_events::Column::RedactedAt,
                 sea_orm::sea_query::Expr::value(Some(redacted_at)),
             )
             .col_expr(
-                poll_responses::Column::RedactedBy,
+                poll_response_events::Column::RedactedBy,
                 sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
             )
-            .col_expr(
-                poll_responses::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
-            )
-            .filter(poll_responses::Column::EventId.eq(event_id))
+            .filter(poll_response_events::Column::EventId.eq(event_id))
             .exec(&self.db)
             .await?;
         Ok(result.rows_affected > 0)
@@ -1113,9 +1045,13 @@ impl DbStore {
         if poll_message_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut rows = poll_responses::Entity::find()
-            .filter(poll_responses::Column::PollMessageId.is_in(poll_message_ids.iter().cloned()))
-            .filter(poll_responses::Column::RedactedAt.is_null())
+        let mut rows = poll_response_events::Entity::find()
+            .filter(
+                poll_response_events::COLUMN
+                    .poll_message_id
+                    .is_in(poll_message_ids.iter().cloned()),
+            )
+            .filter(poll_response_events::Column::RedactedAt.is_null())
             .all(&self.db)
             .await?;
         let active_parents = active_message_ids(
@@ -1125,13 +1061,31 @@ impl DbStore {
         .await?;
         rows.retain(|row| active_parents.contains(&row.poll_message_id));
 
-        let mut counts_by_poll: HashMap<String, HashMap<i64, i64>> = HashMap::new();
+        // Select each voter's latest non-redacted relation event. An event with
+        // no mapped option is a spoiled/unvote response and contributes nothing.
+        let mut latest_by_voter: HashMap<(String, String), poll_response_events::Model> =
+            HashMap::new();
         for row in rows {
-            *counts_by_poll
-                .entry(row.poll_message_id)
-                .or_default()
-                .entry(row.option_index)
-                .or_default() += 1;
+            let key = (row.poll_message_id.clone(), row.sender_mxid.clone());
+            match latest_by_voter.get_mut(&key) {
+                Some(current)
+                    if (current.origin_server_ts, &current.event_id)
+                        >= (row.origin_server_ts, &row.event_id) => {}
+                _ => {
+                    latest_by_voter.insert(key, row);
+                }
+            }
+        }
+
+        let mut counts_by_poll: HashMap<String, HashMap<i64, i64>> = HashMap::new();
+        for (_, row) in latest_by_voter {
+            if let Some(option_index) = row.option_index {
+                *counts_by_poll
+                    .entry(row.poll_message_id)
+                    .or_default()
+                    .entry(option_index)
+                    .or_default() += 1;
+            }
         }
         Ok(counts_by_poll
             .into_iter()

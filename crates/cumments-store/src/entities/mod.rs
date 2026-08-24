@@ -12,6 +12,7 @@ pub mod media_upload_idempotency;
 pub mod media_uploads;
 pub mod message_revisions;
 pub mod messages;
+pub mod poll_response_events;
 pub mod poll_responses;
 pub mod post_submissions;
 pub mod reactions;

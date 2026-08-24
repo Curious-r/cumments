@@ -431,7 +431,9 @@ pub struct PollVote {
     pub event_id: String,
     pub poll_message_id: String,
     pub sender_mxid: String,
-    pub option_index: i64,
+    /// `None` for an explicit unvote or a latest response whose selections are
+    /// invalid; such an event spoils the voter's previous choice.
+    pub option_index: Option<i64>,
     pub origin_server_ts: i64,
 }
 

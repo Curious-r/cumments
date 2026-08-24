@@ -49,6 +49,7 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
         ("reactions", "message_event_id"),
         ("message_revisions", "message_event_id"),
         ("poll_responses", "poll_message_id"),
+        ("poll_response_events", "poll_message_id"),
     ] {
         exec(
             db,
@@ -123,6 +124,7 @@ pub(crate) async fn delete_room(db: &DatabaseConnection, room_id: &str) -> Resul
         ("reactions", "message_event_id"),
         ("message_revisions", "message_event_id"),
         ("poll_responses", "poll_message_id"),
+        ("poll_response_events", "poll_message_id"),
     ] {
         exec(
             db,

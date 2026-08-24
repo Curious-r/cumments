@@ -163,9 +163,9 @@ message_revisions (message_id, event_id PK, content_json, edited_at, editor)
 
 reactions (event_id UNIQUE, message_event_id, sender_mxid, key, timestamp, redacted_at)
 
-poll_responses (
-  event_id, poll_message_id, sender_mxid, option_index, timestamp, redacted_at,
-  UNIQUE (poll_message_id, sender_mxid)
+poll_response_events (
+  event_id UNIQUE, poll_message_id, sender_mxid,
+  option_index, timestamp, redacted_at, redacted_by
 )
 ```
 
@@ -178,9 +178,10 @@ Notes on the layout:
 - The author proof (`signature`, `challenge`) is verified at projection time
   and is **not** stored in the read model; only the public key is kept for
   edit/delete authorization.
-- `reactions` is keyed by event ID, making push redelivery and backfill
-  idempotent; the poll unique index collapses duplicate redeliveries and
-  keeps the latest vote authoritative.
+- `reactions` and `poll_response_events` are keyed by event ID, making push
+  redelivery and backfill idempotent. Poll aggregation selects each voter's
+  latest non-redacted response; redacting that response restores the previous
+  valid vote.
 - `formatted_body` is passed through unchanged. The demo renders plain text
   only; any client rendering HTML must sanitize it first.
 - `media_uploads.page_slug` is nullable: comment media records the page it

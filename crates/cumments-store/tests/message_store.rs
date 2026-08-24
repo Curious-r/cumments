@@ -54,6 +54,26 @@ fn visitor_message(event_id: &str, body: &str) -> Message {
     }
 }
 
+async fn poll_counts(store: &DbStore) -> Vec<(i64, i64)> {
+    let stored = store
+        .get_message("$poll:hs")
+        .await
+        .expect("get poll")
+        .expect("poll exists");
+    match stored.content {
+        Content::Poll(poll) => {
+            let mut counts = poll
+                .responses
+                .into_iter()
+                .map(|response| (response.option_index, response.count))
+                .collect::<Vec<_>>();
+            counts.sort_unstable();
+            counts
+        }
+        other => panic!("expected poll content, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn save_message_records_typed_content_and_internal_fields() {
     let store = DbStore::connect(&test_db_url("message-sender"))
@@ -614,7 +634,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
             event_id: "$vote-alice-1:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
-            option_index: 0,
+            option_index: Some(0),
             origin_server_ts: 1,
         })
         .await
@@ -624,7 +644,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
             event_id: "$vote-bob:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@bob:hs".to_string(),
-            option_index: 1,
+            option_index: Some(1),
             origin_server_ts: 2,
         })
         .await
@@ -635,7 +655,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
             event_id: "$vote-alice-2:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
-            option_index: 1,
+            option_index: Some(1),
             origin_server_ts: 3,
         })
         .await
@@ -654,6 +674,77 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
         }
         other => panic!("expected poll content, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn redacting_the_latest_poll_response_restores_the_previous_vote() {
+    let store = DbStore::connect(&test_db_url("poll-response-redact-rollback"))
+        .await
+        .expect("connect db");
+    let mut message = visitor_message("$poll:hs", "poll placeholder");
+    message.content = Content::Poll(PollContent {
+        question: "best?".to_string(),
+        options: vec![
+            PollOption {
+                id: "a".to_string(),
+                text: "A".to_string(),
+            },
+            PollOption {
+                id: "b".to_string(),
+                text: "B".to_string(),
+            },
+        ],
+        responses: Vec::new(),
+    });
+    store.save_message(&message).await.expect("save poll");
+
+    for (event_id, option_index, timestamp) in
+        [("$alice-a:hs", Some(0), 1), ("$alice-b:hs", Some(1), 2)]
+    {
+        store
+            .save_poll_vote(&PollVote {
+                event_id: event_id.to_string(),
+                poll_message_id: "$poll:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                option_index,
+                origin_server_ts: timestamp,
+            })
+            .await
+            .expect("save response");
+    }
+
+    assert_eq!(poll_counts(&store).await, [(1, 1)]);
+
+    // Removing the newest relation must restore the previous valid vote.
+    assert!(
+        store
+            .redact_poll_vote("$alice-b:hs", Utc::now(), ":hs")
+            .await
+            .expect("redact newest response")
+    );
+    assert_eq!(poll_counts(&store).await, [(0, 1)]);
+
+    // A newer invalid or empty selection spoils the voter's previous choice.
+    store
+        .save_poll_vote(&PollVote {
+            event_id: "$alice-spoiled:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            option_index: None,
+            origin_server_ts: 3,
+        })
+        .await
+        .expect("save spoiled response");
+    assert_eq!(poll_counts(&store).await, []);
+
+    // Redacting the spoiled response restores the prior valid vote.
+    assert!(
+        store
+            .redact_poll_vote("$alice-spoiled:hs", Utc::now(), ":hs")
+            .await
+            .expect("redact spoiled response")
+    );
+    assert_eq!(poll_counts(&store).await, [(0, 1)]);
 }
 
 #[tokio::test]
@@ -679,7 +770,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
         event_id: "$vote-bob:hs".to_string(),
         poll_message_id: "$poll:hs".to_string(),
         sender_mxid: "@bob:hs".to_string(),
-        option_index: 0,
+        option_index: Some(0),
         origin_server_ts: 2,
     };
     store.save_poll_vote(&bob_vote).await.expect("bob votes");
@@ -688,7 +779,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
             event_id: "$vote-alice:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
-            option_index: 0,
+            option_index: Some(0),
             origin_server_ts: 1,
         })
         .await
@@ -763,7 +854,7 @@ async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
             event_id: "$vote-1:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
-            option_index: 1,
+            option_index: Some(1),
             origin_server_ts: 3,
         })
         .await
@@ -775,7 +866,7 @@ async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
             event_id: "$vote-0:hs".to_string(),
             poll_message_id: "$poll:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
-            option_index: 0,
+            option_index: Some(0),
             origin_server_ts: 1,
         })
         .await

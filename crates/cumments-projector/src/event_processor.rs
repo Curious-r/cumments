@@ -1798,10 +1798,7 @@ impl EventProcessor {
             return Ok(());
         }
 
-        let Some(answer_id) = event.answer_ids.first() else {
-            debug!("Poll vote without answers; ignoring");
-            return Ok(());
-        };
+        let answer_id = event.answer_ids.first();
 
         if event.is_virtual_user_sender {
             let (Some(pk), Some(sig), Some(chal)) = (
@@ -1827,7 +1824,7 @@ impl EventProcessor {
                 Some(identity.site_id.as_str()),
                 Some(identity.page_slug.as_str()),
                 Some(event.poll_message_id.as_str()),
-                Some(answer_id),
+                answer_id.map(String::as_str),
                 Some(chal),
             ]);
             if !verify_visitor_event(
@@ -1864,16 +1861,18 @@ impl EventProcessor {
             );
             return Ok(());
         };
-        let Some(option_index) = poll.options.iter().position(|o| &o.id == answer_id) else {
-            debug!("Poll vote references unknown answer {answer_id}; ignoring");
-            return Ok(());
-        };
+        let option_index = answer_id.and_then(|answer_id| {
+            poll.options
+                .iter()
+                .position(|option| option.id == *answer_id)
+                .map(|index| index as i64)
+        });
         self.message_store
             .save_poll_vote(&PollVote {
                 event_id: event.event_id,
                 poll_message_id: event.poll_message_id,
                 sender_mxid: event.sender,
-                option_index: option_index as i64,
+                option_index,
                 origin_server_ts: event.origin_server_ts,
             })
             .await?;
