@@ -8,7 +8,7 @@ use crate::models::{
     CommentMedia, EditProjectionOutcome, Message, MessagePage, MessageRedactionOutcome,
     MessageRevision, MessageSaveOutcome, PageSlug, PollVote, QuarantinedRoom, Reaction,
     RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot,
-    RoomStatus, RoomUpgradeIntent, SiteId, VisitorProfile,
+    RoomStatus, RoomUpgradeIntent, SiteId, SubmissionCompletion, VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -220,7 +220,7 @@ pub trait SubmissionStore: Send + Sync {
 
 /// The port for all message projection storage operations.
 #[async_trait]
-pub trait MessageStore: Send + Sync {
+pub trait MessageStore: ProjectionSink {
     /// Fetches a single message by its Matrix event ID.
     async fn get_message(&self, event_id: &str) -> Result<Option<Message>>;
 
@@ -378,6 +378,39 @@ pub trait AppServiceTxnStore: Send + Sync {
     /// Records a transaction as processed. Implementations may bound this
     /// cache; event projection must remain idempotent for evicted IDs.
     async fn mark_processed_txn(&self, txn_id: &str) -> Result<()>;
+}
+
+/// Transactional boundary for the highest-risk comment projections. Methods
+/// return only after SQLite commits; SSE events must therefore be emitted by
+/// callers afterward.
+#[async_trait]
+pub trait ProjectionSink: Send + Sync {
+    /// Saves an original message and closes its post submission atomically.
+    async fn save_message_unit(
+        &self,
+        message: &Message,
+        completion: SubmissionCompletion,
+    ) -> Result<MessageSaveOutcome>;
+
+    /// Applies an edit revision and closes an eligible update submission
+    /// atomically.
+    async fn apply_edit_unit(
+        &self,
+        message: &Message,
+        revision: &MessageRevision,
+        completion: SubmissionCompletion,
+    ) -> Result<EditProjectionOutcome>;
+
+    /// Redacts a message, records the anti-resurrection tombstone, and closes
+    /// its delete submission atomically.
+    async fn redact_message_unit(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+        redaction_event_id: &str,
+    ) -> Result<MessageRedactionOutcome>;
 }
 
 /// The port for room-level metadata: member profiles and the system-message

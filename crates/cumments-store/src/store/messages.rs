@@ -1,9 +1,10 @@
 use super::DbStore;
 use super::is_unique_violation;
+use crate::entities::active_enums::SubmissionStatus;
 use crate::entities::{
-    backfill_tombstones, media_upload_idempotency, media_uploads, message_revisions, messages,
-    poll_response_events, post_submissions, processed_appservice_transactions, reactions,
-    room_members,
+    backfill_tombstones, delete_submissions, media_upload_idempotency, media_uploads,
+    message_revisions, messages, poll_response_events, post_submissions,
+    processed_appservice_transactions, reactions, room_members, update_submissions,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -14,12 +15,13 @@ use cumments_core::media_upload::{
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message, MessagePage,
     MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
-    PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, UnknownContent,
+    PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, SubmissionCompletion,
+    UnknownContent,
 };
-use cumments_core::ports::{AppServiceTxnStore, MessageStore};
+use cumments_core::ports::{AppServiceTxnStore, MessageStore, ProjectionSink};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -42,6 +44,400 @@ fn unknown_content() -> Content {
         fallback: None,
         raw: serde_json::Value::Null,
     })
+}
+
+async fn insert_message_if_absent<C: ConnectionTrait>(
+    conn: &C,
+    message: &Message,
+) -> Result<MessageSaveOutcome> {
+    let now = chrono::Utc::now();
+    let active_model = messages::ActiveModel {
+        event_id: Set(message.event_id.clone()),
+        room_id: Set(message.room_id.clone()),
+        site_id: Set(message.site_id.clone()),
+        page_slug: Set(message.page_slug.clone()),
+        sender_mxid: Set(message.sender_mxid.clone()),
+        author_kind: Set(message.author.kind.as_str().to_string()),
+        author_display_name: Set(message.author.display_name.clone()),
+        author_avatar_url: Set(message.author.avatar_url.clone()),
+        author_public_key: Set(message.author.public_key.clone()),
+        content_json: Set(content_to_json(&message.content)),
+        original_content_json: Set(content_to_json(&message.content)),
+        matrix_event_type: Set(message.matrix_event_type.clone()),
+        raw_content_json: Set(
+            serde_json::to_string(&message.raw_content).unwrap_or_else(|_| "null".to_string())
+        ),
+        timestamp: Set(message.timestamp),
+        reply_to: Set(message.reply_to.clone()),
+        thread_root: Set(message.thread_root.clone()),
+        status: Set(message.status.as_str().to_string()),
+        redacted_at: Set(message.redacted_at),
+        redacted_by: Set(message.redacted_by.clone()),
+        submission_id: Set(message.submission_id),
+        last_edit_ts: Set(message.edited_at.map(|t| t.timestamp_millis())),
+        last_edit_event_id: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+
+    match messages::Entity::insert(active_model)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(messages::Column::EventId)
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec(conn)
+        .await
+    {
+        Ok(_) => Ok(MessageSaveOutcome::Inserted),
+        Err(sea_orm::DbErr::RecordNotInserted) => Ok(MessageSaveOutcome::AlreadyProjected),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[async_trait]
+impl ProjectionSink for DbStore {
+    async fn save_message_unit(
+        &self,
+        message: &Message,
+        completion: SubmissionCompletion,
+    ) -> Result<MessageSaveOutcome> {
+        let txn = self.db.begin().await?;
+        let outcome = insert_message_if_absent(&txn, message).await?;
+        if matches!(
+            outcome,
+            MessageSaveOutcome::Inserted | MessageSaveOutcome::AlreadyProjected
+        ) {
+            complete_post(&txn, &completion).await?;
+        }
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn apply_edit_unit(
+        &self,
+        message: &Message,
+        revision: &MessageRevision,
+        completion: SubmissionCompletion,
+    ) -> Result<EditProjectionOutcome> {
+        let txn = self.db.begin().await?;
+        let edit_ts = revision.edited_at.timestamp_millis();
+
+        if message_revisions::Entity::find()
+            .filter(
+                message_revisions::COLUMN
+                    .event_id
+                    .eq(revision.event_id.clone()),
+            )
+            .one(&txn)
+            .await?
+            .is_some()
+        {
+            if matches!(
+                completion,
+                SubmissionCompletion::UpdateById(_) | SubmissionCompletion::UpdateByEvent { .. }
+            ) {
+                complete_update(&txn, &completion).await?;
+            }
+            txn.commit().await?;
+            return Ok(EditProjectionOutcome::AlreadyKnown);
+        }
+
+        let parent = messages::Entity::find()
+            .filter(messages::COLUMN.event_id.eq(message.event_id.clone()))
+            .filter(messages::COLUMN.room_id.eq(message.room_id.clone()))
+            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
+            .one(&txn)
+            .await?;
+        let Some(parent) = parent else {
+            return Ok(EditProjectionOutcome::Rejected);
+        };
+
+        let revision_model = message_revisions::ActiveModel {
+            event_id: Set(revision.event_id.clone()),
+            message_event_id: Set(message.event_id.clone()),
+            content_json: Set(content_to_json(&revision.content)),
+            edited_at: Set(revision.edited_at),
+            editor_mxid: Set(revision.editor_mxid.clone()),
+            redacted_at: Set(None),
+            redacted_by: Set(None),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        message_revisions::Entity::insert(revision_model)
+            .exec(&txn)
+            .await?;
+
+        let current = message_revisions::Entity::find()
+            .filter(
+                message_revisions::COLUMN
+                    .message_event_id
+                    .eq(message.event_id.clone()),
+            )
+            .filter(message_revisions::COLUMN.redacted_at.is_null())
+            .order_by_desc(message_revisions::Column::EditedAt)
+            .order_by_desc(message_revisions::Column::EventId)
+            .one(&txn)
+            .await?;
+        let Some(current) = current else {
+            return Ok(EditProjectionOutcome::Rejected);
+        };
+
+        let outcome = if current.event_id == revision.event_id {
+            let mut active: messages::ActiveModel = parent.into();
+            active.content_json = Set(content_to_json(&message.content));
+            active.last_edit_ts = Set(Some(edit_ts));
+            active.last_edit_event_id = Set(Some(revision.event_id.clone()));
+            active.updated_at = Set(chrono::Utc::now());
+            active.update(&txn).await?;
+            EditProjectionOutcome::AppliedCurrent
+        } else {
+            // The valid replacement remains stored as a fact, but it does not
+            // become the public view until a newer revision is redacted.
+            EditProjectionOutcome::Superseded
+        };
+
+        if matches!(outcome, EditProjectionOutcome::AppliedCurrent)
+            || (matches!(outcome, EditProjectionOutcome::Superseded)
+                && !matches!(completion, SubmissionCompletion::None))
+        {
+            complete_update(&txn, &completion).await?;
+        }
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn redact_message_unit(
+        &self,
+        event_id: &str,
+        room_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+        redaction_event_id: &str,
+    ) -> Result<MessageRedactionOutcome> {
+        let txn = self.db.begin().await?;
+        let existing = messages::Entity::find()
+            .filter(messages::COLUMN.event_id.eq(event_id))
+            .one(&txn)
+            .await?;
+        let Some(existing) = existing else {
+            return Ok(MessageRedactionOutcome::Rejected);
+        };
+        if existing.room_id != room_id {
+            return Ok(MessageRedactionOutcome::Rejected);
+        }
+
+        if existing.status == MessageStatus::Redacted.as_str() {
+            record_backfill_tombstone_on(&txn, event_id, room_id, redaction_event_id).await?;
+            close_delete_submission(&txn, event_id).await?;
+            txn.commit().await?;
+            return Ok(MessageRedactionOutcome::AlreadyRedacted);
+        }
+
+        messages::Entity::update_many()
+            .col_expr(
+                messages::Column::ContentJson,
+                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
+            )
+            .col_expr(
+                messages::Column::RawContentJson,
+                sea_orm::sea_query::Expr::value("{}".to_owned()),
+            )
+            .col_expr(
+                messages::Column::Status,
+                sea_orm::sea_query::Expr::value(MessageStatus::Redacted.as_str()),
+            )
+            .col_expr(
+                messages::Column::RedactedAt,
+                sea_orm::sea_query::Expr::value(Some(redacted_at)),
+            )
+            .col_expr(
+                messages::Column::RedactedBy,
+                sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
+            )
+            .col_expr(
+                messages::Column::LastEditTs,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .col_expr(
+                messages::Column::LastEditEventId,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                messages::Column::ReplyTo,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                messages::Column::ThreadRoot,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                messages::Column::SubmissionId,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .col_expr(
+                messages::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .filter(messages::COLUMN.event_id.eq(event_id))
+            .filter(messages::COLUMN.room_id.eq(room_id))
+            .exec(&txn)
+            .await?;
+        message_revisions::Entity::delete_many()
+            .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
+            .exec(&txn)
+            .await?;
+        record_backfill_tombstone_on(&txn, event_id, room_id, redaction_event_id).await?;
+        close_delete_submission(&txn, event_id).await?;
+        txn.commit().await?;
+        Ok(MessageRedactionOutcome::Redacted)
+    }
+}
+
+async fn complete_post<C: ConnectionTrait>(
+    conn: &C,
+    completion: &SubmissionCompletion,
+) -> Result<()> {
+    match completion {
+        SubmissionCompletion::None => {}
+        SubmissionCompletion::PostById(id) => {
+            post_submissions::Entity::update_many()
+                .col_expr(
+                    post_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Completed),
+                )
+                .col_expr(
+                    post_submissions::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+                )
+                .filter(post_submissions::COLUMN.id.eq(*id))
+                .filter(post_submissions::COLUMN.status.is_in([
+                    SubmissionStatus::Pending,
+                    SubmissionStatus::Processing,
+                    SubmissionStatus::WaitingForSync,
+                    SubmissionStatus::Failed,
+                ]))
+                .exec(conn)
+                .await?;
+        }
+        SubmissionCompletion::PostByEvent(event_id) => {
+            post_submissions::Entity::update_many()
+                .col_expr(
+                    post_submissions::Column::Status,
+                    sea_orm::sea_query::Expr::value(SubmissionStatus::Completed),
+                )
+                .col_expr(
+                    post_submissions::Column::UpdatedAt,
+                    sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+                )
+                .filter(
+                    post_submissions::COLUMN
+                        .matrix_event_id
+                        .eq(event_id.clone()),
+                )
+                .exec(conn)
+                .await?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn complete_update<C: ConnectionTrait>(
+    conn: &C,
+    completion: &SubmissionCompletion,
+) -> Result<()> {
+    let (scope, allowed_statuses) = match completion {
+        SubmissionCompletion::UpdateById(id) => (
+            Condition::all().add(update_submissions::COLUMN.id.eq(*id)),
+            vec![
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ],
+        ),
+        SubmissionCompletion::UpdateByEvent {
+            target_event_id,
+            author_public_key,
+        } => {
+            let mut condition =
+                Condition::all().add(update_submissions::COLUMN.event_id.eq(target_event_id));
+            condition = condition.add(match author_public_key {
+                Some(key) => update_submissions::COLUMN.author_public_key.eq(key.clone()),
+                None => update_submissions::COLUMN.author_public_key.is_null(),
+            });
+            (
+                condition,
+                vec![
+                    SubmissionStatus::Processing,
+                    SubmissionStatus::WaitingForSync,
+                ],
+            )
+        }
+        _ => return Ok(()),
+    };
+    let query = update_submissions::Entity::update_many()
+        .col_expr(
+            update_submissions::Column::Status,
+            sea_orm::sea_query::Expr::value(SubmissionStatus::Completed),
+        )
+        .col_expr(
+            update_submissions::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+        );
+    query
+        .filter(scope)
+        .filter(update_submissions::COLUMN.status.is_in(allowed_statuses))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+async fn close_delete_submission<C: ConnectionTrait>(conn: &C, event_id: &str) -> Result<()> {
+    delete_submissions::Entity::update_many()
+        .col_expr(
+            delete_submissions::Column::Status,
+            sea_orm::sea_query::Expr::value(SubmissionStatus::Completed),
+        )
+        .col_expr(
+            delete_submissions::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+        )
+        .filter(delete_submissions::COLUMN.target_event_id.eq(event_id))
+        .filter(delete_submissions::COLUMN.status.is_in([
+            SubmissionStatus::Pending,
+            SubmissionStatus::Processing,
+            SubmissionStatus::WaitingForSync,
+        ]))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+async fn record_backfill_tombstone_on<C: ConnectionTrait>(
+    conn: &C,
+    event_id: &str,
+    room_id: &str,
+    redaction_event_id: &str,
+) -> Result<()> {
+    let active_model = backfill_tombstones::ActiveModel {
+        event_id: Set(event_id.to_owned()),
+        room_id: Set(room_id.to_owned()),
+        redaction_event_id: Set(redaction_event_id.to_owned()),
+        created_at: Set(chrono::Utc::now()),
+    };
+    backfill_tombstones::Entity::insert(active_model)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(backfill_tombstones::Column::EventId)
+                .update_column(backfill_tombstones::Column::RoomId)
+                .update_column(backfill_tombstones::Column::RedactionEventId)
+                .update_column(backfill_tombstones::Column::CreatedAt)
+                .to_owned(),
+        )
+        .exec(conn)
+        .await?;
+    Ok(())
 }
 
 fn message_from_model(model: messages::Model) -> Message {
@@ -219,52 +615,7 @@ impl MessageStore for DbStore {
     }
 
     async fn save_message(&self, message: &Message) -> Result<MessageSaveOutcome> {
-        let now = chrono::Utc::now();
-        let active_model = messages::ActiveModel {
-            event_id: Set(message.event_id.clone()),
-            room_id: Set(message.room_id.clone()),
-            site_id: Set(message.site_id.clone()),
-            page_slug: Set(message.page_slug.clone()),
-            sender_mxid: Set(message.sender_mxid.clone()),
-            author_kind: Set(message.author.kind.as_str().to_string()),
-            author_display_name: Set(message.author.display_name.clone()),
-            author_avatar_url: Set(message.author.avatar_url.clone()),
-            author_public_key: Set(message.author.public_key.clone()),
-            content_json: Set(content_to_json(&message.content)),
-            original_content_json: Set(content_to_json(&message.content)),
-            matrix_event_type: Set(message.matrix_event_type.clone()),
-            raw_content_json: Set(
-                serde_json::to_string(&message.raw_content).unwrap_or_else(|_| "null".to_string())
-            ),
-            timestamp: Set(message.timestamp),
-            reply_to: Set(message.reply_to.clone()),
-            thread_root: Set(message.thread_root.clone()),
-            status: Set(message.status.as_str().to_string()),
-            redacted_at: Set(message.redacted_at),
-            redacted_by: Set(message.redacted_by.clone()),
-            submission_id: Set(message.submission_id),
-            last_edit_ts: Set(message.edited_at.map(|t| t.timestamp_millis())),
-            last_edit_event_id: Set(None),
-            created_at: Set(now),
-            updated_at: Set(now),
-            ..Default::default()
-        };
-
-        match messages::Entity::insert(active_model)
-            .on_conflict(
-                sea_orm::sea_query::OnConflict::column(messages::Column::EventId)
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .exec(&self.db)
-            .await
-        {
-            Ok(_) => Ok(MessageSaveOutcome::Inserted),
-            // A replayed immutable original is a no-op; preserving the current
-            // derived view is especially important after later edits.
-            Err(sea_orm::DbErr::RecordNotInserted) => Ok(MessageSaveOutcome::AlreadyProjected),
-            Err(error) => return Err(error.into()),
-        }
+        insert_message_if_absent(&self.db, message).await
     }
 
     async fn apply_edit(

@@ -1,14 +1,14 @@
 use chrono::Utc;
-use cumments_core::commands::PostCommentCommand;
+use cumments_core::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, CommentMedia, Content, EditProjectionOutcome, MediaContent,
     MediaKind, Message, MessageRedactionOutcome, MessageRevision, MessageSaveOutcome,
     MessageStatus, PageSlug, PollContent, PollOption, PollVote, Reaction, RoomMember, SiteId,
-    TextContent, TextStyle, UnknownContent,
+    SubmissionCompletion, TextContent, TextStyle, UnknownContent,
 };
 use cumments_core::ports::{
-    AppServiceTxnStore, MessageStore, RoomStore, SubmissionStore, VirtualUserStore,
+    AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
 };
 use cumments_store::DbStore;
 
@@ -1291,4 +1291,160 @@ async fn virtual_user_mapping_is_stable_across_server_name_changes() {
     assert_eq!(first, second);
     assert!(first.starts_with("@_cumments_my-blog_"));
     assert!(first.ends_with(":hs"));
+}
+
+#[tokio::test]
+async fn projection_sink_closes_a_post_after_fact_only_replay() {
+    let store = DbStore::connect(&test_db_url("sink-post-replay"))
+        .await
+        .expect("connect db");
+    let command_id = store
+        .save_post_submission(&PostCommentCommand {
+            site_id: SiteId::from("my-blog"),
+            page_slug: PageSlug::from("hello"),
+            content: "hello".to_string(),
+            media: None,
+            location: None,
+            display_name: "Alice".to_string(),
+            author_public_key: "key".to_string(),
+            author_signature: "signature".to_string(),
+            author_challenge: "challenge".to_string(),
+            reply_to: None,
+            thread_root: None,
+        })
+        .await
+        .expect("save post");
+    let message = visitor_message("$event:hs", "hello");
+
+    // Simulate the old crash window: the fact committed, but closure did not.
+    store.save_message(&message).await.expect("save fact");
+    let outcome = store
+        .save_message_unit(&message, SubmissionCompletion::PostById(command_id))
+        .await
+        .expect("replay projection");
+    assert_eq!(outcome, MessageSaveOutcome::AlreadyProjected);
+    assert!(
+        store
+            .claim_pending_post_submissions(10, Utc::now())
+            .await
+            .expect("claim posts")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn projection_sink_closes_an_edit_after_fact_only_replay() {
+    let store = DbStore::connect(&test_db_url("sink-edit-replay"))
+        .await
+        .expect("connect db");
+    let parent = visitor_message("$parent:hs", "parent");
+    let message = visitor_message("$event:hs", "original");
+    store.save_message(&parent).await.expect("save parent");
+    store.save_message(&message).await.expect("save message");
+    let submission_id = store
+        .save_update_submission(&UpdateCommentCommand {
+            site_id: SiteId::from("my-blog"),
+            page_slug: PageSlug::from("hello"),
+            event_id: "$event:hs".to_string(),
+            content: "edited".to_string(),
+            author_public_key: "key".to_string(),
+            author_signature: "signature".to_string(),
+            author_challenge: "challenge".to_string(),
+        })
+        .await
+        .expect("save update");
+
+    let edited_at = Utc::now();
+    let mut updated = message.clone();
+    updated.content = Content::Text(TextContent {
+        body: "edited".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    updated.edited_at = Some(edited_at);
+    let revision = MessageRevision {
+        event_id: "$edit:hs".to_string(),
+        message_event_id: "$event:hs".to_string(),
+        content: updated.content.clone(),
+        edited_at,
+        editor_mxid: "@alice:hs".to_string(),
+        redacted_at: None,
+    };
+    assert_eq!(
+        store.apply_edit(&updated, &revision).await.expect("apply"),
+        EditProjectionOutcome::AppliedCurrent
+    );
+    assert_eq!(
+        store
+            .apply_edit_unit(
+                &updated,
+                &revision,
+                SubmissionCompletion::UpdateById(submission_id)
+            )
+            .await
+            .expect("replay edit"),
+        EditProjectionOutcome::AlreadyKnown
+    );
+    assert!(
+        store
+            .claim_pending_update_submissions(10, Utc::now())
+            .await
+            .expect("claim updates")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn projection_sink_closes_a_delete_after_redaction_replay() {
+    let store = DbStore::connect(&test_db_url("sink-delete-replay"))
+        .await
+        .expect("connect db");
+    let message = visitor_message("$event:hs", "delete me");
+    store.save_message(&message).await.expect("save message");
+    let _submission_id = store
+        .save_delete_submission(&DeleteCommentCommand {
+            site_id: SiteId::from("my-blog"),
+            page_slug: PageSlug::from("hello"),
+            event_id: "$event:hs".to_string(),
+            author_public_key: "key".to_string(),
+            author_signature: "signature".to_string(),
+            author_challenge: "challenge".to_string(),
+        })
+        .await
+        .expect("save delete");
+
+    let redacted_at = Utc::now();
+    assert_eq!(
+        store
+            .redact_message("$event:hs", "!room:hs", redacted_at, "@alice:hs")
+            .await
+            .expect("redact"),
+        MessageRedactionOutcome::Redacted
+    );
+    assert_eq!(
+        store
+            .redact_message_unit(
+                "$event:hs",
+                "!room:hs",
+                redacted_at,
+                "@alice:hs",
+                "$redaction:hs"
+            )
+            .await
+            .expect("replay delete"),
+        MessageRedactionOutcome::AlreadyRedacted
+    );
+    assert!(
+        store
+            .has_backfill_tombstone("$event:hs", "!room:hs")
+            .await
+            .expect("tombstone")
+    );
+    assert!(
+        store
+            .claim_pending_delete_submissions(10, Utc::now())
+            .await
+            .expect("claim deletes")
+            .is_empty()
+    );
 }

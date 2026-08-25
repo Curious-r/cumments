@@ -86,6 +86,12 @@ is best-effort convergence from a locally durable queue, not at-least-once
 delivery across local-database loss. Idempotency keys protect against
 duplicate submissions while the local record survives.
 
+When the projector observes a post, edit, or delete, it commits the comment
+fact, its anti-resurrection tombstone where applicable, and the matching
+submission closure as one SQLite unit of work. SSE events are published only
+after that commit, so a replay can close a surviving submission without
+duplicating or resurrecting a fact.
+
 ### Boundaries to watch
 
 - The reconciler is a set of independent controllers, one task per pass, each

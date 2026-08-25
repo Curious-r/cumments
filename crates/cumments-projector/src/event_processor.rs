@@ -24,7 +24,8 @@ use cumments_core::{
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageStatus, PageSlug, PollVote, Reaction,
-        RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId, TextStyle,
+        RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion,
+        TextStyle,
     },
     ports::{
         CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, RegistryStore,
@@ -58,7 +59,7 @@ pub struct EventProcessor {
     governance_store: Arc<dyn GovernanceStore>,
     sticker_pack_store: Arc<dyn StickerPackStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
-    submission_store: Arc<dyn SubmissionStore>,
+    _submission_store: Arc<dyn SubmissionStore>,
     site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
@@ -1225,7 +1226,7 @@ impl EventProcessor {
             governance_store: deps.governance_store,
             sticker_pack_store: deps.sticker_pack_store,
             role_claim_store: deps.role_claim_store,
-            submission_store: deps.submission_store,
+            _submission_store: deps.submission_store,
             site_service: deps.site_service,
             driver: deps.driver,
             event_bus: deps.event_bus,
@@ -1485,7 +1486,19 @@ impl EventProcessor {
                 redacted_at: None,
             };
 
-            let outcome = self.message_store.apply_edit(&updated, &revision).await?;
+            // The projection and queue closure share one SQLite transaction.
+            let completion = if let Some(id) = event.submission_id {
+                SubmissionCompletion::UpdateById(id)
+            } else {
+                SubmissionCompletion::UpdateByEvent {
+                    target_event_id: relation.target_event_id.clone(),
+                    author_public_key: event.author_public_key.clone(),
+                }
+            };
+            let outcome = self
+                .message_store
+                .apply_edit_unit(&updated, &revision, completion)
+                .await?;
             let should_complete = match outcome {
                 EditProjectionOutcome::AppliedCurrent | EditProjectionOutcome::AlreadyKnown => true,
                 // A correlated stale command was still observed on the
@@ -1497,26 +1510,6 @@ impl EventProcessor {
 
             if should_complete {
                 info!("Successfully updated message {}", relation.target_event_id);
-                // Closed-loop only after the projection succeeded: the
-                // correlation ID lets concurrent edits close independently;
-                // legacy events fall back to target-event matching (waiting
-                // submissions only). A failed projection leaves the submission open
-                // for the timeout/backfill safety net.
-                match event.submission_id {
-                    Some(id) => {
-                        self.submission_store
-                            .mark_update_submission_completed_by_id(id)
-                            .await?
-                    }
-                    None => {
-                        self.submission_store
-                            .mark_update_submission_completed(
-                                &relation.target_event_id,
-                                event.author_public_key.as_deref(),
-                            )
-                            .await?
-                    }
-                };
                 if let Some(message) = self
                     .message_store
                     .get_message(&relation.target_event_id)
@@ -1635,28 +1628,21 @@ impl EventProcessor {
             raw_content: event.raw_content.clone(),
         };
 
-        let outcome = self.message_store.save_message(&message).await?;
+        // The fact and its closed-loop completion commit together; SSE is sent
+        // only after this method returns.
+        let completion = match event.submission_id {
+            Some(id) => SubmissionCompletion::PostById(id),
+            None => SubmissionCompletion::PostByEvent(event.event_id.clone()),
+        };
+        let outcome = self
+            .message_store
+            .save_message_unit(&message, completion)
+            .await?;
         info!(
             ?outcome,
             event_id = %event.event_id,
             "Observed projected message event"
         );
-        // Closed-loop only after the projection succeeded. Prefer the
-        // correlation ID when present – the push may arrive before the
-        // reconciler's write-back, so the event_id is not yet stored on the
-        // submission row. Fall back to event_id matching for external messages.
-        match event.submission_id {
-            Some(id) => {
-                self.submission_store
-                    .mark_post_submission_completed_by_id(id)
-                    .await?
-            }
-            None => {
-                self.submission_store
-                    .mark_post_submission_completed(&event.event_id)
-                    .await?
-            }
-        };
         let _ = self.event_bus.send(ProjectorEvent::MessageCreated {
             site_id,
             page_slug,
@@ -2530,26 +2516,23 @@ impl EventProcessor {
                 return Ok(());
             }
 
+            // Redaction, anti-resurrection tombstone, and delete closure are
+            // one atomic local unit. The SSE event follows the commit.
             let outcome = self
                 .message_store
-                .redact_message(&target_event_id, &event.room_id, redacted_at, &redacted_by)
+                .redact_message_unit(
+                    &target_event_id,
+                    &event.room_id,
+                    redacted_at,
+                    &redacted_by,
+                    &event.event_id,
+                )
                 .await?;
             if matches!(
                 outcome,
                 MessageRedactionOutcome::Redacted | MessageRedactionOutcome::AlreadyRedacted
             ) {
-                // Keep a persistent tombstone so a later re-delivery of the
-                // original event (push retry, resumed backfill) cannot insert
-                // it again.
-                self.message_store
-                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
-                    .await?;
                 info!("Successfully redacted message {}", target_event_id);
-                // Closed-loop only after the projection succeeded; a failed
-                // delete leaves the submission open for the timeout safety net.
-                self.submission_store
-                    .mark_delete_submission_completed(&target_event_id)
-                    .await?;
                 let _ = self.event_bus.send(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
                     page_slug: c.page_slug,

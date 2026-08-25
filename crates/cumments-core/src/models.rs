@@ -424,6 +424,25 @@ pub enum MessageRedactionOutcome {
     Rejected,
 }
 
+/// Which queued command may be closed with the fact mutation. The sink keeps
+/// this write in the same SQLite transaction as the projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionCompletion {
+    /// No local API submission is correlated with this Matrix event.
+    None,
+    /// Prefer the exact queue row carried by the push event.
+    PostById(i64),
+    /// Legacy/external posts fall back to the projected Matrix event ID.
+    PostByEvent(String),
+    /// Prefer the exact update queue row carried by the push event.
+    UpdateById(i64),
+    /// Legacy/external edits are scoped to the target and author key.
+    UpdateByEvent {
+        target_event_id: String,
+        author_public_key: Option<String>,
+    },
+}
+
 /// A poll vote record (one row per voter; the latest vote wins).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PollVote {
