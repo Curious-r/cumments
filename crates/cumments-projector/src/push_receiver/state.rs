@@ -1,7 +1,7 @@
 //! Shared state for the push receiver endpoints.
 
 use crate::event_processor::EventProcessor;
-use cumments_core::ports::AppServiceTxnStore;
+use cumments_core::ports::{AppServiceTxnStore, SseOutboxStore};
 use std::sync::Arc;
 
 // ── Shared state ──────────────────────────────────────────────────
@@ -13,4 +13,5 @@ pub struct PushState {
     /// Durable acknowledgement records survive process restarts; bounded
     /// storage means event-level idempotency remains the correctness backstop.
     pub(super) txn_store: Arc<dyn AppServiceTxnStore>,
+    pub(super) outbox_store: Arc<dyn SseOutboxStore>,
 }

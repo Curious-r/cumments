@@ -12,7 +12,7 @@ use axum::{
     response::IntoResponse,
     routing::{post, put},
 };
-use cumments_core::ports::AppServiceTxnStore;
+use cumments_core::ports::{AppServiceTxnStore, SseOutboxStore};
 use std::{collections::HashMap, sync::Arc};
 
 // ── Axum router ──────────────────────────────────────────────────
@@ -27,12 +27,14 @@ use std::{collections::HashMap, sync::Arc};
 pub fn push_router(
     processor: Arc<EventProcessor>,
     txn_store: Arc<dyn AppServiceTxnStore>,
+    outbox_store: Arc<dyn SseOutboxStore>,
     hs_token: String,
 ) -> axum::Router {
     let state = Arc::new(PushState {
         processor,
         hs_token,
         txn_store,
+        outbox_store,
     });
 
     axum::Router::new()
@@ -55,9 +57,10 @@ pub fn push_router(
 pub fn push_router_standalone(
     processor: Arc<EventProcessor>,
     txn_store: Arc<dyn AppServiceTxnStore>,
+    outbox_store: Arc<dyn SseOutboxStore>,
     hs_token: String,
 ) -> axum::Router {
-    push_router(processor, txn_store, hs_token).fallback(handle_unknown)
+    push_router(processor, txn_store, outbox_store, hs_token).fallback(handle_unknown)
 }
 
 /// Respond to unknown AppService routes with the spec's `M_UNRECOGNIZED`
@@ -92,6 +95,13 @@ async fn handle_ping(
     (StatusCode::OK, Json(serde_json::json!({})))
 }
 
+fn internal_error(message: &'static str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"errcode": "M_UNKNOWN", "error": message})),
+    )
+}
+
 /// Handle `PUT /_matrix/app/v1/transactions/{txnId}`.
 async fn handle_transaction(
     Path(txn_id): Path<String>,
@@ -124,8 +134,39 @@ async fn handle_transaction(
     }
 
     let mut failed = false;
-    for event in txn.events {
-        if let Err(e) = process_single_event(&event, &state.processor).await {
+    let sse_event_id_prefix = format!("sse:{txn_id}");
+    for (event_index, event) in txn.events.into_iter().enumerate() {
+        let sse_event_id = format!("{sse_event_id_prefix}:{event_index}");
+        let should_process = match state
+            .outbox_store
+            .reserve_sse_outbox(&txn_id, event_index as u32, &sse_event_id)
+            .await
+        {
+            Ok(should_process) => should_process,
+            Err(error) => {
+                tracing::error!("Failed to reserve SSE outbox: {error:#}");
+                return internal_error("Failed to reserve projection output");
+            }
+        };
+        if !should_process {
+            continue;
+        }
+
+        state.processor.start_event_capture().await;
+        let result = process_single_event(&event, &state.processor).await;
+        let captured = state.processor.stop_event_capture().await;
+        if let Some(events) = captured
+            && let Ok(payload) = serde_json::to_string(&events)
+            && let Err(error) = state
+                .outbox_store
+                .fill_sse_outbox(&sse_event_id, &payload)
+                .await
+        {
+            tracing::error!("Failed to persist SSE output: {error:#}");
+            failed = true;
+            continue;
+        }
+        if let Err(e) = result {
             tracing::warn!("Failed to process push event: {:?}", e);
             failed = true;
         }
@@ -134,13 +175,7 @@ async fn handle_transaction(
     if failed {
         // Ask the homeserver to retry the whole transaction instead of
         // acknowledging events that were never projected.
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "errcode": "M_UNKNOWN",
-                "error": "Failed to process push transaction"
-            })),
-        );
+        return internal_error("Failed to process push transaction");
     }
 
     if let Err(error) = state.txn_store.mark_processed_txn(&txn_id).await {

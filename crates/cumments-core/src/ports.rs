@@ -9,7 +9,7 @@ use crate::models::{
     MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, PageSlug, PollVote,
     ProjectionRepair, ProjectionRepairInput, QuarantinedRoom, Reaction, RoomEventPage,
     RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot, RoomStatus,
-    RoomUpgradeIntent, SiteId, SubmissionCompletion, VisitorProfile,
+    RoomUpgradeIntent, SiteId, SseOutbox, SubmissionCompletion, VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -1189,6 +1189,27 @@ pub trait ProjectionRepairStore: Send + Sync {
 #[async_trait]
 pub trait StateRedactionRepairer: Send + Sync {
     async fn repair_state_redaction(&self, target_event_id: &str) -> Result<()>;
+}
+
+/// Durable publication queue for projector events.
+#[async_trait]
+pub trait SseOutboxStore: Send + Sync {
+    /// Idempotently reserves one transaction event. Returns `true` when its
+    /// projection should run; `false` when a non-empty payload is already
+    /// queued (including already sent).
+    async fn reserve_sse_outbox(
+        &self,
+        txn_id: &str,
+        event_index: u32,
+        sse_event_id: &str,
+    ) -> Result<bool>;
+
+    /// Stores the events produced by a reserved Matrix event.
+    async fn fill_sse_outbox(&self, sse_event_id: &str, payload_json: &str) -> Result<()>;
+
+    async fn pending_sse_outbox(&self, limit: u64) -> Result<Vec<SseOutbox>>;
+
+    async fn mark_sse_outbox_sent(&self, id: i64) -> Result<()>;
 }
 
 /// Persistence for the chat command audit log.

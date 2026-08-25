@@ -10,4 +10,5 @@ pub mod ephemeral;
 pub mod event_processor;
 pub mod parsed;
 pub mod push_receiver;
+pub mod sse_outbox;
 pub mod verification;

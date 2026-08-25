@@ -321,6 +321,28 @@ async fn main() -> Result<()> {
     );
     tokio::spawn(backfill_worker.run());
 
+    // Publish projector events only after their facts are committed. Frequent
+    // polling keeps live latency low without coupling publication to the HTTP
+    // response that acknowledged the homeserver transaction.
+    {
+        let outbox_store = db_store.clone();
+        let event_bus = event_bus.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+            loop {
+                interval.tick().await;
+                if let Err(error) = cumments_projector::sse_outbox::publish_pending(
+                    outbox_store.as_ref(),
+                    &event_bus,
+                )
+                .await
+                {
+                    tracing::error!("SSE outbox publisher failed: {error:#}");
+                }
+            }
+        });
+    }
+
     // ─────────────────────────────────────────────────────────────
     // 7b. Handle the backfill subcommand (needs driver + processor)
     // ─────────────────────────────────────────────────────────────
@@ -414,6 +436,7 @@ async fn main() -> Result<()> {
                 let push_app = cumments_projector::push_receiver::push_router_standalone(
                     event_processor.clone(),
                     db_store.clone() as Arc<dyn cumments_core::ports::AppServiceTxnStore>,
+                    db_store.clone() as Arc<dyn cumments_core::ports::SseOutboxStore>,
                     as_conf.hs_token.clone(),
                 );
                 tokio::spawn(async move {
@@ -531,6 +554,7 @@ async fn main() -> Result<()> {
             let push_router = cumments_projector::push_receiver::push_router(
                 event_processor,
                 db_store.clone() as Arc<dyn cumments_core::ports::AppServiceTxnStore>,
+                db_store.clone() as Arc<dyn cumments_core::ports::SseOutboxStore>,
                 as_conf.hs_token.clone(),
             );
             api_router.merge(push_router)

@@ -2509,11 +2509,19 @@
                 const url = `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/sse`;
                 const sse = new EventSource(url);
                 state.currentSse = sse;
+                const seenSseIds = new Set();
+                const duplicateSse = (event) => {
+                    if (!event.lastEventId) return false;
+                    if (seenSseIds.has(event.lastEventId)) return true;
+                    seenSseIds.add(event.lastEventId);
+                    return false;
+                };
 
                 sse.onopen = () => updateSseStatus(true);
                 sse.onerror = () => updateSseStatus(false);
 
                 sse.addEventListener("message_created", (event) => {
+                    if (duplicateSse(event)) return;
                     const payload = JSON.parse(event.data).payload;
                     const message = payload.message;
                     toast(t("sse_new_comment") + authorName(message), "success");
@@ -2522,6 +2530,7 @@
                 });
 
                 sse.addEventListener("message_updated", (event) => {
+                    if (duplicateSse(event)) return;
                     const payload = JSON.parse(event.data).payload;
                     toast(
                         t("sse_comment_updated") + authorName(payload.message),
@@ -2530,13 +2539,15 @@
                     loadList();
                 });
 
-                sse.addEventListener("message_annotations_changed", () => {
+                sse.addEventListener("message_annotations_changed", (event) => {
+                    if (duplicateSse(event)) return;
                     // Reactions and poll responses change without the message
                     // content being edited; refresh quietly.
                     loadList();
                 });
 
-                sse.addEventListener("message_deleted", () => {
+                sse.addEventListener("message_deleted", (event) => {
+                    if (duplicateSse(event)) return;
                     toast(t("sse_comment_deleted"), "info");
                     loadList();
                 });

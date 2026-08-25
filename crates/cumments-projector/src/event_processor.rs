@@ -72,6 +72,9 @@ pub struct EventProcessor {
     /// Routes `!cumments` chat commands; kept separate so projection does not
     /// carry command-only state.
     command_router: BotCommandRouter,
+    /// Set by the AppService router while an event is projected. Captured
+    /// events are persisted to the SSE outbox instead of broadcast directly.
+    event_capture: Mutex<Option<Vec<ProjectorEvent>>>,
 }
 
 /// Dependencies of the [`EventProcessor`], kept as one struct so the growing
@@ -1241,7 +1244,26 @@ impl EventProcessor {
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
             command_router,
+            event_capture: Mutex::new(None),
         }
+    }
+
+    pub async fn start_event_capture(&self) {
+        let mut capture = self.event_capture.lock().await;
+        *capture = Some(Vec::new());
+    }
+
+    /// Returns captured events, or `None` when direct broadcast is enabled.
+    pub async fn stop_event_capture(&self) -> Option<Vec<ProjectorEvent>> {
+        self.event_capture.lock().await.take()
+    }
+
+    async fn emit(&self, event: ProjectorEvent) {
+        if let Some(capture) = self.event_capture.lock().await.as_mut() {
+            capture.push(event);
+            return;
+        }
+        let _ = self.event_bus.send(event);
     }
 
     /// Look up the site ID associated with a Matrix Space room ID.
@@ -1523,11 +1545,12 @@ impl EventProcessor {
                     .get_message(&relation.target_event_id)
                     .await?
                 {
-                    let _ = self.event_bus.send(ProjectorEvent::MessageUpdated {
+                    self.emit(ProjectorEvent::MessageUpdated {
                         site_id,
                         page_slug,
                         message,
-                    });
+                    })
+                    .await;
                 }
             } else {
                 debug!(
@@ -1651,11 +1674,12 @@ impl EventProcessor {
             event_id = %event.event_id,
             "Observed projected message event"
         );
-        let _ = self.event_bus.send(ProjectorEvent::MessageCreated {
+        self.emit(ProjectorEvent::MessageCreated {
             site_id,
             page_slug,
             message,
-        });
+        })
+        .await;
         Ok(())
     }
 
@@ -1754,13 +1778,12 @@ impl EventProcessor {
             })
             .await?;
         if let Some(updated) = self.message_store.get_message(&message_event_id).await? {
-            let _ = self
-                .event_bus
-                .send(ProjectorEvent::MessageAnnotationsChanged {
-                    site_id: updated.site_id.clone(),
-                    page_slug: updated.page_slug.clone(),
-                    message: updated,
-                });
+            self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                site_id: updated.site_id.clone(),
+                page_slug: updated.page_slug.clone(),
+                message: updated,
+            })
+            .await;
         }
         Ok(())
     }
@@ -1908,13 +1931,12 @@ impl EventProcessor {
                 .await?;
         }
         if let Some(updated) = self.message_store.get_message(&message.event_id).await? {
-            let _ = self
-                .event_bus
-                .send(ProjectorEvent::MessageAnnotationsChanged {
-                    site_id: updated.site_id.clone(),
-                    page_slug: updated.page_slug.clone(),
-                    message: updated,
-                });
+            self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                site_id: updated.site_id.clone(),
+                page_slug: updated.page_slug.clone(),
+                message: updated,
+            })
+            .await;
         }
         Ok(())
     }
@@ -2461,13 +2483,12 @@ impl EventProcessor {
                     .await?;
                 info!("Successfully redacted edit {}", target_event_id);
                 if let Some(updated) = self.message_store.get_message(&parent.event_id).await? {
-                    let _ = self
-                        .event_bus
-                        .send(ProjectorEvent::MessageAnnotationsChanged {
-                            site_id: updated.site_id.clone(),
-                            page_slug: updated.page_slug.clone(),
-                            message: updated,
-                        });
+                    self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                        site_id: updated.site_id.clone(),
+                        page_slug: updated.page_slug.clone(),
+                        message: updated,
+                    })
+                    .await;
                 }
             }
             return Ok(());
@@ -2545,12 +2566,13 @@ impl EventProcessor {
                 MessageRedactionOutcome::Redacted | MessageRedactionOutcome::AlreadyRedacted
             ) {
                 info!("Successfully redacted message {}", target_event_id);
-                let _ = self.event_bus.send(ProjectorEvent::MessageDeleted {
+                self.emit(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
                     page_slug: c.page_slug,
                     event_id: target_event_id,
                     submission_id: event.submission_id,
-                });
+                })
+                .await;
             } else {
                 self.message_store
                     .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
@@ -2597,13 +2619,12 @@ impl EventProcessor {
                     .get_message(&reaction.message_event_id)
                     .await?
                 {
-                    let _ = self
-                        .event_bus
-                        .send(ProjectorEvent::MessageAnnotationsChanged {
-                            site_id: updated.site_id.clone(),
-                            page_slug: updated.page_slug.clone(),
-                            message: updated,
-                        });
+                    self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                        site_id: updated.site_id.clone(),
+                        page_slug: updated.page_slug.clone(),
+                        message: updated,
+                    })
+                    .await;
                 }
             }
             return Ok(());
@@ -2650,13 +2671,12 @@ impl EventProcessor {
                     .get_message(&vote.poll_message_id)
                     .await?
                 {
-                    let _ = self
-                        .event_bus
-                        .send(ProjectorEvent::MessageAnnotationsChanged {
-                            site_id: updated.site_id.clone(),
-                            page_slug: updated.page_slug.clone(),
-                            message: updated,
-                        });
+                    self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                        site_id: updated.site_id.clone(),
+                        page_slug: updated.page_slug.clone(),
+                        message: updated,
+                    })
+                    .await;
                 }
             }
             return Ok(());

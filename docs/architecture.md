@@ -94,9 +94,11 @@ duplicating or resurrecting a fact.
 
 The durable AppService transaction fast path has a narrow crash window: if the
 process stops after an event is projected but before its transaction ID is
-recorded, event-level idempotency prevents duplicate facts/submissions, but SSE
-subscribers may see one replay. This trade-off avoids requiring a distributed
-outbox for every event.
+recorded, event-level idempotency prevents duplicate facts/submissions.
+SSE output uses a local transactional outbox: projector events are persisted
+before publication and deleted after broadcast. A crash between those steps can
+therefore repeat one frame, never lose a committed live update; each comment SSE
+frame carries a deterministic `id`, and the demo ignores IDs it has already seen.
 
 ### Boundaries to watch
 

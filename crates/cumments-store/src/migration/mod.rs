@@ -66,6 +66,7 @@ pub mod m20260825_000060_sanitize_redacted_payloads;
 pub mod m20260825_000061_clear_redacted_poll_choices;
 pub mod m20260826_000062_projection_repairs;
 pub mod m20260826_000063_poll_answer_selections;
+pub mod m20260826_000064_sse_outbox;
 
 pub struct Migrator;
 
@@ -192,6 +193,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260825_000061_clear_redacted_poll_choices::Migration),
             Box::new(m20260826_000062_projection_repairs::Migration),
             Box::new(m20260826_000063_poll_answer_selections::Migration),
+            Box::new(m20260826_000064_sse_outbox::Migration),
         ]
     }
 }

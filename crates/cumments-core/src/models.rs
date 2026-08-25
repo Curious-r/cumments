@@ -752,6 +752,17 @@ pub struct ProjectionRepair {
     pub resolved_at: Option<DateTime<Utc>>,
 }
 
+/// A durable SSE publication created in the same local commit domain as the
+/// projection that produced it. `payload_json` is a serialized
+/// [`crate::projector_events::ProjectorEvent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseOutbox {
+    pub id: i64,
+    pub delivery_key: String,
+    pub payload_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

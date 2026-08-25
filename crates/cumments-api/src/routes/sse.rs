@@ -13,6 +13,7 @@ use axum::{
 use cumments_core::ephemeral::EphemeralEvent;
 use cumments_core::models::{PageSlug, SiteId};
 use cumments_core::projector_events::ProjectorEvent;
+use sha2::{Digest, Sha256};
 use std::convert::Infallible;
 
 /// Conservative `Retry-After` for the global concurrent-connection cap. The
@@ -169,7 +170,15 @@ pub(crate) async fn sse_handler(
                             }
                             ProjectorEvent::MessageDeleted { .. } => "message_deleted",
                         };
-                        yield Ok::<Event, Infallible>(Event::default().event(event_name).data(json));
+                        let mut hasher = Sha256::new();
+                        hasher.update(json.as_bytes());
+                        let id = hex::encode(hasher.finalize());
+                        yield Ok::<Event, Infallible>(
+                            Event::default()
+                                .event(event_name)
+                                .id(id)
+                                .data(json),
+                        );
                     }
                 }
                 Incoming::Ephemeral(event) => {

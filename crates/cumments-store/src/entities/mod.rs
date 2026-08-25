@@ -29,6 +29,7 @@ pub mod site_roles;
 pub mod site_transfers;
 pub mod site_verified_origins;
 pub mod sites;
+pub mod sse_outbox;
 pub mod sticker_packs;
 pub mod update_submissions;
 pub mod verification_tokens;
