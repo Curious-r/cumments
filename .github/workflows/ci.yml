@@ -197,7 +197,7 @@ jobs:
           node-version: 24
 
       - name: Lint OpenAPI contract
-        run: npx --yes @redocly/cli@2.47.0 lint --config redocly.yaml docs/public/openapi.yaml
+        run: npx --yes @redocly/cli@2.47.0 lint --config docs/redocly.yaml docs/public/openapi.yaml
 
       - name: Assert OpenAPI 3.2 migration invariants
         run: node scripts/check-openapi-3-2.mjs
