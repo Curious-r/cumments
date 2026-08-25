@@ -5,10 +5,11 @@ use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
 use crate::models::{
-    CommentMedia, EditProjectionOutcome, Message, MessagePage, MessageRedactionOutcome,
-    MessageRevision, MessageSaveOutcome, PageSlug, PollVote, QuarantinedRoom, Reaction,
-    RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot,
-    RoomStatus, RoomUpgradeIntent, SiteId, SubmissionCompletion, VisitorProfile,
+    CommentMedia, EditProjectionOutcome, MatrixEvent, Message, MessagePage,
+    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, PageSlug, PollVote,
+    ProjectionRepair, ProjectionRepairInput, QuarantinedRoom, Reaction, RoomEventPage,
+    RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot, RoomStatus,
+    RoomUpgradeIntent, SiteId, SubmissionCompletion, VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -1073,6 +1074,11 @@ pub trait MatrixDriver: Send + Sync {
     /// timed-out `waiting_for_sync` submission can be safely resent.
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool>;
 
+    /// Fetches one authoritative event (`404` -> `None`). When redacted,
+    /// `MatrixEvent::redacted_by` identifies the redaction and content has
+    /// already been stripped by the homeserver.
+    async fn get_event(&self, room_id: &str, event_id: &str) -> Result<Option<MatrixEvent>>;
+
     /// The AppService sender user ID, or `None` when this driver has no
     /// Matrix sender account (e.g. logging mode).
     fn sender_user_id(&self) -> Option<String>;
@@ -1140,6 +1146,40 @@ pub trait BackfillCursorStore: Send + Sync {
 
     /// Persist the next pagination token for a room.
     async fn save_cursor(&self, room_id: &str, next_token: &str) -> Result<()>;
+}
+
+/// Durable queue for facts whose projection failed closed. Rows carry only
+/// identifiers and diagnostics; Matrix remains the payload authority.
+#[async_trait]
+pub trait ProjectionRepairStore: Send + Sync {
+    async fn record_projection_repair(&self, input: &ProjectionRepairInput) -> Result<()>;
+
+    async fn claim_due_projection_repairs(&self, limit: u64) -> Result<Vec<ProjectionRepair>>;
+
+    async fn record_projection_repair_failure(
+        &self,
+        target_event_id: &str,
+        error: &str,
+        retry_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()>;
+
+    async fn mark_projection_repair_manual(&self, target_event_id: &str, error: &str)
+    -> Result<()>;
+
+    async fn resolve_projection_repair(&self, target_event_id: &str) -> Result<bool>;
+
+    async fn list_projection_repairs(
+        &self,
+        status: Option<crate::models::ProjectionRepairStatus>,
+        limit: u64,
+    ) -> Result<Vec<ProjectionRepair>>;
+}
+
+/// Repairs a queued state-event redaction using the homeserver-resolved
+/// event, so unknown/custom room versions never require a local guess.
+#[async_trait]
+pub trait StateRedactionRepairer: Send + Sync {
+    async fn repair_state_redaction(&self, target_event_id: &str) -> Result<()>;
 }
 
 /// Persistence for the chat command audit log.

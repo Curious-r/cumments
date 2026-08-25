@@ -23,13 +23,13 @@ use cumments_core::{
     identity::{post_signature_message, signature_message},
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
-        MessageRedactionOutcome, MessageRevision, MessageStatus, PageSlug, PollVote, Reaction,
-        RoomIdentity, RoomMember, RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion,
-        TextStyle,
+        MessageRedactionOutcome, MessageRevision, MessageStatus, PageSlug, PollVote,
+        ProjectionRepairInput, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus,
+        SiteId, SubmissionCompletion, TextStyle,
     },
     ports::{
-        CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, RegistryStore,
-        RoleClaimStore, RoomStore, SiteStore, StickerPackStore, SubmissionStore,
+        CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore,
+        RegistryStore, RoleClaimStore, RoomStore, SiteStore, StickerPackStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
@@ -58,6 +58,7 @@ pub struct EventProcessor {
     room_store: Arc<dyn RoomStore>,
     governance_store: Arc<dyn GovernanceStore>,
     sticker_pack_store: Arc<dyn StickerPackStore>,
+    projection_repair_store: Arc<dyn ProjectionRepairStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     _submission_store: Arc<dyn SubmissionStore>,
     site_service: Arc<cumments_core::site_service::SiteService>,
@@ -82,6 +83,7 @@ pub struct EventProcessorDeps {
     pub room_store: Arc<dyn RoomStore>,
     pub governance_store: Arc<dyn GovernanceStore>,
     pub sticker_pack_store: Arc<dyn StickerPackStore>,
+    pub projection_repair_store: Arc<dyn ProjectionRepairStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub submission_store: Arc<dyn SubmissionStore>,
     pub audit_store: Arc<dyn CommandAuditStore>,
@@ -1230,6 +1232,7 @@ impl EventProcessor {
             room_store: deps.room_store,
             governance_store: deps.governance_store,
             sticker_pack_store: deps.sticker_pack_store,
+            projection_repair_store: deps.projection_repair_store,
             role_claim_store: deps.role_claim_store,
             _submission_store: deps.submission_store,
             site_service: deps.site_service,
@@ -2302,85 +2305,51 @@ impl EventProcessor {
             ) {
                 Ok(stripped) => stripped,
                 Err(UnsupportedRoomVersion(version)) => {
+                    let error = format!(
+                        "cannot apply state redaction with unknown room version {version:?}"
+                    );
                     error!(
                         room_id = %event.room_id,
                         version = ?version,
                         "Refusing state redaction with unknown room version"
                     );
-                    return Err(anyhow::anyhow!(
-                        "refusing state redaction in {} with unknown room version {version:?}",
-                        event.room_id
-                    ));
+                    // Do not guess an unknown room version's protected keys.
+                    // Queue identifiers for authoritative repair and ACK the
+                    // push so this poison event cannot block its transaction.
+                    self.projection_repair_store
+                        .record_projection_repair(&ProjectionRepairInput {
+                            target_event_id: target_event_id.clone(),
+                            room_id: event.room_id.clone(),
+                            redaction_event_id: event.event_id.clone(),
+                            reason: "unsupported_room_version",
+                            observed_room_version: version,
+                            error,
+                        })
+                        .await?;
+                    warn!(
+                        room_id = %event.room_id,
+                        target = %target_event_id,
+                        "Queued unsupported-version state redaction for repair"
+                    );
+                    return Ok(());
                 }
             };
-            self.room_store
-                .update_state_event_content(&target_event_id, &stripped)
-                .await?;
-            self.message_store
-                .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
-                .await?;
-
-            let latest = self
-                .room_store
-                .get_latest_state_event(&state.room_id, &state.event_type, &state.state_key)
-                .await?;
-            if latest
-                .as_ref()
-                .is_some_and(|latest| latest.event_id == target_event_id)
+            if let Err(error) = self
+                .apply_stripped_state_redaction(
+                    &state,
+                    stripped,
+                    &event.event_id,
+                    event.origin_server_ts,
+                )
+                .await
             {
-                match state.event_type.as_str() {
-                    "m.room.member" => {
-                        self.room_store
-                            .save_member(&RoomMember {
-                                room_id: state.room_id.clone(),
-                                user_id: state.state_key.clone(),
-                                display_name: stripped
-                                    .get("displayname")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::to_string),
-                                avatar_url: stripped
-                                    .get("avatar_url")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::to_string),
-                                membership: stripped
-                                    .get("membership")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                updated_at: chrono::DateTime::from_timestamp_millis(
-                                    event.origin_server_ts,
-                                )
-                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
-                            })
-                            .await?;
-                    }
-                    POWER_LEVELS_EVENT_TYPE => {
-                        let site = self.site_store.get_site_by_space_id(&state.room_id).await?;
-                        let min_level = if site.is_some() {
-                            SITE_ROLE_MIN_LEVEL
-                        } else {
-                            MODERATOR_LEVEL
-                        };
-                        let roles: Vec<RoleEntry> = role_entries(&stripped, min_level)
-                            .into_iter()
-                            .filter(|role| !is_as_managed_user(&role.user_id))
-                            .collect();
-                        if let Some(site) = site {
-                            self.governance_store
-                                .replace_site_roles(&site.id, &roles)
-                                .await?;
-                            self.projection_notify.notify_one();
-                        } else if matches!(
-                            self.registry_store.get_room_status(&state.room_id).await?,
-                            Some(RoomStatus::Active)
-                        ) {
-                            self.governance_store
-                                .replace_room_roles(&state.room_id, &roles)
-                                .await?;
-                        }
-                    }
-                    _ => {}
-                }
+                error!(
+                    room_id = %event.room_id,
+                    target = %target_event_id,
+                    error = %error,
+                    "Failed to apply supported state redaction"
+                );
+                return Err(error);
             }
             info!(
                 "Successfully redacted state event {target_event_id} ({} in {})",
@@ -2498,7 +2467,7 @@ impl EventProcessor {
             {
                 warn!(
                     "Ignoring redaction for {} in {}: message belongs to {}/{}",
-                    target_event_id, event.room_id, c.site_id, c.page_slug
+                    target_event_id, event.room_id, identity.site_id, identity.page_slug
                 );
                 return Ok(());
             }
@@ -2574,7 +2543,7 @@ impl EventProcessor {
             };
             if target.room_id != event.room_id {
                 warn!(
-                    "Ignoring redaction for {} in {}: reaction lives in {}",
+                    "Ignoring reaction redaction {} in {}: reaction lives in {}",
                     target_event_id, event.room_id, target.room_id
                 );
                 return Ok(());
@@ -2605,7 +2574,7 @@ impl EventProcessor {
             return Ok(());
         }
 
-        // 3. Poll-vote targets (same room check through the poll message).
+        // 3. Poll votes follow the same annotation rules as reactions.
         if let Some(vote) = self
             .message_store
             .get_poll_vote_by_event(&target_event_id)
@@ -2617,7 +2586,7 @@ impl EventProcessor {
                 .await?
             else {
                 debug!(
-                    "Redaction tombstoned for poll vote {}: poll message unknown",
+                    "Redaction tombstoned for poll vote {}: poll unknown",
                     target_event_id
                 );
                 self.message_store
@@ -2627,7 +2596,7 @@ impl EventProcessor {
             };
             if target.room_id != event.room_id {
                 warn!(
-                    "Ignoring redaction for {} in {}: vote lives in {}",
+                    "Ignoring poll vote redaction {} in {}: vote lives in {}",
                     target_event_id, event.room_id, target.room_id
                 );
                 return Ok(());
@@ -2658,15 +2627,91 @@ impl EventProcessor {
             return Ok(());
         }
 
-        // 4. Unknown target: persist the tombstone so the target cannot
-        // resurrect when it is fetched by a later backfill run.
+        // Unknown or foreign targets still get a durable tombstone so a later
+        // replay cannot resurrect them after the homeserver has applied the
+        // redaction.
         self.message_store
             .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
             .await?;
-        debug!(
-            "Redaction tombstoned for unknown target {}",
-            target_event_id
-        );
+        Ok(())
+    }
+
+    /// Applies homeserver-verified stripped content to a stored state fact and
+    /// refreshes derived member/governance projections when it was current.
+    async fn apply_stripped_state_redaction(
+        &self,
+        state: &RoomStateEvent,
+        stripped: serde_json::Value,
+        redaction_event_id: &str,
+        redacted_at_ts: i64,
+    ) -> Result<()> {
+        self.room_store
+            .update_state_event_content(&state.event_id, &stripped)
+            .await?;
+        self.message_store
+            .record_backfill_tombstone(&state.event_id, &state.room_id, redaction_event_id)
+            .await?;
+
+        let latest = self
+            .room_store
+            .get_latest_state_event(&state.room_id, &state.event_type, &state.state_key)
+            .await?;
+        if latest
+            .as_ref()
+            .is_some_and(|latest| latest.event_id == state.event_id)
+        {
+            match state.event_type.as_str() {
+                "m.room.member" => {
+                    self.room_store
+                        .save_member(&RoomMember {
+                            room_id: state.room_id.clone(),
+                            user_id: state.state_key.clone(),
+                            display_name: stripped
+                                .get("displayname")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string),
+                            avatar_url: stripped
+                                .get("avatar_url")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string),
+                            membership: stripped
+                                .get("membership")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            updated_at: chrono::DateTime::from_timestamp_millis(redacted_at_ts)
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+                        })
+                        .await?;
+                }
+                POWER_LEVELS_EVENT_TYPE => {
+                    let site = self.site_store.get_site_by_space_id(&state.room_id).await?;
+                    let min_level = if site.is_some() {
+                        SITE_ROLE_MIN_LEVEL
+                    } else {
+                        MODERATOR_LEVEL
+                    };
+                    let roles: Vec<RoleEntry> = role_entries(&stripped, min_level)
+                        .into_iter()
+                        .filter(|role| !is_as_managed_user(&role.user_id))
+                        .collect();
+                    if let Some(site) = site {
+                        self.governance_store
+                            .replace_site_roles(&site.id, &roles)
+                            .await?;
+                        self.projection_notify.notify_one();
+                    } else if matches!(
+                        self.registry_store.get_room_status(&state.room_id).await?,
+                        Some(RoomStatus::Active)
+                    ) {
+                        self.governance_store
+                            .replace_room_roles(&state.room_id, &roles)
+                            .await?;
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -2715,6 +2760,73 @@ impl EventProcessor {
                 event.child_room_id, event.space_room_id
             );
         }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl cumments_core::ports::StateRedactionRepairer for EventProcessor {
+    async fn repair_state_redaction(&self, target_event_id: &str) -> Result<()> {
+        let Some(state) = self.room_store.get_state_event(target_event_id).await? else {
+            // The local fact disappeared (for example room retirement cleanup);
+            // the queue entry no longer has anything to repair.
+            self.projection_repair_store
+                .resolve_projection_repair(target_event_id)
+                .await?;
+            return Ok(());
+        };
+        let Some(driver) = self.driver.as_ref() else {
+            anyhow::bail!("state redaction repair requires a Matrix driver");
+        };
+        let Some(event) = driver.get_event(&state.room_id, target_event_id).await? else {
+            anyhow::bail!(
+                "homeserver does not expose redacted state event {}",
+                target_event_id
+            );
+        };
+
+        if event.event_id != state.event_id || event.room_id != state.room_id {
+            let error = format!(
+                "homeserver returned {},{} for repair of {},{}",
+                event.event_id, event.room_id, state.event_id, state.room_id
+            );
+            self.projection_repair_store
+                .mark_projection_repair_manual(target_event_id, &error)
+                .await?;
+            anyhow::bail!(error);
+        }
+        if event.state_key.as_deref() != Some(state.state_key.as_str())
+            || event.event_type != state.event_type
+        {
+            let error = format!(
+                "homeserver event {} has state slot {}/{}, expected {}/{}",
+                event.event_id,
+                event.event_type,
+                event.state_key.unwrap_or_default(),
+                state.event_type,
+                state.state_key
+            );
+            self.projection_repair_store
+                .mark_projection_repair_manual(target_event_id, &error)
+                .await?;
+            anyhow::bail!(error);
+        }
+
+        let redaction_event_id = match event.redacted_by.as_deref() {
+            Some(redaction_event_id) => redaction_event_id,
+            None => anyhow::bail!("homeserver event {} is not redacted yet", target_event_id),
+        };
+        self.apply_stripped_state_redaction(
+            &state,
+            event.content,
+            redaction_event_id,
+            event.origin_server_ts,
+        )
+        .await?;
+        self.projection_repair_store
+            .resolve_projection_repair(target_event_id)
+            .await?;
+        info!("Repaired unsupported-version state redaction {target_event_id} from the homeserver");
         Ok(())
     }
 }

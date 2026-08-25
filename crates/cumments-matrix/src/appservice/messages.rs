@@ -8,7 +8,7 @@ use crate::wire::{
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use cumments_core::{
-    models::{CommentMedia, RoomEventPage, SiteId},
+    models::{CommentMedia, MatrixEvent, RoomEventPage, SiteId},
     submissions::fresh_transaction_id,
 };
 use serde::Deserialize;
@@ -25,6 +25,29 @@ struct MessagesResponse {
     /// the final (or empty) page, so it must be optional.
     end: Option<String>,
     chunk: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct EventResponse {
+    event_id: String,
+    room_id: String,
+    #[serde(rename = "type")]
+    event_type: String,
+    state_key: Option<String>,
+    sender: Option<String>,
+    origin_server_ts: i64,
+    content: serde_json::Value,
+    unsigned: Option<EventUnsigned>,
+}
+
+#[derive(Deserialize)]
+struct EventUnsigned {
+    redacted_because: Option<EventRedactedBecause>,
+}
+
+#[derive(Deserialize)]
+struct EventRedactedBecause {
+    event_id: String,
 }
 
 impl AppServiceMatrixDriver {
@@ -452,7 +475,11 @@ impl AppServiceMatrixDriver {
     }
 
     #[instrument(skip(self))]
-    pub(super) async fn event_exists_impl(&self, room_id: &str, event_id: &str) -> Result<bool> {
+    pub(super) async fn get_event_impl(
+        &self,
+        room_id: &str,
+        event_id: &str,
+    ) -> Result<Option<MatrixEvent>> {
         let path = format!(
             "_matrix/client/v3/rooms/{}/event/{}",
             percent_encode(room_id),
@@ -462,22 +489,39 @@ impl AppServiceMatrixDriver {
             .request(reqwest::Method::GET, &path, None)
             .send()
             .await
-            .map_err(|e| anyhow!("Failed to query event {}: {}", event_id, e))?;
+            .map_err(|e| anyhow!("Failed to fetch event {}: {}", event_id, e))?;
 
-        if resp.status().is_success() {
-            Ok(true)
-        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            Ok(false)
-        } else {
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            Err(anyhow!(
-                "Event lookup {} failed ({}): {}",
+            return Err(anyhow!(
+                "Event fetch {} failed ({}): {}",
                 event_id,
                 status,
                 error_body
-            ))
+            ));
         }
+
+        let data: EventResponse = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("Failed to parse event {}: {}", event_id, e))?;
+        Ok(Some(MatrixEvent {
+            event_id: data.event_id,
+            room_id: data.room_id,
+            event_type: data.event_type,
+            state_key: data.state_key,
+            sender: data.sender,
+            origin_server_ts: data.origin_server_ts,
+            content: data.content,
+            redacted_by: data
+                .unsigned
+                .and_then(|unsigned| unsigned.redacted_because)
+                .map(|because| because.event_id),
+        }))
     }
 
     #[instrument(skip(self))]

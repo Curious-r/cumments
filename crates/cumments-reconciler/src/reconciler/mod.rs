@@ -3,6 +3,7 @@ mod governance;
 mod media;
 mod pass;
 mod posts;
+mod projection_repairs;
 mod room_retirement;
 mod rooms;
 mod site_retirement;
@@ -14,8 +15,9 @@ use cumments_core::{
     matrix_error::MatrixError,
     models::{PageSlug, QuarantinedRoom, SiteId},
     ports::{
-        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteAuthStore, SiteStore, SiteTransferStore, SubmissionStore, VirtualUserStore,
+        GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore, RegistryStore,
+        RoleClaimStore, RoomStore, SiteAuthStore, SiteStore, SiteTransferStore,
+        StateRedactionRepairer, SubmissionStore, VirtualUserStore,
     },
     site_service::SiteService,
 };
@@ -63,6 +65,8 @@ const GOVERNANCE_PASS_INTERVAL: Duration = Duration::from_secs(60);
 /// Interval for the orphan-media sweep; it has no event source, so the
 /// interval alone drives it.
 const MEDIA_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Interval for repairing facts that failed closed during projection.
+const PROJECTION_REPAIR_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Run one submission.s processing future with a hard time budget.
 async fn run_submission<F>(future: F) -> Result<()>
@@ -128,11 +132,13 @@ pub struct ReconcilerDeps {
     pub site_store: Arc<dyn SiteStore>,
     pub role_claim_store: Arc<dyn RoleClaimStore>,
     pub governance_store: Arc<dyn GovernanceStore>,
+    pub projection_repair_store: Arc<dyn ProjectionRepairStore>,
     pub message_store: Arc<dyn MessageStore>,
     pub room_store: Arc<dyn RoomStore>,
     pub virtual_user_store: Arc<dyn VirtualUserStore>,
     pub site_auth_store: Arc<dyn SiteAuthStore>,
     pub site_transfer_store: Arc<dyn SiteTransferStore>,
+    pub state_redaction_repairer: Arc<dyn StateRedactionRepairer>,
     pub driver: Arc<dyn MatrixDriver>,
     pub site_service: Arc<SiteService>,
 }
@@ -192,6 +198,10 @@ impl Reconciler {
                     wakeup: Arc::new(Notify::new()),
                 },
             )),
+            Arc::new(projection_repairs::ProjectionRepairsPass::new(
+                deps.clone(),
+                schedule.projection_repairs,
+            )),
         ];
         Self { passes }
     }
@@ -219,6 +229,7 @@ struct PassSchedule {
     rooms: PassConfig,
     room_retirements: PassConfig,
     site_retirements: PassConfig,
+    projection_repairs: PassConfig,
 }
 
 fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
@@ -248,6 +259,13 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
         rooms: governance("rooms"),
         room_retirements: governance("room_retirements"),
         site_retirements: governance("site_retirements"),
+        projection_repairs: PassConfig {
+            name: "projection-repairs",
+            interval: PROJECTION_REPAIR_INTERVAL,
+            // The durable queue is the event source; the interval is
+            // sufficient because repair is not user-latency critical.
+            wakeup: Arc::new(Notify::new()),
+        },
     }
 }
 

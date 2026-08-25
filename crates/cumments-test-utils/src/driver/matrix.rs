@@ -8,8 +8,8 @@
 
 use super::TestDriver;
 use cumments_core::{
-    models::{CommentMedia, PageSlug, RoomEventPage, SiteId, VisitorProfile},
-    ports::MatrixDriver,
+    models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
+    ports::{MatrixDriver, StateRedactionRepairer},
 };
 
 #[async_trait::async_trait]
@@ -279,6 +279,18 @@ impl MatrixDriver for TestDriver {
     async fn event_exists(&self, _room_id: &str, _event_id: &str) -> anyhow::Result<bool> {
         unimplemented!("not used in this test")
     }
+    async fn get_event(
+        &self,
+        _room_id: &str,
+        _event_id: &str,
+    ) -> anyhow::Result<Option<MatrixEvent>> {
+        Ok(self
+            .events
+            .lock()
+            .await
+            .get(&(_room_id.to_string(), _event_id.to_string()))
+            .cloned())
+    }
     async fn get_room_power_levels(
         &self,
         room_id: &str,
@@ -397,5 +409,12 @@ impl MatrixDriver for TestDriver {
             .await
             .push((space_id.to_string(), room_id.to_string()));
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl StateRedactionRepairer for TestDriver {
+    async fn repair_state_redaction(&self, _target_event_id: &str) -> anyhow::Result<()> {
+        unimplemented!("not used in this test")
     }
 }

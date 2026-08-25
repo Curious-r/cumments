@@ -8,7 +8,7 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
-    models::{CommentMedia, PageSlug, RoomEventPage, SiteId, VisitorProfile},
+    models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
     ports::MatrixDriver,
 };
 
@@ -274,7 +274,11 @@ impl MatrixDriver for AppServiceMatrixDriver {
     }
 
     async fn event_exists(&self, room_id: &str, event_id: &str) -> Result<bool> {
-        self.event_exists_impl(room_id, event_id).await
+        Ok(self.get_event_impl(room_id, event_id).await?.is_some())
+    }
+
+    async fn get_event(&self, room_id: &str, event_id: &str) -> Result<Option<MatrixEvent>> {
+        self.get_event_impl(room_id, event_id).await
     }
 
     fn sender_user_id(&self) -> Option<String> {

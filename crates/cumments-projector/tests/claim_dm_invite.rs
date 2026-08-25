@@ -44,6 +44,7 @@ fn processor(store: Arc<DbStore>, driver: Arc<common::TestDriver>) -> EventProce
         room_store: store.clone(),
         governance_store: store.clone(),
         sticker_pack_store: store.clone(),
+        projection_repair_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
         audit_store: store.clone(),

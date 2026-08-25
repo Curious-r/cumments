@@ -8,7 +8,7 @@ mod matrix;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
-use cumments_core::models::VisitorProfile;
+use cumments_core::models::{MatrixEvent, VisitorProfile};
 
 /// In-memory [`MatrixDriver`] double that records the calls each test
 /// asserts.
@@ -26,6 +26,7 @@ pub struct TestDriver {
     pub deleted: Mutex<Vec<(String, String)>>,
     pub joined_rooms: Mutex<Vec<String>>,
     pub room_events: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    pub events: Mutex<HashMap<(String, String), MatrixEvent>>,
     pub room_metadata: Mutex<HashMap<String, serde_json::Value>>,
     pub room_state: Mutex<HashMap<(String, String, String), serde_json::Value>>,
     pub state_writes: Mutex<Vec<(String, String, String)>>,
@@ -52,6 +53,7 @@ impl TestDriver {
             deleted: Mutex::new(Vec::new()),
             joined_rooms: Mutex::new(Vec::new()),
             room_events: Mutex::new(HashMap::new()),
+            events: Mutex::new(HashMap::new()),
             room_metadata: Mutex::new(HashMap::new()),
             room_state: Mutex::new(HashMap::new()),
             state_writes: Mutex::new(Vec::new()),
@@ -98,6 +100,13 @@ impl TestDriver {
         self.room_metadata
             .get_mut()
             .insert(room_id.into(), metadata);
+        self
+    }
+
+    pub fn with_event(mut self, event: MatrixEvent) -> Self {
+        self.events
+            .get_mut()
+            .insert((event.room_id.clone(), event.event_id.clone()), event);
         self
     }
 

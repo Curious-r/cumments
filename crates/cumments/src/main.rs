@@ -73,6 +73,9 @@ async fn main() -> Result<()> {
             cli::Commands::Audit(_) => {
                 // Handled after the database is connected.
             }
+            cli::Commands::Projection(_) => {
+                // Handled after the database is connected.
+            }
             cli::Commands::Completions(args) => {
                 cli::handle_completions(args)?;
                 return Ok(());
@@ -130,6 +133,10 @@ async fn main() -> Result<()> {
             .list_command_audit(audit_args.actor.as_deref(), audit_args.limit)
             .await?;
         cli::print_json(&entries)?;
+        return Ok(());
+    }
+    if let Some(cli::Commands::Projection(projection_args)) = &args.command {
+        cli::handle_projection_command(&db_store, projection_args).await?;
         return Ok(());
     }
 
@@ -280,6 +287,7 @@ async fn main() -> Result<()> {
             room_store: db_store.clone(),
             governance_store: db_store.clone(),
             sticker_pack_store: db_store.clone(),
+            projection_repair_store: db_store.clone(),
             role_claim_store: db_store.clone(),
             submission_store: db_store.clone(),
             audit_store: db_store.clone(),
@@ -339,6 +347,7 @@ async fn main() -> Result<()> {
             cli::Commands::Sites(_) => unreachable!("handled earlier"),
             cli::Commands::Audit(_) => unreachable!("handled earlier"),
             cli::Commands::Rooms(_) => unreachable!("handled earlier"),
+            cli::Commands::Projection(_) => unreachable!("handled earlier"),
             cli::Commands::Completions(_) => unreachable!("handled earlier"),
         }
     }
@@ -353,11 +362,13 @@ async fn main() -> Result<()> {
             site_store: db_store.clone(),
             role_claim_store: db_store.clone(),
             governance_store: db_store.clone(),
+            projection_repair_store: db_store.clone(),
             message_store: db_store.clone(),
             room_store: db_store.clone(),
             virtual_user_store: db_store.clone(),
             site_auth_store: db_store.clone(),
             site_transfer_store: db_store.clone(),
+            state_redaction_repairer: event_processor.clone(),
             driver: driver.clone(),
             site_service: site_service.clone(),
         },

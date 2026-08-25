@@ -427,11 +427,13 @@ mod tests {
             site_store: store.clone(),
             role_claim_store: store.clone(),
             governance_store: store.clone(),
+            projection_repair_store: store.clone(),
             message_store: store.clone(),
             room_store: store.clone(),
             virtual_user_store: store.clone(),
             site_auth_store: store.clone(),
             site_transfer_store: store.clone(),
+            state_redaction_repairer: driver.clone(),
             driver: driver.clone(),
             site_service: Arc::new(SiteService::new(
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
@@ -522,11 +524,13 @@ mod tests {
             site_store: store.clone(),
             role_claim_store: store.clone(),
             governance_store: store.clone(),
+            projection_repair_store: store.clone(),
             message_store: store.clone(),
             room_store: store.clone(),
             virtual_user_store: store.clone(),
             site_auth_store: store.clone(),
             site_transfer_store: store.clone(),
+            state_redaction_repairer: driver.clone(),
             driver: driver.clone(),
             site_service: Arc::new(SiteService::new(
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>

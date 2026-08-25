@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cumments_core::{
     identity::derive_visitor_id_from_public_key,
-    models::{CommentMedia, PageSlug, RoomEventPage, SiteId, VisitorProfile},
+    models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
     ports::MatrixDriver,
 };
 use tracing::{debug, info};
@@ -253,6 +253,11 @@ impl MatrixDriver for LoggingMatrixDriver {
         // No real homeserver: the projector can never close the loop, so treat
         // timed-out events as absent and let the retry budget drain visibly.
         Ok(false)
+    }
+
+    async fn get_event(&self, _room_id: &str, event_id: &str) -> Result<Option<MatrixEvent>> {
+        info!("LOGGING: Fetch event {} (no real homeserver)", event_id);
+        Ok(None)
     }
 
     async fn get_room_events(

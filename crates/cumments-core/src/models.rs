@@ -682,6 +682,68 @@ pub struct RoomStateSnapshot {
     pub resolved_at: DateTime<Utc>,
 }
 
+/// A homeserver-resolved Matrix event. `redacted_by` mirrors the CS API's
+/// `unsigned.redacted_because.event_id` and is the authority used when local
+/// redaction rules cannot be applied safely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatrixEvent {
+    pub event_id: String,
+    pub room_id: String,
+    pub event_type: String,
+    pub state_key: Option<String>,
+    pub sender: Option<String>,
+    pub origin_server_ts: i64,
+    pub content: serde_json::Value,
+    pub redacted_by: Option<String>,
+}
+
+/// Status of a locally unprojectable Matrix fact that can be repaired from
+/// the homeserver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ProjectionRepairStatus {
+    Pending,
+    Manual,
+    Resolved,
+}
+
+impl ProjectionRepairStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Manual => "manual",
+            Self::Resolved => "resolved",
+        }
+    }
+}
+
+/// Identifiers only. The original event payload is deliberately not copied
+/// into this control-plane row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionRepairInput {
+    pub target_event_id: String,
+    pub room_id: String,
+    pub redaction_event_id: String,
+    pub reason: &'static str,
+    pub observed_room_version: Option<String>,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectionRepair {
+    pub target_event_id: String,
+    pub room_id: String,
+    pub redaction_event_id: String,
+    pub reason: String,
+    pub observed_room_version: Option<String>,
+    pub status: ProjectionRepairStatus,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+    pub next_retry_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

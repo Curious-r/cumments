@@ -39,7 +39,7 @@ The SQLite database deliberately contains three kinds of state:
 |---|---|---|
 | Fact projection | messages, edit revisions, reactions, poll responses, room members/state events, governance role snapshots, sticker packs | Derived from visible Matrix facts and rebuildable by backfill. Deleted content is sanitized rather than retained forever. |
 | Derived views | current content, `edited_at`, reaction/poll summaries, live author profile | Always recomputable from fact rows and Matrix state. |
-| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, upgrade intents, backfill cursors/tombstones, media-upload ownership | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
+| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, upgrade intents, projection repair requests, backfill cursors/tombstones, media-upload ownership | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
 
 A few columns cross layers for operational reasons: for example,
 `messages.submission_id` correlates a projected Matrix fact with a local
@@ -488,10 +488,13 @@ the backup command.
 - `m.space.child` events only refresh rooms already known to the local
   registry; unknown rooms linked through a Space are picked up by the
   reconciler or `backfill` instead of being auto-registered.
-- Redacting state in an unknown/custom room version fails closed. The event is
-  not tombstoned; live AppService transactions return an error for retry, and
-  backfill stops at the failing event without advancing its cursor. A durable
-  dead-letter path is not implemented yet.
+- Redacting state in an unknown/custom room version fails closed without
+  guessing the version's protected-key algorithm. Cumments records a durable,
+  payload-free projection-repair request and acknowledges the transaction so
+  one poison event cannot block other events. A background pass fetches the
+  authoritative event from the homeserver; if it is redacted, its already
+  stripped content replaces the local copy. Repeated failures escalate to
+  `manual` in `cumments projection list-repairs`.
 - Comment-room upgrades are supported through the homeserver's native
   `/upgrade`: `cumments rooms upgrade <room_id> <version>`, the Operator API
   (`POST /api/v1/operator/rooms/{room_id}/upgrade`), or the bot

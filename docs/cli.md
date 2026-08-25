@@ -49,6 +49,8 @@ cumments
 │   ├── reinstate ROOM_ID
 │   └── upgrade ROOM_ID VERSION
 │   └── retire ROOM_ID --yes [--wait]
+├── projection
+│   └── list-repairs [--status pending|manual|resolved] [--limit N]
 └── completions SHELL
 ```
 
@@ -85,6 +87,13 @@ List quarantined rooms and reinstate one:
 ```bash
 cumments rooms list-quarantined
 cumments rooms reinstate '!ps4zwsSTsR6qph4L8Yqi5j6wfALV1-EIY5cI1TCq8DE'
+```
+
+Inspect durable projection repairs. Rows in `manual` need operator attention;
+successful repairs move to `resolved`:
+
+```bash
+cumments projection list-repairs --status manual
 ```
 
 Upgrade a comment room (the target version must be newer than the room's

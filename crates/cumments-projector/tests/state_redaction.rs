@@ -1,8 +1,11 @@
 //! State redaction semantics: live push and backfill replay must converge on
 //! the same read model (v11/v12 redaction algorithm).
 
+use cumments_core::models::MatrixEvent;
 use cumments_core::ports::MessageStore;
-use cumments_core::ports::{GovernanceStore, RoomStore, SiteStore};
+use cumments_core::ports::ProjectionRepairStore;
+use cumments_core::ports::StateRedactionRepairer;
+use cumments_core::ports::{GovernanceStore, MatrixDriver, RoomStore, SiteStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{ParsedRoomRedaction, ParsedRoomState};
 use cumments_store::DbStore;
@@ -23,6 +26,13 @@ fn test_db_url(name: &str) -> String {
 }
 
 async fn processor(store: Arc<DbStore>) -> EventProcessor {
+    processor_with_driver(store, None).await
+}
+
+async fn processor_with_driver(
+    store: Arc<DbStore>,
+    driver: Option<Arc<dyn MatrixDriver>>,
+) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
     EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
@@ -31,6 +41,7 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
         room_store: store.clone(),
         governance_store: store.clone(),
         sticker_pack_store: store.clone(),
+        projection_repair_store: store.clone(),
         role_claim_store: store.clone(),
         submission_store: store.clone(),
         audit_store: store.clone(),
@@ -39,7 +50,7 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
         site_service: Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as Arc<dyn cumments_core::ports::SiteStore>
         )),
-        driver: None,
+        driver,
         operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
@@ -360,7 +371,7 @@ async fn leaving_member_keeps_the_last_known_profile() {
 }
 
 #[tokio::test]
-async fn unknown_room_versions_fail_closed_without_tombstoning() {
+async fn unknown_room_versions_queue_repair_without_tombstoning() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("unknown-version"))
             .await
@@ -390,11 +401,23 @@ async fn unknown_room_versions_fail_closed_without_tombstoning() {
         .await
         .expect("save name");
 
-    let result = processor
+    processor
         .process_room_redaction(redaction("!room:hs", "$red:hs", 200, "$name:hs"))
         .await
-        .expect_err("unknown room version must fail the event");
-    assert!(result.to_string().contains("unknown room version"));
+        .expect("unknown room versions must queue durable repair and ACK");
+
+    let repairs = store
+        .claim_due_projection_repairs(10)
+        .await
+        .expect("query repairs");
+    assert_eq!(repairs.len(), 1);
+    assert_eq!(repairs[0].target_event_id, "$name:hs");
+    assert_eq!(repairs[0].redaction_event_id, "$red:hs");
+    assert_eq!(repairs[0].reason, "unsupported_room_version");
+    assert_eq!(
+        repairs[0].observed_room_version.as_deref(),
+        Some("custom-experimental")
+    );
 
     let raw = store
         .get_state_event("$name:hs")
@@ -404,11 +427,50 @@ async fn unknown_room_versions_fail_closed_without_tombstoning() {
     assert_eq!(raw.content_json, json!({ "name": "secret" }));
 
     // The redaction itself must not be tombstoned: the AppService transaction
-    // is left unacknowledged so the homeserver can retry after reconciliation.
+    // is acknowledged only after its repair identifiers are durable.
     assert!(
         !store
             .has_backfill_tombstone("$red:hs", "!room:hs")
             .await
             .expect("check redaction tombstone")
+    );
+
+    let driver = Arc::new(common::TestDriver::new().with_event(MatrixEvent {
+        event_id: "$name:hs".to_owned(),
+        room_id: "!room:hs".to_owned(),
+        event_type: "m.room.name".to_owned(),
+        state_key: Some(String::new()),
+        sender: Some("@alice:hs".to_owned()),
+        origin_server_ts: 300,
+        content: json!({}),
+        redacted_by: Some("$red:hs".to_owned()),
+    }));
+    let repairing_processor = processor_with_driver(store.clone(), Some(driver)).await;
+    repairing_processor
+        .repair_state_redaction("$name:hs")
+        .await
+        .expect("repair from authoritative homeserver event");
+
+    let raw = store
+        .get_state_event("$name:hs")
+        .await
+        .expect("get repaired raw")
+        .expect("state exists");
+    assert_eq!(raw.content_json, json!({}));
+    assert!(
+        store
+            .has_backfill_tombstone("$name:hs", "!room:hs")
+            .await
+            .expect("check repaired target tombstone")
+    );
+    assert!(
+        store
+            .list_projection_repairs(
+                Some(cumments_core::models::ProjectionRepairStatus::Pending),
+                10
+            )
+            .await
+            .expect("pending repairs")
+            .is_empty()
     );
 }

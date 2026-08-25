@@ -44,6 +44,8 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
         room_store: store.clone() as Arc<dyn cumments_core::ports::RoomStore>,
         governance_store: store.clone() as Arc<dyn cumments_core::ports::GovernanceStore>,
         sticker_pack_store: store.clone() as Arc<dyn cumments_core::ports::StickerPackStore>,
+        projection_repair_store: store.clone()
+            as Arc<dyn cumments_core::ports::ProjectionRepairStore>,
         role_claim_store: store.clone() as Arc<dyn cumments_core::ports::RoleClaimStore>,
         submission_store: store.clone() as Arc<dyn cumments_core::ports::SubmissionStore>,
         audit_store: store.clone() as Arc<dyn cumments_core::ports::CommandAuditStore>,

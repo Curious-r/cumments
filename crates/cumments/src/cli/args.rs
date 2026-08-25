@@ -192,6 +192,31 @@ pub struct RoomsArgs {
     pub command: RoomsCommand,
 }
 
+/// Projection repair queue subcommands.
+#[derive(clap::Args, Debug)]
+pub struct ProjectionArgs {
+    #[command(subcommand)]
+    pub command: ProjectionCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProjectionCommand {
+    /// List durable Matrix facts awaiting projection repair
+    #[command(name = "list-repairs")]
+    ListRepairs(ListProjectionRepairsArgs),
+}
+
+/// Arguments for listing projection repairs.
+#[derive(clap::Args, Debug)]
+pub struct ListProjectionRepairsArgs {
+    /// Filter by `pending`, `manual`, or `resolved`
+    #[arg(long)]
+    pub status: Option<String>,
+    /// Maximum rows to show.
+    #[arg(long, default_value_t = 50)]
+    pub limit: u64,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum RoomsCommand {
     /// List rooms currently quarantined from adoption
@@ -294,6 +319,9 @@ pub enum Commands {
     /// Manage quarantined comment rooms
     #[command(name = "rooms")]
     Rooms(RoomsArgs),
+    /// Inspect the durable projection repair queue
+    #[command(name = "projection")]
+    Projection(ProjectionArgs),
     /// Generate a shell completion script
     #[command(name = "completions")]
     Completions(CompletionsArgs),
@@ -321,6 +349,7 @@ mod tests {
             "backup",
             "sites",
             "rooms",
+            "projection",
             "completions",
         ] {
             assert!(
