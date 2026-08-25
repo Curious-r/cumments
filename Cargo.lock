@@ -935,6 +935,7 @@ dependencies = [
  "tracing",
  "url",
  "validator",
+ "wiremock",
 ]
 
 [[package]]

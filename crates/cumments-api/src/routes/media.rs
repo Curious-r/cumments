@@ -114,6 +114,7 @@ const MEDIA_CONTENT_SECURITY_POLICY: &str = "sandbox; default-src 'none'; script
      plugin-types application/pdf; style-src 'unsafe-inline'; object-src 'self';";
 
 /// How a successfully fetched upstream payload may be presented.
+#[derive(Clone)]
 struct MediaPresentation {
     /// Canonical MIME type sent to the browser (upstream parameters removed).
     content_type: String,
@@ -213,8 +214,22 @@ impl MediaProxy {
             );
         }
         let public_base_url = public_base_url.map(|url| url.trim_end_matches('/').to_owned());
+        let homeserver_origin = Url::parse(&homeserver_url)
+            .map_err(|error| {
+                anyhow::anyhow!("matrix.homeserver.address is not a valid URL: {error}")
+            })?
+            .origin();
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if attempt.previous().len() >= 10 {
+                    attempt.error("too many redirects")
+                } else if attempt.url().origin() == homeserver_origin {
+                    attempt.follow()
+                } else {
+                    attempt.error("cross-origin redirect")
+                }
+            }))
             .build()?;
         Ok(Self {
             homeserver_url,
@@ -1444,11 +1459,16 @@ pub(crate) async fn media_handler(
         bytes.extend_from_slice(&chunk);
     }
 
-    Ok(media_response(presentation, bytes))
+    let cache_max_age_secs = expires.saturating_sub(now_epoch_seconds());
+    Ok(media_response(presentation, bytes, cache_max_age_secs))
 }
 
 /// Builds the public response from an already-classified upstream payload.
-fn media_response(presentation: MediaPresentation, bytes: Vec<u8>) -> Response {
+fn media_response(
+    presentation: MediaPresentation,
+    bytes: Vec<u8>,
+    cache_max_age_secs: i64,
+) -> Response {
     let disposition = format!(
         "{}; filename=\"{}\"",
         presentation.disposition, presentation.filename
@@ -1457,7 +1477,10 @@ fn media_response(presentation: MediaPresentation, bytes: Vec<u8>) -> Response {
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, presentation.content_type)
         .header(header::CONTENT_DISPOSITION, disposition)
-        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .header(
+            header::CACHE_CONTROL,
+            media_cache_control(cache_max_age_secs),
+        )
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(
             header::CONTENT_SECURITY_POLICY,
@@ -1467,6 +1490,13 @@ fn media_response(presentation: MediaPresentation, bytes: Vec<u8>) -> Response {
         .header(header::REFERRER_POLICY, "no-referrer")
         .body(Body::from(bytes))
         .expect("static response builds")
+}
+
+/// Signed URLs must stop being cacheable once their signature expires.
+fn media_cache_control(max_age_secs: i64) -> HeaderValue {
+    let max_age_secs = max_age_secs.clamp(0, MEDIA_URL_TTL_SECONDS);
+    HeaderValue::from_str(&format!("public, max-age={max_age_secs}"))
+        .expect("cache-control is a valid header value")
 }
 
 fn now_epoch_seconds() -> i64 {
@@ -1484,6 +1514,8 @@ mod tests {
         AuthorKind, AuthorSnapshot, MediaContent, MediaKind, Message, MessageStatus, TextContent,
         TextStyle,
     };
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn proxy() -> MediaProxy {
         MediaProxy::new(
@@ -1941,7 +1973,7 @@ mod tests {
     fn media_response_headers_are_fixed_and_safe() {
         let presentation =
             classify_media_content_type("IMAGE/PNG; bogus-parameter=1", false).expect("classify");
-        let response = media_response(presentation, b"bytes".to_vec());
+        let response = media_response(presentation, b"bytes".to_vec(), MEDIA_URL_TTL_SECONDS);
         let headers = response.headers();
 
         assert_eq!(headers[header::CONTENT_TYPE], "image/png");
@@ -1949,6 +1981,7 @@ mod tests {
             headers[header::CONTENT_DISPOSITION],
             "inline; filename=\"media.png\""
         );
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=900");
         assert_eq!(
             headers[header::CONTENT_SECURITY_POLICY],
             MEDIA_CONTENT_SECURITY_POLICY
@@ -1960,6 +1993,73 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .contains("media-id")
+        );
+    }
+
+    #[test]
+    fn media_cache_control_never_exceeds_signature_ttl() {
+        let presentation =
+            classify_media_content_type("IMAGE/PNG; bogus-parameter=1", false).expect("classify");
+
+        let response = media_response(presentation.clone(), b"bytes".to_vec(), -1);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=0"
+        );
+
+        let response = media_response(
+            presentation,
+            b"bytes".to_vec(),
+            MEDIA_URL_TTL_SECONDS + 3600,
+        );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=900"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_does_not_follow_cross_origin_redirects() {
+        let homeserver = MockServer::start().await;
+        let redirect_target = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/_matrix/client/v1/media/download/127.0.0.1/abc"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/other", redirect_target.uri())),
+            )
+            .mount(&homeserver)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&redirect_target)
+            .await;
+
+        let proxy = MediaProxy::new(
+            homeserver.uri(),
+            "token".to_string(),
+            "sign-key".to_string(),
+            None,
+            true,
+        )
+        .expect("build proxy");
+
+        let error = proxy
+            .fetch("127.0.0.1", "abc", None)
+            .await
+            .expect_err("cross-origin redirect must be rejected");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("cross-origin redirect"),
+            "unexpected fetch error: {message}"
+        );
+        assert_eq!(
+            redirect_target
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .len(),
+            0
         );
     }
 }
