@@ -431,8 +431,9 @@ requires an AppService configuration connected to a reachable homeserver:
    room registry after a local DB reset);
 2. paginates each comment room's and Space's history via the CS API
    `/messages`;
-3. replays events in `(origin_server_ts, event_id)` order through the same
-   idempotent projection used for live pushes.
+3. reverses each newest-first page and prepends it to previously fetched pages,
+   preserving the homeserver's stream/topological order while replaying through
+   the same idempotent projection used for live pushes.
 
 `cumments backfill --max-pages N` caps how much history is fetched per room
 (~100 events each). Fetched events are buffered in memory so the chronological
@@ -481,8 +482,8 @@ the backup command.
 - Governance reconciliation captures the homeserver's resolved power levels
   and room version into `room_state_snapshots`; local historical state events
   are audit/replay data rather than an independent state-resolution engine.
-  Timeline ordering remains latest-wins on `(origin_server_ts, event_id)`, so
-  forked or federated rooms still require homeserver snapshot freshness.
+  Backfill preserves homeserver timeline ordering rather than sorting by
+  `origin_server_ts`.
 - Redaction of state events follows the room-version 11+ algorithm in the
   projector (protected keys are kept, other content is emptied in place);
   the algorithm is selected by the resolved room version, while unsupported

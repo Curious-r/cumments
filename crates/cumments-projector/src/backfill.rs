@@ -319,7 +319,10 @@ impl Backfiller {
     /// replay it in chronological order, and persist the next cursor.
     async fn backfill_room(&self, room_id: &str, max_pages: u32) -> anyhow::Result<usize> {
         let mut from = self.cursor_store.get_cursor(room_id).await?;
-        let mut collected: Vec<serde_json::Value> = Vec::new();
+        // Pages arrive newest-first and preserve homeserver stream/topological
+        // order within the requested direction. Keep pages in fetch order,
+        // then reverse the complete buffer once for chronological replay.
+        let mut ordered_events: Vec<serde_json::Value> = Vec::new();
         let mut last_batch: Option<String> = None;
         let mut done = false;
         let mut pages = 0u32;
@@ -337,8 +340,10 @@ impl Backfiller {
                 .get_room_events(room_id, from.as_deref(), PAGE_SIZE)
                 .await?;
             pages += 1;
-            collected.extend(page.events);
-            if collected.len() > MAX_BUFFERED_EVENTS {
+            let mut oldest_first = page.events;
+            oldest_first.reverse();
+            ordered_events.extend(oldest_first);
+            if ordered_events.len() > MAX_BUFFERED_EVENTS {
                 anyhow::bail!(
                     "backfill of room {room_id} exceeds the in-memory buffer cap \
                      ({MAX_BUFFERED_EVENTS} events); rerun with --max-pages to process it \
@@ -359,12 +364,9 @@ impl Backfiller {
             tokio::time::sleep(PAGE_DELAY).await;
         }
 
-        // Newest-first pagination returns edits/redactions before their
-        // targets; replay chronologically so the projection is order-correct.
-        sort_events(&mut collected);
-
         let mut processed = 0usize;
-        for event in &collected {
+        ordered_events.reverse();
+        for event in &ordered_events {
             let Ok(push_event) = serde_json::from_value::<PushEvent>(event.clone()) else {
                 continue;
             };
@@ -379,56 +381,23 @@ impl Backfiller {
     }
 }
 
-/// Sort raw room events by (origin_server_ts, event_id) so replay order is
-/// deterministic. Events missing timestamps sort last.
-fn event_sort_key(event: &serde_json::Value) -> (i64, String) {
-    let ts = event
-        .get("origin_server_ts")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(i64::MAX);
-    let id = event
-        .get("event_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    (ts, id)
-}
-
-fn sort_events(events: &mut [serde_json::Value]) {
-    events.sort_by_key(event_sort_key);
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
 
     #[test]
-    fn events_sort_by_timestamp_then_event_id() {
-        let mut events = vec![
-            json!({"origin_server_ts": 200, "event_id": "$b"}),
-            json!({"origin_server_ts": 100, "event_id": "$a"}),
-            json!({"origin_server_ts": 200, "event_id": "$a"}),
+    fn backward_pages_are_stitched_in_homeserver_order() {
+        let mut fetched_newest_first = [
+            json!({"event_id": "$newest"}),
+            json!({"event_id": "$middle"}),
+            json!({"event_id": "$oldest"}),
         ];
-        sort_events(&mut events);
-        let ids: Vec<_> = events
-            .iter()
-            .map(|e| e["event_id"].as_str().unwrap())
-            .collect();
-        // (100, $a) < (200, $a) < (200, $b)
-        assert_eq!(ids, vec!["$a", "$a", "$b"]);
-    }
+        fetched_newest_first.reverse();
 
-    #[test]
-    fn events_missing_timestamp_sort_last() {
-        let mut events = vec![
-            json!({"origin_server_ts": 100, "event_id": "$a"}),
-            json!({"type": "m.room.message"}),
-            json!({"origin_server_ts": 50, "event_id": "$z"}),
-        ];
-        sort_events(&mut events);
-        assert_eq!(events[0]["event_id"], "$z");
-        assert_eq!(events[1]["event_id"], "$a");
-        assert!(events[2].get("event_id").is_none());
+        let ids: Vec<_> = fetched_newest_first
+            .iter()
+            .map(|event| event["event_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["$oldest", "$middle", "$newest"]);
     }
 }
