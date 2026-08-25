@@ -11,7 +11,7 @@ devenv.local.nix
 .direnv
 
 # Cumments
-/node_modules/
+node_modules/
 /target
 /site
 /data/*

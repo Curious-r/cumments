@@ -1,12 +1,11 @@
-import path from "node:path";
 import { defineConfig } from "@rspress/core";
 
 const docsVersion = process.env.CUMMENTS_DOCS_VERSION ?? "";
 
 export default defineConfig({
-  root: path.resolve(import.meta.dirname, "docs"),
-  themeDir: path.resolve(import.meta.dirname, "theme"),
-  outDir: "site",
+  root: import.meta.dirname,
+  themeDir: `${import.meta.dirname}/theme`,
+  outDir: `${import.meta.dirname}/../site`,
   title: "Cumments",
   description:
     "Matrix-backed comments for ordinary websites, with visitor identity and moderation.",
@@ -15,6 +14,9 @@ export default defineConfig({
   route: {
     cleanUrls: true,
     localeRedirect: "never",
+    // The config lives with the content for a self-contained docs workspace,
+    // but only Markdown files are public routes.
+    exclude: ["rspress.config.*", "theme/**"],
   },
   markdown: {
     link: {
@@ -26,6 +28,9 @@ export default defineConfig({
     },
   },
   builderConfig: {
+    output: {
+      cleanDistPath: false,
+    },
     source: {
       define: {
         "process.env.CUMMENTS_DOCS_VERSION": JSON.stringify(docsVersion),

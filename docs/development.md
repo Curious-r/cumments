@@ -22,12 +22,13 @@ The documentation site is built with Rspress. Install JavaScript dependencies
 and build it locally with:
 
 ```bash
-npm ci --ignore-scripts
-npm run docs:build
+npm --prefix docs ci --ignore-scripts
+npm --prefix docs run docs:build
 ```
 
-For live reload while editing pages, run `npm run docs:start`. CI builds with
-dead-link and anchor checking enabled.
+For live reload while editing pages, run
+`npm --prefix docs run docs:start`.
+CI builds from the `docs/` workspace with dead-link and anchor checking enabled.
 
 ## CLI
 
