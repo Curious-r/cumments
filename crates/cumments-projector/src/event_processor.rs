@@ -46,7 +46,7 @@ use cumments_core::{
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 // ── Core processing functions ─────────────────────────────────────
 
@@ -2297,12 +2297,15 @@ impl EventProcessor {
             ) {
                 Ok(stripped) => stripped,
                 Err(UnsupportedRoomVersion(version)) => {
-                    warn!(
+                    error!(
                         room_id = %event.room_id,
                         version = ?version,
                         "Refusing state redaction with unknown room version"
                     );
-                    return Ok(());
+                    return Err(anyhow::anyhow!(
+                        "refusing state redaction in {} with unknown room version {version:?}",
+                        event.room_id
+                    ));
                 }
             };
             self.room_store

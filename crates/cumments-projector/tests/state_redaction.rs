@@ -1,6 +1,7 @@
 //! State redaction semantics: live push and backfill replay must converge on
 //! the same read model (v11/v12 redaction algorithm).
 
+use cumments_core::ports::MessageStore;
 use cumments_core::ports::{GovernanceStore, RoomStore, SiteStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{ParsedRoomRedaction, ParsedRoomState};
@@ -389,10 +390,11 @@ async fn unknown_room_versions_fail_closed_without_tombstoning() {
         .await
         .expect("save name");
 
-    processor
+    let result = processor
         .process_room_redaction(redaction("!room:hs", "$red:hs", 200, "$name:hs"))
         .await
-        .expect("process redaction");
+        .expect_err("unknown room version must fail the event");
+    assert!(result.to_string().contains("unknown room version"));
 
     let raw = store
         .get_state_event("$name:hs")
@@ -400,4 +402,13 @@ async fn unknown_room_versions_fail_closed_without_tombstoning() {
         .expect("get raw")
         .expect("state survives");
     assert_eq!(raw.content_json, json!({ "name": "secret" }));
+
+    // The redaction itself must not be tombstoned: the AppService transaction
+    // is left unacknowledged so the homeserver can retry after reconciliation.
+    assert!(
+        !store
+            .has_backfill_tombstone("$red:hs", "!room:hs")
+            .await
+            .expect("check redaction tombstone")
+    );
 }

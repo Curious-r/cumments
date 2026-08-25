@@ -482,6 +482,10 @@ the backup command.
 - `m.space.child` events only refresh rooms already known to the local
   registry; unknown rooms linked through a Space are picked up by the
   reconciler or `backfill` instead of being auto-registered.
+- Redacting state in an unknown/custom room version fails closed. The event is
+  not tombstoned; live AppService transactions return an error for retry, and
+  backfill stops at the failing event without advancing its cursor. A durable
+  dead-letter path is not implemented yet.
 - Comment-room upgrades are supported through the homeserver's native
   `/upgrade`: `cumments rooms upgrade <room_id> <version>`, the Operator API
   (`POST /api/v1/operator/rooms/{room_id}/upgrade`), or the bot
