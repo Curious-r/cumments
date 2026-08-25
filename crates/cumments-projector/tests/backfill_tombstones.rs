@@ -473,6 +473,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
             id: "a".to_string(),
             text: "A".to_string(),
         }],
+        max_selections: 1,
         responses: Vec::new(),
     });
     processor

@@ -878,6 +878,15 @@ impl MessageStore for DbStore {
     }
 
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()> {
+        self.save_poll_vote_with_selections(vote, &[], None).await
+    }
+
+    async fn save_poll_vote_with_selections(
+        &self,
+        vote: &PollVote,
+        answer_ids: &[String],
+        spoiled_reason: Option<&str>,
+    ) -> Result<()> {
         let txn = self.db.begin().await?;
         if poll_response_events::Entity::find()
             .filter(
@@ -898,6 +907,10 @@ impl MessageStore for DbStore {
             poll_message_id: Set(vote.poll_message_id.clone()),
             sender_mxid: Set(vote.sender_mxid.clone()),
             option_index: Set(vote.option_index),
+            answer_ids_json: Set(
+                serde_json::to_string(answer_ids).unwrap_or_else(|_| "[]".to_owned())
+            ),
+            spoiled_reason: Set(spoiled_reason.map(str::to_owned)),
             origin_server_ts: Set(vote.origin_server_ts),
             redacted_at: Set(None),
             redacted_by: Set(None),
@@ -939,6 +952,14 @@ impl MessageStore for DbStore {
             .col_expr(
                 poll_response_events::Column::OptionIndex,
                 sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .col_expr(
+                poll_response_events::Column::AnswerIdsJson,
+                sea_orm::sea_query::Expr::value("[]"),
+            )
+            .col_expr(
+                poll_response_events::Column::SpoiledReason,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
             )
             .col_expr(
                 poll_response_events::Column::RedactedBy,
@@ -1415,6 +1436,30 @@ impl DbStore {
         .await?;
         rows.retain(|row| active_parents.contains(&row.poll_message_id));
 
+        let poll_rows = messages::Entity::find()
+            .filter(
+                messages::COLUMN.event_id.is_in(
+                    rows.iter()
+                        .map(|row| row.poll_message_id.clone())
+                        .collect::<Vec<_>>(),
+                ),
+            )
+            .all(&self.db)
+            .await?;
+        let answer_indexes: HashMap<String, Vec<String>> = poll_rows
+            .into_iter()
+            .filter_map(|row| {
+                let content = serde_json::from_str::<Content>(&row.content_json).ok()?;
+                let Content::Poll(poll) = content else {
+                    return None;
+                };
+                Some((
+                    row.event_id,
+                    poll.options.into_iter().map(|option| option.id).collect(),
+                ))
+            })
+            .collect();
+
         // Select each voter's latest non-redacted relation event. An event with
         // no mapped option is a spoiled/unvote response and contributes nothing.
         let mut latest_by_voter: HashMap<(String, String), poll_response_events::Model> =
@@ -1433,12 +1478,26 @@ impl DbStore {
 
         let mut counts_by_poll: HashMap<String, HashMap<i64, i64>> = HashMap::new();
         for (_, row) in latest_by_voter {
-            if let Some(option_index) = row.option_index {
-                *counts_by_poll
-                    .entry(row.poll_message_id)
-                    .or_default()
-                    .entry(option_index)
-                    .or_default() += 1;
+            let selections: Vec<String> =
+                serde_json::from_str(&row.answer_ids_json).unwrap_or_default();
+            let Some(options) = answer_indexes.get(&row.poll_message_id) else {
+                continue;
+            };
+            if selections.is_empty() {
+                if let Some(legacy_option_index) = row.option_index {
+                    *counts_by_poll
+                        .entry(row.poll_message_id)
+                        .or_default()
+                        .entry(legacy_option_index)
+                        .or_default() += 1;
+                }
+            } else {
+                let counts = counts_by_poll.entry(row.poll_message_id).or_default();
+                for selection in selections {
+                    if let Some(index) = options.iter().position(|option| option == &selection) {
+                        *counts.entry(index as i64).or_default() += 1;
+                    }
+                }
             }
         }
         Ok(counts_by_poll

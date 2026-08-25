@@ -333,8 +333,16 @@ pub struct LocationContent {
 pub struct PollContent {
     pub question: String,
     pub options: Vec<PollOption>,
+    /// MSC3381 allows multi-select; Cumments' authoring API remains
+    /// single-select but projections preserve the protocol's declared limit.
+    #[serde(default = "default_poll_max_selections")]
+    pub max_selections: u8,
     #[serde(default)]
     pub responses: Vec<PollResponseSummary>,
+}
+
+fn default_poll_max_selections() -> u8 {
+    1
 }
 
 /// One selectable poll option. The `id` matches Matrix's answer ID so votes

@@ -17,6 +17,8 @@ pub struct Model {
     pub sender_mxid: String,
     /// `None` when the response is an unvote or its selections are invalid.
     pub option_index: Option<i64>,
+    pub answer_ids_json: String,
+    pub spoiled_reason: Option<String>,
     pub origin_server_ts: i64,
     pub redacted_at: Option<DateTimeUtc>,
     pub redacted_by: Option<String>,

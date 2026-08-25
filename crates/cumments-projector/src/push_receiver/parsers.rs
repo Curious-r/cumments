@@ -423,10 +423,18 @@ fn poll_content(content: &serde_json::Value, body: &str) -> Content {
                 text: text.to_string(),
             })
         })
+        .take(20)
         .collect();
+    let max_selections = poll
+        .get("max_selections")
+        .and_then(|v| v.as_u64())
+        .filter(|value| *value >= 1)
+        .and_then(|value| u8::try_from(value).ok())
+        .unwrap_or(1);
     Content::Poll(PollContent {
         question,
         options,
+        max_selections,
         responses: Vec::new(),
     })
 }
@@ -954,6 +962,7 @@ mod tests {
             Content::Poll(poll) => {
                 assert_eq!(poll.question, "best?");
                 assert_eq!(poll.options.len(), 2);
+                assert_eq!(poll.max_selections, 1);
                 assert_eq!(poll.options[1].id, "2");
                 assert_eq!(poll.options[1].text, "B");
             }

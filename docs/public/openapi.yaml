@@ -2185,6 +2185,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PollOption"
+        max_selections:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 1
+          description: MSC3381 declared selection limit
         responses:
           type: array
           items:

@@ -1794,9 +1794,15 @@ impl EventProcessor {
             return Ok(());
         }
 
-        let answer_id = event.answer_ids.first();
-
         if event.is_virtual_user_sender {
+            if event.answer_ids.len() != 1 {
+                warn!(
+                    "Rejecting visitor vote {} from {}: visitor votes are single-select",
+                    event.event_id, event.sender
+                );
+                return Ok(());
+            }
+            let answer_id = event.answer_ids.first();
             let (Some(pk), Some(sig), Some(chal)) = (
                 event.author_public_key.as_deref(),
                 event.author_signature.as_deref(),
@@ -1857,21 +1863,50 @@ impl EventProcessor {
             );
             return Ok(());
         };
-        let option_index = answer_id.and_then(|answer_id| {
-            poll.options
-                .iter()
-                .position(|option| option.id == *answer_id)
-                .map(|index| index as i64)
-        });
-        self.message_store
-            .save_poll_vote(&PollVote {
-                event_id: event.event_id,
-                poll_message_id: event.poll_message_id,
-                sender_mxid: event.sender,
-                option_index,
+        if event
+            .answer_ids
+            .iter()
+            .any(|answer_id| !poll.options.iter().any(|option| &option.id == answer_id))
+        {
+            let vote = PollVote {
+                event_id: event.event_id.clone(),
+                poll_message_id: event.poll_message_id.clone(),
+                sender_mxid: event.sender.clone(),
+                option_index: None,
                 origin_server_ts: event.origin_server_ts,
-            })
-            .await?;
+            };
+            self.message_store
+                .save_poll_vote_with_selections(&vote, &[], Some("unknown_answer"))
+                .await?;
+        } else {
+            // MSC3381 requires truncation to the declared limit; duplicates
+            // remaining after truncation contribute only one selection.
+            let mut selections = Vec::with_capacity(event.answer_ids.len());
+            for answer_id in event.answer_ids.iter().take(poll.max_selections as usize) {
+                if !selections.contains(answer_id) {
+                    selections.push(answer_id.clone());
+                }
+            }
+            let option_index = selections.first().and_then(|answer_id| {
+                poll.options
+                    .iter()
+                    .position(|option| &option.id == answer_id)
+                    .map(|index| index as i64)
+            });
+            self.message_store
+                .save_poll_vote_with_selections(
+                    &PollVote {
+                        event_id: event.event_id,
+                        poll_message_id: event.poll_message_id,
+                        sender_mxid: event.sender,
+                        option_index,
+                        origin_server_ts: event.origin_server_ts,
+                    },
+                    &selections,
+                    None,
+                )
+                .await?;
+        }
         if let Some(updated) = self.message_store.get_message(&message.event_id).await? {
             let _ = self
                 .event_bus

@@ -4,8 +4,8 @@ use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempo
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, CommentMedia, Content, EditProjectionOutcome, MediaContent,
     MediaKind, Message, MessageRedactionOutcome, MessageRevision, MessageSaveOutcome,
-    MessageStatus, PageSlug, PollContent, PollOption, PollVote, Reaction, RoomMember, SiteId,
-    SubmissionCompletion, TextContent, TextStyle, UnknownContent,
+    MessageStatus, PageSlug, PollContent, PollOption, PollResponseSummary, PollVote, Reaction,
+    RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, UnknownContent,
 };
 use cumments_core::ports::{
     AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
@@ -719,6 +719,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
                 text: "B".to_string(),
             },
         ],
+        max_selections: 1,
         responses: Vec::new(),
     });
     store
@@ -791,6 +792,7 @@ async fn redacting_the_latest_poll_response_restores_the_previous_vote() {
                 text: "B".to_string(),
             },
         ],
+        max_selections: 1,
         responses: Vec::new(),
     });
     store.save_message(&message).await.expect("save poll");
@@ -845,6 +847,70 @@ async fn redacting_the_latest_poll_response_restores_the_previous_vote() {
 }
 
 #[tokio::test]
+async fn poll_selections_aggregate_per_option() {
+    let store = DbStore::connect(&test_db_url("poll-multi-select"))
+        .await
+        .expect("connect db");
+    let mut message = visitor_message("$poll:hs", "poll placeholder");
+    message.content = Content::Poll(PollContent {
+        question: "best?".to_string(),
+        options: vec![
+            PollOption {
+                id: "a".to_string(),
+                text: "A".to_string(),
+            },
+            PollOption {
+                id: "b".to_string(),
+                text: "B".to_string(),
+            },
+        ],
+        max_selections: 2,
+        responses: Vec::new(),
+    });
+    store.save_message(&message).await.expect("save poll");
+
+    let vote = |event_id: &str, sender: &str| PollVote {
+        event_id: event_id.to_owned(),
+        poll_message_id: "$poll:hs".to_owned(),
+        sender_mxid: sender.to_owned(),
+        option_index: None,
+        origin_server_ts: 1,
+    };
+    let alice = vote("$alice:hs", "@alice:hs");
+    let bob = vote("$bob:hs", "@bob:hs");
+    store
+        .save_poll_vote_with_selections(&alice, &["a".to_owned(), "b".to_owned()], None)
+        .await
+        .expect("alice votes twice");
+    store
+        .save_poll_vote_with_selections(&bob, &["b".to_owned()], None)
+        .await
+        .expect("bob votes once");
+
+    let stored = store
+        .get_message("$poll:hs")
+        .await
+        .expect("get poll")
+        .expect("poll exists");
+    let Content::Poll(poll) = stored.content else {
+        panic!("expected poll");
+    };
+    assert_eq!(
+        poll.responses,
+        vec![
+            PollResponseSummary {
+                option_index: 0,
+                count: 1
+            },
+            PollResponseSummary {
+                option_index: 1,
+                count: 2
+            },
+        ]
+    );
+}
+
+#[tokio::test]
 async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
     let url = test_db_url("message-poll-redact");
     let store = DbStore::connect(&url).await.expect("connect db");
@@ -855,6 +921,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
             id: "a".to_string(),
             text: "A".to_string(),
         }],
+        max_selections: 1,
         responses: Vec::new(),
     });
     store
@@ -951,6 +1018,7 @@ async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
                 text: "B".to_string(),
             },
         ],
+        max_selections: 1,
         responses: Vec::new(),
     });
     store

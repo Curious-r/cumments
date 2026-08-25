@@ -100,6 +100,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260825_000061_clear_redacted_poll_choices".to_string()),
         "000061 must be registered or redacted poll choices can remain in SQLite"
     );
+    assert!(
+        names.contains(&"m20260826_000063_poll_answer_selections".to_string()),
+        "000063 must be registered or MSC3381 selections are lossy"
+    );
 }
 
 #[tokio::test]
@@ -245,9 +249,10 @@ async fn clear_redacted_poll_choices_migration_forgets_selected_options() {
     db.execute_unprepared(&format!(
         "INSERT INTO poll_response_events \
          (event_id, poll_message_id, sender_mxid, option_index, origin_server_ts, \
-          redacted_at, redacted_by, created_at) \
+          answer_ids_json, spoiled_reason, redacted_at, redacted_by, created_at) \
          VALUES \
-         ('$vote:hs', '$poll:hs', '@alice:hs', 2, 1, '{now}', '@moderator:hs', '{now}')"
+         ('$vote:hs', '$poll:hs', '@alice:hs', 2, 1, '[]', NULL, '{now}', \
+          '@moderator:hs', '{now}')"
     ))
     .await
     .expect("insert redacted vote");

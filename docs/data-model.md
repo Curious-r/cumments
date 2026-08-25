@@ -70,7 +70,7 @@ their `mxid` and never a `public_key`.
 | `text` | `body`, optional HTML `formatted_body`, `style` (`normal`/`emote`/`notice`) |
 | `media` | `kind` (image/video/audio/file/sticker), `url`, optional filename, mimetype, size, dimensions, thumbnail, alt text, `voice` flag |
 | `location` | `geo_uri`, optional description and thumbnail |
-| `poll` | `question`, `options`, aggregated `responses` |
+| `poll` | `question`, `options`, MSC3381 `max_selections`, aggregated `responses` |
 | `redacted` | Stable empty tombstone; no original body, URL, relations or raw payload |
 | `encrypted` | algorithm and sender key placeholder only |
 | `unknown` | optional `fallback` text plus the original raw JSON |
@@ -192,8 +192,9 @@ Notes on the layout:
   edit/delete authorization.
 - `reactions` and `poll_response_events` are keyed by event ID, making push
   redelivery and backfill idempotent. Poll aggregation selects each voter's
-  latest non-redacted response; redacting that response clears its selected
-  option and restores the previous valid vote.
+  latest non-redacted response; it stores normalized MSC3381 selections while
+  retaining a first-choice index for older rows. Redacting that response clears
+  its selections and restores the previous valid vote.
 - `formatted_body` is passed through unchanged. The demo renders plain text
   only; any client rendering HTML must sanitize it first.
 - `media_uploads.page_slug` is nullable: comment media records the page it

@@ -292,6 +292,15 @@ pub trait MessageStore: ProjectionSink {
     /// Records a poll vote (upsert per voter; the latest vote wins).
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()>;
 
+    /// Saves normalized MSC3381 selections alongside the legacy first-choice
+    /// index. Empty selections are unvotes; a reason marks a spoiled vote.
+    async fn save_poll_vote_with_selections(
+        &self,
+        vote: &PollVote,
+        answer_ids: &[String],
+        spoiled_reason: Option<&str>,
+    ) -> Result<()>;
+
     /// Looks up a stored poll vote by its Matrix event ID.
     async fn get_poll_vote_by_event(&self, event_id: &str) -> Result<Option<PollVote>>;
 
