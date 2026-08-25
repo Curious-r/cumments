@@ -82,6 +82,18 @@ fn redaction(event_id: &str, ts: i64, redacts: &str) -> ParsedRoomRedaction {
     }
 }
 
+fn room_create(event_id: &str, ts: i64) -> ParsedRoomState {
+    ParsedRoomState {
+        room_id: "!space:hs".to_string(),
+        event_id: event_id.to_string(),
+        sender: "@owner:hs".to_string(),
+        event_type: "m.room.create".to_string(),
+        state_key: String::new(),
+        origin_server_ts: ts,
+        content: json!({ "room_version": "12" }),
+    }
+}
+
 #[tokio::test]
 async fn push_projects_pack_and_latest_state_wins() {
     let store = Arc::new(
@@ -230,6 +242,10 @@ async fn redacting_current_pack_removes_it_and_tombstones_replay() {
     setup_site(&store).await;
     let processor = processor(store.clone()).await;
     processor
+        .process_room_state(room_create("$create", 50))
+        .await
+        .expect("process create");
+    processor
         .process_room_state(pack_state(
             "$v1",
             100,
@@ -282,6 +298,10 @@ async fn redacting_an_old_version_keeps_the_current_pack() {
     );
     setup_site(&store).await;
     let processor = processor(store.clone()).await;
+    processor
+        .process_room_state(room_create("$create", 50))
+        .await
+        .expect("process create");
     processor
         .process_room_state(pack_state(
             "$v1",
