@@ -155,6 +155,33 @@ trusted entry, and the nearest untrusted address becomes the client key.
 Only list networks you actually control behind the reverse proxy; a wide
 network means any host on it can forge the client IP seen by the limiter.
 
+### Forwarded protocol and host
+
+When the direct peer is trusted, Cumments also accepts
+`X-Forwarded-Proto` and `X-Forwarded-Host` to mint absolute media URLs and to
+derive the public API base. For either header, a comma-separated value uses
+the **rightmost** entry: in an append-mode proxy chain, that entry is the one
+added by the proxy closest to Cumments and is less likely to be a
+client-supplied prefix.
+
+Your proxy contract must make that value trustworthy:
+
+- Prefer `server.public_base_url` when comments are embedded across origins,
+  when multiple proxy paths exist, or when forwarded headers may be unreliable.
+- Configure the trusted proxy to overwrite `X-Forwarded-Proto` and
+  `X-Forwarded-Host`, or ensure that its value is appended as the rightmost
+  entry.
+- Do not mark a proxy as trusted unless it controls these headers. An
+  untrusted peer's forwarded protocol/host values are ignored; the connection
+  peer and `Host` are used instead.
+- Do not include a path, query, userinfo, or multiple hosts in the final
+  forwarded host entry. A malformed value falls back to relative media URLs
+  rather than trusting an attacker-controlled origin.
+
+`X-Forwarded-For` remains separate: rate limiting walks its list right-to-left
+while skipping entries produced by trusted proxies, so the nearest untrusted
+client address becomes the limiter key.
+
 ## Site verification and write-path authentication
 
 `security.site_verification` controls the instance-wide policy:

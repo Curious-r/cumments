@@ -119,11 +119,32 @@ Body:
 `{"new_version": "13", "replacement_room": "!successor:server"}`.
 
 For a failed or manual intent, this confirms the exact reviewed successor and
-completes convergence if Matrix still agrees: the old tombstone must be from
-the AS bot and name that successor, and the successor create event must have
-the expected version and predecessor. On success, the replacement becomes the
-registry's active room and the intent is marked `adopted`. Mismatched input is
-rejected without moving local identity.
+completes convergence if Matrix still agrees: the old room must still carry a
+tombstone naming that successor, and the successor create event must have the
+expected version and predecessor. On success, the replacement becomes the
+registry's active room, the old room is superseded, and the intent is marked
+`adopted`. Mismatched input is rejected without moving local identity.
+
+#### Recovery checklist
+
+Before calling recover, verify all of the following:
+
+1. The durable intent names the same target version and replacement you intend
+   to approve.
+2. You saw the native upgrade in Matrix (or in homeserver logs), not merely an
+   unexplained room ID.
+3. The old room's `m.room.tombstone` still exists and its
+   `replacement_room` exactly matches the intent.
+4. The replacement's `m.room.create` has the expected room version and its
+   `predecessor.room_id` points to the old room.
+5. Governance state is safe to converge: the site Space still has trusted
+   admin/manager entries, and no unrelated power-level change occurred during
+   the failure.
+
+Do **not** recover an intent whose origin is unclear, whose replacement was not
+created by the Cumments-managed `/upgrade` call, or whose successor metadata
+points to another site/page. Recovery never repairs a mismatched successor by
+guessing; it fails closed and records why.
 
 ## Retire a comment room
 
