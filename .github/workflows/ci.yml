@@ -71,10 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    defaults:
-      run:
-        working-directory: docs
-
     steps:
       - uses: actions/checkout@v7
         with:
@@ -151,10 +147,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    defaults:
-      run:
-        working-directory: docs
-
     steps:
       - uses: actions/checkout@v7
         with:
@@ -216,6 +208,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: docs
 
     steps:
       - uses: actions/checkout@v7
