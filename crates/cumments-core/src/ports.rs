@@ -8,7 +8,7 @@ use crate::models::{
     CommentMedia, EditProjectionOutcome, Message, MessagePage, MessageRedactionOutcome,
     MessageRevision, MessageSaveOutcome, PageSlug, PollVote, QuarantinedRoom, Reaction,
     RoomEventPage, RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot,
-    RoomStatus, SiteId, VisitorProfile,
+    RoomStatus, RoomUpgradeIntent, SiteId, VisitorProfile,
 };
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
@@ -517,6 +517,38 @@ pub trait RegistryStore: Send + Sync {
 
     /// Lists all rooms currently quarantined from adoption.
     async fn get_quarantined_rooms(&self) -> Result<Vec<QuarantinedRoom>>;
+
+    /// Creates or reopens the durable intent for a bot-initiated upgrade.
+    async fn record_upgrade_intent(
+        &self,
+        old_room_id: &str,
+        new_version: &str,
+    ) -> Result<RoomUpgradeIntent>;
+
+    /// Records the replacement observed for an open upgrade intent.
+    async fn observe_upgrade_replacement(
+        &self,
+        old_room_id: &str,
+        replacement_room_id: &str,
+    ) -> Result<Option<RoomUpgradeIntent>>;
+
+    /// Marks a matching intent adopted after local convergence succeeds.
+    async fn complete_upgrade_intent(
+        &self,
+        old_room_id: &str,
+        replacement_room_id: &str,
+    ) -> Result<Option<RoomUpgradeIntent>>;
+
+    /// Records why an open managed-upgrade attempt failed.
+    async fn fail_upgrade_intent(&self, old_room_id: &str, reason: &str) -> Result<()>;
+
+    /// Marks an intent as requiring manual review without exposing it as a
+    /// bot-authorized adoption.
+    async fn mark_upgrade_intent_manual(&self, old_room_id: &str, reason: &str) -> Result<()>;
+
+    /// Returns the current intent for a room, including terminal states used
+    /// by audit and idempotent tombstone replay.
+    async fn get_upgrade_intent(&self, old_room_id: &str) -> Result<Option<RoomUpgradeIntent>>;
 }
 
 /// Defines the operations for managing sites in the local database.

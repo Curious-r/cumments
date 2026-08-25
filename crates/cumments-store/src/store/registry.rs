@@ -1,9 +1,12 @@
 use super::DbStore;
 use crate::entities::active_enums::{SiteAuthMode, SiteVerificationStatus};
-use crate::entities::{room_registry, sites};
+use crate::entities::{room_registry, room_upgrade_intents, sites};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use cumments_core::models::{PageSlug, QuarantinedRoom, RoomIdentity, RoomStatus, Site, SiteId};
+use cumments_core::models::{
+    PageSlug, QuarantinedRoom, RoomIdentity, RoomStatus, RoomUpgradeIntent,
+    RoomUpgradeIntentStatus, Site, SiteId,
+};
 use cumments_core::ports::{RegistryStore, SiteStore};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
 
@@ -363,6 +366,222 @@ impl RegistryStore for DbStore {
             })
             .collect()
     }
+
+    async fn record_upgrade_intent(
+        &self,
+        old_room_id: &str,
+        new_version: &str,
+    ) -> Result<RoomUpgradeIntent> {
+        let now = chrono::Utc::now();
+        let Some(model) = room_upgrade_intents::Entity::find_by_id(old_room_id.to_owned())
+            .one(&self.db)
+            .await?
+        else {
+            let active_model = room_upgrade_intents::ActiveModel {
+                old_room_id: Set(old_room_id.to_owned()),
+                expected_new_version: Set(new_version.to_owned()),
+                replacement_room_id: Set(None),
+                status: Set(RoomUpgradeIntentStatus::Requested.as_str().to_owned()),
+                error_message: Set(None),
+                created_at: Set(now),
+                updated_at: Set(now),
+            };
+            room_upgrade_intents::Entity::insert(active_model)
+                .exec(&self.db)
+                .await?;
+            return Ok(RoomUpgradeIntent {
+                old_room_id: old_room_id.to_owned(),
+                expected_new_version: new_version.to_owned(),
+                replacement_room_id: None,
+                status: RoomUpgradeIntentStatus::Requested,
+                error_message: None,
+                created_at: now,
+                updated_at: now,
+            });
+        };
+
+        // Terminal audit states are never silently rewritten. Failed intents
+        // may be reopened by an explicit operator/API retry; adopted upgrades
+        // require a new successor (and therefore a new old-room intent).
+        let status = model
+            .status
+            .parse::<RoomUpgradeIntentStatus>()
+            .map_err(|e| anyhow!("{e}"))?;
+        if matches!(
+            status,
+            RoomUpgradeIntentStatus::Manual | RoomUpgradeIntentStatus::Adopted
+        ) {
+            return model_to_intent(model);
+        }
+
+        room_upgrade_intents::Entity::update_many()
+            .col_expr(
+                room_upgrade_intents::Column::ExpectedNewVersion,
+                sea_orm::sea_query::Expr::value(new_version),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::ReplacementRoomId,
+                sea_orm::sea_query::Expr::value(None::<String>),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::Status,
+                sea_orm::sea_query::Expr::value(RoomUpgradeIntentStatus::Requested.as_str()),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::ErrorMessage,
+                sea_orm::sea_query::Expr::value(None::<String>),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(room_upgrade_intents::COLUMN.old_room_id.eq(old_room_id))
+            .exec(&self.db)
+            .await?;
+
+        Ok(RoomUpgradeIntent {
+            old_room_id: old_room_id.to_owned(),
+            expected_new_version: new_version.to_owned(),
+            replacement_room_id: None,
+            status: RoomUpgradeIntentStatus::Requested,
+            error_message: None,
+            created_at: model.created_at,
+            updated_at: now,
+        })
+    }
+
+    async fn observe_upgrade_replacement(
+        &self,
+        old_room_id: &str,
+        replacement_room_id: &str,
+    ) -> Result<Option<RoomUpgradeIntent>> {
+        update_open_intent(self, old_room_id, |intent| {
+            if intent
+                .replacement_room_id
+                .as_ref()
+                .is_some_and(|id| id != replacement_room_id)
+            {
+                intent.status = RoomUpgradeIntentStatus::Failed;
+                intent.error_message = Some(format!(
+                    "replacement changed from {:?} to {replacement_room_id:?}",
+                    intent.replacement_room_id
+                ));
+            } else {
+                intent.replacement_room_id = Some(replacement_room_id.to_owned());
+                intent.status = RoomUpgradeIntentStatus::Observed;
+                intent.error_message = None;
+            }
+        })
+        .await
+    }
+
+    async fn complete_upgrade_intent(
+        &self,
+        old_room_id: &str,
+        replacement_room_id: &str,
+    ) -> Result<Option<RoomUpgradeIntent>> {
+        update_open_intent(self, old_room_id, |intent| {
+            if intent.replacement_room_id.as_deref() == Some(replacement_room_id) {
+                intent.status = RoomUpgradeIntentStatus::Adopted;
+                intent.error_message = None;
+            }
+        })
+        .await
+    }
+
+    async fn fail_upgrade_intent(&self, old_room_id: &str, reason: &str) -> Result<()> {
+        update_open_intent(self, old_room_id, |intent| {
+            intent.status = RoomUpgradeIntentStatus::Failed;
+            intent.error_message = Some(reason.to_owned());
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_upgrade_intent_manual(&self, old_room_id: &str, reason: &str) -> Result<()> {
+        update_open_intent(self, old_room_id, |intent| {
+            intent.status = RoomUpgradeIntentStatus::Manual;
+            intent.error_message = Some(reason.to_owned());
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn get_upgrade_intent(&self, old_room_id: &str) -> Result<Option<RoomUpgradeIntent>> {
+        let model = room_upgrade_intents::Entity::find_by_id(old_room_id.to_owned())
+            .one(&self.db)
+            .await?;
+        model.map(model_to_intent).transpose()
+    }
+}
+
+fn model_to_intent(model: room_upgrade_intents::Model) -> Result<RoomUpgradeIntent> {
+    Ok(RoomUpgradeIntent {
+        old_room_id: model.old_room_id,
+        expected_new_version: model.expected_new_version,
+        replacement_room_id: model.replacement_room_id,
+        status: model.status.parse().map_err(|e| anyhow!("{e}"))?,
+        error_message: model.error_message,
+        created_at: model.created_at,
+        updated_at: model.updated_at,
+    })
+}
+
+/// Applies a state transition to every non-terminal state. Keeping the filter
+/// explicit prevents a delayed response from overwriting a later manual review.
+async fn update_open_intent(
+    store: &DbStore,
+    old_room_id: &str,
+    transition: impl FnOnce(&mut RoomUpgradeIntent),
+) -> Result<Option<RoomUpgradeIntent>> {
+    let Some(model) = room_upgrade_intents::Entity::find_by_id(old_room_id.to_owned())
+        .one(&store.db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let mut intent = model_to_intent(model)?;
+    if matches!(
+        intent.status,
+        RoomUpgradeIntentStatus::Observed
+            | RoomUpgradeIntentStatus::Requested
+            | RoomUpgradeIntentStatus::Failed
+    ) {
+        transition(&mut intent);
+        let now = chrono::Utc::now();
+        room_upgrade_intents::Entity::update_many()
+            .col_expr(
+                room_upgrade_intents::Column::ReplacementRoomId,
+                sea_orm::sea_query::Expr::value(intent.replacement_room_id.clone()),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::Status,
+                sea_orm::sea_query::Expr::value(intent.status.as_str()),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::ErrorMessage,
+                sea_orm::sea_query::Expr::value(intent.error_message.clone()),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(room_upgrade_intents::COLUMN.old_room_id.eq(old_room_id))
+            .filter(
+                room_upgrade_intents::COLUMN
+                    .status
+                    .ne(RoomUpgradeIntentStatus::Adopted.as_str()),
+            )
+            .filter(
+                room_upgrade_intents::COLUMN
+                    .status
+                    .ne(RoomUpgradeIntentStatus::Manual.as_str()),
+            )
+            .exec(&store.db)
+            .await?;
+        intent.updated_at = now;
+    }
+    Ok(Some(intent))
 }
 
 #[async_trait]

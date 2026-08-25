@@ -541,6 +541,64 @@ pub struct QuarantinedRoom {
     pub next_attempt_at: Option<DateTime<Utc>>,
 }
 
+/// Lifecycle of a Cumments-initiated native room upgrade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomUpgradeIntentStatus {
+    /// The local use case has authorized the upgrade but the homeserver has
+    /// not yet been observed to commit it.
+    Requested,
+    /// The homeserver returned (or projected) a replacement room.
+    Observed,
+    /// Cumments finished adopting and converging the replacement.
+    Adopted,
+    /// The native call or local convergence failed and may be retried.
+    Failed,
+    /// A tombstone did not match a safe managed upgrade; manual review is
+    /// required before changing the active room mapping.
+    Manual,
+}
+
+impl RoomUpgradeIntentStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::Observed => "observed",
+            Self::Adopted => "adopted",
+            Self::Failed => "failed",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+impl std::str::FromStr for RoomUpgradeIntentStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "requested" => Ok(Self::Requested),
+            "observed" => Ok(Self::Observed),
+            "adopted" => Ok(Self::Adopted),
+            "failed" => Ok(Self::Failed),
+            "manual" => Ok(Self::Manual),
+            other => Err(format!("unknown room upgrade intent status `{other}`")),
+        }
+    }
+}
+
+/// Durable authorization for one native room upgrade. This is deliberately
+/// separate from `room_registry`: an intent exists before the successor does,
+/// while the registry maintains exactly one canonical room per page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomUpgradeIntent {
+    pub old_room_id: String,
+    pub expected_new_version: String,
+    pub replacement_room_id: Option<String>,
+    pub status: RoomUpgradeIntentStatus,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Pagination metadata shared by operator and comment listings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginationMeta {

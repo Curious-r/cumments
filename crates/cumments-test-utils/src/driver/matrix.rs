@@ -358,6 +358,17 @@ impl MatrixDriver for TestDriver {
             .lock()
             .await
             .insert(key, serde_json::json!({ "replacement_room": replacement }));
+        self.room_state.lock().await.insert(
+            (
+                replacement.clone(),
+                "m.room.create".to_string(),
+                String::new(),
+            ),
+            serde_json::json!({
+                "room_version": new_version,
+                "predecessor": { "room_id": room_id },
+            }),
+        );
         Ok(replacement)
     }
 

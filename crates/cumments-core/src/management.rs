@@ -66,6 +66,50 @@ pub fn is_valid_room_version(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-'))
 }
 
+/// Checks that a native successor really replaces the requested room and was
+/// created at the requested version before any local identity is moved.
+async fn validate_native_successor(
+    driver: &dyn MatrixDriver,
+    old_room_id: &str,
+    replacement_room_id: &str,
+    expected_version: &str,
+) -> anyhow::Result<()> {
+    if replacement_room_id == old_room_id {
+        anyhow::bail!("native upgrade returned the original room as its own successor");
+    }
+    let create = driver
+        .get_room_state(replacement_room_id, "m.room.create", "")
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("successor {replacement_room_id} has no create event"))?;
+    let actual_version = create.get("room_version").and_then(|v| v.as_str());
+    let expected_major = expected_version
+        .split(['.', '-'])
+        .next()
+        .and_then(|v| v.parse::<u32>().ok());
+    let actual_major = actual_version
+        .unwrap_or_default()
+        .split(['.', '-'])
+        .next()
+        .and_then(|v| v.parse::<u32>().ok());
+    if actual_major.is_none() || actual_major != expected_major {
+        anyhow::bail!(
+            "successor {replacement_room_id} has version {actual_version:?}, expected \
+             {expected_version}"
+        );
+    }
+    let predecessor = create
+        .get("predecessor")
+        .and_then(|v| v.get("room_id"))
+        .and_then(|v| v.as_str());
+    if predecessor != Some(old_room_id) {
+        anyhow::bail!(
+            "successor {replacement_room_id} predecessor is {predecessor:?}, expected \
+             {old_room_id}"
+        );
+    }
+    Ok(())
+}
+
 /// Upgrades one registered active comment room through the homeserver's
 /// native `/upgrade` and converges the replacement into Cumments.
 ///
@@ -131,39 +175,84 @@ pub async fn upgrade_comment_room(
         .map_err(|e| ManagementError::InvalidPageSlug(e.to_string()))?;
     let space_id = site_service.ensure_space(&site_id, driver).await?;
 
-    let replacement = driver.upgrade_room(room_id, new_version).await?;
+    // Authorize durably before the side-effecting Matrix call. If this process
+    // disappears during `/upgrade`, the tombstone can still be recognized as
+    // bot-initiated when the transaction is redelivered.
+    registry.record_upgrade_intent(room_id, new_version).await?;
 
-    driver
-        .adopt_room(&replacement, &site_id, Some(&page_slug), false)
-        .await?;
-    driver.link_room_to_space(&space_id, &replacement).await?;
-
-    // Best-effort: clear the old child's `via` so clients stop treating the
-    // tombstoned room as part of the Space (MSC4168 semantics).
-    if let Err(e) = driver
-        .set_room_state(&space_id, "m.space.child", room_id, &serde_json::json!({}))
-        .await
-    {
-        warn!("failed to clear old Space child {room_id}: {e:#}");
-    }
-
-    let sender = driver.sender_user_id().unwrap_or_default();
-    if let Some(space_power_levels) = driver.get_room_power_levels(&space_id).await? {
-        for role in role_entries(&space_power_levels, SITE_ROLE_MIN_LEVEL) {
-            if role.user_id == sender {
-                continue;
+    let replacement = match driver.upgrade_room(room_id, new_version).await {
+        Ok(replacement) => {
+            if let Err(e) =
+                validate_native_successor(driver, room_id, &replacement, new_version).await
+            {
+                registry
+                    .fail_upgrade_intent(room_id, &format!("unsafe successor {replacement}: {e:#}"))
+                    .await?;
+                return Err(e.into());
             }
-            if let Err(e) = driver.invite_user(&replacement, &role.user_id).await {
-                warn!(
-                    "failed to re-invite {} to upgraded room: {e:#}",
-                    role.user_id
-                );
+            if let Err(e) = registry
+                .observe_upgrade_replacement(room_id, &replacement)
+                .await
+            {
+                warn!("failed to record observed room upgrade replacement: {e:#}");
+            }
+            replacement
+        }
+        Err(e) => {
+            registry
+                .fail_upgrade_intent(room_id, &format!("native /upgrade failed: {e:#}"))
+                .await?;
+            return Err(e.into());
+        }
+    };
+
+    let convergence = async {
+        driver
+            .adopt_room(&replacement, &site_id, Some(&page_slug), false)
+            .await?;
+        driver.link_room_to_space(&space_id, &replacement).await?;
+
+        // Best-effort: clear the old child's `via` so clients stop treating the
+        // tombstoned room as part of the Space (MSC4168 semantics).
+        if let Err(e) = driver
+            .set_room_state(&space_id, "m.space.child", room_id, &serde_json::json!({}))
+            .await
+        {
+            warn!("failed to clear old Space child {room_id}: {e:#}");
+        }
+
+        let sender = driver.sender_user_id().unwrap_or_default();
+        if let Some(space_power_levels) = driver.get_room_power_levels(&space_id).await? {
+            for role in role_entries(&space_power_levels, SITE_ROLE_MIN_LEVEL) {
+                if role.user_id == sender {
+                    continue;
+                }
+                if let Err(e) = driver.invite_user(&replacement, &role.user_id).await {
+                    warn!(
+                        "failed to re-invite {} to upgraded room: {e:#}",
+                        role.user_id
+                    );
+                }
             }
         }
+
+        registry
+            .register_room(&replacement, &site_id, &page_slug)
+            .await?;
+        Ok::<(), anyhow::Error>(())
+    };
+    if let Err(e) = convergence.await {
+        registry
+            .fail_upgrade_intent(
+                room_id,
+                &format!("failed to converge replacement {replacement}: {e:#}"),
+            )
+            .await?;
+        return Err(e.into());
     }
 
     registry
-        .register_room(&replacement, &site_id, &page_slug)
+        .complete_upgrade_intent(room_id, &replacement)
         .await?;
     Ok(replacement)
 }

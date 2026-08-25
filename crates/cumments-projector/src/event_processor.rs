@@ -59,6 +59,7 @@ pub struct EventProcessor {
     sticker_pack_store: Arc<dyn StickerPackStore>,
     role_claim_store: Arc<dyn RoleClaimStore>,
     submission_store: Arc<dyn SubmissionStore>,
+    site_service: Arc<cumments_core::site_service::SiteService>,
     driver: Option<Arc<dyn MatrixDriver>>,
     event_bus: broadcast::Sender<ProjectorEvent>,
     /// Wakes the reconciler after a site Space's power levels are projected,
@@ -1225,6 +1226,7 @@ impl EventProcessor {
             sticker_pack_store: deps.sticker_pack_store,
             role_claim_store: deps.role_claim_store,
             submission_store: deps.submission_store,
+            site_service: deps.site_service,
             driver: deps.driver,
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
@@ -1986,6 +1988,10 @@ impl EventProcessor {
             else {
                 return Ok(());
             };
+            let intent = self
+                .registry_store
+                .get_upgrade_intent(&event.room_id)
+                .await?;
             if matches!(
                 self.registry_store.get_room_status(&event.room_id).await?,
                 Some(RoomStatus::Active)
@@ -1994,7 +2000,27 @@ impl EventProcessor {
                     .driver
                     .as_ref()
                     .and_then(|driver| driver.sender_user_id());
-                if event.sender != as_sender.unwrap_or_default() {
+                let authorized_intent = intent.as_ref().is_some_and(|intent| {
+                    matches!(
+                        intent.status,
+                        cumments_core::models::RoomUpgradeIntentStatus::Requested
+                            | cumments_core::models::RoomUpgradeIntentStatus::Observed
+                            | cumments_core::models::RoomUpgradeIntentStatus::Adopted
+                    ) && intent
+                        .replacement_room_id
+                        .as_deref()
+                        .is_none_or(|observed| observed == replacement)
+                });
+                if event.sender != as_sender.unwrap_or_default() || !authorized_intent {
+                    self.registry_store
+                        .mark_upgrade_intent_manual(
+                            &event.room_id,
+                            &format!(
+                                "unmanaged native room upgrade by {} to {replacement}",
+                                event.sender
+                            ),
+                        )
+                        .await?;
                     self.registry_store
                         .quarantine_room(
                             &event.room_id,
@@ -2010,10 +2036,72 @@ impl EventProcessor {
                         old_room = %event.room_id,
                         new_room = %replacement,
                         sender = %event.sender,
-                        "Non-bot native room upgrade quarantined; refusing automatic adoption"
+                        "Unmanaged native room upgrade quarantined; refusing automatic \
+                         adoption"
                     );
                     return Ok(());
                 }
+
+                let Some(intent) = intent else {
+                    return Ok(());
+                };
+                if intent.status == cumments_core::models::RoomUpgradeIntentStatus::Adopted {
+                    return Ok(());
+                }
+
+                self.registry_store
+                    .observe_upgrade_replacement(&event.room_id, replacement)
+                    .await?;
+                let Some(driver) = self.driver.as_deref() else {
+                    self.registry_store
+                        .mark_upgrade_intent_manual(
+                            &event.room_id,
+                            "AS driver unavailable for managed upgrade reconciliation",
+                        )
+                        .await?;
+                    return Ok(());
+                };
+                match cumments_core::management::upgrade_comment_room(
+                    driver,
+                    self.registry_store.as_ref(),
+                    &self.site_service,
+                    &event.room_id,
+                    &intent.expected_new_version,
+                )
+                .await
+                {
+                    Ok(observed_replacement) if observed_replacement == replacement => {}
+                    Ok(observed_replacement) => {
+                        self.registry_store
+                            .mark_upgrade_intent_manual(
+                                &event.room_id,
+                                &format!(
+                                    "tombstone replacement {replacement} conflicts with recovered {observed_replacement}"
+                                ),
+                            )
+                            .await?;
+                    }
+                    Err(e) => {
+                        warn!(
+                            old_room = %event.room_id,
+                            new_room = %replacement,
+                            error = %e,
+                            "Managed native room upgrade reconciliation failed"
+                        );
+                    }
+                }
+                return Ok(());
+            }
+
+            // Replays after successful convergence arrive against an inactive
+            // old room. Closing the intent here keeps repeated tombstones
+            // idempotent without resurrecting the old registry mapping.
+            if let Some(intent) = intent
+                && intent.replacement_room_id.as_deref() == Some(replacement)
+            {
+                self.registry_store
+                    .complete_upgrade_intent(&event.room_id, replacement)
+                    .await?;
             }
         }
 

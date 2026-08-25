@@ -61,6 +61,7 @@ pub mod m20260824_000055_edit_revision_facts;
 pub mod m20260824_000056_poll_response_events;
 pub mod m20260825_000057_appservice_txn_dedupe;
 pub mod m20260825_000058_room_state_snapshots;
+pub mod m20260825_000059_room_upgrade_intents;
 
 pub struct Migrator;
 
@@ -182,6 +183,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260824_000056_poll_response_events::Migration),
             Box::new(m20260825_000057_appservice_txn_dedupe::Migration),
             Box::new(m20260825_000058_room_state_snapshots::Migration),
+            Box::new(m20260825_000059_room_upgrade_intents::Migration),
         ]
     }
 }

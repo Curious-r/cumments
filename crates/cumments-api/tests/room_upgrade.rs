@@ -11,7 +11,7 @@ use axum::{
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter};
 use cumments_core::management::{ManagementError, upgrade_comment_room, upgrade_site_page_room};
-use cumments_core::models::{PageSlug, RoomStatus, Site, SiteId};
+use cumments_core::models::{PageSlug, RoomStatus, RoomUpgradeIntentStatus, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteAuthStore, SiteStore};
 use cumments_core::site_auth::{SiteAuthPolicy, SiteVerificationPolicy, token_hash};
 use cumments_core::site_service::SiteService;
@@ -148,6 +148,17 @@ async fn upgrade_comment_room_reuses_an_existing_replacement() {
         ),
         json!({ "replacement_room": "!already-upgraded:hs" }),
     );
+    driver.room_state.lock().await.insert(
+        (
+            "!already-upgraded:hs".to_string(),
+            "m.room.create".to_string(),
+            String::new(),
+        ),
+        json!({
+            "room_version": "13",
+            "predecessor": { "room_id": "!old:hs" },
+        }),
+    );
 
     let replacement = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "13")
         .await
@@ -169,6 +180,48 @@ async fn upgrade_comment_room_reuses_an_existing_replacement() {
             .unwrap(),
         Some("!already-upgraded:hs".to_string())
     );
+}
+
+#[tokio::test]
+async fn upgrade_comment_room_rejects_a_successor_with_wrong_predecessor() {
+    let (store, driver, site_service) = test_fixture("unsafe-successor").await;
+    driver.room_state.lock().await.insert(
+        (
+            "!old:hs".to_string(),
+            "m.room.tombstone".to_string(),
+            String::new(),
+        ),
+        json!({ "replacement_room": "!unsafe:hs" }),
+    );
+    driver.room_state.lock().await.insert(
+        (
+            "!unsafe:hs".to_string(),
+            "m.room.create".to_string(),
+            String::new(),
+        ),
+        json!({
+            "room_version": "13",
+            "predecessor": { "room_id": "!different:hs" },
+        }),
+    );
+
+    let error = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "13")
+        .await
+        .expect_err("mismatched predecessor must not be adopted");
+    assert!(error.to_string().contains("predecessor"));
+
+    // The failed native side effect must not move the local canonical mapping.
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+    assert_eq!(
+        store
+            .get_registered_room(&site_id, &page_slug)
+            .await
+            .unwrap(),
+        Some("!old:hs".to_string())
+    );
+    let intent = store.get_upgrade_intent("!old:hs").await.unwrap().unwrap();
+    assert_eq!(intent.status, RoomUpgradeIntentStatus::Failed);
 }
 
 #[tokio::test]

@@ -39,7 +39,7 @@ The SQLite database deliberately contains three kinds of state:
 |---|---|---|
 | Fact projection | messages, edit revisions, reactions, poll responses, room members/state events, governance role snapshots, sticker packs | Derived from visible Matrix facts and rebuildable by backfill. Deleted content is sanitized rather than retained forever. |
 | Derived views | current content, `edited_at`, reaction/poll summaries, live author profile | Always recomputable from fact rows and Matrix state. |
-| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, backfill cursors/tombstones, media-upload ownership | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
+| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, upgrade intents, backfill cursors/tombstones, media-upload ownership | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
 
 A few columns cross layers for operational reasons: for example,
 `messages.submission_id` correlates a projected Matrix fact with a local
@@ -265,6 +265,13 @@ target version must be newer than the room's current version. The driver is
 idempotent: an existing `m.room.tombstone` is reused, and a failed request
 re-reads the tombstone before reporting an error, so a lost response cannot
 mint a second replacement room.
+
+Every managed upgrade first records a durable intent containing the old room,
+target version, observed replacement, and lifecycle state. The shared use case
+verifies the successor's create event before moving local identity: its version
+must match the request and its predecessor must name the old room. A projected
+AS-sender tombstone can safely re-enter this same use case when an open intent
+remains; any other tombstone is quarantined for manual successor review.
 
 #### Governance attribution: site-level motivation, instance-level execution
 

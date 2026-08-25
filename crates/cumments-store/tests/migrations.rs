@@ -88,6 +88,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260825_000057_appservice_txn_dedupe".to_string()),
         "000057 must be registered or AppService transaction dedupe is not durable"
     );
+    assert!(
+        names.contains(&"m20260825_000059_room_upgrade_intents".to_string()),
+        "000059 must be registered or native room upgrades have no durable authorization"
+    );
 }
 
 #[tokio::test]
