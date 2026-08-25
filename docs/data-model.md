@@ -54,6 +54,8 @@ Edit revisions are stored in a dedicated `message_revisions` table, but the API
 currently exposes only `edited_at`. A revision is an immutable relation fact;
 redacting an edit hides that revision and the displayed content falls back to
 the latest surviving revision or the original message.
+Redaction also replaces the revision payload with a redacted tombstone; only
+its event metadata remains for replay/audit.
 `room_id`, `sender_mxid` and the raw Matrix `content` are internal integrity
 fields and are never serialized to API or SSE clients.
 
@@ -154,6 +156,8 @@ messages (
   author_type, author_mxid, author_display_name, author_avatar_url,
   author_public_key,
   content_json JSON,          -- the serialized Content enum
+  original_content_json JSON, -- displayable content when first projected
+  matrix_event_type TEXT,     -- replacement type validation
   raw_content_json JSON,      -- original Matrix content (escape hatch)
   reply_to_event_id, thread_root_event_id,
   timestamp, edited_at,
@@ -161,7 +165,10 @@ messages (
   submission_id
 )
 
-message_revisions (message_id, event_id PK, content_json, edited_at, editor)
+message_revisions (
+  message_id, event_id PK, content_json, edited_at, editor,
+  redacted_at, redacted_by
+)
 
 reactions (event_id UNIQUE, message_event_id, sender_mxid, key, timestamp, redacted_at)
 
@@ -174,16 +181,19 @@ poll_response_events (
 Notes on the layout:
 
 - Edit revisions include redaction metadata so removing one replacement can
-  roll the public view back deterministically.
+  roll the public view back deterministically. Redaction clears the authored
+  replacement payload.
 - Parent deletion sanitizes the parent and removes all of its revisions; late
   replacements cannot restore deleted content.
+- Deleting a comment also clears its original/current payloads and raw Matrix
+  content.
 - The author proof (`signature`, `challenge`) is verified at projection time
   and is **not** stored in the read model; only the public key is kept for
   edit/delete authorization.
 - `reactions` and `poll_response_events` are keyed by event ID, making push
   redelivery and backfill idempotent. Poll aggregation selects each voter's
-  latest non-redacted response; redacting that response restores the previous
-  valid vote.
+  latest non-redacted response; redacting that response clears its selected
+  option and restores the previous valid vote.
 - `formatted_body` is passed through unchanged. The demo renders plain text
   only; any client rendering HTML must sanitize it first.
 - `media_uploads.page_slug` is nullable: comment media records the page it

@@ -126,6 +126,7 @@ mode = "logging"
 # verification  = { requests = 20,  window = "1h" }
 # confirm       = { requests = 30,  window = "1h" }
 # operator      = { requests = 60,  window = "1m" }
+# claim_token   = { requests = 60,  window = "1m" }
 # write         = { requests = 120, window = "1h" }
 # # SSE uses a bounded token bucket: requests/window is the sustained refill
 # # rate and burst is the immediately available connection-attempt capacity.

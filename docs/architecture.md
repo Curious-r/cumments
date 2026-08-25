@@ -92,6 +92,12 @@ submission closure as one SQLite unit of work. SSE events are published only
 after that commit, so a replay can close a surviving submission without
 duplicating or resurrecting a fact.
 
+The durable AppService transaction fast path has a narrow crash window: if the
+process stops after an event is projected but before its transaction ID is
+recorded, event-level idempotency prevents duplicate facts/submissions, but SSE
+subscribers may see one replay. This trade-off avoids requiring a distributed
+outbox for every event.
+
 ### Boundaries to watch
 
 - The reconciler is a set of independent controllers, one task per pass, each

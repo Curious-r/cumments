@@ -7,9 +7,9 @@
 //!    after a full local DB reset, rebuilding sites and the room registry),
 //! 2. fetches each comment room's history page by page (`/messages`, newest
 //!    first), persisting a pagination cursor for interrupted runs,
-//! 3. sorts events by (origin_server_ts, event_id) so edits/redactions are
-//!    replayed in order, then feeds them through the same transport-agnostic
-//!    projection as live push events (idempotent upserts).
+//! 3. preserves homeserver stream/topological order across pages so
+//!    edits/redactions follow their targets, then feeds events through the
+//!    same transport-agnostic projection as live pushes (idempotent upserts).
 
 use cumments_core::models::{PageSlug, SiteId};
 use cumments_core::ports::{BackfillCursorStore, MatrixDriver, RegistryStore, SiteStore};
