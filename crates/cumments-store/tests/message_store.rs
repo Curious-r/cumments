@@ -11,6 +11,8 @@ use cumments_core::ports::{
     AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
 };
 use cumments_store::DbStore;
+use cumments_store::entities::{message_revisions, messages};
+use sea_orm::{Database, EntityTrait, QueryFilter};
 
 /// Unique SQLite file per test to avoid shared in-memory state.
 fn test_db_url(name: &str) -> String {
@@ -394,9 +396,8 @@ async fn redacting_the_latest_revision_rolls_back_to_an_older_revision() {
 
 #[tokio::test]
 async fn redacting_the_only_revision_restores_the_original() {
-    let store = DbStore::connect(&test_db_url("revision-redact-only"))
-        .await
-        .expect("connect db");
+    let url = test_db_url("revision-redact-only");
+    let store = DbStore::connect(&url).await.expect("connect db");
     let message = visitor_message("$event:hs", "original");
     store.save_message(&message).await.expect("save message");
     let edited_at = Utc::now();
@@ -441,13 +442,25 @@ async fn redacting_the_only_revision_restores_the_original() {
         "redacting the only edit must restore the original"
     );
     assert!(stored.edited_at.is_none());
+
+    let db = Database::connect(&url).await.expect("connect raw db");
+    let revision = message_revisions::Entity::find()
+        .filter(message_revisions::COLUMN.event_id.eq("$edit:hs"))
+        .one(&db)
+        .await
+        .expect("query redacted revision")
+        .expect("redacted revision metadata remains");
+    assert!(revision.redacted_at.is_some());
+    assert_eq!(
+        revision.content_json, r#"{"type":"redacted"}"#,
+        "a redacted replacement must not retain its authored payload"
+    );
 }
 
 #[tokio::test]
 async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates() {
-    let store = DbStore::connect(&test_db_url("message-redact"))
-        .await
-        .expect("connect db");
+    let url = test_db_url("message-redact");
+    let store = DbStore::connect(&url).await.expect("connect db");
     let message = visitor_message("$event:hs", "secret");
     store.save_message(&message).await.expect("save message");
 
@@ -510,6 +523,24 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
     assert!(stored.thread_root.is_none());
     assert!(stored.submission_id.is_none());
     assert!(stored.reactions.is_empty());
+
+    let db = Database::connect(&url).await.expect("connect raw db");
+    let row = messages::Entity::find()
+        .filter(messages::COLUMN.event_id.eq("$event:hs"))
+        .one(&db)
+        .await
+        .expect("query redacted row")
+        .expect("redacted row exists");
+    assert_eq!(row.original_content_json, r#"{"type":"redacted"}"#);
+    let revisions = message_revisions::Entity::find()
+        .filter(message_revisions::COLUMN.message_event_id.eq("$event:hs"))
+        .all(&db)
+        .await
+        .expect("query revisions");
+    assert!(
+        revisions.is_empty(),
+        "parent deletion must remove all revision payloads"
+    );
 
     // A late or replayed replacement cannot restore deleted content.
     updated.edited_at = Some(Utc::now());
@@ -1446,5 +1477,75 @@ async fn projection_sink_closes_a_delete_after_redaction_replay() {
             .await
             .expect("claim deletes")
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn projection_sink_redaction_sanitizes_retained_payloads() {
+    let url = test_db_url("sink-redact-payloads");
+    let store = DbStore::connect(&url).await.expect("connect db");
+    let message = visitor_message("$event:hs", "original secret");
+    store.save_message(&message).await.expect("save message");
+
+    let edited_at = Utc::now();
+    let mut updated = message.clone();
+    updated.content = Content::Text(TextContent {
+        body: "edited secret".to_string(),
+        formatted_body: None,
+        style: TextStyle::Normal,
+    });
+    updated.edited_at = Some(edited_at);
+    assert_eq!(
+        store
+            .apply_edit(
+                &updated,
+                &MessageRevision {
+                    event_id: "$edit:hs".to_string(),
+                    message_event_id: "$event:hs".to_string(),
+                    content: updated.content.clone(),
+                    edited_at,
+                    editor_mxid: message.sender_mxid.clone(),
+                    redacted_at: None,
+                },
+            )
+            .await
+            .expect("apply edit"),
+        EditProjectionOutcome::AppliedCurrent
+    );
+
+    let redacted_at = Utc::now();
+    assert_eq!(
+        store
+            .redact_message_unit(
+                "$event:hs",
+                "!room:hs",
+                redacted_at,
+                "@moderator:hs",
+                "$redaction:hs"
+            )
+            .await
+            .expect("redact message"),
+        MessageRedactionOutcome::Redacted
+    );
+
+    let db = Database::connect(&url).await.expect("connect raw db");
+    let row = messages::Entity::find()
+        .filter(messages::COLUMN.event_id.eq("$event:hs"))
+        .one(&db)
+        .await
+        .expect("query redacted row")
+        .expect("redacted row exists");
+    assert_eq!(row.content_json, r#"{"type":"redacted"}"#);
+    assert_eq!(row.original_content_json, r#"{"type":"redacted"}"#);
+    assert_eq!(row.raw_content_json, "{}");
+
+    let revisions = message_revisions::Entity::find()
+        .filter(message_revisions::COLUMN.message_event_id.eq("$event:hs"))
+        .all(&db)
+        .await
+        .expect("query revisions");
+    assert!(
+        revisions.is_empty(),
+        "parent deletion must remove all revision payloads"
     );
 }

@@ -92,6 +92,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260825_000059_room_upgrade_intents".to_string()),
         "000059 must be registered or native room upgrades have no durable authorization"
     );
+    assert!(
+        names.contains(&"m20260825_000060_sanitize_redacted_payloads".to_string()),
+        "000060 must be registered or redacted payloads can remain in SQLite"
+    );
 }
 
 #[tokio::test]
@@ -164,6 +168,65 @@ async fn redacted_content_migration_sanitizes_existing_rows() {
         revisions.is_empty(),
         "edit history for a redacted comment must be removed"
     );
+}
+
+#[tokio::test]
+async fn sanitize_redacted_payloads_migration_clears_late_retained_bodies() {
+    let url = test_db_url("sanitize-redacted-payloads");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(59))
+        .await
+        .expect("migrate to 000059");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO messages \
+         (event_id, room_id, site_id, page_slug, sender_mxid, author_kind, content_json, \
+          original_content_json, matrix_event_type, raw_content_json, timestamp, status, \
+          created_at, updated_at) \
+         VALUES \
+         ('$redacted:hs', '!room:hs', 'my-blog', 'hello', '@alice:hs', 'visitor', \
+          '{{\"type\":\"redacted\"}}', '{{\"body\":\"secret\"}}', 'm.room.message', '{{}}', \
+          '{now}', 'redacted', '{now}', '{now}')"
+    ))
+    .await
+    .expect("insert message deleted after 000060's baseline");
+    db.execute_unprepared(&format!(
+        "INSERT INTO message_revisions \
+         (event_id, message_event_id, content_json, edited_at, editor_mxid, redacted_at, \
+          redacted_by, created_at) \
+         VALUES \
+         ('$edit:hs', '$event:hs', '{{\"body\":\"edited secret\"}}', '{now}', '@alice:hs', \
+          '{now}', '@moderator:hs', '{now}')"
+    ))
+    .await
+    .expect("insert individually redacted revision");
+
+    Migrator::up(&db, None).await.expect("apply 000060");
+
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT original_content_json FROM messages WHERE event_id = '$redacted:hs'",
+        ))
+        .await
+        .expect("query migrated message");
+    assert_eq!(rows.len(), 1);
+    let original: String = rows[0]
+        .try_get("", "original_content_json")
+        .expect("original content");
+    assert_eq!(original, r#"{"type":"redacted"}"#);
+
+    let revisions = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT content_json FROM message_revisions WHERE event_id = '$edit:hs'",
+        ))
+        .await
+        .expect("query migrated revision");
+    assert_eq!(revisions.len(), 1);
+    let content: String = revisions[0].try_get("", "content_json").expect("content");
+    assert_eq!(content, r#"{"type":"redacted"}"#);
 }
 
 #[tokio::test]

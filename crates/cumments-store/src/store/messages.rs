@@ -241,6 +241,10 @@ impl ProjectionSink for DbStore {
                 sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
             )
             .col_expr(
+                messages::Column::OriginalContentJson,
+                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
+            )
+            .col_expr(
                 messages::Column::RawContentJson,
                 sea_orm::sea_query::Expr::value("{}".to_owned()),
             )
@@ -731,6 +735,10 @@ impl MessageStore for DbStore {
                 sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
             )
             .col_expr(
+                messages::Column::OriginalContentJson,
+                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
+            )
+            .col_expr(
                 messages::Column::RawContentJson,
                 sea_orm::sea_query::Expr::value("{}".to_owned()),
             )
@@ -834,6 +842,10 @@ impl MessageStore for DbStore {
             .col_expr(
                 message_revisions::Column::RedactedAt,
                 sea_orm::sea_query::Expr::value(Some(redacted_at)),
+            )
+            .col_expr(
+                message_revisions::Column::ContentJson,
+                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
             )
             .col_expr(
                 message_revisions::Column::RedactedBy,
