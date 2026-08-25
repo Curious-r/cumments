@@ -507,7 +507,7 @@ fn request_public_base(
 ) -> Option<String> {
     let trusted_peer = addr.is_some_and(|addr| trusted_proxies.contains(addr.ip()));
     let scheme = if trusted_peer {
-        first_header_value(headers, "x-forwarded-proto").unwrap_or_else(|| "http".to_string())
+        rightmost_header_value(headers, "x-forwarded-proto").unwrap_or_else(|| "http".to_string())
     } else {
         "http".to_string()
     };
@@ -515,7 +515,7 @@ fn request_public_base(
         return None;
     }
     let host = if trusted_peer {
-        first_header_value(headers, "x-forwarded-host")
+        rightmost_header_value(headers, "x-forwarded-host")
             .or_else(|| first_header_value(headers, "host"))
     } else {
         first_header_value(headers, "host")
@@ -542,6 +542,19 @@ fn first_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .next()
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+}
+
+/// Reads the rightmost CSV entry appended by the closest trusted proxy. This
+/// prevents an untrusted client-supplied prefix from winning when a proxy
+/// appends rather than overwrites a forwarded header.
+fn rightmost_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let value = headers.get(name)?.to_str().ok()?;
+    value
+        .split(',')
+        .rev()
+        .map(str::trim)
+        .find(|entry| !entry.is_empty())
         .map(str::to_owned)
 }
 
@@ -1675,6 +1688,28 @@ mod tests {
         headers.insert(
             "x-forwarded-host",
             HeaderValue::from_static("comments.example.net"),
+        );
+        let addr = Some("127.0.0.1:54321".parse().expect("addr"));
+        let base = p
+            .public_base(&headers, addr, &trusted)
+            .expect("forwarded base");
+        assert_eq!(base, "https://comments.example.net");
+    }
+
+    #[test]
+    fn request_base_uses_rightmost_trusted_forwarded_host() {
+        let p = proxy();
+        let trusted = TrustedProxySet::from_rules(&[TrustedProxyRule::parse("loopback").unwrap()])
+            .expect("trusted rules");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("internal.example.net"),
+        );
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http, https"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("evil.example.net, comments.example.net"),
         );
         let addr = Some("127.0.0.1:54321".parse().expect("addr"));
         let base = p
