@@ -635,6 +635,67 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/operator/room-upgrade-intents:
+    query:
+      tags: [Operator]
+      summary: List native room upgrade intents (QUERY)
+      operationId: listRoomUpgradeIntents
+      description: |
+        Sent as `QUERY /api/v1/operator/room-upgrade-intents` with optional
+        pagination and status filter.
+      security:
+        - operatorToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpgradeIntentListQuery"
+      responses:
+        "200":
+          description: Paginated upgrade intents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorRoomUpgradeIntentPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/operator/room-upgrade-intents/{room_id}/recover:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    post:
+      tags: [Operator]
+      summary: Recover a reviewed room upgrade
+      operationId: recoverRoomUpgradeIntent
+      description: |
+        Completes a bot-initiated room upgrade whose homeserver commit survived
+        a local failure. The exact version and replacement must match the
+        durable intent; Matrix state is revalidated before adoption.
+      security:
+        - operatorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoverUpgradeRequest"
+      responses:
+        "200":
+          description: Replacement adopted and registry converged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoverUpgradeResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/v1/operator/rooms/{room_id}/upgrade:
     parameters:
       - $ref: "#/components/parameters/RoomId"
@@ -2479,6 +2540,78 @@ components:
             $ref: "#/components/schemas/OperatorQuarantinedRoom"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
+    UpgradeIntentListQuery:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        status:
+          type: string
+          enum: [requested, observed, adopted, failed, manual]
+    OperatorRoomUpgradeIntent:
+      type: object
+      required:
+        - old_room_id
+        - expected_new_version
+        - status
+        - created_at
+        - updated_at
+      properties:
+        old_room_id:
+          type: string
+        expected_new_version:
+          type: string
+        replacement_room_id:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [requested, observed, adopted, failed, manual]
+        error_message:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    OperatorRoomUpgradeIntentPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OperatorRoomUpgradeIntent"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+    RecoverUpgradeRequest:
+      type: object
+      required: [new_version, replacement_room]
+      properties:
+        new_version:
+          type: string
+        replacement_room:
+          type: string
+    RecoverUpgradeResponse:
+      type: object
+      required: [room_id, new_version, replacement_room, status]
+      properties:
+        room_id:
+          type: string
+        new_version:
+          type: string
+        replacement_room:
+          type: string
+        status:
+          type: string
+          enum: [adopted]
     RevokeOriginRequest:
       type: object
       required: [origin]

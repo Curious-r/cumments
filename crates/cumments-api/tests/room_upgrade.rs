@@ -10,7 +10,9 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use cumments_api::{ApiState, pow::Pow, rate_limit::RateLimiter};
-use cumments_core::management::{ManagementError, upgrade_comment_room, upgrade_site_page_room};
+use cumments_core::management::{
+    ManagementError, recover_comment_room_upgrade, upgrade_comment_room, upgrade_site_page_room,
+};
 use cumments_core::models::{PageSlug, RoomStatus, RoomUpgradeIntentStatus, Site, SiteId};
 use cumments_core::ports::{RegistryStore, SiteAuthStore, SiteStore};
 use cumments_core::site_auth::{SiteAuthPolicy, SiteVerificationPolicy, token_hash};
@@ -222,6 +224,80 @@ async fn upgrade_comment_room_rejects_a_successor_with_wrong_predecessor() {
     );
     let intent = store.get_upgrade_intent("!old:hs").await.unwrap().unwrap();
     assert_eq!(intent.status, RoomUpgradeIntentStatus::Failed);
+}
+
+#[tokio::test]
+async fn recover_comment_room_completes_a_reviewed_failed_upgrade() {
+    let (store, driver, site_service) = test_fixture("recover-upgrade").await;
+
+    // Simulate the crash window: the homeserver committed the upgrade, the
+    // durable intent observed it, but local convergence failed and left the
+    // old mapping quarantined for review.
+    store
+        .record_upgrade_intent("!old:hs", "13")
+        .await
+        .expect("record intent");
+    store
+        .observe_upgrade_replacement("!old:hs", "!recovered:hs")
+        .await
+        .expect("observe replacement");
+    store
+        .fail_upgrade_intent("!old:hs", "convergence failed")
+        .await
+        .expect("fail intent");
+    store
+        .quarantine_room("!old:hs", "upgrade recovery required", 1, None)
+        .await
+        .expect("quarantine old room");
+    driver.room_state.lock().await.insert(
+        (
+            "!old:hs".to_string(),
+            "m.room.tombstone".to_string(),
+            String::new(),
+        ),
+        json!({
+            "replacement_room": "!recovered:hs",
+        }),
+    );
+    driver.room_state.lock().await.insert(
+        (
+            "!recovered:hs".to_string(),
+            "m.room.create".to_string(),
+            String::new(),
+        ),
+        json!({
+            "room_version": "13",
+            "predecessor": { "room_id": "!old:hs" },
+        }),
+    );
+
+    let replacement = recover_comment_room_upgrade(
+        &driver,
+        &store,
+        &site_service,
+        "!old:hs",
+        "13",
+        "!recovered:hs",
+    )
+    .await
+    .expect("reviewed upgrade must recover");
+    assert_eq!(replacement, "!recovered:hs");
+
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+    assert_eq!(
+        store
+            .get_registered_room(&site_id, &page_slug)
+            .await
+            .unwrap(),
+        Some("!recovered:hs".to_string())
+    );
+    assert_eq!(
+        store.get_room_status("!old:hs").await.unwrap(),
+        Some(RoomStatus::Superseded)
+    );
+    let intent = store.get_upgrade_intent("!old:hs").await.unwrap().unwrap();
+    assert_eq!(intent.status, RoomUpgradeIntentStatus::Adopted);
 }
 
 #[tokio::test]

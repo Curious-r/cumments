@@ -104,6 +104,27 @@ response. This endpoint is the operator mirror of the
 site-level `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
 (claim token); both execute through the AS bot.
 
+### Inspect and recover upgrade intents
+
+`QUERY /api/v1/operator/room-upgrade-intents`
+
+Lists durable authorization for native upgrades, including the target version,
+observed replacement, lifecycle state (`requested`, `observed`, `adopted`,
+`failed`, `manual`) and error. The body supports `page`, `per_page` and an
+optional `status` filter.
+
+`POST /api/v1/operator/room-upgrade-intents/{room_id}/recover`
+
+Body:
+`{"new_version": "13", "replacement_room": "!successor:server"}`.
+
+For a failed or manual intent, this confirms the exact reviewed successor and
+completes convergence if Matrix still agrees: the old tombstone must be from
+the AS bot and name that successor, and the successor create event must have
+the expected version and predecessor. On success, the replacement becomes the
+registry's active room and the intent is marked `adopted`. Mismatched input is
+rejected without moving local identity.
+
 ## Retire a comment room
 
 `DELETE /api/v1/operator/rooms/{room_id}`

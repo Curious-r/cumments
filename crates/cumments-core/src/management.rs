@@ -5,7 +5,7 @@
 
 use crate::governance::{
     MANAGER_LEVEL, MODERATOR_LEVEL, NewRoleClaim, SITE_ADMIN_LEVEL, SITE_ROLE_MIN_LEVEL,
-    SiteTransfer, role_entries, set_role_level, validate_governance_user_id,
+    SiteTransfer, TOMBSTONE_EVENT_TYPE, role_entries, set_role_level, validate_governance_user_id,
 };
 use crate::models::{PageSlug, RoomStatus, SiteId};
 use crate::ports::{
@@ -206,41 +206,15 @@ pub async fn upgrade_comment_room(
         }
     };
 
-    let convergence = async {
-        driver
-            .adopt_room(&replacement, &site_id, Some(&page_slug), false)
-            .await?;
-        driver.link_room_to_space(&space_id, &replacement).await?;
-
-        // Best-effort: clear the old child's `via` so clients stop treating the
-        // tombstoned room as part of the Space (MSC4168 semantics).
-        if let Err(e) = driver
-            .set_room_state(&space_id, "m.space.child", room_id, &serde_json::json!({}))
-            .await
-        {
-            warn!("failed to clear old Space child {room_id}: {e:#}");
-        }
-
-        let sender = driver.sender_user_id().unwrap_or_default();
-        if let Some(space_power_levels) = driver.get_room_power_levels(&space_id).await? {
-            for role in role_entries(&space_power_levels, SITE_ROLE_MIN_LEVEL) {
-                if role.user_id == sender {
-                    continue;
-                }
-                if let Err(e) = driver.invite_user(&replacement, &role.user_id).await {
-                    warn!(
-                        "failed to re-invite {} to upgraded room: {e:#}",
-                        role.user_id
-                    );
-                }
-            }
-        }
-
-        registry
-            .register_room(&replacement, &site_id, &page_slug)
-            .await?;
-        Ok::<(), anyhow::Error>(())
-    };
+    let convergence = converge_comment_room_upgrade(
+        driver,
+        registry,
+        &space_id,
+        room_id,
+        &replacement,
+        &site_id,
+        &page_slug,
+    );
     if let Err(e) = convergence.await {
         registry
             .fail_upgrade_intent(
@@ -255,6 +229,132 @@ pub async fn upgrade_comment_room(
         .complete_upgrade_intent(room_id, &replacement)
         .await?;
     Ok(replacement)
+}
+
+/// Converges a validated native successor into Cumments. Both fresh upgrades
+/// and reviewed crash recoveries share this idempotent write sequence.
+async fn converge_comment_room_upgrade(
+    driver: &dyn MatrixDriver,
+    registry: &dyn RegistryStore,
+    space_id: &str,
+    old_room_id: &str,
+    replacement_room_id: &str,
+    site_id: &SiteId,
+    page_slug: &PageSlug,
+) -> anyhow::Result<()> {
+    driver
+        .adopt_room(replacement_room_id, site_id, Some(page_slug), false)
+        .await?;
+    driver
+        .link_room_to_space(space_id, replacement_room_id)
+        .await?;
+
+    // Best-effort: clear the old child's `via` so clients stop treating the
+    // tombstoned room as part of the Space (MSC4168 semantics).
+    if let Err(e) = driver
+        .set_room_state(
+            space_id,
+            "m.space.child",
+            old_room_id,
+            &serde_json::json!({}),
+        )
+        .await
+    {
+        warn!("failed to clear old Space child {old_room_id}: {e:#}");
+    }
+
+    let sender = driver.sender_user_id().unwrap_or_default();
+    if let Some(space_power_levels) = driver.get_room_power_levels(space_id).await? {
+        for role in role_entries(&space_power_levels, SITE_ROLE_MIN_LEVEL) {
+            if role.user_id == sender {
+                continue;
+            }
+            if let Err(e) = driver.invite_user(replacement_room_id, &role.user_id).await {
+                warn!(
+                    "failed to re-invite {} to upgraded room: {e:#}",
+                    role.user_id
+                );
+            }
+        }
+    }
+
+    registry
+        .register_room(replacement_room_id, site_id, page_slug)
+        .await?;
+    // A reviewed recovery may start from a quarantined old row. Explicitly
+    // supersede it so the failed mapping cannot remain canonical.
+    registry.retire_room(old_room_id).await?;
+    Ok(())
+}
+
+/// Completes a reviewed native upgrade whose homeserver commit outlived the
+/// original management attempt. Operator approval must match the durable intent
+/// exactly; Matrix state and successor metadata are revalidated here.
+pub async fn recover_comment_room_upgrade(
+    driver: &dyn MatrixDriver,
+    registry: &dyn RegistryStore,
+    site_service: &SiteService,
+    room_id: &str,
+    new_version: &str,
+    replacement_room_id: &str,
+) -> Result<String, ManagementError> {
+    let _intent = registry
+        .approve_upgrade_intent_recovery(room_id, new_version, replacement_room_id)
+        .await?;
+    let identity = registry
+        .get_registered_room_identity(room_id)
+        .await?
+        .ok_or_else(|| ManagementError::RoomNotRegistered(room_id.to_string()))?;
+    let site_id = SiteId::new(identity.site_id.clone())
+        .map_err(|e| ManagementError::InvalidSiteId(e.to_string()))?;
+    let page_slug = PageSlug::new(identity.page_slug.clone())
+        .map_err(|e| ManagementError::InvalidPageSlug(e.to_string()))?;
+    let space_id = site_service.ensure_space(&site_id, driver).await?;
+
+    let recovery = async {
+        let tombstone = driver
+            .get_room_state(room_id, TOMBSTONE_EVENT_TYPE, "")
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("room {room_id} no longer carries an upgrade tombstone")
+            })?;
+        let observed_replacement = tombstone
+            .get("replacement_room")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("upgrade tombstone has no replacement room"))?;
+        if observed_replacement != replacement_room_id {
+            anyhow::bail!(
+                "tombstone replacement {observed_replacement} does not match approved \
+                 successor {replacement_room_id}"
+            );
+        }
+        validate_native_successor(driver, room_id, replacement_room_id, new_version).await?;
+        converge_comment_room_upgrade(
+            driver,
+            registry,
+            &space_id,
+            room_id,
+            replacement_room_id,
+            &site_id,
+            &page_slug,
+        )
+        .await
+    };
+
+    if let Err(e) = recovery.await {
+        registry
+            .fail_upgrade_intent(
+                room_id,
+                &format!("failed to recover replacement {replacement_room_id}: {e:#}"),
+            )
+            .await?;
+        return Err(e.into());
+    }
+
+    registry
+        .complete_upgrade_intent(room_id, replacement_room_id)
+        .await?;
+    Ok(replacement_room_id.to_owned())
 }
 
 /// Site-owner entry point for [`upgrade_comment_room`]: resolves the active

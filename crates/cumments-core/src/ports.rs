@@ -582,6 +582,19 @@ pub trait RegistryStore: Send + Sync {
     /// Returns the current intent for a room, including terminal states used
     /// by audit and idempotent tombstone replay.
     async fn get_upgrade_intent(&self, old_room_id: &str) -> Result<Option<RoomUpgradeIntent>>;
+
+    /// Lists durable upgrade intents for operator review.
+    async fn list_upgrade_intents(&self) -> Result<Vec<RoomUpgradeIntent>>;
+
+    /// Reopens a reviewed failed/manual intent after an operator confirms the
+    /// exact replacement. The successor must still be validated before local
+    /// identity is moved.
+    async fn approve_upgrade_intent_recovery(
+        &self,
+        old_room_id: &str,
+        new_version: &str,
+        replacement_room_id: &str,
+    ) -> Result<RoomUpgradeIntent>;
 }
 
 /// Defines the operations for managing sites in the local database.

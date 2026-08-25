@@ -17,9 +17,9 @@ use crate::routes::media::{
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::operator::{
     config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
-    reinstate_room_handler, require_operator, retire_room_handler, revoke_secret_handler,
-    revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
-    upgrade_room_handler,
+    list_upgrade_intents_handler, recover_upgrade_intent_handler, reinstate_room_handler,
+    require_operator, retire_room_handler, revoke_secret_handler, revoke_verified_origin_handler,
+    rotate_claim_token_handler, rotate_secret_handler, upgrade_room_handler,
 };
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -378,6 +378,15 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/operator/rooms/{room_id}/upgrade",
             axum::routing::post(upgrade_room_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/room-upgrade-intents",
+            axum::routing::get(method_not_allowed_handler).fallback(list_upgrade_intents_handler),
+        )
+        .route(
+            "/api/v1/operator/room-upgrade-intents/{room_id}/recover",
+            axum::routing::post(recover_upgrade_intent_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/operator/rooms/{room_id}",

@@ -492,6 +492,9 @@ the backup command.
   (`!cumments room <room_id> upgrade <version> --confirm`). The replacement
   room is adopted (metadata repaired), re-linked into the site Space, site
   roles are re-invited, and the old room is superseded and cleaned up. Site
+  upgrade intents are durable; an operator can list them and explicitly recover
+  a reviewed failed/manual upgrade when the homeserver commit survived a local
+  failure. Site
   Space upgrades are not supported: MSC4168 (updating `m.space.*` references
   across rooms) is still open, and a Space upgrade would require re-linking
   every child room plus copying sticker-pack state. Image-pack handling

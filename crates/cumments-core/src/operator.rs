@@ -3,7 +3,7 @@
 //! shape and the `[sites]` overlay merge is implemented exactly once.
 
 use crate::models::{PaginationMeta, QuarantinedRoom};
-use crate::ports::SiteAuthStore;
+use crate::ports::{RegistryStore, SiteAuthStore};
 use crate::site_auth::{
     SiteAuthInfo, SiteAuthMode, SiteAuthPolicy, SiteLifecycle, SitePolicyEntry,
     SiteVerificationStatus,
@@ -69,6 +69,75 @@ pub fn operator_meta(total: i64, page: i64, per_page: i64) -> PaginationMeta {
         per_page,
         total_pages,
     }
+}
+
+/// Operator-facing view of one durable native-upgrade intent.
+#[derive(Debug, Serialize)]
+pub struct OperatorRoomUpgradeIntent {
+    pub old_room_id: String,
+    pub expected_new_version: String,
+    pub replacement_room_id: Option<String>,
+    pub status: &'static str,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Query parameters for upgrade-intent listings.
+#[derive(Debug, Deserialize)]
+pub struct UpgradeIntentListQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub status: Option<String>,
+}
+
+/// Validates pagination and narrows the optional review status.
+pub fn upgrade_intent_query_bounds(
+    query: &UpgradeIntentListQuery,
+) -> anyhow::Result<(i64, i64, Option<String>)> {
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+    let status = match query.status.as_deref().filter(|s| !s.is_empty()) {
+        Some("requested" | "observed" | "adopted" | "failed" | "manual") => query.status.clone(),
+        Some(status) => anyhow::bail!("invalid upgrade intent status `{status}`"),
+        None => None,
+    };
+    Ok((page, per_page, status))
+}
+
+/// Lists native-upgrade intents so operators can identify failed/manual work.
+pub async fn list_operator_upgrade_intents(
+    store: &dyn RegistryStore,
+    query: &UpgradeIntentListQuery,
+) -> Result<OperatorPage<OperatorRoomUpgradeIntent>> {
+    let (page, per_page, status_filter) = upgrade_intent_query_bounds(query)?;
+    let mut intents = store
+        .list_upgrade_intents()
+        .await?
+        .into_iter()
+        .map(|intent| OperatorRoomUpgradeIntent {
+            old_room_id: intent.old_room_id,
+            expected_new_version: intent.expected_new_version,
+            replacement_room_id: intent.replacement_room_id,
+            status: intent.status.as_str(),
+            error_message: intent.error_message,
+            created_at: intent.created_at,
+            updated_at: intent.updated_at,
+        })
+        .collect::<Vec<_>>();
+    if let Some(status) = status_filter {
+        intents.retain(|intent| intent.status == status);
+    }
+    let total = intents.len() as i64;
+    let start = ((page - 1) * per_page) as usize;
+    Ok(OperatorPage {
+        data: intents
+            .into_iter()
+            .skip(start)
+            .take(per_page as usize)
+            .collect(),
+        meta: operator_meta(total, page, per_page),
+    })
 }
 
 /// Lists managed sites: database rows merged with the `[sites]` overlay.

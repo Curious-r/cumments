@@ -8,7 +8,7 @@ use cumments_core::models::{
     RoomUpgradeIntentStatus, Site, SiteId,
 };
 use cumments_core::ports::{RegistryStore, SiteStore};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait};
 
 #[async_trait]
 impl RegistryStore for DbStore {
@@ -512,6 +512,69 @@ impl RegistryStore for DbStore {
             .one(&self.db)
             .await?;
         model.map(model_to_intent).transpose()
+    }
+
+    async fn list_upgrade_intents(&self) -> Result<Vec<RoomUpgradeIntent>> {
+        room_upgrade_intents::Entity::find()
+            .order_by_desc(room_upgrade_intents::Column::UpdatedAt)
+            .order_by_asc(room_upgrade_intents::Column::OldRoomId)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(model_to_intent)
+            .collect()
+    }
+
+    async fn approve_upgrade_intent_recovery(
+        &self,
+        old_room_id: &str,
+        new_version: &str,
+        replacement_room_id: &str,
+    ) -> Result<RoomUpgradeIntent> {
+        let model = room_upgrade_intents::Entity::find_by_id(old_room_id.to_owned())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("upgrade intent for {old_room_id} does not exist"))?;
+        let mut intent = model_to_intent(model)?;
+        if !matches!(
+            intent.status,
+            RoomUpgradeIntentStatus::Failed | RoomUpgradeIntentStatus::Manual
+        ) {
+            anyhow::bail!("upgrade intent for {old_room_id} is not awaiting recovery review");
+        }
+        if intent.expected_new_version != new_version
+            || intent.replacement_room_id.as_deref() != Some(replacement_room_id)
+        {
+            anyhow::bail!(
+                "confirmed upgrade details do not match the durable intent for {old_room_id}"
+            );
+        }
+
+        let now = chrono::Utc::now();
+        room_upgrade_intents::Entity::update_many()
+            .col_expr(
+                room_upgrade_intents::Column::Status,
+                sea_orm::sea_query::Expr::value(RoomUpgradeIntentStatus::Requested.as_str()),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::ErrorMessage,
+                sea_orm::sea_query::Expr::value(None::<String>),
+            )
+            .col_expr(
+                room_upgrade_intents::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(room_upgrade_intents::COLUMN.old_room_id.eq(old_room_id))
+            .filter(room_upgrade_intents::COLUMN.status.is_in([
+                RoomUpgradeIntentStatus::Failed.as_str(),
+                RoomUpgradeIntentStatus::Manual.as_str(),
+            ]))
+            .exec(&self.db)
+            .await?;
+        intent.status = RoomUpgradeIntentStatus::Requested;
+        intent.error_message = None;
+        intent.updated_at = now;
+        Ok(intent)
     }
 }
 

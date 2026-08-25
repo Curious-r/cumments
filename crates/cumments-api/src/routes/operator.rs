@@ -18,8 +18,9 @@ use axum::{
 };
 use cumments_core::models::SiteId;
 use cumments_core::operator::{
-    OperatorListQuery, OperatorSite, config_snippet_toml, list_operator_quarantined_rooms,
-    list_operator_sites, operator_site,
+    OperatorListQuery, OperatorSite, UpgradeIntentListQuery, config_snippet_toml,
+    list_operator_quarantined_rooms, list_operator_sites, list_operator_upgrade_intents,
+    operator_site,
 };
 use cumments_core::site_auth::{SiteAuthMode, constant_time_eq, generate_token, token_hash};
 use serde::{Deserialize, Serialize};
@@ -58,11 +59,25 @@ pub struct UpgradeRoomRequest {
     pub new_version: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RecoverUpgradeRequest {
+    pub new_version: String,
+    pub replacement_room: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct UpgradeRoomResponse {
     pub room_id: String,
     pub new_version: String,
     pub replacement_room: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecoverUpgradeResponse {
+    pub room_id: String,
+    pub new_version: String,
+    pub replacement_room: String,
+    pub status: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,6 +210,57 @@ pub(crate) async fn upgrade_room_handler(
         room_id,
         new_version: body.new_version,
         replacement_room: replacement,
+    }))
+}
+
+pub(crate) async fn list_upgrade_intents_handler(
+    method: Method,
+    State(state): State<ApiState>,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    if method != *QUERY_METHOD {
+        return Err(AppError::MethodNotAllowed);
+    }
+    let query: UpgradeIntentListQuery = if body.is_empty() {
+        UpgradeIntentListQuery {
+            page: None,
+            per_page: None,
+            status: None,
+        }
+    } else {
+        serde_json::from_str(&body)
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?
+    };
+
+    let page = list_operator_upgrade_intents(state.store.as_ref(), &query)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list upgrade intents: {e}")))?;
+    Ok((
+        [(ACCEPT_QUERY.clone(), "application/json")],
+        (StatusCode::OK, Json(page)),
+    ))
+}
+
+pub(crate) async fn recover_upgrade_intent_handler(
+    State(state): State<ApiState>,
+    Path(room_id): Path<String>,
+    Json(body): Json<RecoverUpgradeRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let replacement = cumments_core::management::recover_comment_room_upgrade(
+        state.driver.as_ref(),
+        state.store.as_ref(),
+        &state.site_service,
+        &room_id,
+        &body.new_version,
+        &body.replacement_room,
+    )
+    .await
+    .map_err(map_management_error)?;
+    Ok(Json(RecoverUpgradeResponse {
+        room_id,
+        new_version: body.new_version,
+        replacement_room: replacement,
+        status: "adopted",
     }))
 }
 
