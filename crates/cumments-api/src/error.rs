@@ -382,15 +382,15 @@ mod tests {
     }
 
     #[test]
-    fn problem_type_base_matches_mkdocs_site_url() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/mkdocs.yml");
-        let mkdocs = std::fs::read_to_string(path).expect("mkdocs.yml must exist");
+    fn problem_type_base_matches_docs_site_origin() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/rspress.config.ts");
+        let config = std::fs::read_to_string(path).expect("rspress.config.ts must exist");
         let site_root = PROBLEM_TYPE_BASE
             .strip_suffix("/problems")
             .expect("PROBLEM_TYPE_BASE must end with /problems");
         assert!(
-            mkdocs.contains(&format!("site_url: {site_root}/")),
-            "mkdocs.yml site_url must match PROBLEM_TYPE_BASE"
+            config.contains(&format!("siteOrigin: \"{site_root}\"")),
+            "rspress.config.ts siteOrigin must match PROBLEM_TYPE_BASE"
         );
     }
 
