@@ -143,7 +143,7 @@ impl BotCommandRouter {
             command_ingress: SlidingWindowRateLimiter::new(
                 Self::COMMAND_INGRESS_LIMIT,
                 Self::COMMAND_RATE_WINDOW,
-                1,
+                Self::COMMAND_RATE_MAX_SENDERS,
             ),
             command_rate: SlidingWindowRateLimiter::new(
                 Self::COMMAND_RATE_LIMIT,
@@ -286,7 +286,9 @@ async fn is_private_channel(
 }
 
 impl BotCommandRouter {
-    const COMMAND_INGRESS_LIMIT: usize = 600;
+    /// A cheap per-sender cap before the private-channel membership lookup.
+    /// The later authoritative per-sender budget is tighter.
+    const COMMAND_INGRESS_LIMIT: usize = 30;
     const COMMAND_RATE_LIMIT: usize = 10;
     const COMMAND_RATE_WINDOW: StdDuration = StdDuration::from_secs(60);
     const COMMAND_RATE_MAX_SENDERS: usize = 10_000;
@@ -345,10 +347,13 @@ impl BotCommandRouter {
         };
         let line = rest.trim();
 
-        // Prefix floods must not turn into homeserver membership reads. The
-        // fixed global key makes this a cheap process-wide admission gate.
-        if !self.command_ingress.allow("global") {
-            debug!("Dropping !cumments prefix flood before private-channel check");
+        // Prefix floods must not turn into homeserver membership reads. Keying
+        // admission by sender keeps one flooder from starving administrators.
+        if !self.command_ingress.allow(&event.sender) {
+            debug!(
+                sender = %event.sender,
+                "Dropping prefix flood before private-channel check"
+            );
             return Ok(true);
         }
 

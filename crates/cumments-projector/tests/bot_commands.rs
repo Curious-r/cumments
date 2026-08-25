@@ -179,7 +179,7 @@ async fn per_sender_limit_counts_the_first_command_and_silently_consumes_denials
 }
 
 #[tokio::test]
-async fn exhausted_ingress_budget_does_not_query_membership_or_audit() {
+async fn exhausted_sender_ingress_does_not_starve_another_admin() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("ingress-limit"))
             .await
@@ -197,7 +197,7 @@ async fn exhausted_ingress_budget_does_not_query_membership_or_audit() {
         common::test_policy(),
     );
 
-    for _ in 0..600 {
+    for _ in 0..30 {
         assert!(
             p.process_bot_command(&command_message("@outside:hs", "!cumments"))
                 .await
@@ -205,24 +205,22 @@ async fn exhausted_ingress_budget_does_not_query_membership_or_audit() {
         );
     }
 
-    let queries_before = driver.joined_member_queries.lock().await.len();
-    assert_eq!(queries_before, 600);
+    assert_eq!(driver.joined_member_queries.lock().await.len(), 30);
     assert!(
         p.process_bot_command(&command_message(sender, "!cumments"))
             .await
-            .expect("throttled event must be consumed")
+            .expect("unrelated admin must not be throttled")
     );
-    assert_eq!(
-        driver.joined_member_queries.lock().await.len(),
-        queries_before
-    );
-    assert!(driver.replies.lock().await.is_empty());
+    assert_eq!(driver.joined_member_queries.lock().await.len(), 31);
+    assert_eq!(driver.replies.lock().await.len(), 1);
     assert!(
         store
             .list_command_audit(Some(sender), 10)
             .await
             .expect("audit")
-            .is_empty()
+            .len()
+            == 1,
+        "an admitted admin command must be audited"
     );
 }
 
