@@ -11,7 +11,7 @@ use cumments_core::ports::{
     AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
 };
 use cumments_store::DbStore;
-use cumments_store::entities::{message_revisions, messages};
+use cumments_store::entities::{message_revisions, messages, poll_response_events};
 use sea_orm::{Database, EntityTrait, QueryFilter};
 
 /// Unique SQLite file per test to avoid shared in-memory state.
@@ -846,9 +846,8 @@ async fn redacting_the_latest_poll_response_restores_the_previous_vote() {
 
 #[tokio::test]
 async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
-    let store = DbStore::connect(&test_db_url("message-poll-redact"))
-        .await
-        .expect("connect db");
+    let url = test_db_url("message-poll-redact");
+    let store = DbStore::connect(&url).await.expect("connect db");
     let mut message = visitor_message("$poll:hs", "poll placeholder");
     message.content = Content::Poll(PollContent {
         question: "best? ".to_string(),
@@ -888,6 +887,19 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
             .await
             .expect("redact bob vote")
     );
+    let db = Database::connect(&url).await.expect("connect raw db");
+    let redacted = poll_response_events::Entity::find()
+        .filter(poll_response_events::COLUMN.event_id.eq("$vote-bob:hs"))
+        .one(&db)
+        .await
+        .expect("query redacted vote")
+        .expect("redacted vote exists");
+    assert!(redacted.redacted_at.is_some());
+    assert_eq!(
+        redacted.option_index, None,
+        "redaction must forget the selected option"
+    );
+
     let stored = store
         .get_message("$poll:hs")
         .await

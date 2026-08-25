@@ -96,6 +96,167 @@ async fn insert_message_if_absent<C: ConnectionTrait>(
     }
 }
 
+async fn apply_edit_on<C: ConnectionTrait>(
+    conn: &C,
+    message: &Message,
+    revision: &MessageRevision,
+) -> Result<EditProjectionOutcome> {
+    let edit_ts = revision.edited_at.timestamp_millis();
+
+    if message_revisions::Entity::find()
+        .filter(
+            message_revisions::COLUMN
+                .event_id
+                .eq(revision.event_id.clone()),
+        )
+        .one(conn)
+        .await?
+        .is_some()
+    {
+        return Ok(EditProjectionOutcome::AlreadyKnown);
+    }
+
+    let parent = messages::Entity::find()
+        .filter(messages::COLUMN.event_id.eq(message.event_id.clone()))
+        .filter(messages::COLUMN.room_id.eq(message.room_id.clone()))
+        .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
+        .one(conn)
+        .await?;
+    let Some(parent) = parent else {
+        return Ok(EditProjectionOutcome::Rejected);
+    };
+
+    let revision_model = message_revisions::ActiveModel {
+        event_id: Set(revision.event_id.clone()),
+        message_event_id: Set(message.event_id.clone()),
+        content_json: Set(content_to_json(&revision.content)),
+        edited_at: Set(revision.edited_at),
+        editor_mxid: Set(revision.editor_mxid.clone()),
+        redacted_at: Set(None),
+        redacted_by: Set(None),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    message_revisions::Entity::insert(revision_model)
+        .exec(conn)
+        .await?;
+
+    let current = message_revisions::Entity::find()
+        .filter(
+            message_revisions::COLUMN
+                .message_event_id
+                .eq(message.event_id.clone()),
+        )
+        .filter(message_revisions::COLUMN.redacted_at.is_null())
+        .order_by_desc(message_revisions::Column::EditedAt)
+        .order_by_desc(message_revisions::Column::EventId)
+        .one(conn)
+        .await?;
+    let Some(current) = current else {
+        return Ok(EditProjectionOutcome::Rejected);
+    };
+
+    if current.event_id != revision.event_id {
+        // The valid replacement remains stored as a fact, but it does not
+        // become the public view until a newer revision is redacted.
+        return Ok(EditProjectionOutcome::Superseded);
+    }
+
+    let mut active: messages::ActiveModel = parent.into();
+    active.content_json = Set(content_to_json(&message.content));
+    active.last_edit_ts = Set(Some(edit_ts));
+    active.last_edit_event_id = Set(Some(revision.event_id.clone()));
+    active.updated_at = Set(chrono::Utc::now());
+    active.update(conn).await?;
+    Ok(EditProjectionOutcome::AppliedCurrent)
+}
+
+async fn redact_message_on<C: ConnectionTrait>(
+    conn: &C,
+    event_id: &str,
+    room_id: &str,
+    redacted_at: chrono::DateTime<chrono::Utc>,
+    redacted_by: &str,
+) -> Result<MessageRedactionOutcome> {
+    // Redaction is a projection rewrite, not just a lifecycle flag: the
+    // homeserver strips the original event, so the read model must do the
+    // same. Revisions are removed in the same transaction because each one
+    // contains an earlier displayable version of the deleted comment.
+    let existing = messages::Entity::find()
+        .filter(messages::COLUMN.event_id.eq(event_id))
+        .one(conn)
+        .await?;
+    let Some(existing) = existing else {
+        return Ok(MessageRedactionOutcome::Rejected);
+    };
+    if existing.room_id != room_id {
+        return Ok(MessageRedactionOutcome::Rejected);
+    }
+    if existing.status == MessageStatus::Redacted.as_str() {
+        return Ok(MessageRedactionOutcome::AlreadyRedacted);
+    }
+
+    messages::Entity::update_many()
+        .col_expr(
+            messages::Column::ContentJson,
+            sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
+        )
+        .col_expr(
+            messages::Column::OriginalContentJson,
+            sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
+        )
+        .col_expr(
+            messages::Column::RawContentJson,
+            sea_orm::sea_query::Expr::value("{}".to_owned()),
+        )
+        .col_expr(
+            messages::Column::Status,
+            sea_orm::sea_query::Expr::value(MessageStatus::Redacted.as_str()),
+        )
+        .col_expr(
+            messages::Column::RedactedAt,
+            sea_orm::sea_query::Expr::value(Some(redacted_at)),
+        )
+        .col_expr(
+            messages::Column::RedactedBy,
+            sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
+        )
+        .col_expr(
+            messages::Column::LastEditTs,
+            sea_orm::sea_query::Expr::value(Option::<i64>::None),
+        )
+        .col_expr(
+            messages::Column::LastEditEventId,
+            sea_orm::sea_query::Expr::value(Option::<String>::None),
+        )
+        .col_expr(
+            messages::Column::ReplyTo,
+            sea_orm::sea_query::Expr::value(Option::<String>::None),
+        )
+        .col_expr(
+            messages::Column::ThreadRoot,
+            sea_orm::sea_query::Expr::value(Option::<String>::None),
+        )
+        .col_expr(
+            messages::Column::SubmissionId,
+            sea_orm::sea_query::Expr::value(Option::<i64>::None),
+        )
+        .col_expr(
+            messages::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+        )
+        .filter(messages::COLUMN.event_id.eq(event_id))
+        .filter(messages::COLUMN.room_id.eq(room_id))
+        .exec(conn)
+        .await?;
+
+    message_revisions::Entity::delete_many()
+        .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
+        .exec(conn)
+        .await?;
+    Ok(MessageRedactionOutcome::Redacted)
+}
+
 #[async_trait]
 impl ProjectionSink for DbStore {
     async fn save_message_unit(
@@ -122,18 +283,8 @@ impl ProjectionSink for DbStore {
         completion: SubmissionCompletion,
     ) -> Result<EditProjectionOutcome> {
         let txn = self.db.begin().await?;
-        let edit_ts = revision.edited_at.timestamp_millis();
-
-        if message_revisions::Entity::find()
-            .filter(
-                message_revisions::COLUMN
-                    .event_id
-                    .eq(revision.event_id.clone()),
-            )
-            .one(&txn)
-            .await?
-            .is_some()
-        {
+        let outcome = apply_edit_on(&txn, message, revision).await?;
+        if matches!(outcome, EditProjectionOutcome::AlreadyKnown) {
             if matches!(
                 completion,
                 SubmissionCompletion::UpdateById(_) | SubmissionCompletion::UpdateByEvent { .. }
@@ -141,63 +292,12 @@ impl ProjectionSink for DbStore {
                 complete_update(&txn, &completion).await?;
             }
             txn.commit().await?;
-            return Ok(EditProjectionOutcome::AlreadyKnown);
+            return Ok(outcome);
         }
-
-        let parent = messages::Entity::find()
-            .filter(messages::COLUMN.event_id.eq(message.event_id.clone()))
-            .filter(messages::COLUMN.room_id.eq(message.room_id.clone()))
-            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
-            .one(&txn)
-            .await?;
-        let Some(parent) = parent else {
-            return Ok(EditProjectionOutcome::Rejected);
-        };
-
-        let revision_model = message_revisions::ActiveModel {
-            event_id: Set(revision.event_id.clone()),
-            message_event_id: Set(message.event_id.clone()),
-            content_json: Set(content_to_json(&revision.content)),
-            edited_at: Set(revision.edited_at),
-            editor_mxid: Set(revision.editor_mxid.clone()),
-            redacted_at: Set(None),
-            redacted_by: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            ..Default::default()
-        };
-        message_revisions::Entity::insert(revision_model)
-            .exec(&txn)
-            .await?;
-
-        let current = message_revisions::Entity::find()
-            .filter(
-                message_revisions::COLUMN
-                    .message_event_id
-                    .eq(message.event_id.clone()),
-            )
-            .filter(message_revisions::COLUMN.redacted_at.is_null())
-            .order_by_desc(message_revisions::Column::EditedAt)
-            .order_by_desc(message_revisions::Column::EventId)
-            .one(&txn)
-            .await?;
-        let Some(current) = current else {
-            return Ok(EditProjectionOutcome::Rejected);
-        };
-
-        let outcome = if current.event_id == revision.event_id {
-            let mut active: messages::ActiveModel = parent.into();
-            active.content_json = Set(content_to_json(&message.content));
-            active.last_edit_ts = Set(Some(edit_ts));
-            active.last_edit_event_id = Set(Some(revision.event_id.clone()));
-            active.updated_at = Set(chrono::Utc::now());
-            active.update(&txn).await?;
-            EditProjectionOutcome::AppliedCurrent
-        } else {
-            // The valid replacement remains stored as a fact, but it does not
-            // become the public view until a newer revision is redacted.
-            EditProjectionOutcome::Superseded
-        };
-
+        if matches!(outcome, EditProjectionOutcome::Rejected) {
+            txn.rollback().await?;
+            return Ok(outcome);
+        }
         if matches!(outcome, EditProjectionOutcome::AppliedCurrent)
             || (matches!(outcome, EditProjectionOutcome::Superseded)
                 && !matches!(completion, SubmissionCompletion::None))
@@ -217,81 +317,17 @@ impl ProjectionSink for DbStore {
         redaction_event_id: &str,
     ) -> Result<MessageRedactionOutcome> {
         let txn = self.db.begin().await?;
-        let existing = messages::Entity::find()
-            .filter(messages::COLUMN.event_id.eq(event_id))
-            .one(&txn)
-            .await?;
-        let Some(existing) = existing else {
-            return Ok(MessageRedactionOutcome::Rejected);
-        };
-        if existing.room_id != room_id {
-            return Ok(MessageRedactionOutcome::Rejected);
-        }
-
-        if existing.status == MessageStatus::Redacted.as_str() {
+        let outcome = redact_message_on(&txn, event_id, room_id, redacted_at, redacted_by).await?;
+        if matches!(outcome, MessageRedactionOutcome::AlreadyRedacted) {
             record_backfill_tombstone_on(&txn, event_id, room_id, redaction_event_id).await?;
             close_delete_submission(&txn, event_id).await?;
             txn.commit().await?;
             return Ok(MessageRedactionOutcome::AlreadyRedacted);
         }
-
-        messages::Entity::update_many()
-            .col_expr(
-                messages::Column::ContentJson,
-                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
-            )
-            .col_expr(
-                messages::Column::OriginalContentJson,
-                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
-            )
-            .col_expr(
-                messages::Column::RawContentJson,
-                sea_orm::sea_query::Expr::value("{}".to_owned()),
-            )
-            .col_expr(
-                messages::Column::Status,
-                sea_orm::sea_query::Expr::value(MessageStatus::Redacted.as_str()),
-            )
-            .col_expr(
-                messages::Column::RedactedAt,
-                sea_orm::sea_query::Expr::value(Some(redacted_at)),
-            )
-            .col_expr(
-                messages::Column::RedactedBy,
-                sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
-            )
-            .col_expr(
-                messages::Column::LastEditTs,
-                sea_orm::sea_query::Expr::value(Option::<i64>::None),
-            )
-            .col_expr(
-                messages::Column::LastEditEventId,
-                sea_orm::sea_query::Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                messages::Column::ReplyTo,
-                sea_orm::sea_query::Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                messages::Column::ThreadRoot,
-                sea_orm::sea_query::Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                messages::Column::SubmissionId,
-                sea_orm::sea_query::Expr::value(Option::<i64>::None),
-            )
-            .col_expr(
-                messages::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
-            )
-            .filter(messages::COLUMN.event_id.eq(event_id))
-            .filter(messages::COLUMN.room_id.eq(room_id))
-            .exec(&txn)
-            .await?;
-        message_revisions::Entity::delete_many()
-            .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
-            .exec(&txn)
-            .await?;
+        if matches!(outcome, MessageRedactionOutcome::Rejected) {
+            txn.rollback().await?;
+            return Ok(outcome);
+        }
         record_backfill_tombstone_on(&txn, event_id, room_id, redaction_event_id).await?;
         close_delete_submission(&txn, event_id).await?;
         txn.commit().await?;
@@ -628,79 +664,13 @@ impl MessageStore for DbStore {
         revision: &MessageRevision,
     ) -> Result<EditProjectionOutcome> {
         let txn = self.db.begin().await?;
-        let edit_ts = revision.edited_at.timestamp_millis();
-
-        if message_revisions::Entity::find()
-            .filter(
-                message_revisions::COLUMN
-                    .event_id
-                    .eq(revision.event_id.clone()),
-            )
-            .one(&txn)
-            .await?
-            .is_some()
-        {
-            txn.commit().await?;
-            return Ok(EditProjectionOutcome::AlreadyKnown);
-        }
-
-        let parent = messages::Entity::find()
-            .filter(messages::COLUMN.event_id.eq(message.event_id.clone()))
-            .filter(messages::COLUMN.room_id.eq(message.room_id.clone()))
-            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
-            .one(&txn)
-            .await?;
-        let Some(parent) = parent else {
+        let outcome = apply_edit_on(&txn, message, revision).await?;
+        if matches!(outcome, EditProjectionOutcome::Rejected) {
             txn.rollback().await?;
-            return Ok(EditProjectionOutcome::Rejected);
-        };
-
-        let revision_model = message_revisions::ActiveModel {
-            event_id: Set(revision.event_id.clone()),
-            message_event_id: Set(message.event_id.clone()),
-            content_json: Set(content_to_json(&revision.content)),
-            edited_at: Set(revision.edited_at),
-            editor_mxid: Set(revision.editor_mxid.clone()),
-            redacted_at: Set(None),
-            redacted_by: Set(None),
-            created_at: Set(chrono::Utc::now()),
-            ..Default::default()
-        };
-        message_revisions::Entity::insert(revision_model)
-            .exec(&txn)
-            .await?;
-
-        let current = message_revisions::Entity::find()
-            .filter(
-                message_revisions::COLUMN
-                    .message_event_id
-                    .eq(message.event_id.clone()),
-            )
-            .filter(message_revisions::COLUMN.redacted_at.is_null())
-            .order_by_desc(message_revisions::Column::EditedAt)
-            .order_by_desc(message_revisions::Column::EventId)
-            .one(&txn)
-            .await?;
-        let Some(current) = current else {
-            txn.rollback().await?;
-            return Ok(EditProjectionOutcome::Rejected);
-        };
-        if current.event_id != revision.event_id {
-            // The valid replacement remains stored as a fact, but it does not
-            // become the public view until a newer revision is redacted.
-            txn.commit().await?;
-            return Ok(EditProjectionOutcome::Superseded);
+            return Ok(outcome);
         }
-
-        let mut active: messages::ActiveModel = parent.into();
-        active.content_json = Set(content_to_json(&message.content));
-        active.last_edit_ts = Set(Some(edit_ts));
-        active.last_edit_event_id = Set(Some(revision.event_id.clone()));
-        active.updated_at = Set(chrono::Utc::now());
-        active.update(&txn).await?;
-
         txn.commit().await?;
-        Ok(EditProjectionOutcome::AppliedCurrent)
+        Ok(outcome)
     }
 
     async fn redact_message(
@@ -710,85 +680,14 @@ impl MessageStore for DbStore {
         redacted_at: chrono::DateTime<chrono::Utc>,
         redacted_by: &str,
     ) -> Result<MessageRedactionOutcome> {
-        // Redaction is a projection rewrite, not just a lifecycle flag: the
-        // homeserver strips the original event, so the read model must do the
-        // same. Revisions are removed in the same transaction because each one
-        // contains an earlier displayable version of the deleted comment.
-        let existing = messages::Entity::find()
-            .filter(messages::COLUMN.event_id.eq(event_id))
-            .one(&self.db)
-            .await?;
-        let Some(existing) = existing else {
-            return Ok(MessageRedactionOutcome::Rejected);
-        };
-        if existing.room_id != room_id {
-            return Ok(MessageRedactionOutcome::Rejected);
-        }
-        if existing.status == MessageStatus::Redacted.as_str() {
-            return Ok(MessageRedactionOutcome::AlreadyRedacted);
-        }
-
         let txn = self.db.begin().await?;
-        messages::Entity::update_many()
-            .col_expr(
-                messages::Column::ContentJson,
-                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
-            )
-            .col_expr(
-                messages::Column::OriginalContentJson,
-                sea_orm::sea_query::Expr::value(content_to_json(&Content::redacted())),
-            )
-            .col_expr(
-                messages::Column::RawContentJson,
-                sea_orm::sea_query::Expr::value("{}".to_owned()),
-            )
-            .col_expr(
-                messages::Column::Status,
-                sea_orm::sea_query::Expr::value(MessageStatus::Redacted.as_str()),
-            )
-            .col_expr(
-                messages::Column::RedactedAt,
-                sea_orm::sea_query::Expr::value(Some(redacted_at)),
-            )
-            .col_expr(
-                messages::Column::RedactedBy,
-                sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
-            )
-            .col_expr(
-                messages::Column::LastEditTs,
-                sea_orm::sea_query::Expr::value(Option::<i64>::None),
-            )
-            .col_expr(
-                messages::Column::LastEditEventId,
-                sea_orm::sea_query::Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                messages::Column::ReplyTo,
-                sea_orm::sea_query::Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                messages::Column::ThreadRoot,
-                sea_orm::sea_query::Expr::value(Option::<String>::None),
-            )
-            .col_expr(
-                messages::Column::SubmissionId,
-                sea_orm::sea_query::Expr::value(Option::<i64>::None),
-            )
-            .col_expr(
-                messages::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
-            )
-            .filter(messages::COLUMN.event_id.eq(event_id))
-            .filter(messages::COLUMN.room_id.eq(room_id))
-            .exec(&txn)
-            .await?;
-
-        message_revisions::Entity::delete_many()
-            .filter(message_revisions::COLUMN.message_event_id.eq(event_id))
-            .exec(&txn)
-            .await?;
+        let outcome = redact_message_on(&txn, event_id, room_id, redacted_at, redacted_by).await?;
+        if matches!(outcome, MessageRedactionOutcome::Rejected) {
+            txn.rollback().await?;
+            return Ok(outcome);
+        }
         txn.commit().await?;
-        Ok(MessageRedactionOutcome::Redacted)
+        Ok(outcome)
     }
 
     async fn get_message_revision(&self, event_id: &str) -> Result<Option<MessageRevision>> {
@@ -1036,6 +935,10 @@ impl MessageStore for DbStore {
             .col_expr(
                 poll_response_events::Column::RedactedAt,
                 sea_orm::sea_query::Expr::value(Some(redacted_at)),
+            )
+            .col_expr(
+                poll_response_events::Column::OptionIndex,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
             )
             .col_expr(
                 poll_response_events::Column::RedactedBy,

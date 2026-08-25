@@ -63,6 +63,7 @@ pub mod m20260825_000057_appservice_txn_dedupe;
 pub mod m20260825_000058_room_state_snapshots;
 pub mod m20260825_000059_room_upgrade_intents;
 pub mod m20260825_000060_sanitize_redacted_payloads;
+pub mod m20260825_000061_clear_redacted_poll_choices;
 
 pub struct Migrator;
 
@@ -186,6 +187,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260825_000058_room_state_snapshots::Migration),
             Box::new(m20260825_000059_room_upgrade_intents::Migration),
             Box::new(m20260825_000060_sanitize_redacted_payloads::Migration),
+            Box::new(m20260825_000061_clear_redacted_poll_choices::Migration),
         ]
     }
 }

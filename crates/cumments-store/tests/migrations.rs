@@ -96,6 +96,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260825_000060_sanitize_redacted_payloads".to_string()),
         "000060 must be registered or redacted payloads can remain in SQLite"
     );
+    assert!(
+        names.contains(&"m20260825_000061_clear_redacted_poll_choices".to_string()),
+        "000061 must be registered or redacted poll choices can remain in SQLite"
+    );
 }
 
 #[tokio::test]
@@ -227,6 +231,39 @@ async fn sanitize_redacted_payloads_migration_clears_late_retained_bodies() {
     assert_eq!(revisions.len(), 1);
     let content: String = revisions[0].try_get("", "content_json").expect("content");
     assert_eq!(content, r#"{"type":"redacted"}"#);
+}
+
+#[tokio::test]
+async fn clear_redacted_poll_choices_migration_forgets_selected_options() {
+    let url = test_db_url("clear-redacted-poll-choices");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(60))
+        .await
+        .expect("migrate to 000060");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO poll_response_events \
+         (event_id, poll_message_id, sender_mxid, option_index, origin_server_ts, \
+          redacted_at, redacted_by, created_at) \
+         VALUES \
+         ('$vote:hs', '$poll:hs', '@alice:hs', 2, 1, '{now}', '@moderator:hs', '{now}')"
+    ))
+    .await
+    .expect("insert redacted vote");
+
+    Migrator::up(&db, None).await.expect("apply 000061");
+
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT option_index FROM poll_response_events WHERE event_id = '$vote:hs'",
+        ))
+        .await
+        .expect("query migrated vote");
+    assert_eq!(rows.len(), 1);
+    let option_index: Option<i64> = rows[0].try_get("", "option_index").expect("option");
+    assert_eq!(option_index, None);
 }
 
 #[tokio::test]
