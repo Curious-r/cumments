@@ -5,7 +5,7 @@
 //! which behind a reverse proxy depends on `X-Forwarded-For` being set
 //! correctly.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -126,12 +126,23 @@ pub struct SseRateLimiter {
 #[derive(Default)]
 struct SseBuckets {
     buckets: HashMap<String, SseBucket>,
-    lru: VecDeque<String>,
+    /// Ordered from least to most recently used. The sequence number makes
+    /// entries unique even when several keys are touched within the same
+    /// `Instant` resolution.
+    lru: BTreeSet<LruEntry>,
+    next_sequence: u64,
 }
 
 struct SseBucket {
     tokens: f64,
     last_refill: Instant,
+    sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LruEntry {
+    sequence: u64,
+    key: String,
 }
 
 impl SseRateLimiter {
@@ -148,35 +159,39 @@ impl SseRateLimiter {
     pub fn acquire(&self, key: &str) -> Result<(), Duration> {
         let now = Instant::now();
         let mut state = self.buckets.lock().expect("SSE limiter mutex poisoned");
-        state.retain(&now, self.capacity_seconds());
+        state.retain_recent(&now, self.capacity_seconds());
 
-        let tokens = match state.buckets.get_mut(key) {
+        enum Acquisition {
+            Allowed(f64),
+            Denied(Duration),
+        }
+
+        let result = match state.buckets.get_mut(key) {
             Some(bucket) => {
                 bucket.refill(now, self.refill_rate(), self.burst);
                 if bucket.tokens < 1.0 {
                     let wait = Duration::from_secs_f64((1.0 - bucket.tokens) / self.refill_rate());
-                    state.touch(key);
-                    return Err(wait);
+                    Acquisition::Denied(wait)
+                } else {
+                    bucket.tokens -= 1.0;
+                    bucket.last_refill = now;
+                    Acquisition::Allowed(bucket.tokens)
                 }
-                bucket.tokens -= 1.0;
-                bucket.last_refill = now;
-                bucket.tokens
             }
             None => {
-                state.insert(
-                    key.to_string(),
-                    SseBucket {
-                        tokens: self.burst as f64 - 1.0,
-                        last_refill: now,
-                    },
-                );
-                self.burst as f64 - 1.0
+                state.insert(key.to_string(), self.burst as f64 - 1.0, now);
+                Acquisition::Allowed(self.burst as f64 - 1.0)
             }
         };
 
         state.touch(key);
-        debug_assert!(tokens >= 0.0);
-        Ok(())
+        match result {
+            Acquisition::Allowed(tokens) => {
+                debug_assert!(tokens >= 0.0);
+                Ok(())
+            }
+            Acquisition::Denied(wait) => Err(wait),
+        }
     }
 
     fn refill_rate(&self) -> f64 {
@@ -189,30 +204,71 @@ impl SseRateLimiter {
 }
 
 impl SseBuckets {
-    fn insert(&mut self, key: String, bucket: SseBucket) {
-        while self.lru.len() >= MAX_SSE_KEYS {
-            let Some(oldest) = self.lru.pop_front() else {
-                break;
-            };
-            self.buckets.remove(&oldest);
+    fn insert(&mut self, key: String, tokens: f64, last_refill: Instant) {
+        while self.buckets.len() >= MAX_SSE_KEYS {
+            self.evict_oldest();
         }
-        self.lru.push_back(key.clone());
-        self.buckets.insert(key, bucket);
+
+        let sequence = self.fresh_sequence();
+        self.lru.insert(LruEntry {
+            sequence,
+            key: key.clone(),
+        });
+        self.buckets.insert(
+            key,
+            SseBucket {
+                tokens,
+                last_refill,
+                sequence,
+            },
+        );
     }
 
     fn touch(&mut self, key: &str) {
-        if let Some(index) = self.lru.iter().position(|entry| entry == key)
-            && let Some(entry) = self.lru.remove(index)
-        {
-            self.lru.push_back(entry);
+        let Some(old_sequence) = self.buckets.get(key).map(|bucket| bucket.sequence) else {
+            return;
+        };
+        self.lru.remove(&LruEntry {
+            sequence: old_sequence,
+            key: key.to_owned(),
+        });
+        let sequence = self.fresh_sequence();
+        if let Some(bucket) = self.buckets.get_mut(key) {
+            bucket.sequence = sequence;
+        }
+        self.lru.insert(LruEntry {
+            sequence,
+            key: key.to_owned(),
+        });
+    }
+
+    fn retain_recent(&mut self, now: &Instant, capacity_seconds: f64) {
+        let ttl = Duration::from_secs_f64(capacity_seconds.max(1.0));
+        while let Some(oldest) = self.lru.pop_first() {
+            match self.buckets.get(&oldest.key) {
+                // Sequence numbers are assigned whenever `last_refill` moves
+                // forward, so the first non-expired entry ends the sweep.
+                Some(bucket) if now.duration_since(bucket.last_refill) >= ttl => {
+                    self.buckets.remove(&oldest.key);
+                }
+                Some(_) => {
+                    self.lru.insert(oldest);
+                    break;
+                }
+                None => {}
+            }
         }
     }
 
-    fn retain(&mut self, now: &Instant, capacity_seconds: f64) {
-        let ttl = Duration::from_secs_f64(capacity_seconds.max(1.0));
-        self.buckets
-            .retain(|_, bucket| now.duration_since(bucket.last_refill) < ttl);
-        self.lru.retain(|key| self.buckets.contains_key(key));
+    fn evict_oldest(&mut self) {
+        if let Some(oldest) = self.lru.pop_first() {
+            self.buckets.remove(&oldest.key);
+        }
+    }
+
+    fn fresh_sequence(&mut self) -> u64 {
+        self.next_sequence += 1;
+        self.next_sequence
     }
 }
 
@@ -370,6 +426,50 @@ mod tests {
             wait >= Duration::from_millis(1900),
             "unexpected wait {wait:?}"
         );
+    }
+
+    #[test]
+    fn sse_limiter_touch_moves_a_key_to_the_recent_end() {
+        let now = Instant::now();
+        let mut state = SseBuckets::default();
+        state.insert("oldest".to_owned(), 1.0, now);
+        state.insert("hot".to_owned(), 1.0, now);
+        state.insert("newest".to_owned(), 1.0, now);
+        state.touch("hot");
+
+        let keys: Vec<_> = state.lru.iter().map(|entry| entry.key.as_str()).collect();
+        assert_eq!(keys, ["oldest", "newest", "hot"]);
+    }
+
+    #[test]
+    fn sse_limiter_denied_attempts_refresh_recency() {
+        let limiter = SseRateLimiter::new(1, Duration::from_secs(100), 1);
+        let key = "client";
+
+        assert!(limiter.acquire(key).is_ok());
+        assert!(limiter.acquire(key).is_err());
+        assert!(limiter.acquire("later").is_ok());
+
+        let state = limiter.buckets.lock().expect("buckets");
+        let oldest = state.lru.first().expect("non-empty LRU");
+        assert_eq!(oldest.key, key, "a denial must keep the key tracked");
+    }
+
+    #[test]
+    fn sse_limiter_expires_only_from_the_old_end() {
+        let now = Instant::now();
+        let stale = now
+            .checked_sub(Duration::from_secs(2))
+            .expect("construct stale instant");
+        let mut state = SseBuckets::default();
+        state.insert("stale".to_owned(), 1.0, stale);
+        state.insert("fresh".to_owned(), 1.0, now);
+
+        state.retain_recent(&now, 1.0);
+
+        assert!(!state.buckets.contains_key("stale"));
+        assert!(state.buckets.contains_key("fresh"));
+        assert_eq!(state.buckets.len(), state.lru.len());
     }
 
     #[test]
