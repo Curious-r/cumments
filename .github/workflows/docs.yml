@@ -24,9 +24,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-node@v7
         with:
-          python-version: "3.14"
+          node-version: 24
+          cache: npm
+
+      - name: Install docs dependencies
+        run: npm ci --ignore-scripts
 
       - name: Resolve docs version
         id: version
@@ -40,9 +44,7 @@ jobs:
       - name: Build docs site
         env:
           CUMMENTS_DOCS_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          pip install --quiet mkdocs==1.6.1 mkdocs-material==9.7.7
-          mkdocs build --strict --config-file docs/mkdocs.yml
+        run: npm run docs:build
 
       - uses: actions/upload-pages-artifact@v5
         with:

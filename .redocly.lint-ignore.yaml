@@ -1,6 +1,6 @@
 # Narrow exceptions are part of the contract policy; do not grow this list
 # without recording why the generic rule does not fit the operation.
-docs/openapi.yaml:
+docs/public/openapi.yaml:
   # Health intentionally has only success and infrastructure-failure responses.
   operation-4xx-response:
     - '#/paths/~1health/get/responses'

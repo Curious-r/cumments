@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-const contract = readFileSync("docs/openapi.yaml", "utf8");
+const contract = readFileSync("docs/public/openapi.yaml", "utf8");
 
 function assert(condition, message) {
   if (!condition) {

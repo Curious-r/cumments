@@ -43,5 +43,5 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 - [Demo frontend](demo.md) — the standalone browser demo page and identity
   model.
 
-The OpenAPI contract lives at [`openapi.yaml`](openapi.yaml) and is validated
+The OpenAPI contract lives at [`/openapi.yaml`](/openapi.yaml) and is validated
 by CI (Redocly lint).
