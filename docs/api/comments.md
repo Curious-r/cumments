@@ -159,33 +159,14 @@ Signature message:
 ["PATCH","{site_id}","{page_slug}","{comment_id}","{content}","{challenge_prefix}"]
 ```
 
-The same operation is available without embedding `comment_id` in the URL:
-
-`PATCH /api/v1/sites/{site_id}/pages/{page_slug}/comments`
-
-```json
-{
-  "comment_id": "$event:server",
-  "content": "edited",
-  "author_public_key": "...",
-  "author_signature": "...",
-  "challenge_response": "challenge|nonce"
-}
-```
-
-Both edit forms are supported: the body-based form avoids percent-encoding
-opaque event IDs, while the path-based form keeps the target in the URL.
-Both require the `Idempotency-Key` header.
+The request requires the `Idempotency-Key` header. Event IDs are opaque, so
+clients must percent-encode `comment_id`.
 
 ## Delete a comment
 
-`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/comments?comment_id=$event%3Aserver`
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}`
 
-The target event id travels as a percent-encoded `comment_id` query
-parameter. RFC 9110 leaves DELETE request bodies undefined, so Cumments
-never puts the target in a DELETE body — that keeps requests acceptable to
-proxies that reject body-bearing DELETEs. The body carries only the author
-proof:
+The body carries only the author proof:
 
 ```json
 {
@@ -201,7 +182,8 @@ Signature message:
 ["DELETE","{site_id}","{page_slug}","{comment_id}","{challenge_prefix}"]
 ```
 
-The request requires the `Idempotency-Key` header.
+The request requires the `Idempotency-Key` header. Event IDs are opaque, so
+clients must percent-encode `comment_id`.
 
 ## React to a comment
 

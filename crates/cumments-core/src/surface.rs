@@ -449,18 +449,6 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "visitor.comment.create",
     ),
     http_operation(
-        "PATCH",
-        "/api/v1/sites/{site_id}/pages/{page_slug}/comments",
-        "updateCommentBody",
-        "visitor.comment.update",
-    ),
-    http_operation(
-        "DELETE",
-        "/api/v1/sites/{site_id}/pages/{page_slug}/comments",
-        "deleteComment",
-        "visitor.comment.delete",
-    ),
-    http_operation(
         "QUERY",
         "/api/v1/sites/{site_id}/pages/{page_slug}/comments",
         "queryComments",
@@ -471,6 +459,12 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
         "updateCommentPath",
         "visitor.comment.update",
+    ),
+    http_operation(
+        "DELETE",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
+        "deleteCommentPath",
+        "visitor.comment.delete",
     ),
     http_operation(
         "GET",
@@ -855,6 +849,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 65);
+        assert_eq!(HTTP_OPERATIONS.len(), 64);
     }
 }

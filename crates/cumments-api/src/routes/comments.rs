@@ -11,7 +11,7 @@ use crate::request::{
 use crate::routes::media::media_url_base;
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -166,8 +166,7 @@ async fn idempotency_short_circuit(
     }
 }
 
-/// Route parameters shared by the PATCH/DELETE handlers, plus the canonical
-/// fingerprint path for the endpoint form actually used.
+/// Route parameters shared by the PATCH/DELETE handlers.
 struct CommentWritePath {
     site_id: String,
     page_slug: String,
@@ -176,10 +175,6 @@ struct CommentWritePath {
 }
 
 impl CommentWritePath {
-    /// `fingerprint_path` is the canonical idempotency identity of the
-    /// endpoint form used. DELETE targets the collection endpoint (the
-    /// comment id rides in the query string); PATCH can use either the path
-    /// or the body form.
     fn new(
         site_id: String,
         page_slug: String,
@@ -547,29 +542,18 @@ pub(crate) async fn post_comment_handler(
     }
 }
 
-/// Delete via the collection endpoint, with `comment_id` in the query string
-/// so opaque Matrix event IDs never need percent-encoding in the path.
+/// Delete a comment addressed by its path.
 pub(crate) async fn delete_comment_handler(
     State(state): State<ApiState>,
-    Path((site_id, page_slug)): Path<(String, String)>,
+    Path((site_id, page_slug, comment_id)): Path<(String, String, String)>,
     connect: ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    Query(query): Query<std::collections::HashMap<String, String>>,
     body: String,
 ) -> Result<impl IntoResponse, AppError> {
     let req: DeleteCommentRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
-    let comment_id = query
-        .get("comment_id")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            AppError::BadRequest("comment_id query parameter is required".to_string())
-        })?;
-    // The collection path is constant for every DELETE: the body signature
-    // already covers `comment_id`, so the idempotency fingerprint stays
-    // insensitive to query percent-encoding choices.
-    let fingerprint_path = format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments");
+    let fingerprint_path =
+        format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}");
     let path = CommentWritePath::new(site_id, page_slug, comment_id, fingerprint_path);
     delete_comment_common(state, connect, headers, path, req, body).await
 }
@@ -739,26 +723,6 @@ pub(crate) async fn update_comment_handler(
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     let fingerprint_path =
         format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}");
-    let path = CommentWritePath::new(site_id, page_slug, comment_id, fingerprint_path);
-    update_comment_common(state, connect, headers, path, req, body).await
-}
-
-/// Edit via the collection endpoint, with `comment_id` in the JSON body so
-/// opaque Matrix event IDs never need percent-encoding in the URL.
-pub(crate) async fn update_comment_body_handler(
-    State(state): State<ApiState>,
-    Path((site_id, page_slug)): Path<(String, String)>,
-    connect: ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, AppError> {
-    let req: UpdateCommentRequest = serde_json::from_str(&body)
-        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
-    let comment_id = req
-        .comment_id
-        .clone()
-        .ok_or_else(|| AppError::BadRequest("comment_id is required".to_string()))?;
-    let fingerprint_path = format!("/api/v1/sites/{site_id}/pages/{page_slug}/comments");
     let path = CommentWritePath::new(site_id, page_slug, comment_id, fingerprint_path);
     update_comment_common(state, connect, headers, path, req, body).await
 }

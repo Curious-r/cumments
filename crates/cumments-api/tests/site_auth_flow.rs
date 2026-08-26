@@ -588,8 +588,13 @@ async fn disabled_write_errors_include_wildcard_cors() {
 }
 
 #[tokio::test]
-async fn comment_body_endpoints_require_comment_id() {
-    let (state, store) = test_state("comment-body", SiteVerificationPolicy::Disabled, None).await;
+async fn comment_collection_rejects_resource_mutations() {
+    let (state, store) = test_state(
+        "comment-collection-mutations",
+        SiteVerificationPolicy::Disabled,
+        None,
+    )
+    .await;
     store
         .register_site("test-blog", &token_hash("claim"), false)
         .await
@@ -598,58 +603,27 @@ async fn comment_body_endpoints_require_comment_id() {
 
     let delete = router
         .clone()
-        .oneshot(
-            request(
-                Method::DELETE,
-                "/api/v1/sites/test-blog/pages/hello/comments",
-                Some("null"),
-                &[],
-            )
-            .map(|_| {
-                Body::from(
-                    serde_json::json!({
-                        "author_public_key": "pk",
-                        "author_signature": "sig",
-                        "challenge_response": "chal|nonce",
-                    })
-                    .to_string(),
-                )
-            }),
-        )
+        .oneshot(request(
+            Method::DELETE,
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+        ))
         .await
         .expect("call router");
-    assert_eq!(delete.status(), StatusCode::BAD_REQUEST);
-    assert!(
-        body_text(delete)
-            .await
-            .contains("comment_id query parameter is required")
-    );
+    assert_eq!(delete.status(), StatusCode::METHOD_NOT_ALLOWED);
 
     let patch = router
         .clone()
-        .oneshot(
-            request(
-                Method::PATCH,
-                "/api/v1/sites/test-blog/pages/hello/comments",
-                Some("null"),
-                &[],
-            )
-            .map(|_| {
-                Body::from(
-                    serde_json::json!({
-                        "content": "edited",
-                        "author_public_key": "pk",
-                        "author_signature": "sig",
-                        "challenge_response": "chal|nonce",
-                    })
-                    .to_string(),
-                )
-            }),
-        )
+        .oneshot(request(
+            Method::PATCH,
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+        ))
         .await
         .expect("call router");
-    assert_eq!(patch.status(), StatusCode::BAD_REQUEST);
-    assert!(body_text(patch).await.contains("comment_id is required"));
+    assert_eq!(patch.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]

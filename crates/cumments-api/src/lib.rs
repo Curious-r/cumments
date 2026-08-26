@@ -1,6 +1,6 @@
 use crate::routes::comments::{
     delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
-    react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
+    react_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
     add_admin_handler, add_manager_handler, add_room_moderator_handler,
@@ -163,15 +163,13 @@ pub fn build_router(state: ApiState) -> Router {
     let comment_router = Router::new()
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/comments",
-            // POST for writing submissions, fallback handles QUERY for reading.
-            post(post_comment_handler)
-                .patch(update_comment_body_handler)
-                .delete(delete_comment_handler)
-                .fallback(query_comments_handler),
+            post(post_comment_handler).fallback(query_comments_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
-            patch(update_comment_handler).fallback(method_not_allowed_handler),
+            patch(update_comment_handler)
+                .delete(delete_comment_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions",

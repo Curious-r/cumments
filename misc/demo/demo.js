@@ -2446,7 +2446,7 @@
                         chal.prefix,
                     ]);
                     const res = await fetch(
-                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments?comment_id=${encodeURIComponent(commentId)}`,
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments/${encodeURIComponent(commentId)}`,
                         {
                             method: "DELETE",
                             headers: {

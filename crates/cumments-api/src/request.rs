@@ -136,8 +136,8 @@ pub struct PostCommentRequest {
     pub challenge_response: String,
 }
 
-/// Request DTO for deleting a comment. The target `comment_id` travels as a
-/// query parameter, so the body carries only the author proof.
+/// Request DTO for deleting a comment. The body carries only the author
+/// proof; the target is addressed by path.
 #[derive(Debug, Deserialize, Validate)]
 pub struct DeleteCommentRequest {
     #[validate(length(min = 1, max = 128))]
@@ -151,10 +151,6 @@ pub struct DeleteCommentRequest {
 /// Request DTO for updating a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateCommentRequest {
-    /// Matrix event ID of the comment to edit. Required when calling the
-    /// collection endpoint; ignored/optional on the legacy path endpoint.
-    #[serde(default)]
-    pub comment_id: Option<String>,
     #[validate(length(min = 1, max = 5000))]
     pub content: String,
     #[validate(length(min = 1, max = 128))]

@@ -104,77 +104,6 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-    patch:
-      tags: [Comments]
-      summary: Edit a comment (body carries comment_id)
-      operationId: updateCommentBody
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateCommentRequest"
-      responses:
-        "202":
-          description: "Edit submission accepted (replays carry Idempotent-Replayed: true)"
-          headers:
-            Idempotent-Replayed:
-              description: "true when this is a replay of an accepted request"
-              schema:
-                type: boolean
-                enum: [true]
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SubmissionAccepted"
-        "400":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-    delete:
-      tags: [Comments]
-      summary: Delete a comment (comment_id is a query parameter)
-      operationId: deleteComment
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CommentIdQuery"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DeleteCommentRequest"
-      responses:
-        "202":
-          description: "Delete submission accepted (replays carry Idempotent-Replayed: true)"
-          headers:
-            Idempotent-Replayed:
-              description: "true when this is a replay of an accepted request"
-              schema:
-                type: boolean
-                enum: [true]
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SubmissionAccepted"
-        "400":
-          $ref: "#/components/responses/Error"
-        "403":
-          $ref: "#/components/responses/Error"
-        "404":
-          $ref: "#/components/responses/Error"
-        "409":
-          $ref: "#/components/responses/Error"
-        "429":
-          $ref: "#/components/responses/RateLimited"
     query:
       operationId: queryComments
       summary: List comments (QUERY)
@@ -288,6 +217,41 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Comments]
+      summary: Delete a comment
+      operationId: deleteCommentPath
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteCommentRequest"
+      responses:
+        "202":
+          description: "Delete submission accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
@@ -2044,13 +2008,6 @@ components:
       schema:
         type: string
         description: Matrix event ID, percent-encoded
-    CommentIdQuery:
-      name: comment_id
-      in: query
-      required: true
-      schema:
-        type: string
-        description: Matrix event ID, percent-encoded
     UserIdQuery:
       name: user_id
       in: query
@@ -2425,9 +2382,6 @@ components:
       type: object
       required: [content, author_public_key, author_signature, challenge_response]
       properties:
-        comment_id:
-          type: string
-          description: Required for the collection endpoint; optional on the path endpoint
         content:
           type: string
           minLength: 1
