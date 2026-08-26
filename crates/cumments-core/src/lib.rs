@@ -20,3 +20,4 @@ pub mod site_auth;
 pub mod site_service;
 pub mod sticker_packs;
 pub mod submissions;
+pub mod surface;
