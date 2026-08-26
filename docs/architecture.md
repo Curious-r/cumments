@@ -272,7 +272,7 @@ native `/upgrade`. The primary path is site-level (a site admin decides to
 upgrade their own room) with an operator mirror as fallback: site admins use
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades` (claim token) or
 `!cumments site <id> page <slug> upgrade <version> --confirm`; operators use
-`cumments rooms upgrade ROOM_ID VERSION`,
+`cumments rooms upgrades create ROOM_ID VERSION`,
 `POST /api/v1/operator/rooms/{room_id}/upgrades`, or
 `!cumments room ROOM_ID upgrade VERSION --confirm` in a private DM. The
 target version must be newer than the room's current version. The driver is
@@ -496,9 +496,9 @@ the backup command.
   one poison event cannot block other events. A background pass fetches the
   authoritative event from the homeserver; if it is redacted, its already
   stripped content replaces the local copy. Repeated failures escalate to
-  `manual` in `cumments projection list-repairs`.
+  `manual` in `cumments projection-repairs list`.
 - Comment-room upgrades are supported through the homeserver's native
-  `/upgrade`: `cumments rooms upgrade <room_id> <version>`, the Operator API
+  `/upgrade`: `cumments rooms upgrades create <room_id> <version>`, the Operator API
   (`POST /api/v1/operator/rooms/{room_id}/upgrades`), or the bot
   (`!cumments room <room_id> upgrade <version> --confirm`). The replacement
   room is adopted (metadata repaired), re-linked into the site Space, site

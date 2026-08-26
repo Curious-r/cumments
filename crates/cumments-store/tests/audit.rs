@@ -46,4 +46,13 @@ async fn command_audit_records_and_lists_with_filter() {
         .expect("list alice");
     assert_eq!(alice.len(), 2);
     assert!(alice.iter().all(|e| e.actor_mxid == "@alice:hs"));
+
+    assert_eq!(store.count_command_audit(None).await.expect("count"), 3);
+    assert_eq!(
+        store
+            .count_command_audit(Some("@alice:hs"))
+            .await
+            .expect("filtered count"),
+        2
+    );
 }

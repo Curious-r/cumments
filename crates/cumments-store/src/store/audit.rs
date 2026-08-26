@@ -4,7 +4,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use cumments_core::ports::CommandAuditStore;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set};
+use sea_orm::{
+    ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 
 fn to_entry(model: command_audit_logs::Model) -> Result<CommandAuditEntry> {
     Ok(CommandAuditEntry {
@@ -53,5 +55,13 @@ impl CommandAuditStore for DbStore {
         }
         let rows = query.all(&self.db).await?;
         rows.into_iter().map(to_entry).collect()
+    }
+
+    async fn count_command_audit(&self, actor_mxid: Option<&str>) -> Result<u64> {
+        let mut query = command_audit_logs::Entity::find();
+        if let Some(actor) = actor_mxid {
+            query = query.filter(command_audit_logs::Column::ActorMxid.eq(actor));
+        }
+        query.count(&self.db).await.map_err(Into::into)
     }
 }

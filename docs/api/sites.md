@@ -116,7 +116,7 @@ Decommissioning is two-phase. The request marks the site `retiring`
 **synchronously**: writes are rejected from that moment with
 `410 code=site-retired`, the claim token is invalidated, and it returns `202 Accepted` with `{ "target_type": "site", "target_id": "...", "state": "retiring" }`. A background pass then retires the Matrix Space and every comment room one by one — renaming them `[retired] ...`, removing their aliases and leaving them as the AppService sender — before clearing the local projections and the site row.
 
-The status is available at `GET /api/v1/sites/{site_id}/retirement`. The operator mirror is `POST /api/v1/operator/sites/{site_id}/retirement` (operator token). Sites declared in the `[sites]` configuration cannot be retired through the API; remove them from the config file instead. The CLI equivalent is `cumments sites retirements create <id> --yes [--wait]`.
+The status is available at `GET /api/v1/sites/{site_id}/retirement`. The operator mirror is `POST /api/v1/operator/sites/{site_id}/retirement` (operator token). Sites declared in the `[sites]` configuration cannot be retired through the API; remove them from the config file instead. The CLI equivalent is `cumments sites retirements create <id> --yes --confirm-site-id <id> [--wait]`.
 
 ## Retire a page's comment room
 

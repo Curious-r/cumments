@@ -163,7 +163,7 @@ recreating the site (the target version must be newer than the room's
 current version):
 
 ```bash
-docker compose exec cumments cumments rooms upgrade <room_id> 12
+docker compose exec cumments cumments rooms upgrades create <room_id> 12
 ```
 
 Pre-v12 rooms work too: new Cumments rooms give the bot explicit tombstone

@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 pub mod cli;
 pub mod config;
 
+use cli::CliError;
 use config::Mode;
 
 /// The complete clap command, used by `cumments completions`.
@@ -29,7 +30,17 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::ExitCode::from(u8::try_from(error.kind().exit_code()).unwrap_or(1))
+        }
+    }
+}
+
+async fn run() -> Result<(), CliError> {
     // Setup logging from .env and RUST_LOG
     dotenvy::dotenv().ok();
 
@@ -61,19 +72,25 @@ async fn main() -> Result<()> {
             cli::Commands::Backfill(_) => {
                 // Handled later, after the driver and processor are wired up.
             }
-            cli::Commands::Backup(_) => {
+            cli::Commands::Database(_) => {
                 // Handled after the database is connected.
             }
             cli::Commands::Sites(_) => {
                 // Handled after the database is connected.
             }
+            cli::Commands::Pages(_) => {
+                // Handled after the database and Matrix adapter are ready.
+            }
             cli::Commands::Rooms(_) => {
+                // Handled after the database is connected.
+            }
+            cli::Commands::QuarantinedRooms(_) => {
                 // Handled after the database is connected.
             }
             cli::Commands::Audit(_) => {
                 // Handled after the database is connected.
             }
-            cli::Commands::Projection(_) => {
+            cli::Commands::ProjectionRepairs(_) => {
                 // Handled after the database is connected.
             }
             cli::Commands::Completions(args) => {
@@ -90,11 +107,15 @@ async fn main() -> Result<()> {
         Some(path) => tracing::info!("Using config file: {}", path.display()),
         None => tracing::info!("No config file found; using defaults and environment variables."),
     }
-    let settings = config::get_configuration(args.config.as_deref())
-        .map_err(|e| anyhow::anyhow!("failed to read configuration: {e}"))?;
-    config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)?;
-    let operator_token_hash = config::operator_token_hash(&settings.security)?;
-    let operator_mxids = config::validate_operator_mxids(&settings.security)?;
+    let settings = config::get_configuration(args.config.as_deref()).map_err(|error| {
+        cli::CliError::validation(format!("failed to read configuration: {error}"))
+    })?;
+    config::validate_pow_secret(&settings.security.pow_secret, settings.matrix.mode)
+        .map_err(|error| cli::CliError::validation(error.to_string()))?;
+    let operator_token_hash = config::operator_token_hash(&settings.security)
+        .map_err(|error| cli::CliError::validation(error.to_string()))?;
+    let operator_mxids = config::validate_operator_mxids(&settings.security)
+        .map_err(|error| cli::CliError::validation(error.to_string()))?;
     let (backfill_tx, backfill_rx) = tokio::sync::mpsc::channel(1);
     if settings.matrix.mode == Mode::Logging
         && config::is_known_pow_placeholder(&settings.security.pow_secret)
@@ -106,10 +127,10 @@ async fn main() -> Result<()> {
         );
     }
     tracing::info!("Configuration loaded successfully.");
-    let site_auth_policy = Arc::new(config::build_site_auth_policy(
-        &settings.security,
-        &settings.sites,
-    )?);
+    let site_auth_policy = Arc::new(
+        config::build_site_auth_policy(&settings.security, &settings.sites)
+            .map_err(|error| cli::CliError::validation(error.to_string()))?,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // 2. Initialize database Store
@@ -117,31 +138,39 @@ async fn main() -> Result<()> {
     let db_store = Arc::new(
         cumments_store::DbStore::connect(&settings.database.url)
             .await
-            .map_err(|e| anyhow::anyhow!("failed to connect to database: {e}"))?,
+            .map_err(|error| {
+                cli::CliError::dependency("failed to connect to database", anyhow::anyhow!(error))
+            })?,
     );
     tracing::info!("Database initialized.");
 
     // Handle CLI subcommands that only need the database.
-    if let Some(cli::Commands::Rooms(rooms_args)) = &args.command
-        && !matches!(rooms_args.command, cli::RoomsCommand::Upgrade(_))
-    {
-        cli::handle_rooms_command(&db_store, rooms_args).await?;
+    if let Some(cli::Commands::QuarantinedRooms(args)) = &args.command {
+        cli::handle_quarantined_rooms_command(&db_store, args).await?;
         return Ok(());
     }
     if let Some(cli::Commands::Audit(audit_args)) = &args.command {
+        let cli::AuditCommand::Entries(entries_args) = &audit_args.command;
+        let cli::AuditEntriesCommand::List(list_args) = &entries_args.command;
         let entries = db_store
-            .list_command_audit(audit_args.actor.as_deref(), audit_args.limit)
+            .list_command_audit(list_args.actor.as_deref(), list_args.limit)
             .await?;
-        cli::print_json(&entries)?;
+        let total = db_store
+            .count_command_audit(list_args.actor.as_deref())
+            .await? as i64;
+        cli::print_list(&entries, total, 1, list_args.limit as i64)?;
         return Ok(());
     }
-    if let Some(cli::Commands::Projection(projection_args)) = &args.command {
-        cli::handle_projection_command(&db_store, projection_args).await?;
+    if let Some(cli::Commands::ProjectionRepairs(args)) = &args.command {
+        cli::handle_projection_repairs_command(&db_store, args).await?;
         return Ok(());
     }
 
     // Handle backup before any Matrix/driver setup: it only needs SQLite.
-    if let Some(cli::Commands::Backup(args)) = &args.command {
+    if let Some(cli::Commands::Database(database_args)) = &args.command
+        && let cli::DatabaseCommand::Backups(backups_args) = &database_args.command
+        && let cli::DatabaseBackupsCommand::Create(args) = &backups_args.command
+    {
         db_store.backup_to(&args.output).await?;
         tracing::info!("Backup written to {}", args.output.display());
         return Ok(());
@@ -157,7 +186,15 @@ async fn main() -> Result<()> {
     let sites_deferred = if let Some(cli::Commands::Sites(sites_args)) = &args.command {
         let needs_driver = matches!(
             &sites_args.command,
-            cli::SitesCommand::RemoveAdmin(_) | cli::SitesCommand::RemoveManager(_)
+            cli::SitesCommand::Admins(cli::SiteAdminsArgs {
+                command: cli::SiteAdminsCommand::Remove(_),
+            }) | cli::SitesCommand::Managers(cli::SiteManagersArgs {
+                command: cli::SiteManagersCommand::Remove(_),
+            }) | cli::SitesCommand::Moderators(cli::PageModeratorsArgs {
+                command: cli::PageModeratorsCommand::Remove(_),
+            }) | cli::SitesCommand::Packs(cli::SitePacksArgs {
+                command: cli::SitePacksCommand::Stickers(_)
+            })
         );
         if !needs_driver {
             let logging = cumments_matrix::LoggingMatrixDriver;
@@ -266,10 +303,16 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(cli::Commands::Pages(pages_args)) = &args.command {
+        cli::handle_pages_command(&db_store, driver.as_ref(), &site_service, pages_args).await?;
+        return Ok(());
+    }
+
     // Room upgrades need the driver + site service; they run here instead
     // of the early database-only phase.
     if let Some(cli::Commands::Rooms(rooms_args)) = &args.command
-        && let cli::RoomsCommand::Upgrade(upgrade_args) = &rooms_args.command
+        && let cli::RoomsCommand::Upgrades(upgrades_args) = &rooms_args.command
+        && let cli::RoomUpgradesCommand::Create(upgrade_args) = &upgrades_args.command
     {
         cli::handle_rooms_upgrade_command(&db_store, driver.as_ref(), &site_service, upgrade_args)
             .await?;
@@ -365,11 +408,13 @@ async fn main() -> Result<()> {
                 );
                 return Ok(());
             }
-            cli::Commands::Backup(_) => unreachable!("handled earlier"),
+            cli::Commands::Database(_) => unreachable!("handled earlier"),
             cli::Commands::Sites(_) => unreachable!("handled earlier"),
+            cli::Commands::Pages(_) => unreachable!("handled earlier"),
+            cli::Commands::QuarantinedRooms(_) => unreachable!("handled earlier"),
             cli::Commands::Audit(_) => unreachable!("handled earlier"),
             cli::Commands::Rooms(_) => unreachable!("handled earlier"),
-            cli::Commands::Projection(_) => unreachable!("handled earlier"),
+            cli::Commands::ProjectionRepairs(_) => unreachable!("handled earlier"),
             cli::Commands::Completions(_) => unreachable!("handled earlier"),
         }
     }

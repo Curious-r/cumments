@@ -1,68 +1,90 @@
-//! Clap argument definitions and the completions command.
+//! Clap argument definitions for the stable CLI grammar.
 
-use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
 #[derive(clap::Args, Debug)]
 pub struct GenerateRegistrationArgs {
-    /// The URL where the homeserver can reach this Cumments instance
     #[arg(long)]
     pub url: Option<String>,
-
-    /// The Matrix server name (domain)
     #[arg(long)]
     pub server_name: Option<String>,
-
-    /// The localpart for the AppService's sender user
     #[arg(long)]
     pub sender_localpart: Option<String>,
-
-    /// The AppService id (must match config's matrix.appservice.id)
     #[arg(long)]
     pub id: Option<String>,
-
-    /// Suppress token hints; stdout carries a `[REDACTED]` YAML for
-    /// demos/audits only. Use `--output` for a real registration file.
     #[arg(long, default_value_t = false)]
     pub quiet: bool,
-
-    /// Write the registration YAML (real tokens) to this file with 0600
-    /// permissions instead of printing it.
     #[arg(long)]
     pub output: Option<PathBuf>,
 }
 
-/// Backfill the read model from Matrix room history.
 #[derive(clap::Args, Debug)]
 pub struct BackfillArgs {
-    /// Stop fetching a room after this many history pages (~100 events each).
-    /// The cursor is saved so a later run resumes where it stopped.
-    /// `0` disables the cap.
     #[arg(long, default_value_t = 500)]
     pub max_pages: u32,
 }
 
-/// Create a consistent single-file SQLite backup.
 #[derive(clap::Args, Debug)]
-pub struct BackupArgs {
-    /// Destination SQLite file (must not already exist)
+pub struct BackupCreateArgs {
     #[arg(short, long)]
     pub output: PathBuf,
 }
 
-/// List the chat command audit log.
+#[derive(Subcommand, Debug)]
+pub enum DatabaseCommand {
+    #[command(name = "backups")]
+    Backups(DatabaseBackupsArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DatabaseArgs {
+    #[command(subcommand)]
+    pub command: DatabaseCommand,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DatabaseBackupsArgs {
+    #[command(subcommand)]
+    pub command: DatabaseBackupsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DatabaseBackupsCommand {
+    Create(BackupCreateArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuditCommand {
+    #[command(name = "entries")]
+    Entries(AuditEntriesArgs),
+}
+
 #[derive(clap::Args, Debug)]
 pub struct AuditArgs {
-    /// Only entries from this MXID.
+    #[command(subcommand)]
+    pub command: AuditCommand,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AuditEntriesArgs {
+    #[command(subcommand)]
+    pub command: AuditEntriesCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuditEntriesCommand {
+    List(AuditListArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AuditListArgs {
     #[arg(long)]
     pub actor: Option<String>,
-    /// Maximum entries to show.
     #[arg(long, default_value_t = 50)]
     pub limit: u64,
 }
 
-/// Site management subcommands.
 #[derive(clap::Args, Debug)]
 pub struct SitesArgs {
     #[command(subcommand)]
@@ -71,96 +93,176 @@ pub struct SitesArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum SitesCommand {
-    /// Register a site and print its id and one-time claim token
-    #[command(name = "register")]
     Register(RegisterSiteArgs),
-    /// List managed sites (database rows merged with the `[sites]` overlay)
-    #[command(name = "list")]
     List(SiteListArgs),
-    /// Revoke a verified origin (config-declared origins cannot be revoked)
-    #[command(name = "revoke-origin")]
-    RevokeOrigin(RevokeOriginArgs),
-    /// Rotate the HMAC secret; the new secret is printed exactly once
-    #[command(name = "rotate-secret")]
-    RotateSecret(SiteIdArg),
-    /// Remove the HMAC secret and fall back to origin auth
-    #[command(name = "revoke-secret")]
-    RevokeSecret(RevokeSecretArgs),
-    /// Export a TOML block to adopt a database-tracked site into `[sites]`
-    #[command(name = "export-config")]
+    Get(SiteIdArg),
     ExportConfig(ExportConfigArgs),
-    /// Rotate the claim token; the new token is printed exactly once
-    #[command(name = "rotate-claim-token")]
-    RotateClaimToken(SiteIdArg),
-    /// Stop writes and retire the site's Matrix Space and rooms
-    #[command(name = "retire")]
-    Retire(RetireSiteArgs),
-    /// Start a pending site-admin claim and print its one-time verify token
-    #[command(name = "add-admin")]
-    AddAdmin(SiteUserIdArg),
-    /// Revoke a pending site-admin claim (applied roles are managed in Matrix)
-    #[command(name = "remove-admin")]
-    RemoveAdmin(SiteUserIdArg),
-    /// Start a pending manager claim and print its one-time verify token
-    #[command(name = "add-manager")]
-    AddManager(SiteUserIdArg),
-    /// Start a pending room moderator claim and print its verify token
-    #[command(name = "add-moderator")]
-    AddModerator(PageUserIdArg),
-    /// Remove a pending or applied room moderator
-    #[command(name = "remove-moderator")]
-    RemoveModerator(PageUserIdArg),
-    /// Revoke a pending manager claim (applied roles are managed in Matrix)
-    #[command(name = "remove-manager")]
-    RemoveManager(SiteUserIdArg),
-    /// Start an ownership transfer; the target must verify the claim token
-    #[command(name = "transfer-owner")]
-    TransferOwner(SiteUserIdArg),
-    /// Add or replace one sticker in a site pack
-    #[command(name = "add-sticker")]
-    AddSticker(AddStickerArgs),
-    /// Remove one sticker from a site pack
-    #[command(name = "remove-sticker")]
-    RemoveSticker(RemoveStickerArgs),
+    #[command(name = "origins")]
+    Origins(SiteOriginsArgs),
+    #[command(name = "secrets")]
+    Secrets(SiteSecretsArgs),
+    #[command(name = "claim-tokens")]
+    ClaimTokens(SiteClaimTokensArgs),
+    #[command(name = "admins")]
+    Admins(SiteAdminsArgs),
+    #[command(name = "managers")]
+    Managers(SiteManagersArgs),
+    #[command(name = "moderators")]
+    Moderators(PageModeratorsArgs),
+    #[command(name = "owners")]
+    Owners(SiteOwnersArgs),
+    #[command(name = "retirements")]
+    Retirements(SiteRetirementsArgs),
+    #[command(name = "packs")]
+    Packs(SitePacksArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteOriginsArgs {
+    #[command(subcommand)]
+    pub command: SiteOriginsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteOriginsCommand {
+    Revoke(RevokeOriginArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteSecretsArgs {
+    #[command(subcommand)]
+    pub command: SiteSecretsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteSecretsCommand {
+    Rotate(SiteIdArg),
+    Revoke(RevokeSecretArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteClaimTokensArgs {
+    #[command(subcommand)]
+    pub command: SiteClaimTokensCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteClaimTokensCommand {
+    Rotate(SiteIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteAdminsArgs {
+    #[command(subcommand)]
+    pub command: SiteAdminsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteAdminsCommand {
+    Add(SiteUserIdArg),
+    Remove(SiteUserIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteManagersArgs {
+    #[command(subcommand)]
+    pub command: SiteManagersCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteManagersCommand {
+    Add(SiteUserIdArg),
+    Remove(SiteUserIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PageModeratorsArgs {
+    #[command(subcommand)]
+    pub command: PageModeratorsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PageModeratorsCommand {
+    Add(PageUserIdArg),
+    Remove(PageUserIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteOwnersArgs {
+    #[command(subcommand)]
+    pub command: SiteOwnersCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteOwnersCommand {
+    Transfer(SiteUserIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SiteRetirementsArgs {
+    #[command(subcommand)]
+    pub command: SiteRetirementsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SiteRetirementsCommand {
+    Create(RetireSiteArgs),
+    Show(SiteIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SitePacksArgs {
+    #[command(subcommand)]
+    pub command: SitePacksCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SitePacksCommand {
+    #[command(name = "stickers")]
+    Stickers(SitePackStickersArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SitePackStickersArgs {
+    #[command(subcommand)]
+    pub command: SitePackStickersCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SitePackStickersCommand {
+    Add(AddStickerArgs),
+    Remove(RemoveStickerArgs),
 }
 
 #[derive(clap::Args, Debug)]
 pub struct RegisterSiteArgs {
-    /// Optional explicit site id (operator-chosen). Without it, a random,
-    /// unguessable id is generated.
     #[arg(long)]
     pub site_id: Option<String>,
 }
 
-/// Arguments for listing sites (mirrors `QUERY /api/v1/operator/sites`).
 #[derive(clap::Args, Debug)]
 pub struct SiteListArgs {
-    /// Only show this site id
     #[arg(long)]
     pub site_id: Option<String>,
     #[arg(long, default_value_t = 1)]
     pub page: i64,
     #[arg(long, default_value_t = 20)]
     pub per_page: i64,
-    /// Render a human-readable table instead of JSON
     #[arg(long)]
     pub table: bool,
 }
 
-/// A single site id.
 #[derive(clap::Args, Debug)]
 pub struct SiteIdArg {
     pub site_id: String,
 }
 
-/// A site id plus a target Matrix user id.
 #[derive(clap::Args, Debug)]
 pub struct SiteUserIdArg {
     pub site_id: String,
     pub user_id: String,
 }
 
-/// A site id, page slug, and target Matrix user id.
 #[derive(clap::Args, Debug)]
 pub struct PageUserIdArg {
     pub site_id: String,
@@ -168,23 +270,18 @@ pub struct PageUserIdArg {
     pub user_id: String,
 }
 
-/// Arguments for adding a sticker image.
 #[derive(clap::Args, Debug)]
 pub struct AddStickerArgs {
     pub site_id: String,
     pub pack_id: String,
     pub shortcode: String,
-    /// Matrix media URL, for example `mxc://server/media-id`
     pub url: String,
-    /// Optional human-readable alt text
     #[arg(long)]
     pub body: Option<String>,
-    /// Optional JSON object with Matrix image info
     #[arg(long)]
     pub info: Option<String>,
 }
 
-/// Arguments for removing a sticker image.
 #[derive(clap::Args, Debug)]
 pub struct RemoveStickerArgs {
     pub site_id: String,
@@ -192,143 +289,213 @@ pub struct RemoveStickerArgs {
     pub shortcode: String,
 }
 
-/// Arguments for exporting a config snippet.
 #[derive(clap::Args, Debug)]
 pub struct ExportConfigArgs {
     pub site_id: String,
-    /// Print raw TOML instead of the JSON wrapper
     #[arg(long, default_value_t = false)]
     pub raw: bool,
 }
 
-/// Arguments for revoking the HMAC secret.
 #[derive(clap::Args, Debug)]
 pub struct RevokeSecretArgs {
     pub site_id: String,
-    /// Confirm the destructive operation
     #[arg(long)]
     pub yes: bool,
 }
 
-/// Arguments for retiring a site.
 #[derive(clap::Args, Debug)]
 pub struct RetireSiteArgs {
     pub site_id: String,
-    /// Confirm the destructive operation
     #[arg(long)]
     pub yes: bool,
-    /// Poll until the background retirement finishes
+    #[arg(long)]
+    pub confirm_site_id: Option<String>,
     #[arg(long)]
     pub wait: bool,
 }
 
-/// Arguments for revoking a verified origin.
 #[derive(clap::Args, Debug)]
 pub struct RevokeOriginArgs {
     pub site_id: String,
     pub origin: String,
 }
 
-/// Quarantined room management subcommands.
 #[derive(clap::Args, Debug)]
-pub struct RoomsArgs {
+pub struct PagesArgs {
     #[command(subcommand)]
-    pub command: RoomsCommand,
-}
-
-/// Projection repair queue subcommands.
-#[derive(clap::Args, Debug)]
-pub struct ProjectionArgs {
-    #[command(subcommand)]
-    pub command: ProjectionCommand,
+    pub command: PagesCommand,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum ProjectionCommand {
-    /// List durable Matrix facts awaiting projection repair
-    #[command(name = "list-repairs")]
-    ListRepairs(ListProjectionRepairsArgs),
+pub enum PagesCommand {
+    #[command(name = "upgrades")]
+    Upgrades(PageUpgradesArgs),
+    #[command(name = "retirements")]
+    Retirements(PageRetirementsArgs),
 }
 
-/// Arguments for listing projection repairs.
 #[derive(clap::Args, Debug)]
-pub struct ListProjectionRepairsArgs {
-    /// Filter by `pending`, `manual`, or `resolved`
+pub struct PageUpgradesArgs {
+    #[command(subcommand)]
+    pub command: PageUpgradesCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PageUpgradesCommand {
+    Create(CreatePageUpgradeArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CreatePageUpgradeArgs {
+    pub site_id: String,
+    pub page_slug: String,
+    pub new_version: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PageRetirementsArgs {
+    #[command(subcommand)]
+    pub command: PageRetirementsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PageRetirementsCommand {
+    Create(RetirePageArgs),
+    Show(PageIdArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RetirePageArgs {
+    pub site_id: String,
+    pub page_slug: String,
     #[arg(long)]
-    pub status: Option<String>,
-    /// Maximum rows to show.
-    #[arg(long, default_value_t = 50)]
-    pub limit: u64,
+    pub yes: bool,
+    #[arg(long)]
+    pub wait: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PageIdArgs {
+    pub site_id: String,
+    pub page_slug: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct QuarantinedRoomsArgs {
+    #[command(subcommand)]
+    pub command: QuarantinedRoomsCommand,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum RoomsCommand {
-    /// List rooms currently quarantined from adoption
-    #[command(name = "list-quarantined")]
-    ListQuarantined(QuarantinedListArgs),
-    /// Clear a room's quarantine and make it canonical again
-    #[command(name = "reinstate")]
+pub enum QuarantinedRoomsCommand {
+    List(QuarantinedListArgs),
     Reinstate(ReinstateRoomArgs),
-    /// Upgrade a registered comment room through the homeserver's /upgrade
-    #[command(name = "upgrade")]
-    Upgrade(UpgradeRoomArgs),
-    /// Stop writes and retire one comment room (leave Matrix, clear local
-    /// projections in the background)
-    #[command(name = "retire")]
-    Retire(RetireRoomArgs),
 }
 
-/// Arguments for listing quarantined rooms (mirrors
-/// `QUERY /api/v1/operator/quarantined-rooms`).
 #[derive(clap::Args, Debug)]
 pub struct QuarantinedListArgs {
-    /// Only show rooms for this site
     #[arg(long)]
     pub site_id: Option<String>,
     #[arg(long, default_value_t = 1)]
     pub page: i64,
     #[arg(long, default_value_t = 20)]
     pub per_page: i64,
-    /// Render a human-readable table instead of JSON
     #[arg(long)]
     pub table: bool,
 }
 
-/// Arguments for reinstating a room.
 #[derive(clap::Args, Debug)]
 pub struct ReinstateRoomArgs {
     pub room_id: String,
 }
 
-/// Arguments for retiring a comment room.
+#[derive(clap::Args, Debug)]
+pub struct RoomsArgs {
+    #[command(subcommand)]
+    pub command: RoomsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RoomsCommand {
+    #[command(name = "upgrades")]
+    Upgrades(RoomUpgradesArgs),
+    #[command(name = "retirements")]
+    Retirements(RoomRetirementsArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RoomUpgradesArgs {
+    #[command(subcommand)]
+    pub command: RoomUpgradesCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RoomUpgradesCommand {
+    Create(UpgradeRoomArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct UpgradeRoomArgs {
+    pub room_id: String,
+    pub new_version: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RoomRetirementsArgs {
+    #[command(subcommand)]
+    pub command: RoomRetirementsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RoomRetirementsCommand {
+    Create(RetireRoomArgs),
+    Show(RoomIdArg),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RoomIdArg {
+    pub room_id: String,
+}
+
 #[derive(clap::Args, Debug)]
 pub struct RetireRoomArgs {
     pub room_id: String,
-    /// Confirm the destructive operation
     #[arg(long)]
     pub yes: bool,
-    /// Poll until the background retirement finishes
     #[arg(long)]
     pub wait: bool,
 }
 
-/// Arguments for upgrading a comment room.
 #[derive(clap::Args, Debug)]
-pub struct UpgradeRoomArgs {
-    pub room_id: String,
-    /// Target Matrix room version, e.g. `12`
-    pub new_version: String,
+pub struct ProjectionRepairsArgs {
+    #[command(subcommand)]
+    pub command: ProjectionRepairsCommand,
 }
 
-/// Arguments for generating shell completions.
-#[derive(clap::Args, Debug)]
-pub struct CompletionsArgs {
-    /// Target shell
-    #[arg(value_enum)]
-    pub shell: clap_complete::Shell,
+#[derive(Subcommand, Debug)]
+pub enum ProjectionRepairsCommand {
+    List(ListProjectionRepairsArgs),
+    Get(EventIdArg),
+    Retry(EventIdArg),
 }
 
-/// AppService management subcommands.
+#[derive(clap::Args, Debug)]
+pub struct EventIdArg {
+    pub target_event_id: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ListProjectionRepairsArgs {
+    #[arg(long)]
+    pub status: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    pub page: i64,
+    #[arg(long, default_value_t = 50)]
+    pub per_page: i64,
+    #[arg(long)]
+    pub table: bool,
+}
+
 #[derive(clap::Args, Debug)]
 pub struct AppserviceArgs {
     #[command(subcommand)]
@@ -337,42 +504,44 @@ pub struct AppserviceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum AppserviceCommand {
-    /// Generate a complete registration.yaml for the AppService mode
-    #[command(name = "generate-registration")]
-    GenerateRegistration(GenerateRegistrationArgs),
+    #[command(name = "registrations")]
+    Registrations(AppserviceRegistrationsArgs),
 }
 
-/// All CLI subcommands.
+#[derive(clap::Args, Debug)]
+pub struct AppserviceRegistrationsArgs {
+    #[command(subcommand)]
+    pub command: AppserviceRegistrationsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AppserviceRegistrationsCommand {
+    Generate(GenerateRegistrationArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CompletionsArgs {
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// AppService management commands
-    #[command(name = "appservice")]
     Appservice(AppserviceArgs),
-    /// Rebuild the read model from Matrix room history
-    #[command(name = "backfill")]
     Backfill(BackfillArgs),
-    /// Create a consistent single-file SQLite backup
-    #[command(name = "backup")]
-    Backup(BackupArgs),
-    /// List the chat command audit log
-    #[command(name = "audit")]
+    Database(DatabaseArgs),
     Audit(AuditArgs),
-    /// Manage sites registered through the API
-    #[command(name = "sites")]
     Sites(SitesArgs),
-    /// Manage quarantined comment rooms
-    #[command(name = "rooms")]
+    Pages(PagesArgs),
+    #[command(name = "quarantined-rooms")]
+    QuarantinedRooms(QuarantinedRoomsArgs),
     Rooms(RoomsArgs),
-    /// Inspect the durable projection repair queue
-    #[command(name = "projection")]
-    Projection(ProjectionArgs),
-    /// Generate a shell completion script
-    #[command(name = "completions")]
+    #[command(name = "projection-repairs")]
+    ProjectionRepairs(ProjectionRepairsArgs),
     Completions(CompletionsArgs),
 }
 
-/// Handles `cumments completions <shell>`.
-pub fn handle_completions(args: &CompletionsArgs) -> Result<()> {
+pub fn handle_completions(args: &CompletionsArgs) -> anyhow::Result<()> {
     let mut cmd = crate::cli_command();
     clap_complete::generate(args.shell, &mut cmd, "cumments", &mut std::io::stdout());
     Ok(())
@@ -380,26 +549,26 @@ pub fn handle_completions(args: &CompletionsArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn completions_command_tree_has_management_groups() {
-        let command = crate::cli_command();
-        let subcommands = command
-            .get_subcommands()
-            .map(|sub| sub.get_name().to_string())
-            .collect::<Vec<_>>();
-        for expected in [
-            "appservice",
-            "backfill",
-            "backup",
-            "sites",
-            "rooms",
-            "projection",
-            "completions",
-        ] {
-            assert!(
-                subcommands.iter().any(|name| name == expected),
-                "missing subcommand `{expected}`"
-            );
+    fn find<'a>(command: &'a clap::Command, path: &[&str]) -> Option<&'a clap::Command> {
+        let mut current = command;
+        for name in path {
+            current = current.find_subcommand(*name)?;
         }
+        Some(current)
+    }
+
+    #[test]
+    fn cli_uses_domain_resource_verb_tree() {
+        let root = crate::cli_command();
+        assert!(find(&root, &["database", "backups", "create"]).is_some());
+        assert!(find(&root, &["audit", "entries", "list"]).is_some());
+        assert!(find(&root, &["appservice", "registrations", "generate"]).is_some());
+        assert!(find(&root, &["sites", "secrets", "rotate"]).is_some());
+        assert!(find(&root, &["sites", "admins", "add"]).is_some());
+        assert!(find(&root, &["sites", "moderators", "remove"]).is_some());
+        assert!(find(&root, &["pages", "upgrades", "create"]).is_some());
+        assert!(find(&root, &["quarantined-rooms", "reinstate"]).is_some());
+        assert!(find(&root, &["rooms", "retirements", "show"]).is_some());
+        assert!(find(&root, &["projection-repairs", "retry"]).is_some());
     }
 }

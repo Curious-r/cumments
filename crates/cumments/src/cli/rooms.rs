@@ -1,15 +1,34 @@
 //! `cumments rooms ...` command handling.
 
-use super::args::{RetireRoomArgs, RoomsArgs, RoomsCommand, UpgradeRoomArgs};
+use super::args::{
+    RetireRoomArgs, RoomIdArg, RoomRetirementsCommand, RoomsArgs, RoomsCommand, UpgradeRoomArgs,
+};
+use super::error::{CliError, CliResult};
 use super::output::{print_json, print_room_table};
-use anyhow::{Result, bail};
+use super::sites::management_error;
 use cumments_core::operator::{OperatorListQuery, list_operator_quarantined_rooms};
 use cumments_core::ports::RegistryStore;
 
 /// Handles `cumments rooms ...`.
-pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsArgs) -> Result<()> {
+pub async fn handle_rooms_command(
+    store: &cumments_store::DbStore,
+    args: &RoomsArgs,
+) -> CliResult<()> {
     match &args.command {
-        RoomsCommand::ListQuarantined(list_args) => {
+        RoomsCommand::Upgrades(_) => unreachable!("upgrades are handled after driver setup"),
+        RoomsCommand::Retirements(args) => match &args.command {
+            RoomRetirementsCommand::Create(args) => retire_room(store, args).await,
+            RoomRetirementsCommand::Show(args) => show_retirement(store, args).await,
+        },
+    }
+}
+
+pub async fn handle_quarantined_rooms_command(
+    store: &cumments_store::DbStore,
+    args: &super::args::QuarantinedRoomsArgs,
+) -> CliResult<()> {
+    match &args.command {
+        super::args::QuarantinedRoomsCommand::List(list_args) => {
             let query = OperatorListQuery {
                 page: Some(list_args.page),
                 per_page: Some(list_args.per_page),
@@ -23,10 +42,10 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
             }
             Ok(())
         }
-        RoomsCommand::Reinstate(args) => {
+        super::args::QuarantinedRoomsCommand::Reinstate(args) => {
             let reinstated = store.reinstate_room(&args.room_id).await?;
             if !reinstated {
-                bail!("room not found in the registry");
+                return Err(CliError::not_found("room not found in the registry"));
             }
             print_json(&serde_json::json!({
                 "room_id": args.room_id,
@@ -34,21 +53,20 @@ pub async fn handle_rooms_command(store: &cumments_store::DbStore, args: &RoomsA
             }))?;
             Ok(())
         }
-        RoomsCommand::Upgrade(_) => unreachable!("upgrade is handled after driver setup"),
-        RoomsCommand::Retire(args) => retire_room(store, args).await,
     }
 }
 
 /// Marks a room `Retired` (writes stop immediately). The running server's
 /// reconciler performs the Matrix retirement and local cleanup.
-async fn retire_room(store: &cumments_store::DbStore, args: &RetireRoomArgs) -> Result<()> {
+async fn retire_room(store: &cumments_store::DbStore, args: &RetireRoomArgs) -> CliResult<()> {
     if !args.yes {
-        bail!("refusing to retire the room without `--yes`");
+        return Err(CliError::confirmation("retiring a room requires `--yes`"));
     }
-    let retired =
-        cumments_core::management::retire_page_room_by_room_id(store, &args.room_id).await?;
+    let retired = cumments_core::management::retire_page_room_by_room_id(store, &args.room_id)
+        .await
+        .map_err(management_error)?;
     if !retired {
-        bail!("room not found or not active");
+        return Err(CliError::not_found("room not found or not active"));
     }
 
     if args.wait {
@@ -66,7 +84,9 @@ async fn retire_room(store: &cumments_store::DbStore, args: &RetireRoomArgs) -> 
                 return Ok(());
             }
         }
-        bail!("timed out waiting for the retirement to finish");
+        return Err(CliError::conflict(
+            "timed out waiting for the retirement to finish",
+        ));
     }
 
     print_json(&serde_json::json!({
@@ -80,13 +100,34 @@ async fn retire_room(store: &cumments_store::DbStore, args: &RetireRoomArgs) -> 
     Ok(())
 }
 
+async fn show_retirement(store: &cumments_store::DbStore, args: &RoomIdArg) -> CliResult<()> {
+    let identity = store
+        .get_registered_room_identity(&args.room_id)
+        .await?
+        .ok_or_else(|| CliError::not_found("room not found"))?;
+    if store.get_room_status(&args.room_id).await?
+        != Some(cumments_core::models::RoomStatus::Retired)
+    {
+        return Err(CliError::not_found(format!(
+            "no retirement in progress for {}/{}",
+            identity.site_id, identity.page_slug
+        )));
+    }
+    print_json(&serde_json::json!({
+        "target_type": "room",
+        "target_id": args.room_id,
+        "state": "retired",
+    }))?;
+    Ok(())
+}
+
 /// Handles `cumments rooms upgrade ...` after the Matrix driver exists.
 pub async fn handle_rooms_upgrade_command(
     store: &cumments_store::DbStore,
     driver: &dyn cumments_core::ports::MatrixDriver,
     site_service: &cumments_core::site_service::SiteService,
     args: &UpgradeRoomArgs,
-) -> Result<()> {
+) -> CliResult<()> {
     let replacement = cumments_core::management::upgrade_comment_room(
         driver,
         store,
@@ -94,7 +135,8 @@ pub async fn handle_rooms_upgrade_command(
         &args.room_id,
         &args.new_version,
     )
-    .await?;
+    .await
+    .map_err(management_error)?;
     print_json(&serde_json::json!({
         "room_id": args.room_id,
         "new_version": args.new_version,
@@ -105,7 +147,10 @@ pub async fn handle_rooms_upgrade_command(
 
 #[cfg(test)]
 mod tests {
-    use super::super::args::{QuarantinedListArgs, ReinstateRoomArgs, RetireRoomArgs};
+    use super::super::args::{
+        QuarantinedListArgs, QuarantinedRoomsArgs, QuarantinedRoomsCommand, ReinstateRoomArgs,
+        RetireRoomArgs, RoomRetirementsArgs, RoomRetirementsCommand, RoomsArgs, RoomsCommand,
+    };
     use super::super::test_support::*;
     use super::*;
     use cumments_core::models::{PageSlug, RoomStatus, SiteId};
@@ -127,24 +172,24 @@ mod tests {
             .await
             .expect("quarantine room");
 
-        let list = RoomsArgs {
-            command: RoomsCommand::ListQuarantined(QuarantinedListArgs {
+        let list = QuarantinedRoomsArgs {
+            command: QuarantinedRoomsCommand::List(QuarantinedListArgs {
                 site_id: None,
                 page: 1,
                 per_page: 20,
                 table: false,
             }),
         };
-        handle_rooms_command(&store, &list)
+        handle_quarantined_rooms_command(&store, &list)
             .await
             .expect("list quarantined rooms");
 
-        let reinstate = RoomsArgs {
-            command: RoomsCommand::Reinstate(ReinstateRoomArgs {
+        let reinstate = QuarantinedRoomsArgs {
+            command: QuarantinedRoomsCommand::Reinstate(ReinstateRoomArgs {
                 room_id: "!room:hs".to_string(),
             }),
         };
-        handle_rooms_command(&store, &reinstate)
+        handle_quarantined_rooms_command(&store, &reinstate)
             .await
             .expect("reinstate room");
         assert!(
@@ -156,13 +201,15 @@ mod tests {
             "room must no longer be quarantined"
         );
 
-        let missing = RoomsArgs {
-            command: RoomsCommand::Reinstate(ReinstateRoomArgs {
+        let missing = QuarantinedRoomsArgs {
+            command: QuarantinedRoomsCommand::Reinstate(ReinstateRoomArgs {
                 room_id: "!nope:hs".to_string(),
             }),
         };
         assert!(
-            handle_rooms_command(&store, &missing).await.is_err(),
+            handle_quarantined_rooms_command(&store, &missing)
+                .await
+                .is_err(),
             "unknown room must fail"
         );
     }
@@ -180,10 +227,12 @@ mod tests {
             .expect("register room");
 
         let no_confirm = RoomsArgs {
-            command: RoomsCommand::Retire(RetireRoomArgs {
-                room_id: "!room:hs".to_string(),
-                yes: false,
-                wait: false,
+            command: RoomsCommand::Retirements(RoomRetirementsArgs {
+                command: RoomRetirementsCommand::Create(RetireRoomArgs {
+                    room_id: "!room:hs".to_string(),
+                    yes: false,
+                    wait: false,
+                }),
             }),
         };
         assert!(
@@ -199,10 +248,12 @@ mod tests {
         );
 
         let retire = RoomsArgs {
-            command: RoomsCommand::Retire(RetireRoomArgs {
-                room_id: "!room:hs".to_string(),
-                yes: true,
-                wait: false,
+            command: RoomsCommand::Retirements(RoomRetirementsArgs {
+                command: RoomRetirementsCommand::Create(RetireRoomArgs {
+                    room_id: "!room:hs".to_string(),
+                    yes: true,
+                    wait: false,
+                }),
             }),
         };
         handle_rooms_command(&store, &retire)

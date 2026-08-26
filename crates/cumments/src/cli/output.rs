@@ -1,6 +1,7 @@
 //! Shared stdout helpers for CLI commands.
 
 use anyhow::Result;
+use cumments_core::models::PaginationMeta;
 use cumments_core::models::QuarantinedRoom;
 use cumments_core::operator::OperatorSite;
 use serde::Serialize;
@@ -9,6 +10,19 @@ use serde::Serialize;
 pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string(value)?);
     Ok(())
+}
+
+/// Prints the stable CLI list envelope shared with paginated HTTP reads.
+pub fn print_list<T: Serialize>(data: &[T], total: i64, page: i64, per_page: i64) -> Result<()> {
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + per_page - 1) / per_page
+    };
+    print_json(&serde_json::json!({
+        "data": data,
+        "meta": PaginationMeta { total, page, per_page, total_pages },
+    }))
 }
 
 /// Human-readable table for `sites list --table`.

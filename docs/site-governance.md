@@ -178,12 +178,11 @@ idempotent. Reads come from the projection and are therefore eventually
 consistent with Matrix.
 
 The CLI mirrors admin, manager and moderator operations locally
-(`cumments sites add-admin` / `remove-admin`, `add-manager` /
-`remove-manager`, `add-moderator` / `remove-moderator`) and can start a
-transfer with `cumments sites transfer-owner`: `add-*` stores a pending claim
-and prints the `verify_token`, while `remove-*` cancels pending claims or
-removes applied roles through the shared management use case (see
-[CLI](cli.md)).
+(`cumments sites admins add` / `remove`, `managers add` / `remove`,
+`moderators add` / `remove`) and can start a transfer with
+`cumments sites owners transfer`: `add` stores a pending claim and prints the
+`verify_token`, while `remove` cancels pending claims or removes applied roles
+through the shared management use case (see [CLI](cli.md)).
 
 ## Ownership transfer and recovery
 

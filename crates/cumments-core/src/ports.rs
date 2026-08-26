@@ -1242,6 +1242,9 @@ pub trait CommandAuditStore: Send + Sync {
         actor_mxid: Option<&str>,
         limit: u64,
     ) -> Result<Vec<CommandAuditEntry>>;
+
+    /// Counts all entries matching the actor filter.
+    async fn count_command_audit(&self, actor_mxid: Option<&str>) -> Result<u64>;
 }
 
 /// Port for virtual user identity management (AppService mode).

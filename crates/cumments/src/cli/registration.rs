@@ -1,6 +1,8 @@
 //! AppService registration generation and config-backed defaults.
 
-use super::args::{AppserviceArgs, AppserviceCommand, GenerateRegistrationArgs};
+use super::args::{
+    AppserviceArgs, AppserviceCommand, AppserviceRegistrationsCommand, GenerateRegistrationArgs,
+};
 use crate::config::{regex_escape, resolve_config_path};
 use anyhow::Result;
 use rand::Rng;
@@ -44,9 +46,11 @@ pub(super) fn generate_token() -> String {
 /// Handles `cumments appservice ...`.
 pub fn handle_appservice_command(args: &AppserviceArgs, config_path: Option<&str>) -> Result<()> {
     match &args.command {
-        AppserviceCommand::GenerateRegistration(reg_args) => {
-            handle_generate_registration(reg_args, config_path)
-        }
+        AppserviceCommand::Registrations(regs_args) => match &regs_args.command {
+            AppserviceRegistrationsCommand::Generate(reg_args) => {
+                handle_generate_registration(reg_args, config_path)
+            }
+        },
     }
 }
 
