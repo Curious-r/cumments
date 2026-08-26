@@ -73,12 +73,12 @@ the new token in the bot DM. The operator mirror is
 
 ## Rotate the claim token
 
-`POST /api/v1/sites/{site_id}/claim-token/rotate`
+`POST /api/v1/sites/{site_id}/claim-token-rotations`
 
 Returns a fresh claim token and invalidates the old one. The owner can use
 this immediately after a transfer to remove the delivered token from DM
 history. The operator mirror is
-`POST /api/v1/operator/sites/{site_id}/claim-token/rotate`.
+`POST /api/v1/operator/sites/{site_id}/claim-token-rotations`.
 
 ## Upgrade a comment room
 

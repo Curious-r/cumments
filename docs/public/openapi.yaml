@@ -482,13 +482,13 @@ paths:
                 $ref: "#/components/schemas/RetirementResponse"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/sites/{site_id}/origins/revoke:
+  /api/v1/operator/sites/{site_id}/origin-revocations:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
       summary: Revoke a verified origin
-      operationId: revokeVerifiedOrigin
+      operationId: createOriginRevocation
       security:
         - operatorToken: []
       requestBody:
@@ -506,13 +506,13 @@ paths:
                 $ref: "#/components/schemas/OperatorSite"
         "400":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/sites/{site_id}/secret/rotate:
+  /api/v1/operator/sites/{site_id}/secret-rotations:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
       summary: Rotate HMAC secret
-      operationId: rotateSecret
+      operationId: createOperatorSecretRotation
       security:
         - operatorToken: []
       responses:
@@ -564,13 +564,13 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/sites/{site_id}/claim-token/rotate:
+  /api/v1/operator/sites/{site_id}/claim-token-rotations:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
       summary: Rotate claim token
-      operationId: rotateClaimToken
+      operationId: createOperatorClaimTokenRotation
       security:
         - operatorToken: []
       responses:
@@ -1777,13 +1777,13 @@ paths:
                 $ref: "#/components/schemas/PageRolesResponse"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/claim-token/rotate:
+  /api/v1/sites/{site_id}/claim-token-rotations:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
       summary: Rotate the site claim token (owner)
-      operationId: rotateSiteClaimToken
+      operationId: createSiteClaimTokenRotation
       security:
         - claimToken: []
       responses:

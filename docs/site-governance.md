@@ -166,7 +166,7 @@ site registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 | `/api/v1/sites/{site_id}/roles` | GET | — | Projected admins and managers |
 | `/api/v1/sites/{site_id}/pages/{page_slug}/roles` | GET | — | Projected admins, managers and moderators |
 | `/api/v1/sites/{site_id}/ownership/transfer` | POST | `{ "user_id": ... }` | Start a two-phase ownership transfer |
-| `/api/v1/sites/{site_id}/claim-token/rotate` | POST | — | Owner rotates their own claim token |
+| `/api/v1/sites/{site_id}/claim-token-rotations` | POST | — | Owner rotates their own claim token |
 
 POST responses are
 `{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;

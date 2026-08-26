@@ -523,14 +523,14 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
-        "/api/v1/operator/sites/{site_id}/origins/revoke",
-        "revokeVerifiedOrigin",
+        "/api/v1/operator/sites/{site_id}/origin-revocations",
+        "createOriginRevocation",
         "site.origin.revoke",
     ),
     http_operation(
         "POST",
-        "/api/v1/operator/sites/{site_id}/secret/rotate",
-        "rotateSecret",
+        "/api/v1/operator/sites/{site_id}/secret-rotations",
+        "createOperatorSecretRotation",
         "site.secret.rotate",
     ),
     http_operation(
@@ -547,8 +547,8 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
-        "/api/v1/operator/sites/{site_id}/claim-token/rotate",
-        "rotateClaimToken",
+        "/api/v1/operator/sites/{site_id}/claim-token-rotations",
+        "createOperatorClaimTokenRotation",
         "site.claim_token.rotate",
     ),
     http_operation(
@@ -745,8 +745,8 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
-        "/api/v1/sites/{site_id}/claim-token/rotate",
-        "rotateSiteClaimToken",
+        "/api/v1/sites/{site_id}/claim-token-rotations",
+        "createSiteClaimTokenRotation",
         "site.claim_token.rotate",
     ),
     http_operation(

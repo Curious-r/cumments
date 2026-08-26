@@ -23,14 +23,14 @@ Returns every database-tracked site merged with the operator-declared
 
 ## Revoke a verified origin
 
-`POST /api/v1/operator/sites/{site_id}/origins/revoke`
+`POST /api/v1/operator/sites/{site_id}/origin-revocations`
 
 Body: `{ "origin": "https://blog.example.com" }`. Origins declared in the
 config file cannot be revoked here — edit the config instead.
 
 ## Rotate / revoke the HMAC secret
 
-`POST /api/v1/operator/sites/{site_id}/secret/rotate` — returns the new secret
+`POST /api/v1/operator/sites/{site_id}/secret-rotations` — returns the new secret
 exactly once.
 
 `DELETE /api/v1/operator/sites/{site_id}/secret` — removes the secret and falls
@@ -48,7 +48,7 @@ declarative config.
 
 ## Rotate the claim token
 
-`POST /api/v1/operator/sites/{site_id}/claim-token/rotate`
+`POST /api/v1/operator/sites/{site_id}/claim-token-rotations`
 
 Returns a new `claim_token` exactly once and invalidates the previous token.
 Use this when a claim token may have leaked.

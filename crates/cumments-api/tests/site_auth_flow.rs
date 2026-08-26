@@ -1112,7 +1112,7 @@ async fn operator_lifecycle_and_well_known_verification() {
         .clone()
         .oneshot(request(
             Method::POST,
-            &format!("/api/v1/operator/sites/{site_id}/secret/rotate"),
+            &format!("/api/v1/operator/sites/{site_id}/secret-rotations"),
             None,
             &[("authorization", "Bearer test-operator-token".to_string())],
         ))
@@ -1155,7 +1155,7 @@ async fn operator_lifecycle_and_well_known_verification() {
         .oneshot(
             request(
                 Method::POST,
-                &format!("/api/v1/operator/sites/{site_id}/origins/revoke"),
+                &format!("/api/v1/operator/sites/{site_id}/origin-revocations"),
                 None,
                 &[("authorization", "Bearer test-operator-token".to_string())],
             )
@@ -1236,7 +1236,7 @@ async fn operator_can_rotate_claim_token() {
         .clone()
         .oneshot(request(
             Method::POST,
-            &format!("/api/v1/operator/sites/{site_id}/claim-token/rotate"),
+            &format!("/api/v1/operator/sites/{site_id}/claim-token-rotations"),
             None,
             &[("authorization", "Bearer token".to_string())],
         ))
@@ -2597,7 +2597,7 @@ async fn site_owner_can_rotate_claim_token() {
     let rotated = router
         .oneshot(request_with_body(
             Method::POST,
-            &format!("/api/v1/sites/{site_id}/claim-token/rotate"),
+            &format!("/api/v1/sites/{site_id}/claim-token-rotations"),
             None,
             &[("x-cumments-claim-token", "old-token".to_string())],
             "",

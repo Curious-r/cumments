@@ -285,7 +285,7 @@ pub fn build_router(state: ApiState) -> Router {
             post(add_manager_handler).delete(remove_manager_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/claim-token/rotate",
+            "/api/v1/sites/{site_id}/claim-token-rotations",
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
@@ -328,12 +328,12 @@ pub fn build_router(state: ApiState) -> Router {
             axum::routing::get(method_not_allowed_handler).fallback(list_operator_sites_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/origins/revoke",
+            "/api/v1/operator/sites/{site_id}/origin-revocations",
             axum::routing::post(revoke_verified_origin_handler)
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/secret/rotate",
+            "/api/v1/operator/sites/{site_id}/secret-rotations",
             axum::routing::post(rotate_secret_handler).fallback(method_not_allowed_handler),
         )
         .route(
@@ -345,7 +345,7 @@ pub fn build_router(state: ApiState) -> Router {
             axum::routing::get(config_snippet_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/claim-token/rotate",
+            "/api/v1/operator/sites/{site_id}/claim-token-rotations",
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
