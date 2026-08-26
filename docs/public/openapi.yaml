@@ -592,13 +592,13 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/rooms/quarantined:
+  /api/v1/operator/quarantined-rooms:
     query:
       tags: [Operator]
       summary: List quarantined rooms (QUERY)
       operationId: listQuarantinedRooms
       description: |
-        Sent as `QUERY /api/v1/operator/rooms/quarantined` with an optional JSON
+        Sent as `QUERY /api/v1/operator/quarantined-rooms` with an optional JSON
         body carrying pagination and the `site_id` filter.
       security:
         - operatorToken: []
@@ -619,7 +619,7 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/rooms/quarantined/{room_id}:
+  /api/v1/operator/quarantined-rooms/{room_id}:
     parameters:
       - $ref: "#/components/parameters/RoomId"
     delete:

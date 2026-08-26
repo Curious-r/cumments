@@ -4,7 +4,3 @@ public/openapi.yaml:
   # Health intentionally has only success and infrastructure-failure responses.
   operation-4xx-response:
     - '#/paths/~1health/get/responses'
-  # Matrix room IDs start with '!' and contain ':', so the concrete paths cannot
-  # collide even though Redocly sees overlapping path templates.
-  no-ambiguous-paths:
-    - '#/paths/~1api~1v1~1operator~1rooms~1{room_id}~1upgrade'

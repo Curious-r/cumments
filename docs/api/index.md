@@ -259,6 +259,6 @@ public key, 24-hour retention) to make retries safe.
 
 **Mutations return the affected resource.** Write endpoints return the
 affected resource as JSON (the updated site, the pending role claim, the
-revoked role). `DELETE /api/v1/operator/rooms/quarantined/{room_id}` is the
+revoked role). `DELETE /api/v1/operator/quarantined-rooms/{room_id}` is the
 single exception and returns `204`: the quarantine row is gone, so there is
 no surviving resource to serialize.

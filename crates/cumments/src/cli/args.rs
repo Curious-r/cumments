@@ -235,7 +235,7 @@ pub enum RoomsCommand {
 }
 
 /// Arguments for listing quarantined rooms (mirrors
-/// `QUERY /api/v1/operator/rooms/quarantined`).
+/// `QUERY /api/v1/operator/quarantined-rooms`).
 #[derive(clap::Args, Debug)]
 pub struct QuarantinedListArgs {
     /// Only show rooms for this site

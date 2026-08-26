@@ -65,7 +65,7 @@ declared in `[sites]` cannot be retired this way.
 
 ## List quarantined rooms
 
-`QUERY /api/v1/operator/rooms/quarantined`
+`QUERY /api/v1/operator/quarantined-rooms`
 
 Optional JSON body with the same `page` / `per_page` / `site_id` fields as
 [List sites](#list-sites).
@@ -81,7 +81,7 @@ pagination/filter fields and `{ "data", "meta" }` shape apply.
 
 ## Reinstate a room
 
-`DELETE /api/v1/operator/rooms/quarantined/{room_id}`
+`DELETE /api/v1/operator/quarantined-rooms/{room_id}`
 
 Clears a room's quarantine and makes it the canonical room again (any other
 active room for the same page is superseded). The operation is idempotent:

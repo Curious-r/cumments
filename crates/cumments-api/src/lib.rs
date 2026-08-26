@@ -368,11 +368,11 @@ pub fn build_router(state: ApiState) -> Router {
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/rooms/quarantined",
+            "/api/v1/operator/quarantined-rooms",
             axum::routing::get(method_not_allowed_handler).fallback(list_quarantined_rooms_handler),
         )
         .route(
-            "/api/v1/operator/rooms/quarantined/{room_id}",
+            "/api/v1/operator/quarantined-rooms/{room_id}",
             axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
         )
         .route(

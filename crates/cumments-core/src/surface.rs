@@ -498,13 +498,13 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "QUERY",
-        "/api/v1/operator/rooms/quarantined",
+        "/api/v1/operator/quarantined-rooms",
         "listQuarantinedRooms",
         "room.quarantine.list",
     ),
     http_operation(
         "DELETE",
-        "/api/v1/operator/rooms/quarantined/{room_id}",
+        "/api/v1/operator/quarantined-rooms/{room_id}",
         "reinstateQuarantinedRoom",
         "room.quarantine.reinstate",
     ),

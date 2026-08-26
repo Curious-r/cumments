@@ -6,3 +6,4 @@ rules:
   no-ambiguous-paths: error
   operation-4xx-response: error
   no-unused-components: error
+  # Matrix room IDs contain ':' and cannot collide with literal path segments.

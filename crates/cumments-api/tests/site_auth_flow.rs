@@ -1346,7 +1346,7 @@ async fn operator_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/operator/rooms/quarantined",
+            "/api/v1/operator/quarantined-rooms",
             None,
             &[("authorization", "Bearer token".to_string())],
         ))
@@ -1369,7 +1369,7 @@ async fn operator_lists_quarantined_rooms() {
         .clone()
         .oneshot(request_with_body(
             query_method(),
-            "/api/v1/operator/rooms/quarantined",
+            "/api/v1/operator/quarantined-rooms",
             None,
             &[("authorization", "Bearer token".to_string())],
             r#"{"site_id":"other"}"#,
@@ -1388,7 +1388,7 @@ async fn operator_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/operator/rooms/quarantined/!room:hs",
+            "/api/v1/operator/quarantined-rooms/!room:hs",
             None,
             &auth,
         ))
@@ -1400,7 +1400,7 @@ async fn operator_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/operator/rooms/quarantined/!room:hs",
+            "/api/v1/operator/quarantined-rooms/!room:hs",
             None,
             &auth,
         ))
@@ -1412,7 +1412,7 @@ async fn operator_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/operator/rooms/quarantined/!unknown:hs",
+            "/api/v1/operator/quarantined-rooms/!unknown:hs",
             None,
             &auth,
         ))
@@ -1424,7 +1424,7 @@ async fn operator_lists_quarantined_rooms() {
         .clone()
         .oneshot(request(
             query_method(),
-            "/api/v1/operator/rooms/quarantined",
+            "/api/v1/operator/quarantined-rooms",
             None,
             &auth,
         ))
