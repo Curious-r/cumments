@@ -236,32 +236,7 @@ impl From<anyhow::Error> for CommandError {
     }
 }
 
-fn help_text() -> &'static str {
-    "Cumments bot 命令：
-!cumments help
-!cumments sites list                     （实例管理员）
-!cumments site register <id>             公开注册站点并成为首个站点管理员
-!cumments site use <id>                  设置当前站点
-!cumments site <id> status               站点状态
-!cumments site <id> manager add|remove <mxid>
-!cumments site <id> manager resign --confirm
-!cumments site <id> page <slug> moderator add|remove <mxid>
-!cumments site <id> page <slug> moderator resign --confirm
-!cumments site <id> page <slug> upgrade <version>（站点管理员）
-!cumments site <id> page <slug> retire --confirm（站点管理员）
-!cumments site <id> stickers list
-!cumments site <id> sticker add <pack_id> <shortcode> <mxc> [body...]
-!cumments site <id> sticker remove <pack_id> <shortcode> --confirm
-!cumments site <id> secret issue
-!cumments site <id> claim-token rotate    （实例管理员）
-!cumments site <id> retire --confirm
-!cumments rooms quarantined               （实例管理员）
-!cumments room <room_id> reinstate --confirm
-!cumments room <room_id> upgrade <new_version> （实例管理员）
-!cumments room <room_id> retire --confirm（实例管理员）
-!cumments backfill [max_pages]            （实例管理员）
-破坏性命令需要 --confirm；敏感 token 只在本私聊显示。"
-}
+use crate::bot_commands::help_text;
 
 /// Whether the room is a verified private channel: exactly the bot and
 /// the sender are joined. Fails closed when it cannot be verified.
@@ -380,7 +355,7 @@ impl BotCommandRouter {
             return Ok(true);
         }
         if line.is_empty() {
-            self.reply(event, help_text()).await;
+            self.reply(event, &help_text()).await;
             self.record_audit(event, line, None, CommandAuditStatus::Invalid, None)
                 .await;
             return Ok(true);
