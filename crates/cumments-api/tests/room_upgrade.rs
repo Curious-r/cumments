@@ -389,7 +389,7 @@ async fn operator_upgrade_endpoint_maps_management_errors_to_http_statuses() {
     for (room_id, new_version, expected_status, expected_code) in cases {
         let mut request = Request::builder()
             .method(Method::POST)
-            .uri(format!("/api/v1/operator/rooms/{room_id}/upgrade"))
+            .uri(format!("/api/v1/operator/rooms/{room_id}/upgrades"))
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::AUTHORIZATION, "Bearer operator")
             .body(Body::from(
@@ -562,7 +562,7 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
     );
 
     let app = cumments_api::build_router(api_state(driver, store.clone()));
-    let uri = "/api/v1/sites/my-blog/pages/hello/upgrade";
+    let uri = "/api/v1/sites/my-blog/pages/hello/upgrades";
 
     let missing = app
         .clone()

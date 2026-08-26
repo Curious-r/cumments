@@ -202,7 +202,7 @@ pub(crate) async fn reinstate_room_handler(
     }
 }
 
-pub(crate) async fn upgrade_room_handler(
+pub(crate) async fn create_room_upgrade_handler(
     State(state): State<ApiState>,
     Path(room_id): Path<String>,
     Json(body): Json<UpgradeRoomRequest>,

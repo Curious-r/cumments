@@ -583,8 +583,8 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
-        "/api/v1/operator/rooms/{room_id}/upgrade",
-        "operatorUpgradeRoom",
+        "/api/v1/operator/rooms/{room_id}/upgrades",
+        "createRoomUpgrade",
         "room.upgrade.start",
     ),
     http_operation(
@@ -667,8 +667,8 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
-        "/api/v1/sites/{site_id}/pages/{page_slug}/upgrade",
-        "upgradePageRoom",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/upgrades",
+        "createPageRoomUpgrade",
         "room.upgrade.start",
     ),
     http_operation(

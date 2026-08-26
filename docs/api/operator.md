@@ -92,7 +92,7 @@ returns `404`.
 
 ## Upgrade a comment room
 
-`POST /api/v1/operator/rooms/{room_id}/upgrade`
+`POST /api/v1/operator/rooms/{room_id}/upgrades`
 
 Body: `{"new_version": "12"}`. Upgrades a registered active comment room via
 the homeserver's native `/upgrade` and converges the replacement: metadata is
@@ -103,7 +103,7 @@ operation is idempotent: an existing `m.room.tombstone` is reused. Spaces,
 unknown rooms, non-active rooms, invalid versions and versions that are not
 newer than the room's current version are rejected with a `4xx` problem
 response. This endpoint is the operator mirror of the
-site-level `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
+site-level `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades`
 (claim token); both execute through the AS bot.
 
 ### Inspect and recover upgrade intents

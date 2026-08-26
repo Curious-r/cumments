@@ -803,13 +803,13 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/rooms/{room_id}/upgrade:
+  /api/v1/operator/rooms/{room_id}/upgrades:
     parameters:
       - $ref: "#/components/parameters/RoomId"
     post:
       tags: [Operator]
       summary: Upgrade a comment room (operator)
-      operationId: operatorUpgradeRoom
+      operationId: createRoomUpgrade
       description: |
         Operator mirror of the site-level upgrade endpoint: upgrades a
         registered active comment room and converges the replacement. The
@@ -1390,14 +1390,14 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/pages/{page_slug}/upgrade:
+  /api/v1/sites/{site_id}/pages/{page_slug}/upgrades:
     parameters:
       - $ref: "#/components/parameters/SiteId"
       - $ref: "#/components/parameters/PageSlug"
     post:
       tags: [Governance]
       summary: Upgrade a comment room
-      operationId: upgradePageRoom
+      operationId: createPageRoomUpgrade
       description: |
         Upgrades the site's active comment room for this page through the
         homeserver's native `/upgrade` and converges the replacement:

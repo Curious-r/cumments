@@ -82,7 +82,7 @@ history. The operator mirror is
 
 ## Upgrade a comment room
 
-`POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades`
 
 Body: `{"new_version": "12"}`. Upgrades the site's active comment room for
 this page through the homeserver's native `/upgrade` and converges the
@@ -95,7 +95,7 @@ so the bot remains the replacement room's creator. Pre-v12 rooms are
 upgradable when the bot holds tombstone power (new Cumments rooms grant it
 150); the target version must be newer than the room's current version. The
 operator mirror for raw room IDs is
-`POST /api/v1/operator/rooms/{room_id}/upgrade`.
+`POST /api/v1/operator/rooms/{room_id}/upgrades`.
 
 Reads come from the projected read model and are eventually consistent with
 Matrix power levels.

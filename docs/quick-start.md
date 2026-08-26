@@ -174,9 +174,9 @@ The homeserver moves the room alias to the replacement, Cumments re-adopts
 the new room, re-links it into the site Space, re-invites site roles, and
 supersedes the old room. The same operation is available to operators through
 `!cumments room <room_id> upgrade <version> --confirm` and
-`POST /api/v1/operator/rooms/{room_id}/upgrade`; site admins can trigger it
+`POST /api/v1/operator/rooms/{room_id}/upgrades`; site admins can trigger it
 themselves with `!cumments site <site_id> page <page_slug> upgrade <version>
---confirm` or `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrade`
+--confirm` or `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades`
 (claim token). Every path executes the upgrade as the bot, which stays the
 new room's creator. Because several surrounding standards are still open
 (MSC4168/MSC4433), the current behavior includes a few documented

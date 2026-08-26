@@ -680,8 +680,8 @@ pub(crate) async fn get_page_retirement_handler(
 /// claim token's site scope is the whole authorization boundary. The upgrade
 /// itself is executed by the AS bot (the `/upgrade` caller), keeping the bot
 /// as the replacement room's creator; the operator mirror accepts a raw
-/// room ID and lives under `/api/v1/operator/rooms/{room_id}/upgrade`.
-pub(crate) async fn upgrade_page_room_handler(
+/// room ID and lives under `/api/v1/operator/rooms/{room_id}/upgrades`.
+pub(crate) async fn create_page_room_upgrade_handler(
     State(state): State<ApiState>,
     Path((site_id, page_slug)): Path<(String, String)>,
     Json(body): Json<UpgradePageRoomRequest>,

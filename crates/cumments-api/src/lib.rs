@@ -4,11 +4,11 @@ use crate::routes::comments::{
 };
 use crate::routes::governance::{
     add_admin_handler, add_manager_handler, add_room_moderator_handler,
-    create_page_retirement_handler, create_site_retirement_handler, get_page_retirement_handler,
-    get_site_retirement_handler, list_page_roles_handler, list_room_moderators_handler,
-    list_site_roles_handler, remove_admin_handler, remove_manager_handler,
-    remove_room_moderator_handler, require_claim_token, start_owner_transfer_handler,
-    upgrade_page_room_handler,
+    create_page_retirement_handler, create_page_room_upgrade_handler,
+    create_site_retirement_handler, get_page_retirement_handler, get_site_retirement_handler,
+    list_page_roles_handler, list_room_moderators_handler, list_site_roles_handler,
+    remove_admin_handler, remove_manager_handler, remove_room_moderator_handler,
+    require_claim_token, start_owner_transfer_handler,
 };
 use crate::routes::media::{
     MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_visitor_avatar_handler,
@@ -17,12 +17,12 @@ use crate::routes::media::{
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::operator::{
-    config_snippet_handler, create_room_retirement_handler, create_room_upgrade_recovery_handler,
-    get_projection_repair_handler, get_room_retirement_handler, list_operator_sites_handler,
-    list_projection_repairs_handler, list_quarantined_rooms_handler, list_upgrade_intents_handler,
-    reinstate_room_handler, require_operator, retry_projection_repair_handler,
-    revoke_secret_handler, revoke_verified_origin_handler, rotate_claim_token_handler,
-    rotate_secret_handler, upgrade_room_handler,
+    config_snippet_handler, create_room_retirement_handler, create_room_upgrade_handler,
+    create_room_upgrade_recovery_handler, get_projection_repair_handler,
+    get_room_retirement_handler, list_operator_sites_handler, list_projection_repairs_handler,
+    list_quarantined_rooms_handler, list_upgrade_intents_handler, reinstate_room_handler,
+    require_operator, retry_projection_repair_handler, revoke_secret_handler,
+    revoke_verified_origin_handler, rotate_claim_token_handler, rotate_secret_handler,
 };
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -309,8 +309,9 @@ pub fn build_router(state: ApiState) -> Router {
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/pages/{page_slug}/upgrade",
-            axum::routing::post(upgrade_page_room_handler).fallback(method_not_allowed_handler),
+            "/api/v1/sites/{site_id}/pages/{page_slug}/upgrades",
+            axum::routing::post(create_page_room_upgrade_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/retirement",
@@ -401,8 +402,8 @@ pub fn build_router(state: ApiState) -> Router {
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/rooms/{room_id}/upgrade",
-            axum::routing::post(upgrade_room_handler).fallback(method_not_allowed_handler),
+            "/api/v1/operator/rooms/{room_id}/upgrades",
+            axum::routing::post(create_room_upgrade_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/operator/room-upgrade-intents",
