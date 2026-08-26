@@ -108,39 +108,33 @@ backend and used to sign every write request.
 
 ## Retire a site
 
-`DELETE /api/v1/sites/{site_id}`
+`POST /api/v1/sites/{site_id}/retirement`
 
 Headers: `X-Cumments-Claim-Token: <claim_token>`
 
 Decommissioning is two-phase. The request marks the site `retiring`
 **synchronously**: writes are rejected from that moment with
-`410 code=site-retired`, the claim token is invalidated, and the response is
-`{ "site_id": "...", "status": "retiring" }`. A background pass then retires
-the Matrix Space and every comment room one by one — renaming them
-`[retired] ...`, removing their aliases and leaving them as the AppService
-sender — before clearing the local projections and the site row.
+`410 code=site-retired`, the claim token is invalidated, and it returns `202 Accepted` with `{ "target_type": "site", "target_id": "...", "state": "retiring" }`. A background pass then retires the Matrix Space and every comment room one by one — renaming them `[retired] ...`, removing their aliases and leaving them as the AppService sender — before clearing the local projections and the site row.
 
-The operator mirror is
-`DELETE /api/v1/operator/sites/{site_id}` (operator token). Sites declared in the
-`[sites]` configuration cannot be retired through the API; remove them from
-the config file instead. The CLI equivalent is
-`cumments sites retire <id> --yes [--wait]`.
+The status is available at `GET /api/v1/sites/{site_id}/retirement`. The operator mirror is `POST /api/v1/operator/sites/{site_id}/retirement` (operator token). Sites declared in the `[sites]` configuration cannot be retired through the API; remove them from the config file instead. The CLI equivalent is `cumments sites retirements create <id> --yes [--wait]`.
 
 ## Retire a page's comment room
 
-`DELETE /api/v1/sites/{site_id}/pages/{page_slug}`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/retirement`
 
 Headers: `X-Cumments-Claim-Token: <claim_token>`
 
 Removes one page's comment section. Like site retirement, this is
 two-phase: the request marks the room `retired` **synchronously** (new
-writes to that room are rejected from that moment) and returns
-`{ "site_id": "...", "page_slug": "...", "status": "retiring" }`. A
+writes to that room are rejected from that moment) and returns `202 Accepted`
+with `{ "target_type": "page", "target_id": ".../...", "state": "retiring" }`. A
 background pass then renames the Matrix room `[retired] site/page`, removes
 its alias, leaves it as the AppService sender and every site virtual user,
 and clears the local projections. The page's alias is released and a later
 registration of the same page slug starts fresh.
 
-The operator mirror is `DELETE /api/v1/operator/rooms/{room_id}` (operator
-token), and the CLI equivalent is `cumments rooms retire ROOM_ID --yes
-[--wait]`. Retiring an unknown or already-retired room returns `404`.
+The status is available at
+`GET /api/v1/sites/{site_id}/pages/{page_slug}/retirement`. The operator mirror
+is `POST /api/v1/operator/rooms/{room_id}/retirement` (operator token), and the
+CLI equivalent is `cumments rooms retirements create ROOM_ID --yes [--wait]`.
+Retiring an unknown or already-retired room returns `404`.

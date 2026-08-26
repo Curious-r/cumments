@@ -507,11 +507,11 @@ async fn operator_room_retire_mirror_marks_retired() {
         .expect("register room");
 
     let router = cumments_api::build_router(state.clone());
-    let uri = "/api/v1/operator/rooms/!room:hs";
+    let uri = "/api/v1/operator/rooms/!room:hs/retirement";
 
     let missing = router
         .clone()
-        .oneshot(request_with_body(Method::DELETE, uri, None, &[], ""))
+        .oneshot(request_with_body(Method::POST, uri, None, &[], ""))
         .await
         .expect("call router");
     assert_eq!(missing.status(), StatusCode::FORBIDDEN);
@@ -519,7 +519,7 @@ async fn operator_room_retire_mirror_marks_retired() {
     let ok = router
         .clone()
         .oneshot(request_with_body(
-            Method::DELETE,
+            Method::POST,
             uri,
             None,
             &[("authorization", "Bearer test-operator-token".to_string())],
@@ -527,13 +527,13 @@ async fn operator_room_retire_mirror_marks_retired() {
         ))
         .await
         .expect("call router");
-    assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(ok.status(), StatusCode::ACCEPTED);
     let body = axum::body::to_bytes(ok.into_body(), 64 * 1024)
         .await
         .expect("read body");
     let data: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(data["room_id"], "!room:hs");
-    assert_eq!(data["status"], "retiring");
+    assert_eq!(data["target_id"], "!room:hs");
+    assert_eq!(data["state"], "retiring");
     assert_eq!(
         store
             .get_room_status("!room:hs")
@@ -2890,8 +2890,8 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
     let denied = router
         .clone()
         .oneshot(request(
-            Method::DELETE,
-            "/api/v1/sites/retire-blog",
+            Method::POST,
+            "/api/v1/sites/retire-blog/retirement",
             None,
             &[],
         ))
@@ -2903,17 +2903,17 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
     let retired = router
         .clone()
         .oneshot(request(
-            Method::DELETE,
-            "/api/v1/sites/retire-blog",
+            Method::POST,
+            "/api/v1/sites/retire-blog/retirement",
             None,
             &[("x-cumments-claim-token", "claim".to_string())],
         ))
         .await
         .expect("call router");
-    assert_eq!(retired.status(), StatusCode::OK);
+    assert_eq!(retired.status(), StatusCode::ACCEPTED);
     let retired_json: serde_json::Value =
         serde_json::from_str(&body_text(retired).await).expect("parse response");
-    assert_eq!(retired_json["status"], "retiring");
+    assert_eq!(retired_json["state"], "retiring");
 
     // Writes now fail with 410 site-retired, even in the disabled policy.
     let write = router
@@ -2933,8 +2933,8 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
     let again = router
         .clone()
         .oneshot(request(
-            Method::DELETE,
-            "/api/v1/sites/retire-blog",
+            Method::POST,
+            "/api/v1/sites/retire-blog/retirement",
             None,
             &[("x-cumments-claim-token", "claim".to_string())],
         ))
@@ -2950,14 +2950,14 @@ async fn retiring_a_site_stops_writes_and_requires_auth() {
     let operator = router
         .clone()
         .oneshot(request(
-            Method::DELETE,
-            "/api/v1/operator/sites/operator-retire",
+            Method::POST,
+            "/api/v1/operator/sites/operator-retire/retirement",
             None,
             &[("authorization", "Bearer test-operator-token".to_string())],
         ))
         .await
         .expect("call router");
-    assert_eq!(operator.status(), StatusCode::OK);
+    assert_eq!(operator.status(), StatusCode::ACCEPTED);
     assert!(body_text(operator).await.contains("retiring"));
 }
 

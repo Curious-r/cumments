@@ -53,15 +53,17 @@ declarative config.
 Returns a new `claim_token` exactly once and invalidates the previous token.
 Use this when a claim token may have leaked.
 
-## Retire a site
+## Start a site retirement
 
-`DELETE /api/v1/operator/sites/{site_id}`
+`POST /api/v1/operator/sites/{site_id}/retirement`
 
 Operator mirror of the claim-token retire endpoint: marks the site
 `retiring` immediately (writes get `410 code=site-retired`) and lets the
 background pass retirement the Matrix Space/rooms and clear local
-projections. See [Sites](sites.md#retire-a-site) for the full flow. Sites
-declared in `[sites]` cannot be retired this way.
+projections. Returns `202 Accepted` with the retirement state. See
+[Sites](sites.md#retire-a-site) for the full flow. Sites declared in `[sites]`
+cannot be retired this way. `GET /api/v1/operator/sites/{site_id}/retirement`
+returns the current state while its local row still exists.
 
 ## List quarantined rooms
 
@@ -146,17 +148,20 @@ created by the Cumments-managed `/upgrade` call, or whose successor metadata
 points to another site/page. Recovery never repairs a mismatched successor by
 guessing; it fails closed and records why.
 
-## Retire a comment room
+## Start a comment-room retirement
 
-`DELETE /api/v1/operator/rooms/{room_id}`
+`POST /api/v1/operator/rooms/{room_id}/retirement`
 
 Marks the registered active room `Retired` immediately (new writes stop),
 then the background reconciler renames the Matrix room `[retired]`, removes
 its alias, leaves it as the AppService sender and every site virtual user,
 and clears the local projections. This is the operator mirror of
-`DELETE /api/v1/sites/{site_id}/pages/{page_slug}` (claim token); both go
-through the same management use case. Unknown or already-retired rooms
-return `404`.
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/retirement` (claim token);
+both return `202 Accepted` and use the same management use case. Unknown or
+already-retired rooms return `404`.
+
+`GET /api/v1/operator/rooms/{room_id}/retirement` returns the current
+retirement state for a room that is still in the registry.
 
 ## Governance fallback
 

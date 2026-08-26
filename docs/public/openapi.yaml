@@ -345,26 +345,39 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}:
+  /api/v1/sites/{site_id}/retirement:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-    delete:
+    post:
       tags: [Sites]
       summary: Retire a site
-      operationId: retireSite
+      operationId: startSiteRetirement
       security:
         - claimToken: []
       responses:
-        "200":
-          description: Site marked retiring; background retirement scheduled
+        "202":
+          description: Site retirement accepted; background retirement scheduled
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RetireSiteResponse"
+                $ref: "#/components/schemas/RetirementResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [Sites]
+      summary: Get site retirement status
+      operationId: getSiteRetirement
+      responses:
+        "200":
+          description: Site retirement status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetirementResponse"
         "404":
           $ref: "#/components/responses/Error"
   /api/v1/sites/{site_id}/verifications:
@@ -468,26 +481,41 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/sites/{site_id}:
+  /api/v1/operator/sites/{site_id}/retirement:
     parameters:
       - $ref: "#/components/parameters/SiteId"
-    delete:
+    post:
       tags: [Operator]
       summary: Retire a site (operator)
-      operationId: operatorRetireSite
+      operationId: operatorStartSiteRetirement
       security:
         - operatorToken: []
       responses:
-        "200":
-          description: Site marked retiring; background retirement scheduled
+        "202":
+          description: Site retirement accepted; background retirement scheduled
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RetireSiteResponse"
+                $ref: "#/components/schemas/RetirementResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [Operator]
+      summary: Get site retirement status (operator)
+      operationId: operatorGetSiteRetirement
+      security:
+        - operatorToken: []
+      responses:
+        "200":
+          description: Site retirement status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetirementResponse"
         "404":
           $ref: "#/components/responses/Error"
   /api/v1/operator/sites/{site_id}/origins/revoke:
@@ -732,13 +760,13 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/rooms/{room_id}:
+  /api/v1/operator/rooms/{room_id}/retirement:
     parameters:
       - $ref: "#/components/parameters/RoomId"
-    delete:
+    post:
       tags: [Operator]
       summary: Retire a comment room (operator)
-      operationId: operatorRetireRoom
+      operationId: operatorStartRoomRetirement
       description: |
         Operator mirror of the site-level page retirement: marks the
         registered active room `Retired`, stopping new writes, and the
@@ -747,21 +775,29 @@ paths:
       security:
         - operatorToken: []
       responses:
-        "200":
-          description: Room marked retiring
+        "202":
+          description: Room retirement accepted; room marked retiring
           content:
             application/json:
               schema:
-                type: object
-                required: [room_id, status]
-                properties:
-                  room_id:
-                    type: string
-                  status:
-                    type: string
-                    enum: [retiring]
+                $ref: "#/components/schemas/RetirementResponse"
         "403":
           $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [Operator]
+      summary: Get comment-room retirement status (operator)
+      operationId: operatorGetRoomRetirement
+      security:
+        - operatorToken: []
+      responses:
+        "200":
+          description: Room retirement status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetirementResponse"
         "404":
           $ref: "#/components/responses/Error"
   /api/v1/media/{server}/{media_id}:
@@ -1314,14 +1350,14 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/pages/{page_slug}:
+  /api/v1/sites/{site_id}/pages/{page_slug}/retirement:
     parameters:
       - $ref: "#/components/parameters/SiteId"
       - $ref: "#/components/parameters/PageSlug"
-    delete:
+    post:
       tags: [Governance]
       summary: Retire a page's comment room
-      operationId: retirePageRoom
+      operationId: startPageRetirement
       description: |
         Site-admin entry point for removing a page's comment section: marks
         the active comment room `Retired`, stopping new writes, and the
@@ -1332,23 +1368,29 @@ paths:
       security:
         - claimToken: []
       responses:
-        "200":
-          description: Room marked retiring
+        "202":
+          description: Page retirement accepted; room marked retiring
           content:
             application/json:
               schema:
-                type: object
-                required: [site_id, page_slug, status]
-                properties:
-                  site_id:
-                    type: string
-                  page_slug:
-                    type: string
-                  status:
-                    type: string
-                    enum: [retiring]
+                $ref: "#/components/schemas/RetirementResponse"
+        "400":
+          $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [Governance]
+      summary: Get page retirement status
+      operationId: getPageRetirement
+      responses:
+        "200":
+          description: Page retirement status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetirementResponse"
         "404":
           $ref: "#/components/responses/Error"
   /api/v1/sites/{site_id}/visitors/avatar:
@@ -2337,15 +2379,18 @@ components:
           type: string
         claim_token:
           type: string
-    RetireSiteResponse:
+    RetirementResponse:
       type: object
-      required: [site_id, status]
+      required: [target_type, target_id, state]
       properties:
-        site_id:
+        target_type:
           type: string
-        status:
+          enum: [site, page, room]
+        target_id:
           type: string
-          enum: [retiring]
+        state:
+          type: string
+          enum: [retiring, retired]
     UpgradeRoomRequest:
       type: object
       required: [new_version]

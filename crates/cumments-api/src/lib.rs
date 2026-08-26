@@ -3,10 +3,11 @@ use crate::routes::comments::{
     react_handler, update_comment_body_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
-    add_admin_handler, add_manager_handler, add_room_moderator_handler, list_page_roles_handler,
-    list_room_moderators_handler, list_site_roles_handler, remove_admin_handler,
-    remove_manager_handler, remove_room_moderator_handler, require_claim_token,
-    retire_page_room_handler, retire_site_handler, start_owner_transfer_handler,
+    add_admin_handler, add_manager_handler, add_room_moderator_handler,
+    create_page_retirement_handler, create_site_retirement_handler, get_page_retirement_handler,
+    get_site_retirement_handler, list_page_roles_handler, list_room_moderators_handler,
+    list_site_roles_handler, remove_admin_handler, remove_manager_handler,
+    remove_room_moderator_handler, require_claim_token, start_owner_transfer_handler,
     upgrade_page_room_handler,
 };
 use crate::routes::media::{
@@ -16,10 +17,11 @@ use crate::routes::media::{
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::operator::{
-    config_snippet_handler, list_operator_sites_handler, list_quarantined_rooms_handler,
-    list_upgrade_intents_handler, recover_upgrade_intent_handler, reinstate_room_handler,
-    require_operator, retire_room_handler, revoke_secret_handler, revoke_verified_origin_handler,
-    rotate_claim_token_handler, rotate_secret_handler, upgrade_room_handler,
+    config_snippet_handler, create_room_retirement_handler, get_room_retirement_handler,
+    list_operator_sites_handler, list_quarantined_rooms_handler, list_upgrade_intents_handler,
+    recover_upgrade_intent_handler, reinstate_room_handler, require_operator,
+    revoke_secret_handler, revoke_verified_origin_handler, rotate_claim_token_handler,
+    rotate_secret_handler, upgrade_room_handler,
 };
 use crate::routes::room::room_info_handler;
 use crate::routes::sites::{
@@ -298,16 +300,20 @@ pub fn build_router(state: ApiState) -> Router {
             post(add_site_sticker_handler).delete(remove_site_sticker_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}",
-            axum::routing::delete(retire_site_handler),
+            "/api/v1/sites/{site_id}/retirement",
+            axum::routing::post(create_site_retirement_handler)
+                .get(get_site_retirement_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/upgrade",
             axum::routing::post(upgrade_page_room_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/pages/{page_slug}",
-            axum::routing::delete(retire_page_room_handler).fallback(method_not_allowed_handler),
+            "/api/v1/sites/{site_id}/pages/{page_slug}/retirement",
+            axum::routing::post(create_page_retirement_handler)
+                .get(get_page_retirement_handler)
+                .fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -341,8 +347,10 @@ pub fn build_router(state: ApiState) -> Router {
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}",
-            axum::routing::delete(retire_site_handler).fallback(method_not_allowed_handler),
+            "/api/v1/operator/sites/{site_id}/retirement",
+            axum::routing::post(create_site_retirement_handler)
+                .get(get_site_retirement_handler)
+                .fallback(method_not_allowed_handler),
         )
         // Operator fallback for site ownership takeover.
         .route(
@@ -389,8 +397,10 @@ pub fn build_router(state: ApiState) -> Router {
                 .fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/rooms/{room_id}",
-            axum::routing::delete(retire_room_handler).fallback(method_not_allowed_handler),
+            "/api/v1/operator/rooms/{room_id}/retirement",
+            axum::routing::post(create_room_retirement_handler)
+                .get(get_room_retirement_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

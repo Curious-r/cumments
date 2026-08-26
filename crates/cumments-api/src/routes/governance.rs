@@ -12,6 +12,7 @@ use axum::{
     Json,
     extract::{ConnectInfo, Path, Query, Request, State},
     http::HeaderMap,
+    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -20,8 +21,8 @@ use cumments_core::{
     governance::{
         MANAGER_LEVEL, MODERATOR_LEVEL, RoleEntry, SITE_ADMIN_LEVEL, validate_governance_user_id,
     },
-    models::{PageSlug, SiteId},
-    site_auth::{CLAIM_TOKEN_HEADER, constant_time_eq, token_hash},
+    models::{PageSlug, RoomStatus, SiteId},
+    site_auth::{CLAIM_TOKEN_HEADER, SiteLifecycle, constant_time_eq, token_hash},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -49,13 +50,6 @@ pub struct UpgradePageRoomResponse {
     pub page_slug: String,
     pub new_version: String,
     pub replacement_room: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RetirePageRoomResponse {
-    pub site_id: String,
-    pub page_slug: String,
-    pub status: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,9 +107,14 @@ pub struct RevokedRoleResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct RetireSiteResponse {
-    pub site_id: String,
-    pub status: &'static str,
+pub struct RetirementResponse {
+    pub target_type: &'static str,
+    pub target_id: String,
+    pub state: &'static str,
+}
+
+fn retirement_not_found() -> AppError {
+    AppError::NotFound("no retirement in progress".to_string())
 }
 
 /// Authenticates governance writes with the site's claim token.
@@ -558,10 +557,10 @@ pub(crate) async fn list_page_roles_handler(
 
 /// Starts site retirement: writes are rejected immediately, then the
 /// reconciler retires the Matrix Space/rooms and clears local projections.
-pub(crate) async fn retire_site_handler(
+pub(crate) async fn create_site_retirement_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
-) -> Result<Json<RetireSiteResponse>, AppError> {
+) -> Result<(StatusCode, Json<RetirementResponse>), AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let marked = cumments_core::management::retire_site(state.store.as_ref(), site_id.as_str())
         .await
@@ -572,21 +571,46 @@ pub(crate) async fn retire_site_handler(
         ));
     }
     state.governance_notify.notify_one();
-    Ok(Json(RetireSiteResponse {
-        site_id: site_id.as_str().to_string(),
-        status: "retiring",
-    }))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RetirementResponse {
+            target_type: "site",
+            target_id: site_id.as_str().to_string(),
+            state: "retiring",
+        }),
+    ))
 }
 
+pub(crate) async fn get_site_retirement_handler(
+    State(state): State<ApiState>,
+    Path(site_id): Path<String>,
+) -> Result<Json<RetirementResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let info = state
+        .store
+        .get_site_auth(site_id.as_str())
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load site lifecycle: {e}")))?;
+    match info.map(|info| info.lifecycle) {
+        Some(lifecycle @ (SiteLifecycle::Retiring | SiteLifecycle::Retired)) => {
+            Ok(Json(RetirementResponse {
+                target_type: "site",
+                target_id: site_id.as_str().to_string(),
+                state: lifecycle.as_str(),
+            }))
+        }
+        _ => Err(retirement_not_found()),
+    }
+}
 /// Site-owner entry point for retiring one post's comment room: writes to
 /// that room stop immediately, then the reconciler leaves the Matrix room
 /// and clears local projections. The claim token's site scope is the whole
 /// authorization boundary; the operator mirror accepts a raw room ID under
 /// `/api/v1/operator/rooms/{room_id}`.
-pub(crate) async fn retire_page_room_handler(
+pub(crate) async fn create_page_retirement_handler(
     State(state): State<ApiState>,
     Path((site_id, page_slug)): Path<(String, String)>,
-) -> Result<Json<RetirePageRoomResponse>, AppError> {
+) -> Result<(StatusCode, Json<RetirementResponse>), AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let retired =
@@ -599,11 +623,55 @@ pub(crate) async fn retire_page_room_handler(
         ));
     }
     state.governance_notify.notify_one();
-    Ok(Json(RetirePageRoomResponse {
-        site_id: site_id.as_str().to_string(),
-        page_slug: page_slug.as_str().to_string(),
-        status: "retiring",
-    }))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RetirementResponse {
+            target_type: "page",
+            target_id: format!("{}/{}", site_id.as_str(), page_slug.as_str()),
+            state: "retiring",
+        }),
+    ))
+}
+
+pub(crate) async fn get_page_retirement_handler(
+    State(state): State<ApiState>,
+    Path((site_id, page_slug)): Path<(String, String)>,
+) -> Result<Json<RetirementResponse>, AppError> {
+    let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+
+    if state
+        .store
+        .get_registered_room(&site_id, &page_slug)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
+        .is_some()
+    {
+        return Err(retirement_not_found());
+    }
+
+    for room_id in state
+        .store
+        .list_retired_rooms()
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list retired rooms: {e}")))?
+    {
+        let identity = state
+            .store
+            .get_registered_room_identity(&room_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to load room: {e}")))?;
+        if identity.is_some_and(|identity| {
+            identity.site_id == site_id.as_str() && identity.page_slug == page_slug.as_str()
+        }) {
+            return Ok(Json(RetirementResponse {
+                target_type: "page",
+                target_id: format!("{}/{}", site_id.as_str(), page_slug.as_str()),
+                state: RoomStatus::Retired.as_str(),
+            }));
+        }
+    }
+    Err(retirement_not_found())
 }
 
 /// Site-owner entry point for upgrading one of the site's comment rooms.

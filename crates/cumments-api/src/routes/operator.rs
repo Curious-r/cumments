@@ -8,6 +8,7 @@ use crate::ApiState;
 use crate::error::{AppError, map_management_error};
 use crate::rate_limit::client_key;
 use crate::routes::comments::{ACCEPT_QUERY, QUERY_METHOD};
+use crate::routes::governance::RetirementResponse;
 use axum::extract::Request;
 use axum::{
     Json,
@@ -77,12 +78,6 @@ pub struct RecoverUpgradeResponse {
     pub room_id: String,
     pub new_version: String,
     pub replacement_room: String,
-    pub status: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RetireRoomResponse {
-    pub room_id: String,
     pub status: &'static str,
 }
 
@@ -265,10 +260,10 @@ pub(crate) async fn recover_upgrade_intent_handler(
 }
 
 /// Operator mirror for post-level room retirement, keyed by the raw room ID.
-pub(crate) async fn retire_room_handler(
+pub(crate) async fn create_room_retirement_handler(
     State(state): State<ApiState>,
     Path(room_id): Path<String>,
-) -> Result<Json<RetireRoomResponse>, AppError> {
+) -> Result<(StatusCode, Json<RetirementResponse>), AppError> {
     let retired =
         cumments_core::management::retire_page_room_by_room_id(state.store.as_ref(), &room_id)
             .await
@@ -279,10 +274,44 @@ pub(crate) async fn retire_room_handler(
         ));
     }
     state.governance_notify.notify_one();
-    Ok(Json(RetireRoomResponse {
-        room_id,
-        status: "retiring",
-    }))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RetirementResponse {
+            target_type: "room",
+            target_id: room_id,
+            state: "retiring",
+        }),
+    ))
+}
+
+pub(crate) async fn get_room_retirement_handler(
+    State(state): State<ApiState>,
+    Path(room_id): Path<String>,
+) -> Result<Json<RetirementResponse>, AppError> {
+    let identity = state
+        .store
+        .get_registered_room_identity(&room_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load room: {e}")))?;
+    let Some(identity) = identity else {
+        return Err(AppError::NotFound("room not found".to_string()));
+    };
+    let status = state
+        .store
+        .get_room_status(&room_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load room status: {e}")))?;
+    match status {
+        Some(cumments_core::models::RoomStatus::Retired) => Ok(Json(RetirementResponse {
+            target_type: "room",
+            target_id: room_id,
+            state: "retired",
+        })),
+        _ => Err(AppError::NotFound(format!(
+            "no retirement in progress for {}/{}",
+            identity.site_id, identity.page_slug
+        ))),
+    }
 }
 
 /// Parses the optional QUERY body; an empty body means default pagination.

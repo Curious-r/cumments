@@ -111,6 +111,13 @@ pub const CAPABILITIES: &[Capability] = &[
         AuditRequirement::Required,
     ),
     capability(
+        "site.retirement.read",
+        "Read asynchronous site retirement status.",
+        RiskTier::Low,
+        LifecycleKind::Sync,
+        AuditRequirement::None,
+    ),
+    capability(
         "site.verification.start",
         "Start origin verification.",
         RiskTier::Medium,
@@ -307,6 +314,27 @@ pub const CAPABILITIES: &[Capability] = &[
         AuditRequirement::Required,
     ),
     capability(
+        "room.retirement.read",
+        "Read asynchronous room retirement status.",
+        RiskTier::Low,
+        LifecycleKind::Sync,
+        AuditRequirement::None,
+    ),
+    capability(
+        "page.retirement.start",
+        "Start page comment-room retirement.",
+        RiskTier::High,
+        LifecycleKind::Accepted,
+        AuditRequirement::Required,
+    ),
+    capability(
+        "page.retirement.read",
+        "Read page comment-room retirement status.",
+        RiskTier::Low,
+        LifecycleKind::Sync,
+        AuditRequirement::None,
+    ),
+    capability(
         "media.proxy",
         "Proxy authorized Matrix media.",
         RiskTier::Low,
@@ -431,10 +459,16 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation("POST", "/api/v1/sites", "registerSite", "site.register"),
     http_operation(
-        "DELETE",
-        "/api/v1/sites/{site_id}",
-        "retireSite",
+        "POST",
+        "/api/v1/sites/{site_id}/retirement",
+        "startSiteRetirement",
         "site.retirement.start",
+    ),
+    http_operation(
+        "GET",
+        "/api/v1/sites/{site_id}/retirement",
+        "getSiteRetirement",
+        "site.retirement.read",
     ),
     http_operation(
         "POST",
@@ -461,10 +495,16 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "operator.site.list",
     ),
     http_operation(
-        "DELETE",
-        "/api/v1/operator/sites/{site_id}",
-        "operatorRetireSite",
+        "POST",
+        "/api/v1/operator/sites/{site_id}/retirement",
+        "operatorStartSiteRetirement",
         "site.retirement.start",
+    ),
+    http_operation(
+        "GET",
+        "/api/v1/operator/sites/{site_id}/retirement",
+        "operatorGetSiteRetirement",
+        "site.retirement.read",
     ),
     http_operation(
         "POST",
@@ -527,10 +567,16 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "room.upgrade.start",
     ),
     http_operation(
-        "DELETE",
-        "/api/v1/operator/rooms/{room_id}",
-        "operatorRetireRoom",
+        "POST",
+        "/api/v1/operator/rooms/{room_id}/retirement",
+        "operatorStartRoomRetirement",
         "room.retirement.start",
+    ),
+    http_operation(
+        "GET",
+        "/api/v1/operator/rooms/{room_id}/retirement",
+        "operatorGetRoomRetirement",
+        "room.retirement.read",
     ),
     http_operation(
         "GET",
@@ -605,10 +651,16 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "room.upgrade.start",
     ),
     http_operation(
-        "DELETE",
-        "/api/v1/sites/{site_id}/pages/{page_slug}",
-        "retirePageRoom",
-        "room.retirement.start",
+        "POST",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/retirement",
+        "startPageRetirement",
+        "page.retirement.start",
+    ),
+    http_operation(
+        "GET",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/retirement",
+        "getPageRetirement",
+        "page.retirement.read",
     ),
     http_operation(
         "PUT",
@@ -764,6 +816,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 58);
+        assert_eq!(HTTP_OPERATIONS.len(), 62);
     }
 }

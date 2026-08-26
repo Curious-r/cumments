@@ -430,26 +430,26 @@ async fn page_room_retire_endpoint_requires_claim_token_and_marks_retired() {
         .expect("register room");
 
     let app = cumments_api::build_router(api_state(TestDriver::new(), store.clone()));
-    let uri = "/api/v1/sites/my-blog/pages/hello";
+    let uri = "/api/v1/sites/my-blog/pages/hello/retirement";
 
     let missing = app
         .clone()
-        .oneshot(api_request(Method::DELETE, uri, None, ""))
+        .oneshot(api_request(Method::POST, uri, None, ""))
         .await
         .expect("call router");
     assert_eq!(missing.status(), StatusCode::FORBIDDEN);
 
     let ok = app
         .clone()
-        .oneshot(api_request(Method::DELETE, uri, Some("claim"), ""))
+        .oneshot(api_request(Method::POST, uri, Some("claim"), ""))
         .await
         .expect("call router");
-    assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(ok.status(), StatusCode::ACCEPTED);
     let body = axum::body::to_bytes(ok.into_body(), 64 * 1024)
         .await
         .expect("read body");
     let data: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(data["status"], "retiring");
+    assert_eq!(data["state"], "retiring");
     assert_eq!(
         store
             .get_room_status("!room:hs")
@@ -459,7 +459,7 @@ async fn page_room_retire_endpoint_requires_claim_token_and_marks_retired() {
     );
 
     let again = app
-        .oneshot(api_request(Method::DELETE, uri, Some("claim"), ""))
+        .oneshot(api_request(Method::POST, uri, Some("claim"), ""))
         .await
         .expect("call router");
     assert_eq!(
