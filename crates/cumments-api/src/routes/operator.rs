@@ -17,11 +17,13 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use cumments_core::models::PaginationMeta;
 use cumments_core::models::SiteId;
+use cumments_core::models::{ProjectionRepair, ProjectionRepairStatus};
 use cumments_core::operator::{
     OperatorListQuery, OperatorSite, UpgradeIntentListQuery, config_snippet_toml,
     list_operator_quarantined_rooms, list_operator_sites, list_operator_upgrade_intents,
-    operator_site,
+    operator_meta, operator_site,
 };
 use cumments_core::site_auth::{SiteAuthMode, constant_time_eq, generate_token, token_hash};
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,19 @@ pub struct RecoverUpgradeResponse {
     pub new_version: String,
     pub replacement_room: String,
     pub status: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProjectionRepairListQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectionRepairPage {
+    pub data: Vec<ProjectionRepair>,
+    pub meta: PaginationMeta,
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +327,106 @@ pub(crate) async fn get_room_retirement_handler(
             identity.site_id, identity.page_slug
         ))),
     }
+}
+
+fn projection_repair_status(
+    value: Option<&str>,
+) -> Result<Option<ProjectionRepairStatus>, AppError> {
+    match value {
+        None => Ok(None),
+        Some("pending") => Ok(Some(ProjectionRepairStatus::Pending)),
+        Some("manual") => Ok(Some(ProjectionRepairStatus::Manual)),
+        Some("resolved") => Ok(Some(ProjectionRepairStatus::Resolved)),
+        Some(other) => Err(AppError::BadRequest(format!(
+            "invalid repair status `{other}`; use pending, manual, or resolved"
+        ))),
+    }
+}
+
+pub(crate) async fn list_projection_repairs_handler(
+    method: Method,
+    State(state): State<ApiState>,
+    body: String,
+) -> Result<Json<ProjectionRepairPage>, AppError> {
+    if method != *QUERY_METHOD {
+        return Err(AppError::MethodNotAllowed);
+    }
+    let query: ProjectionRepairListQuery = if body.is_empty() {
+        ProjectionRepairListQuery {
+            page: None,
+            per_page: None,
+            status: None,
+        }
+    } else {
+        serde_json::from_str(&body)
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?
+    };
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+    let status = projection_repair_status(query.status.as_deref())?;
+    let offset = (page - 1).unsigned_abs() * per_page as u64;
+
+    let total = state
+        .store
+        .count_projection_repairs(status)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to count repairs: {e}")))?;
+    let data = state
+        .store
+        .list_projection_repairs(status, offset, per_page as u64)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to list repairs: {e}")))?;
+
+    Ok(Json(ProjectionRepairPage {
+        data,
+        meta: operator_meta(
+            total.try_into().expect("repair count fits i64"),
+            page,
+            per_page,
+        ),
+    }))
+}
+
+pub(crate) async fn get_projection_repair_handler(
+    State(state): State<ApiState>,
+    Path(target_event_id): Path<String>,
+) -> Result<Json<ProjectionRepair>, AppError> {
+    let repair = state
+        .store
+        .get_projection_repair(&target_event_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load repair: {e}")))?;
+    repair
+        .map(Json)
+        .ok_or_else(|| AppError::NotFound(format!("projection repair {target_event_id} not found")))
+}
+
+pub(crate) async fn retry_projection_repair_handler(
+    State(state): State<ApiState>,
+    Path(target_event_id): Path<String>,
+) -> Result<(StatusCode, Json<ProjectionRepair>), AppError> {
+    let existing = state
+        .store
+        .get_projection_repair(&target_event_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to load repair: {e}")))?;
+    let Some(existing) = existing else {
+        return Err(AppError::NotFound(format!(
+            "projection repair {target_event_id} not found"
+        )));
+    };
+    if existing.status == ProjectionRepairStatus::Resolved {
+        return Err(AppError::Conflict(
+            "resolved projection repairs cannot be retried".to_string(),
+        ));
+    }
+
+    let repair = state
+        .store
+        .retry_projection_repair(&target_event_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to retry repair: {e}")))?;
+    Ok((StatusCode::ACCEPTED, Json(repair)))
 }
 
 /// Parses the optional QUERY body; an empty body means default pagination.

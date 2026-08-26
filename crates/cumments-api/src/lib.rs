@@ -17,9 +17,10 @@ use crate::routes::media::{
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::operator::{
-    config_snippet_handler, create_room_retirement_handler, get_room_retirement_handler,
-    list_operator_sites_handler, list_quarantined_rooms_handler, list_upgrade_intents_handler,
-    recover_upgrade_intent_handler, reinstate_room_handler, require_operator,
+    config_snippet_handler, create_room_retirement_handler, get_projection_repair_handler,
+    get_room_retirement_handler, list_operator_sites_handler, list_projection_repairs_handler,
+    list_quarantined_rooms_handler, list_upgrade_intents_handler, recover_upgrade_intent_handler,
+    reinstate_room_handler, require_operator, retry_projection_repair_handler,
     revoke_secret_handler, revoke_verified_origin_handler, rotate_claim_token_handler,
     rotate_secret_handler, upgrade_room_handler,
 };
@@ -40,9 +41,9 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        GovernanceStore, MatrixDriver, MessageStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteAuthStore, SiteStore, SiteTransferStore, StickerPackStore, SubmissionStore,
-        VirtualUserStore,
+        GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore, RegistryStore,
+        RoleClaimStore, RoomStore, SiteAuthStore, SiteStore, SiteTransferStore, StickerPackStore,
+        SubmissionStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -72,6 +73,7 @@ pub trait ApiStore:
     + RoomStore
     + GovernanceStore
     + StickerPackStore
+    + ProjectionRepairStore
     + RoleClaimStore
     + SiteTransferStore
     + VirtualUserStore
@@ -88,6 +90,7 @@ impl<
         + RoomStore
         + GovernanceStore
         + StickerPackStore
+        + ProjectionRepairStore
         + RoleClaimStore
         + SiteTransferStore
         + VirtualUserStore
@@ -382,6 +385,20 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/operator/quarantined-rooms/{room_id}",
             axum::routing::delete(reinstate_room_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/projection-repairs",
+            axum::routing::get(method_not_allowed_handler)
+                .fallback(list_projection_repairs_handler),
+        )
+        .route(
+            "/api/v1/operator/projection-repairs/{target_event_id}",
+            axum::routing::get(get_projection_repair_handler),
+        )
+        .route(
+            "/api/v1/operator/projection-repairs/{target_event_id}/retry",
+            axum::routing::post(retry_projection_repair_handler)
+                .fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/operator/rooms/{room_id}/upgrade",

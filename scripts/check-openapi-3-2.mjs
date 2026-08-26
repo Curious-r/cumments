@@ -17,7 +17,7 @@ assert(!/^.*nullable:.*$/m.test(contract), "contract must not use OAS 3.0 nullab
 assert(!/x-query|x-cumments-query/.test(contract), "contract must use native QUERY operations");
 
 const queryOperations = [...contract.matchAll(/^ {4}query:$/gm)].length;
-assert(queryOperations === 4, `expected 4 native query operations, found ${queryOperations}`);
+assert(queryOperations === 5, `expected 5 native query operations, found ${queryOperations}`);
 assert(
   /^\s+itemSchema:\n\s+\$ref: "#\/components\/schemas\/CommentSseFrame"$/m.test(contract),
   "SSE response must describe each parsed event frame with itemSchema",
@@ -33,6 +33,7 @@ for (const operationId of [
     "listOperatorSites",
     "listQuarantinedRooms",
     "listRoomUpgradeIntents",
+    "listProjectionRepairs",
 ]) {
   assert(new RegExp(`^      operationId: ${operationId}$`, "m").test(contract), `missing ${operationId}`);
 }

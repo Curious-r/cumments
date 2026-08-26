@@ -148,6 +148,27 @@ created by the Cumments-managed `/upgrade` call, or whose successor metadata
 points to another site/page. Recovery never repairs a mismatched successor by
 guessing; it fails closed and records why.
 
+## Inspect and retry projection repairs
+
+`QUERY /api/v1/operator/projection-repairs`
+
+Optional JSON body:
+`{ "page": 1, "per_page": 20, "status": "pending|manual|resolved" }`.
+
+Returns the durable repair queue for facts that failed closed during projection.
+Rows contain only identifiers and diagnostics; the authoritative Matrix event is
+fetched during repair. The standard `{ "data", "meta" }` pagination shape applies.
+
+`GET /api/v1/operator/projection-repairs/{target_event_id}`
+
+Returns one repair row.
+
+`POST /api/v1/operator/projection-repairs/{target_event_id}/retry`
+
+Requeues a `pending` or `manual` repair immediately. Resolved repairs return
+`409`; unknown repairs return `404`. A successful requeue returns `202 Accepted`
+with the updated row.
+
 ## Start a comment-room retirement
 
 `POST /api/v1/operator/rooms/{room_id}/retirement`

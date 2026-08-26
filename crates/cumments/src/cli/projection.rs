@@ -27,7 +27,7 @@ async fn list_repairs(
         Some("resolved") => Some(ProjectionRepairStatus::Resolved),
         Some(other) => bail!("invalid repair status {other}; use pending, manual, or resolved"),
     };
-    let rows = store.list_projection_repairs(status, args.limit).await?;
+    let rows = store.list_projection_repairs(status, 0, args.limit).await?;
     print_json(&rows)?;
     Ok(())
 }

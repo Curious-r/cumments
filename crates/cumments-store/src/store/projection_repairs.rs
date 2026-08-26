@@ -6,7 +6,8 @@ use chrono::Utc;
 use cumments_core::models::{ProjectionRepair, ProjectionRepairInput, ProjectionRepairStatus};
 use cumments_core::ports::ProjectionRepairStore;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 
 /// Consecutive repair-pass failures before automatic retries stop. A short
@@ -168,16 +169,58 @@ impl ProjectionRepairStore for DbStore {
     async fn list_projection_repairs(
         &self,
         status: Option<ProjectionRepairStatus>,
+        offset: u64,
         limit: u64,
     ) -> Result<Vec<ProjectionRepair>> {
         let mut query = projection_repairs::Entity::find()
             .order_by_desc(projection_repairs::Column::UpdatedAt)
+            .offset(offset)
             .limit(limit);
         if let Some(status) = status {
             query = query.filter(projection_repairs::Column::Status.eq(status.as_str()));
         }
         let rows = query.all(&self.db).await?;
         rows.into_iter().map(model_from_row).collect()
+    }
+
+    async fn get_projection_repair(
+        &self,
+        target_event_id: &str,
+    ) -> Result<Option<ProjectionRepair>> {
+        let row = projection_repairs::Entity::find()
+            .filter(projection_repairs::Column::TargetEventId.eq(target_event_id))
+            .one(&self.db)
+            .await?;
+        row.map(model_from_row).transpose()
+    }
+
+    async fn count_projection_repairs(
+        &self,
+        status: Option<ProjectionRepairStatus>,
+    ) -> Result<u64> {
+        let mut query = projection_repairs::Entity::find();
+        if let Some(status) = status {
+            query = query.filter(projection_repairs::Column::Status.eq(status.as_str()));
+        }
+        query.count(&self.db).await.map_err(Into::into)
+    }
+
+    async fn retry_projection_repair(&self, target_event_id: &str) -> Result<ProjectionRepair> {
+        let row = projection_repairs::Entity::find()
+            .filter(projection_repairs::Column::TargetEventId.eq(target_event_id))
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("projection repair {target_event_id} not found"))?;
+        if row.status()? == ProjectionRepairStatus::Resolved {
+            anyhow::bail!("resolved projection repair {target_event_id} cannot be retried");
+        }
+
+        let mut active: projection_repairs::ActiveModel = row.into();
+        active.status = Set(ProjectionRepairStatus::Pending.as_str().to_owned());
+        active.next_retry_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now());
+        let row = active.update(&self.db).await?;
+        model_from_row(row)
     }
 }
 
@@ -240,7 +283,7 @@ mod tests {
         );
 
         let rows = store
-            .list_projection_repairs(Some(ProjectionRepairStatus::Manual), 10)
+            .list_projection_repairs(Some(ProjectionRepairStatus::Manual), 0, 10)
             .await
             .expect("list manual");
         assert_eq!(rows.len(), 1);
@@ -255,7 +298,7 @@ mod tests {
         );
         assert!(
             store
-                .list_projection_repairs(Some(ProjectionRepairStatus::Pending), 10)
+                .list_projection_repairs(Some(ProjectionRepairStatus::Pending), 0, 10)
                 .await
                 .expect("pending rows")
                 .is_empty()

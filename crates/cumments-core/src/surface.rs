@@ -390,6 +390,27 @@ pub const CAPABILITIES: &[Capability] = &[
         LifecycleKind::Sync,
         AuditRequirement::None,
     ),
+    capability(
+        "projection.repair.list",
+        "List durable projection repairs.",
+        RiskTier::Low,
+        LifecycleKind::Sync,
+        AuditRequirement::None,
+    ),
+    capability(
+        "projection.repair.read",
+        "Read one durable projection repair.",
+        RiskTier::Low,
+        LifecycleKind::Sync,
+        AuditRequirement::None,
+    ),
+    capability(
+        "projection.repair.retry",
+        "Requeue a pending or manual projection repair.",
+        RiskTier::High,
+        LifecycleKind::Accepted,
+        AuditRequirement::Required,
+    ),
 ];
 
 pub struct HttpOperation {
@@ -776,6 +797,24 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "operatorStartSiteOwnershipTransfer",
         "governance.ownership.transfer.start",
     ),
+    http_operation(
+        "QUERY",
+        "/api/v1/operator/projection-repairs",
+        "listProjectionRepairs",
+        "projection.repair.list",
+    ),
+    http_operation(
+        "GET",
+        "/api/v1/operator/projection-repairs/{target_event_id}",
+        "getProjectionRepair",
+        "projection.repair.read",
+    ),
+    http_operation(
+        "POST",
+        "/api/v1/operator/projection-repairs/{target_event_id}/retry",
+        "retryProjectionRepair",
+        "projection.repair.retry",
+    ),
 ];
 
 pub fn find_capability(id: &str) -> Option<&'static Capability> {
@@ -816,6 +855,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 62);
+        assert_eq!(HTTP_OPERATIONS.len(), 65);
     }
 }

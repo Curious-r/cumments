@@ -1177,11 +1177,29 @@ pub trait ProjectionRepairStore: Send + Sync {
 
     async fn resolve_projection_repair(&self, target_event_id: &str) -> Result<bool>;
 
+    async fn get_projection_repair(
+        &self,
+        target_event_id: &str,
+    ) -> Result<Option<crate::models::ProjectionRepair>>;
+
+    async fn count_projection_repairs(
+        &self,
+        status: Option<crate::models::ProjectionRepairStatus>,
+    ) -> Result<u64>;
+
     async fn list_projection_repairs(
         &self,
         status: Option<crate::models::ProjectionRepairStatus>,
+        offset: u64,
         limit: u64,
     ) -> Result<Vec<ProjectionRepair>>;
+
+    /// Requeues a pending/manual repair. Returns `None` when unknown and an
+    /// error when the repair is resolved.
+    async fn retry_projection_repair(
+        &self,
+        target_event_id: &str,
+    ) -> Result<crate::models::ProjectionRepair>;
 }
 
 /// Repairs a queued state-event redaction using the homeserver-resolved

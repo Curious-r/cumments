@@ -467,6 +467,7 @@ async fn unknown_room_versions_queue_repair_without_tombstoning() {
         store
             .list_projection_repairs(
                 Some(cumments_core::models::ProjectionRepairStatus::Pending),
+                0,
                 10
             )
             .await

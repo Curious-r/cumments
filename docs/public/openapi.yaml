@@ -724,6 +724,85 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+  /api/v1/operator/projection-repairs:
+    query:
+      tags: [Operator]
+      summary: List projection repairs
+      operationId: listProjectionRepairs
+      security:
+        - operatorToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                page:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                per_page:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 20
+                status:
+                  type: string
+                  enum: [pending, manual, resolved]
+      responses:
+        "200":
+          description: Paginated projection repairs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectionRepairPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/operator/projection-repairs/{target_event_id}:
+    parameters:
+      - $ref: "#/components/parameters/TargetEventId"
+    get:
+      tags: [Operator]
+      summary: Get a projection repair
+      operationId: getProjectionRepair
+      security:
+        - operatorToken: []
+      responses:
+        "200":
+          description: Projection repair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectionRepair"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/operator/projection-repairs/{target_event_id}/retry:
+    parameters:
+      - $ref: "#/components/parameters/TargetEventId"
+    post:
+      tags: [Operator]
+      summary: Retry a pending or manual projection repair
+      operationId: retryProjectionRepair
+      security:
+        - operatorToken: []
+      responses:
+        "202":
+          description: Projection repair requeued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectionRepair"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /api/v1/operator/rooms/{room_id}/upgrade:
     parameters:
       - $ref: "#/components/parameters/RoomId"
@@ -1986,6 +2065,13 @@ components:
       schema:
         type: string
         description: Matrix room ID, percent-encoded
+    TargetEventId:
+      name: target_event_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Matrix event ID of the failed fact, percent-encoded
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -2391,6 +2477,59 @@ components:
         state:
           type: string
           enum: [retiring, retired]
+    ProjectionRepair:
+      type: object
+      required:
+        - target_event_id
+        - room_id
+        - redaction_event_id
+        - reason
+        - status
+        - attempts
+        - next_retry_at
+        - created_at
+        - updated_at
+      properties:
+        target_event_id:
+          type: string
+        room_id:
+          type: string
+        redaction_event_id:
+          type: string
+        reason:
+          type: string
+        observed_room_version:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [pending, manual, resolved]
+        attempts:
+          type: integer
+          minimum: 1
+        last_error:
+          type: [string, "null"]
+        next_retry_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: [string, "null"]
+          format: date-time
+    ProjectionRepairPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectionRepair"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
     UpgradeRoomRequest:
       type: object
       required: [new_version]
