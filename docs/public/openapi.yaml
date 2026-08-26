@@ -1119,16 +1119,24 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/sites/{site_id}/packs/{pack_id}/stickers/{shortcode}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - name: pack_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: shortcode
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags: [Governance]
       summary: Remove a sticker from a site pack
       operationId: removeSiteSticker
-      parameters:
-        - name: shortcode
-          in: query
-          required: true
-          schema:
-            type: string
       responses:
         "200":
           description: Updated sticker pack
@@ -1173,16 +1181,24 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers/{shortcode}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - name: pack_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: shortcode
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags: [Operator]
       summary: Remove a sticker from a site pack (operator fallback)
       operationId: operatorRemoveSiteSticker
-      parameters:
-        - name: shortcode
-          in: query
-          required: true
-          schema:
-            type: string
       responses:
         "200":
           description: Updated sticker pack
@@ -1587,13 +1603,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/admins:
+  /api/v1/sites/{site_id}/admin-claims:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
-      summary: Appoint a site admin
-      operationId: addSiteAdmin
+      summary: Create a site admin claim
+      operationId: createSiteAdminClaim
       security:
         - claimToken: []
       requestBody:
@@ -1617,14 +1633,17 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/sites/{site_id}/admins/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/UserId"
     delete:
       tags: [Governance]
       summary: Remove a site admin
       operationId: removeSiteAdmin
       security:
         - claimToken: []
-      parameters:
-        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1640,13 +1659,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/sites/{site_id}/managers:
+  /api/v1/sites/{site_id}/manager-claims:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
-      summary: Add a site manager
-      operationId: addSiteManager
+      summary: Create a site manager claim
+      operationId: createSiteManagerClaim
       security:
         - claimToken: []
       requestBody:
@@ -1670,14 +1689,17 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/sites/{site_id}/managers/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/UserId"
     delete:
       tags: [Governance]
       summary: Remove a site manager
       operationId: removeSiteManager
       security:
         - claimToken: []
-      parameters:
-        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1710,10 +1732,15 @@ paths:
                 $ref: "#/components/schemas/RoomModeratorsResponse"
         "404":
           $ref: "#/components/responses/Error"
+
+  /api/v1/sites/{site_id}/pages/{page_slug}/moderator-claims:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PageSlug"
     post:
       tags: [Governance]
-      summary: Appoint a room moderator
-      operationId: addRoomModerator
+      summary: Create a room moderator claim
+      operationId: createPageModeratorClaim
       security:
         - claimToken: []
       requestBody:
@@ -1737,14 +1764,18 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/sites/{site_id}/pages/{page_slug}/moderators/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PageSlug"
+      - $ref: "#/components/parameters/UserId"
     delete:
       tags: [Governance]
       summary: Remove a room moderator
       operationId: removeRoomModerator
       security:
         - claimToken: []
-      parameters:
-        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1795,13 +1826,13 @@ paths:
                 $ref: "#/components/schemas/RotateClaimTokenResponse"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/ownership/transfer:
+  /api/v1/sites/{site_id}/ownership-transfers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Governance]
       summary: Start a site ownership transfer
-      operationId: startSiteOwnershipTransfer
+      operationId: createSiteOwnershipTransfer
       security:
         - claimToken: []
       requestBody:
@@ -1843,13 +1874,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/operator/sites/{site_id}/admins:
+  /api/v1/operator/sites/{site_id}/admin-claims:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
-      summary: Appoint a site admin (operator)
-      operationId: operatorAddSiteAdmin
+      summary: Create a site admin claim (operator)
+      operationId: createOperatorAdminClaim
       security:
         - operatorToken: []
       requestBody:
@@ -1873,14 +1904,17 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/operator/sites/{site_id}/admins/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/UserId"
     delete:
       tags: [Operator]
       summary: Remove a site admin (operator)
       operationId: operatorRemoveSiteAdmin
       security:
         - operatorToken: []
-      parameters:
-        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1896,13 +1930,13 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/operator/sites/{site_id}/managers:
+  /api/v1/operator/sites/{site_id}/manager-claims:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
       tags: [Operator]
-      summary: Add a site manager (operator)
-      operationId: operatorAddSiteManager
+      summary: Create a site manager claim (operator)
+      operationId: createOperatorManagerClaim
       security:
         - operatorToken: []
       requestBody:
@@ -1926,14 +1960,17 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/v1/operator/sites/{site_id}/managers/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/UserId"
     delete:
       tags: [Operator]
       summary: Remove a site manager (operator)
       operationId: operatorRemoveSiteManager
       security:
         - operatorToken: []
-      parameters:
-        - $ref: "#/components/parameters/UserIdQuery"
       responses:
         "200":
           description: Role revoked
@@ -1949,7 +1986,7 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /api/v1/operator/sites/{site_id}/ownership/transfer:
+  /api/v1/operator/sites/{site_id}/ownership-transfers:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     post:
@@ -2008,9 +2045,9 @@ components:
       schema:
         type: string
         description: Matrix event ID, percent-encoded
-    UserIdQuery:
+    UserId:
       name: user_id
-      in: query
+      in: path
       required: true
       schema:
         type: string

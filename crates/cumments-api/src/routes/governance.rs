@@ -10,7 +10,7 @@ use crate::error::{AppError, map_management_error};
 use crate::rate_limit::client_key;
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, Query, Request, State},
+    extract::{ConnectInfo, Path, Request, State},
     http::HeaderMap,
     http::StatusCode,
     middleware::Next,
@@ -25,7 +25,6 @@ use cumments_core::{
     site_auth::{CLAIM_TOKEN_HEADER, SiteLifecycle, constant_time_eq, token_hash},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 
 #[derive(Debug, Deserialize)]
@@ -189,16 +188,6 @@ fn parse_user_id(raw: &str) -> Result<String, AppError> {
     validate_governance_user_id(raw).map_err(|error| AppError::BadRequest(error.to_string()))
 }
 
-/// Reads the mandatory `user_id` from a DELETE query string with a
-/// problem-details error instead of axum's default rejection body.
-fn user_id_from_query(query: &HashMap<String, String>) -> Result<String, AppError> {
-    query
-        .get("user_id")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| AppError::BadRequest("user_id query parameter is required".to_string()))
-}
-
 pub(crate) fn rate_limited(
     state: &ApiState,
     headers: &HeaderMap,
@@ -268,7 +257,7 @@ async fn create_role_claim(
     })
 }
 
-pub(crate) async fn add_admin_handler(
+pub(crate) async fn create_admin_claim_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -319,14 +308,13 @@ pub(crate) async fn start_owner_transfer_handler(
 
 pub(crate) async fn remove_admin_handler(
     State(state): State<ApiState>,
-    Path(site_id): Path<String>,
+    Path((site_id, user_id)): Path<(String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
-    let user_id = parse_user_id(&user_id_from_query(&query)?)?;
+    let user_id = parse_user_id(&user_id)?;
     let removal = cumments_core::management::remove_site_role(
         state.store.as_ref(),
         state.store.as_ref(),
@@ -356,7 +344,7 @@ pub(crate) async fn remove_admin_handler(
     }))
 }
 
-pub(crate) async fn add_manager_handler(
+pub(crate) async fn create_manager_claim_handler(
     State(state): State<ApiState>,
     Path(site_id): Path<String>,
     connect: ConnectInfo<SocketAddr>,
@@ -373,14 +361,13 @@ pub(crate) async fn add_manager_handler(
 
 pub(crate) async fn remove_manager_handler(
     State(state): State<ApiState>,
-    Path(site_id): Path<String>,
+    Path((site_id, user_id)): Path<(String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
-    let user_id = parse_user_id(&user_id_from_query(&query)?)?;
+    let user_id = parse_user_id(&user_id)?;
     let removal = cumments_core::management::remove_site_role(
         state.store.as_ref(),
         state.store.as_ref(),
@@ -403,7 +390,7 @@ pub(crate) async fn remove_manager_handler(
     }))
 }
 
-pub(crate) async fn add_room_moderator_handler(
+pub(crate) async fn create_room_moderator_claim_handler(
     State(state): State<ApiState>,
     Path((site_id, page_slug)): Path<(String, String)>,
     connect: ConnectInfo<SocketAddr>,
@@ -422,15 +409,14 @@ pub(crate) async fn add_room_moderator_handler(
 
 pub(crate) async fn remove_room_moderator_handler(
     State(state): State<ApiState>,
-    Path((site_id, page_slug)): Path<(String, String)>,
+    Path((site_id, page_slug, user_id)): Path<(String, String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<RevokedRoleResponse>, AppError> {
     let site_id = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     rate_limited(&state, &headers, Some(connect.0))?;
-    let user_id = parse_user_id(&user_id_from_query(&query)?)?;
+    let user_id = parse_user_id(&user_id)?;
     let room_id = room_id_for(&state, &site_id, &page_slug).await?;
     let removal = cumments_core::management::remove_room_moderator(
         state.store.as_ref(),

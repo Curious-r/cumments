@@ -1299,18 +1299,12 @@ pub(crate) async fn add_site_sticker_handler(
 /// Removes one sticker image from a site's pack.
 pub(crate) async fn remove_site_sticker_handler(
     State(state): State<ApiState>,
-    Path((site_id, pack_id)): Path<(String, String)>,
+    Path((site_id, pack_id, shortcode)): Path<(String, String, String)>,
     connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     rate_limited(&state, &headers, Some(connect.0))?;
     let media_base = media_url_base(&state, &headers, Some(connect.0));
-    let shortcode = query
-        .get("shortcode")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| AppError::BadRequest("shortcode query parameter is required".to_string()))?;
     let projection = remove_site_sticker(
         state.store.as_ref(),
         state.driver.as_ref(),

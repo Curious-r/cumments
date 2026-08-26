@@ -2,8 +2,8 @@
 
 Site-owner operations authenticate with the claim token returned at site
 registration (`X-Cumments-Claim-Token`). Operator fallbacks with the same
-handlers live under `/api/v1/operator/sites/{site_id}/admins` and
-`/api/v1/operator/sites/{site_id}/managers` (operator token) — see
+handlers live under `/api/v1/operator/sites/{site_id}/admin-claims` and
+`/api/v1/operator/sites/{site_id}/manager-claims` (operator token) — see
 [Operator API](operator.md#governance-fallback). Room upgrades follow the
 same pattern: the site-level endpoint below, plus an operator mirror in the
 Operator API.
@@ -17,13 +17,12 @@ in [Site governance](../site-governance.md).
 
 ## Site admins
 
-`POST /api/v1/sites/{site_id}/admins` /
-`DELETE /api/v1/sites/{site_id}/admins?user_id=%40alice%3Aexample.com`
+`POST /api/v1/sites/{site_id}/admin-claims` /
+`DELETE /api/v1/sites/{site_id}/admins/%40alice%3Aexample.com`
 
-POST body: `{ "user_id": "@alice:example.com" }`. DELETE carries the target
-in the `user_id` query parameter (DELETE bodies are avoided per RFC 9110).
-Appoints or removes a site admin (level 100 in the Space and every comment
-room). POST returns
+POST body: `{ "user_id": "@alice:example.com" }`; the delete target is the
+percent-encoded Matrix user ID. Claims or removes a site admin (level 100 in
+the Space and every comment room). POST returns
 `{ "pending": true, "user_id", "level", "verify_token", "expires_at" }`;
 DELETE returns `{ "revoked": true, "user_id", "level" }` and cancels a
 pending claim or removes an applied role; when the last site admin is
@@ -32,23 +31,23 @@ admin is the one-time bootstrap step.
 
 ## Site managers
 
-`POST /api/v1/sites/{site_id}/managers` /
-`DELETE /api/v1/sites/{site_id}/managers?user_id=...`
+`POST /api/v1/sites/{site_id}/manager-claims` /
+`DELETE /api/v1/sites/{site_id}/managers/{user_id}`
 
-POST body: `{ "user_id": "..." }`; DELETE takes `user_id` as a query
-parameter. Managers hold 75 in the Space and are replicated into every
+POST body: `{ "user_id": "..." }`; DELETE addresses the percent-encoded
+Matrix user ID. Managers hold 75 in the Space and are replicated into every
 comment room by the governance sync pass. POST returns the pending claim
 shape; DELETE returns the revoked shape.
 
 ## Room moderators
 
-`POST /api/v1/sites/{site_id}/pages/{page_slug}/moderators` /
-`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/moderators?user_id=...`
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/moderator-claims` /
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/moderators/{user_id}`
 
-POST body: `{ "user_id": "..." }`; DELETE takes `user_id` as a query
-parameter. Appoints or removes a moderator (level 50) in the room registered
-for that page only. POST returns the pending claim shape; DELETE returns the
-revoked shape.
+POST body: `{ "user_id": "..." }`; DELETE addresses the percent-encoded
+Matrix user ID. Claims or removes a moderator (level 50) in the room
+registered for that page only. POST returns the pending claim shape; DELETE
+returns the revoked shape.
 
 ## Read the projected rosters
 
@@ -62,14 +61,14 @@ revoked shape.
 
 ## Ownership transfer
 
-`POST /api/v1/sites/{site_id}/ownership/transfer`
+`POST /api/v1/sites/{site_id}/ownership-transfers`
 
 Body: `{ "user_id": "@new-owner:example.com" }`. Starts a two-phase transfer:
 the target receives a pending admin claim and the site records a pending
 transfer. Once the target sends `cumments-claim:<token>` to the bot, Cumments
 resets the admin roster to the target, rotates the claim token and delivers
 the new token in the bot DM. The operator mirror is
-`POST /api/v1/operator/sites/{site_id}/ownership/transfer`.
+`POST /api/v1/operator/sites/{site_id}/ownership-transfers`.
 
 ## Rotate the claim token
 

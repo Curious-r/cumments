@@ -114,7 +114,7 @@ curl -sS -X POST http://localhost:7931/api/v1/sites \
 SITE_ID=my-blog
 CLAIM=$(jq -r .claim_token site.json)
 
-curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/admins" \
+curl -sS -X POST "http://localhost:7931/api/v1/sites/$SITE_ID/admin-claims" \
   -H "Content-Type: application/json" \
   -H "X-Cumments-Claim-Token: $CLAIM" \
   -d '{"user_id":"@alice:localhost:8008"}' | tee admin.json

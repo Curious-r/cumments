@@ -3,8 +3,8 @@ use crate::routes::comments::{
     react_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
-    add_admin_handler, add_manager_handler, add_room_moderator_handler,
-    create_page_retirement_handler, create_page_room_upgrade_handler,
+    create_admin_claim_handler, create_manager_claim_handler, create_page_retirement_handler,
+    create_page_room_upgrade_handler, create_room_moderator_claim_handler,
     create_site_retirement_handler, get_page_retirement_handler, get_site_retirement_handler,
     list_page_roles_handler, list_room_moderators_handler, list_site_roles_handler,
     remove_admin_handler, remove_manager_handler, remove_room_moderator_handler,
@@ -36,7 +36,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
@@ -277,28 +277,44 @@ pub fn build_router(state: ApiState) -> Router {
     // Site governance writes, authenticated with the site's claim token.
     let governance_router = Router::new()
         .route(
-            "/api/v1/sites/{site_id}/admins",
-            post(add_admin_handler).delete(remove_admin_handler),
+            "/api/v1/sites/{site_id}/admin-claims",
+            post(create_admin_claim_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/managers",
-            post(add_manager_handler).delete(remove_manager_handler),
+            "/api/v1/sites/{site_id}/admins/{user_id}",
+            delete(remove_admin_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/manager-claims",
+            post(create_manager_claim_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/managers/{user_id}",
+            delete(remove_manager_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/claim-token-rotations",
             axum::routing::post(rotate_claim_token_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/ownership/transfer",
+            "/api/v1/sites/{site_id}/ownership-transfers",
             axum::routing::post(start_owner_transfer_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/pages/{page_slug}/moderators",
-            post(add_room_moderator_handler).delete(remove_room_moderator_handler),
+            "/api/v1/sites/{site_id}/pages/{page_slug}/moderator-claims",
+            post(create_room_moderator_claim_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/pages/{page_slug}/moderators/{user_id}",
+            delete(remove_room_moderator_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/packs/{pack_id}/stickers",
-            post(add_site_sticker_handler).delete(remove_site_sticker_handler),
+            post(add_site_sticker_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/packs/{pack_id}/stickers/{shortcode}",
+            delete(remove_site_sticker_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/retirement",
@@ -354,28 +370,33 @@ pub fn build_router(state: ApiState) -> Router {
                 .get(get_site_retirement_handler)
                 .fallback(method_not_allowed_handler),
         )
-        // Operator fallback for site ownership takeover.
         .route(
-            "/api/v1/operator/sites/{site_id}/admins",
-            axum::routing::post(add_admin_handler)
-                .delete(remove_admin_handler)
-                .fallback(method_not_allowed_handler),
+            "/api/v1/operator/sites/{site_id}/admin-claims",
+            axum::routing::post(create_admin_claim_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/managers",
-            axum::routing::post(add_manager_handler)
-                .delete(remove_manager_handler)
-                .fallback(method_not_allowed_handler),
+            "/api/v1/operator/sites/{site_id}/admins/{user_id}",
+            axum::routing::delete(remove_admin_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/operator/sites/{site_id}/ownership/transfer",
+            "/api/v1/operator/sites/{site_id}/manager-claims",
+            axum::routing::post(create_manager_claim_handler),
+        )
+        .route(
+            "/api/v1/operator/sites/{site_id}/managers/{user_id}",
+            axum::routing::delete(remove_manager_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/sites/{site_id}/ownership-transfers",
             axum::routing::post(start_owner_transfer_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers",
-            axum::routing::post(add_site_sticker_handler)
-                .delete(remove_site_sticker_handler)
-                .fallback(method_not_allowed_handler),
+            axum::routing::post(add_site_sticker_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers/{shortcode}",
+            axum::routing::delete(remove_site_sticker_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/operator/quarantined-rooms",

@@ -160,12 +160,14 @@ site registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 
 | Endpoint | Method | Payload | Effect |
 |---|---|---|---|
-| `/api/v1/sites/{site_id}/admins` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a site admin (POST returns a pending claim + token) |
-| `/api/v1/sites/{site_id}/managers` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a manager (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/admin-claims` | POST | `{ "user_id": ... }` | Create a site admin claim |
+| `/api/v1/sites/{site_id}/admins/{user_id}` | DELETE | — | Revoke a pending/applied site admin |
+| `/api/v1/sites/{site_id}/manager-claims` | POST | `{ "user_id": ... }` | Create a manager claim |
+| `/api/v1/sites/{site_id}/managers/{user_id}` | DELETE | — | Revoke a pending/applied manager |
 | `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a room moderator (POST returns a pending claim + token) |
 | `/api/v1/sites/{site_id}/roles` | GET | — | Projected admins and managers |
 | `/api/v1/sites/{site_id}/pages/{page_slug}/roles` | GET | — | Projected admins, managers and moderators |
-| `/api/v1/sites/{site_id}/ownership/transfer` | POST | `{ "user_id": ... }` | Start a two-phase ownership transfer |
+| `/api/v1/sites/{site_id}/ownership-transfers` | POST | `{ "user_id": ... }` | Start a two-phase ownership transfer |
 | `/api/v1/sites/{site_id}/claim-token-rotations` | POST | — | Owner rotates their own claim token |
 
 POST responses are
@@ -185,7 +187,7 @@ API (see [CLI](cli.md)).
 ## Ownership transfer and recovery
 
 The owner (claim-token holder) can start a two-phase transfer with
-`POST /api/v1/sites/{site_id}/ownership/transfer`. The target verifies the
+`POST /api/v1/sites/{site_id}/ownership-transfers`. The target verifies the
 usual `cumments-claim` token; once verified, Cumments resets the site-admin
 roster to the new owner's verified account, rotates the claim token and
 delivers the new token in the bot DM. Old site admins are removed with the

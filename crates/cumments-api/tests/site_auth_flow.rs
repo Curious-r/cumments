@@ -1971,7 +1971,7 @@ async fn claim_token_authentication_attempts_are_rate_limited() {
         .await
         .expect("register site");
     let router = cumments_api::build_router(state);
-    let uri = "/api/v1/sites/claim-limit/admins";
+    let uri = "/api/v1/sites/claim-limit/admin-claims";
     let body = serde_json::json!({ "user_id": "@owner:hs" }).to_string();
 
     // Missing and invalid credentials both count against the same source-IP
@@ -2208,7 +2208,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         .expect("register site");
     let router = cumments_api::build_router(state);
 
-    let admin_uri = format!("/api/v1/sites/{site_id}/admins");
+    let admin_uri = format!("/api/v1/sites/{site_id}/admin-claims");
     let admin_body = serde_json::json!({ "user_id": "@owner:hs" }).to_string();
 
     // Missing claim token is rejected before any Matrix write.
@@ -2288,7 +2288,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
     }
 
     // The operator mirror works without a claim token.
-    let manager_uri = format!("/api/v1/operator/sites/{site_id}/managers");
+    let manager_uri = format!("/api/v1/operator/sites/{site_id}/manager-claims");
     let added_manager = router
         .clone()
         .oneshot(request_with_body(
@@ -2311,7 +2311,7 @@ async fn site_governance_roles_are_claim_token_scoped_and_projected() {
         .clone()
         .oneshot(request_with_body(
             Method::DELETE,
-            &format!("{admin_uri}?user_id=%40owner%3Ahs"),
+            &format!("/api/v1/sites/{site_id}/admins/%40owner%3Ahs"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
             "",
@@ -2421,7 +2421,7 @@ async fn applied_admin_revocation_marks_the_claim_revoked() {
         .clone()
         .oneshot(request_with_body(
             Method::DELETE,
-            &format!("/api/v1/sites/{site_id}/admins?user_id=%40owner%3Ahs"),
+            &format!("/api/v1/sites/{site_id}/admins/%40owner%3Ahs"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
             "",
@@ -2461,7 +2461,7 @@ async fn ownership_transfer_starts_pending_claim_and_transfer() {
         .clone()
         .oneshot(request_with_body(
             Method::POST,
-            &format!("/api/v1/sites/{site_id}/ownership/transfer"),
+            &format!("/api/v1/sites/{site_id}/ownership-transfers"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
             &serde_json::json!({ "user_id": "@new-owner:hs" }).to_string(),
@@ -2494,7 +2494,7 @@ async fn ownership_transfer_starts_pending_claim_and_transfer() {
     let restarted = router
         .oneshot(request_with_body(
             Method::POST,
-            &format!("/api/v1/sites/{site_id}/ownership/transfer"),
+            &format!("/api/v1/sites/{site_id}/ownership-transfers"),
             None,
             &[("x-cumments-claim-token", "claim-token".to_string())],
             &serde_json::json!({ "user_id": "@other:hs" }).to_string(),
@@ -3050,7 +3050,7 @@ async fn sticker_packs_read_publicly_and_write_with_claim_token() {
         .clone()
         .oneshot(request(
             Method::DELETE,
-            "/api/v1/sites/test-blog/packs/default/stickers?shortcode=cat",
+            "/api/v1/sites/test-blog/packs/default/stickers/cat",
             None,
             &[("x-cumments-claim-token", "claim".to_string())],
         ))

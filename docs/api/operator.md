@@ -188,11 +188,11 @@ retirement state for a room that is still in the registry.
 
 The operator can act on a site's behalf for site-level roles:
 
-- `POST /api/v1/operator/sites/{site_id}/admins` /
-  `DELETE /api/v1/operator/sites/{site_id}/admins?user_id=...`
-- `POST /api/v1/operator/sites/{site_id}/managers` /
-  `DELETE /api/v1/operator/sites/{site_id}/managers?user_id=...`
-- `POST /api/v1/operator/sites/{site_id}/ownership/transfer` — operator
+- `POST /api/v1/operator/sites/{site_id}/admin-claims` /
+  `DELETE /api/v1/operator/sites/{site_id}/admins/{user_id}`
+- `POST /api/v1/operator/sites/{site_id}/manager-claims` /
+  `DELETE /api/v1/operator/sites/{site_id}/managers/{user_id}`
+- `POST /api/v1/operator/sites/{site_id}/ownership-transfers` — operator
   mirror of the claim-token ownership transfer.
 
 These use the same handlers and response shapes as the claim-token

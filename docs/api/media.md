@@ -107,12 +107,12 @@ claim token)
 Body: `{ "shortcode", "url", "body"?, "info"? }`. Adds or replaces one image
 in the pack (creating the pack implicitly). Returns the updated pack.
 
-`DELETE /api/v1/sites/{site_id}/packs/{pack_id}/stickers?shortcode=...`
+`DELETE /api/v1/sites/{site_id}/packs/{pack_id}/stickers/{shortcode}`
 (site governance, claim token)
 
 Removes one image from the pack. Returns the updated pack; removing a
 missing shortcode is a successful no-op.
 
 Operator fallbacks mirror both writes under
-`/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers` with the
-operator token.
+`/api/v1/operator/sites/{site_id}/packs/{pack_id}/stickers[/{shortcode}]`
+with the operator token.
