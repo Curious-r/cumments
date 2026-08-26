@@ -81,7 +81,7 @@ time (admins + managers, moderators start empty).
 
 ## Day-to-day workflow
 
-1. **Self-service**: the site owner sends `!cumments site register <id>`
+1. **Self-service**: the site owner sends `!cumments sites register <site_id>`
    in a DM with the bot. The bot registers the site, creates the Space and
    writes the sender as the first **site admin** immediately. Alternatively,
    register through the API and appoint any Matrix account as the first

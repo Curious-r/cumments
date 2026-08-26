@@ -100,7 +100,7 @@ curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
 The response contains the `user_id` (e.g. `@alice:localhost:8008`).
 
 If alice is registering for herself, she can DM the bot
-`!cumments site register my-blog`: the bot registers the site, creates the
+`!cumments sites register my-blog`: the bot registers the site, creates the
 Space and makes her the first site admin immediately. The API path below is
 the generic path — use it when the registrant and the first admin are
 different accounts:
@@ -173,10 +173,10 @@ only 100 have no in-product upgrade path.
 The homeserver moves the room alias to the replacement, Cumments re-adopts
 the new room, re-links it into the site Space, re-invites site roles, and
 supersedes the old room. The same operation is available to operators through
-`!cumments room <room_id> upgrade <version> --confirm` and
+`!cumments rooms upgrades create <room_id> <version> --confirm` and
 `POST /api/v1/operator/rooms/{room_id}/upgrades`; site admins can trigger it
-themselves with `!cumments site <site_id> page <page_slug> upgrade <version>
---confirm` or `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades`
+themselves with `!cumments pages upgrades create <site_id> <page_slug> <version> --confirm`
+or `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades`
 (claim token). Every path executes the upgrade as the bot, which stays the
 new room's creator. Because several surrounding standards are still open
 (MSC4168/MSC4433), the current behavior includes a few documented

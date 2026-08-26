@@ -77,6 +77,7 @@ export default defineConfig({
           { text: "API overview", link: "/api/index" },
           { text: "Configuration", link: "/configuration" },
           { text: "CLI", link: "/cli" },
+          { text: "Matrix bot", link: "/bot" },
           { text: "Problem types", link: "/problems/index" },
         ],
       },
@@ -137,6 +138,7 @@ export default defineConfig({
           items: [
             { text: "Configuration", link: "/configuration" },
             { text: "CLI", link: "/cli" },
+            { text: "Matrix bot", link: "/bot" },
             { text: "Problem types", link: "/problems/index" },
           ],
         },

@@ -271,10 +271,10 @@ Comment rooms can be upgraded to a new room version through the homeserver's
 native `/upgrade`. The primary path is site-level (a site admin decides to
 upgrade their own room) with an operator mirror as fallback: site admins use
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades` (claim token) or
-`!cumments site <id> page <slug> upgrade <version> --confirm`; operators use
-`cumments rooms upgrades create ROOM_ID VERSION`,
+`!cumments pages upgrades create <id> <slug> <version> --confirm`; operators use
+`!cumments rooms upgrades create ROOM_ID VERSION`,
 `POST /api/v1/operator/rooms/{room_id}/upgrades`, or
-`!cumments room ROOM_ID upgrade VERSION --confirm` in a private DM. The
+`!cumments rooms upgrades create ROOM_ID VERSION --confirm` in a private DM. The
 target version must be newer than the room's current version. The driver is
 idempotent: an existing `m.room.tombstone` is reused, and a failed request
 re-reads the tombstone before reporting an error, so a lost response cannot
@@ -310,10 +310,10 @@ operator can act as a fallback. The reasons for the split are:
 Implemented entry points:
 
 - Site admin: `POST /api/v1/sites/{site_id}/pages/{page_slug}/upgrades`
-  (claim token) and `!cumments site <id> page <slug> upgrade <version>
+  (claim token) and `!cumments pages upgrades create <id> <slug> <version>
   --confirm` (private DM, site-admin permission).
 - Operator mirror: `POST /api/v1/operator/rooms/{room_id}/upgrades`
-  (operator token) and `!cumments room <id> upgrade <version> --confirm`.
+  (operator token) and `!cumments rooms upgrades create <id> <version> --confirm`.
 
 The bot is always the `/upgrade` caller in every path, so it stays the
 replacement room's creator.
@@ -500,7 +500,7 @@ the backup command.
 - Comment-room upgrades are supported through the homeserver's native
   `/upgrade`: `cumments rooms upgrades create <room_id> <version>`, the Operator API
   (`POST /api/v1/operator/rooms/{room_id}/upgrades`), or the bot
-  (`!cumments room <room_id> upgrade <version> --confirm`). The replacement
+  (`!cumments rooms upgrades create <room_id> <version> --confirm`). The replacement
   room is adopted (metadata repaired), re-linked into the site Space, site
   roles are re-invited, and the old room is superseded and cleaned up. Site
   upgrade intents are durable; an operator can list them and explicitly recover

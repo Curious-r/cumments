@@ -70,6 +70,12 @@ pub const BOT_COMMANDS: &[BotCommand] = &[
         ConfirmTier::ConfirmFlag,
     ),
     command(
+        "managers.resign",
+        "managers resign <site_id> --confirm",
+        "Resign as manager.",
+        ConfirmTier::ConfirmFlag,
+    ),
+    command(
         "moderators.add",
         "moderators add <site_id> <page_slug> <mxid>",
         "Start a moderator claim.",
@@ -79,6 +85,12 @@ pub const BOT_COMMANDS: &[BotCommand] = &[
         "moderators.remove",
         "moderators remove <site_id> <page_slug> <mxid> --confirm",
         "Remove a pending or applied moderator.",
+        ConfirmTier::ConfirmFlag,
+    ),
+    command(
+        "moderators.resign",
+        "moderators resign <site_id> <page_slug> --confirm",
+        "Resign as moderator.",
         ConfirmTier::ConfirmFlag,
     ),
     command(

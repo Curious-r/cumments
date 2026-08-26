@@ -419,7 +419,7 @@ impl BotCommandRouter {
                 };
                 Ok(CommandOutcome::plain(reply))
             }
-            ["site", "use", id] => {
+            ["sites", "use", id] => {
                 SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let mut active = self.active_sites.lock().await;
                 active.put(event.sender.clone(), id.to_string());
@@ -429,7 +429,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", "status"] => {
+            ["sites", "status"] => {
                 let id = self.active_site_for(event).await?;
                 self.site_status(&id).await.map(|reply| CommandOutcome {
                     reply,
@@ -437,7 +437,7 @@ impl BotCommandRouter {
                     invalid: false,
                 })
             }
-            ["site", id, "status"] => {
+            ["sites", "status", id] => {
                 self.require_site_access(event, id).await?;
                 self.site_status(id).await.map(|reply| CommandOutcome {
                     reply,
@@ -445,7 +445,7 @@ impl BotCommandRouter {
                     invalid: false,
                 })
             }
-            ["site", "register", id] => {
+            ["sites", "register", id] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let driver = self.require_driver()?;
                 cumments_core::governance::validate_governance_user_id(&event.sender)
@@ -471,7 +471,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "manager", "add", mxid] => {
+            ["managers", "add", id, mxid] => {
                 self.require_site_access(event, id).await?;
                 let pending = cumments_core::management::create_role_claim(
                     self.role_claim_store.as_ref(),
@@ -490,17 +490,17 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "manager", "remove", mxid] => {
+            ["managers", "remove", id, mxid] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id} 的主管 {mxid}？请回复：\n!cumments site {id} manager remove {mxid} --confirm"
+                        "确认移除 {id} 的主管 {mxid}？请回复：\n!cumments managers remove {id} {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "manager", "remove", mxid, "--confirm"] => {
+            ["managers", "remove", id, mxid, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let driver = self.require_driver()?;
                 let removal = cumments_core::management::remove_site_role(
@@ -522,14 +522,14 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "manager", "resign"] => Ok(CommandOutcome {
+            ["managers", "resign", id] => Ok(CommandOutcome {
                 invalid: false,
                 reply: format!(
-                    "确认辞去 {id} 的主管？此操作只移除权限，不会让你离开房间。请回复：\n!cumments site {id} manager resign --confirm"
+                    "确认辞去 {id} 的主管？此操作只移除权限，不会让你离开房间。请回复：\n!cumments managers resign {id} --confirm"
                 ),
                 site_id: Some(id.to_string()),
             }),
-            ["site", id, "manager", "resign", "--confirm"] => {
+            ["managers", "resign", id, "--confirm"] => {
                 let driver = self.require_driver()?;
                 let removal = cumments_core::management::remove_site_role(
                     self.role_claim_store.as_ref(),
@@ -550,7 +550,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "moderator", "add", mxid] => {
+            ["moderators", "add", id, slug, mxid] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -576,7 +576,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "moderator", "remove", mxid] => {
+            ["moderators", "remove", id, slug, mxid] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -588,21 +588,12 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments site {id} page {slug} moderator remove {mxid} --confirm"
+                        "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments moderators remove {id} {slug} {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            [
-                "site",
-                id,
-                "page",
-                slug,
-                "moderator",
-                "remove",
-                mxid,
-                "--confirm",
-            ] => {
+            ["moderators", "remove", id, slug, mxid, "--confirm"] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -629,7 +620,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "moderator", "resign"] => {
+            ["moderators", "resign", id, slug] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -640,12 +631,12 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认辞去 {id}/{slug}（{room_id}）的版主？此操作只移除权限，不会让你离开房间。请回复：\n!cumments site {id} page {slug} moderator resign --confirm"
+                        "确认辞去 {id}/{slug}（{room_id}）的版主？此操作只移除权限，不会让你离开房间。请回复：\n!cumments moderators resign {id} {slug} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "moderator", "resign", "--confirm"] => {
+            ["moderators", "resign", id, slug, "--confirm"] => {
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
                 let room_id = self
@@ -671,17 +662,25 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "upgrade", version] => {
+            ["pages", "upgrades", "create", id, slug, version] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认升级 {id}/{slug} 到 {version}？请回复：\n!cumments site {id} page {slug} upgrade {version} --confirm"
+                        "确认升级 {id}/{slug} 到 {version}？请回复：\n!cumments pages upgrades create {id} {slug} {version} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "upgrade", version, "--confirm"] => {
+            [
+                "pages",
+                "upgrades",
+                "create",
+                id,
+                slug,
+                version,
+                "--confirm",
+            ] => {
                 self.require_site_access(event, id).await?;
                 let driver = self.require_driver()?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
@@ -701,17 +700,17 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "retire"] => {
+            ["pages", "retirements", "create", id, slug] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役 {id}/{slug} 的评论区？此操作不可撤销。请回复：\n!cumments site {id} page {slug} retire --confirm"
+                        "确认退役 {id}/{slug} 的评论区？此操作不可撤销。请回复：\n!cumments pages retirements create {id} {slug} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "page", slug, "retire", "--confirm"] => {
+            ["pages", "retirements", "create", id, slug, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 let site_id = SiteId::new(id.to_string()).map_err(CommandError::error)?;
                 let page_slug = PageSlug::new(slug.to_string()).map_err(CommandError::error)?;
@@ -733,7 +732,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "stickers", "list"] => {
+            ["stickers", "list", id] => {
                 self.require_site_sticker_access(event, id).await?;
                 let packs = list_site_sticker_packs(self.sticker_pack_store.as_ref(), id).await?;
                 let reply = if packs.is_empty() {
@@ -765,7 +764,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "sticker", "add", pack_id, shortcode, url] => {
+            ["stickers", "add", id, pack_id, shortcode, url] => {
                 self.require_site_sticker_access(event, id).await?;
                 let driver = self.require_driver()?;
                 add_site_sticker(
@@ -787,16 +786,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            [
-                "site",
-                id,
-                "sticker",
-                "add",
-                pack_id,
-                shortcode,
-                url,
-                body @ ..,
-            ] => {
+            ["stickers", "add", id, pack_id, shortcode, url, body @ ..] => {
                 self.require_site_sticker_access(event, id).await?;
                 let driver = self.require_driver()?;
                 add_site_sticker(
@@ -818,25 +808,17 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "sticker", "remove", pack_id, shortcode] => {
+            ["stickers", "remove", id, pack_id, shortcode] => {
                 self.require_site_sticker_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认从包 {pack_id} 移除贴纸 {shortcode}？请回复：\n!cumments site {id} sticker remove {pack_id} {shortcode} --confirm"
+                        "确认从包 {pack_id} 移除贴纸 {shortcode}？请回复：\n!cumments stickers remove {id} {pack_id} {shortcode} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            [
-                "site",
-                id,
-                "sticker",
-                "remove",
-                pack_id,
-                shortcode,
-                "--confirm",
-            ] => {
+            ["stickers", "remove", id, pack_id, shortcode, "--confirm"] => {
                 self.require_site_sticker_access(event, id).await?;
                 let driver = self.require_driver()?;
                 remove_site_sticker(self.site_store.as_ref(), driver, id, pack_id, shortcode)
@@ -847,7 +829,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "claim-token", "rotate"] => {
+            ["claim-tokens", "rotate", id] => {
                 self.require_operator(event)?;
                 let token = cumments_core::management::rotate_claim_token(
                     self.site_auth_store.as_ref(),
@@ -861,7 +843,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "secret", "issue"] => {
+            ["secrets", "issue", id] => {
                 self.require_site_access(event, id).await?;
                 let secret =
                     cumments_core::management::issue_secret(self.site_auth_store.as_ref(), id)
@@ -873,17 +855,17 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "retire"] => {
+            ["retirements", "create", id] => {
                 self.require_site_access(event, id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役站点 {id}？此操作不可撤销。请回复：\n!cumments site {id} retire --confirm"
+                        "确认退役站点 {id}？此操作不可撤销。请回复：\n!cumments retirements create {id} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
             }
-            ["site", id, "retire", "--confirm"] => {
+            ["retirements", "create", id, "--confirm"] => {
                 self.require_site_access(event, id).await?;
                 if !cumments_core::management::retire_site(self.site_auth_store.as_ref(), id)
                     .await?
@@ -897,7 +879,7 @@ impl BotCommandRouter {
                     site_id: Some(id.to_string()),
                 })
             }
-            ["rooms", "quarantined"] => {
+            ["quarantined-rooms", "list"] => {
                 self.require_operator(event)?;
                 let rooms = self.registry_store.get_quarantined_rooms().await?;
                 let reply = if rooms.is_empty() {
@@ -918,17 +900,17 @@ impl BotCommandRouter {
                     .map_err(|_| CommandError::error(format!("无效的 max_pages：{pages}")))?;
                 self.backfill_command(event, pages).await
             }
-            ["room", room_id, "reinstate"] => {
+            ["quarantined-rooms", "reinstate", room_id] => {
                 self.require_operator(event)?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认恢复房间 {room_id}？请回复：\n!cumments room {room_id} reinstate --confirm"
+                        "确认恢复房间 {room_id}？请回复：\n!cumments quarantined-rooms reinstate {room_id} --confirm"
                     ),
                     site_id: None,
                 })
             }
-            ["room", room_id, "reinstate", "--confirm"] => {
+            ["quarantined-rooms", "reinstate", room_id, "--confirm"] => {
                 self.require_operator(event)?;
                 if !self.registry_store.reinstate_room(room_id).await? {
                     return Err(CommandError::error("房间不在 registry 中"));
@@ -939,17 +921,24 @@ impl BotCommandRouter {
                     site_id: None,
                 })
             }
-            ["room", room_id, "upgrade", new_version] => {
+            ["rooms", "upgrades", "create", room_id, new_version] => {
                 self.require_operator(event)?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认升级房间 {room_id} 到 {new_version}？请回复：\n!cumments room {room_id} upgrade {new_version} --confirm"
+                        "确认升级房间 {room_id} 到 {new_version}？请回复：\n!cumments rooms upgrades create {room_id} {new_version} --confirm"
                     ),
                     site_id: None,
                 })
             }
-            ["room", room_id, "upgrade", new_version, "--confirm"] => {
+            [
+                "rooms",
+                "upgrades",
+                "create",
+                room_id,
+                new_version,
+                "--confirm",
+            ] => {
                 self.require_operator(event)?;
                 let driver = self.require_driver()?;
                 let replacement = cumments_core::management::upgrade_comment_room(
@@ -966,17 +955,17 @@ impl BotCommandRouter {
                     site_id: None,
                 })
             }
-            ["room", room_id, "retire"] => {
+            ["rooms", "retirements", "create", room_id] => {
                 self.require_operator(event)?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役房间 {room_id}？此操作不可撤销。请回复：\n!cumments room {room_id} retire --confirm"
+                        "确认退役房间 {room_id}？此操作不可撤销。请回复：\n!cumments rooms retirements create {room_id} --confirm"
                     ),
                     site_id: None,
                 })
             }
-            ["room", room_id, "retire", "--confirm"] => {
+            ["rooms", "retirements", "create", room_id, "--confirm"] => {
                 self.require_operator(event)?;
                 if !cumments_core::management::retire_page_room_by_room_id(
                     self.registry_store.as_ref(),
@@ -1144,11 +1133,11 @@ impl BotCommandRouter {
         }
         match owned.len() {
             0 => Err(CommandError::error(
-                "你不是任何站点的管理员；请先 `!cumments site register <id>` 注册",
+                "你不是任何站点的管理员；请先 `!cumments sites register <site_id>` 注册",
             )),
             1 => Ok(owned.remove(0)),
             _ => Err(CommandError::error(format!(
-                "你管理多个站点：{}；请用 `!cumments site use <id>` 指定",
+                "你管理多个站点：{}；请用 `!cumments sites use <site_id>` 指定",
                 owned.join(", ")
             ))),
         }

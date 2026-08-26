@@ -311,7 +311,7 @@ async fn admin_can_create_manager_claim_and_retire_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog manager add @bob:hs",
+            "!cumments managers add my-blog @bob:hs",
         ))
         .await
         .expect("process")
@@ -327,7 +327,7 @@ async fn admin_can_create_manager_claim_and_retire_with_confirm() {
 
     // A single owned site makes `site status` unambiguous without `use`.
     assert!(
-        p.process_bot_command(&command_message("@alice:hs", "!cumments site status"))
+        p.process_bot_command(&command_message("@alice:hs", "!cumments sites status"))
             .await
             .expect("process")
     );
@@ -336,7 +336,7 @@ async fn admin_can_create_manager_claim_and_retire_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog retire",
+            "!cumments retirements create my-blog",
         ))
         .await
         .expect("process")
@@ -353,7 +353,7 @@ async fn admin_can_create_manager_claim_and_retire_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog retire --confirm",
+            "!cumments retirements create my-blog --confirm",
         ))
         .await
         .expect("process")
@@ -419,7 +419,7 @@ async fn manager_can_appoint_room_moderator_from_room_power() {
     assert!(
         p.process_bot_command(&command_message(
             "@manager:hs",
-            "!cumments site my-blog page hello moderator add @mod:hs",
+            "!cumments moderators add my-blog hello @mod:hs",
         ))
         .await
         .expect("process")
@@ -475,7 +475,7 @@ async fn fifty_level_moderator_cannot_appoint_room_moderator() {
     assert!(
         p.process_bot_command(&command_message(
             "@mod:hs",
-            "!cumments site my-blog page hello moderator add @other:hs",
+            "!cumments moderators add my-blog hello @other:hs",
         ))
         .await
         .expect("process")
@@ -559,7 +559,7 @@ async fn manager_can_resign_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@manager:hs",
-            "!cumments site my-blog manager resign --confirm",
+            "!cumments managers resign my-blog --confirm",
         ))
         .await
         .expect("process")
@@ -652,7 +652,7 @@ async fn moderator_can_resign_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@mod:hs",
-            "!cumments site my-blog page hello moderator resign --confirm",
+            "!cumments moderators resign my-blog hello --confirm",
         ))
         .await
         .expect("process")
@@ -691,7 +691,7 @@ async fn site_registration_is_public_self_service() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site register my-blog",
+            "!cumments sites register my-blog",
         ))
         .await
         .expect("process")
@@ -762,7 +762,7 @@ async fn admin_can_retire_a_page_room_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog page hello retire",
+            "!cumments pages retirements create my-blog hello",
         ))
         .await
         .expect("process")
@@ -778,7 +778,7 @@ async fn admin_can_retire_a_page_room_with_confirm() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog page hello retire --confirm",
+            "!cumments pages retirements create my-blog hello --confirm",
         ))
         .await
         .expect("process")
@@ -816,9 +816,12 @@ async fn operator_can_retire_a_room_by_id() {
     );
 
     assert!(
-        p.process_bot_command(&command_message("@op:hs", "!cumments room !room:hs retire"))
-            .await
-            .expect("process")
+        p.process_bot_command(&command_message(
+            "@op:hs",
+            "!cumments rooms retirements create !room:hs"
+        ))
+        .await
+        .expect("process")
     );
     assert_eq!(
         store
@@ -830,7 +833,7 @@ async fn operator_can_retire_a_room_by_id() {
     assert!(
         p.process_bot_command(&command_message(
             "@op:hs",
-            "!cumments room !room:hs retire --confirm",
+            "!cumments rooms retirements create !room:hs --confirm",
         ))
         .await
         .expect("process")
@@ -863,7 +866,7 @@ async fn commands_outside_private_channel_are_consumed_silently() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site register my-blog",
+            "!cumments sites register my-blog",
         ))
         .await
         .expect("process")
@@ -1017,7 +1020,7 @@ async fn manager_can_manage_stickers_but_not_governance() {
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
-            "!cumments site my-blog sticker add default cat mxc://hs/1",
+            "!cumments stickers add my-blog default cat mxc://hs/1",
         ))
         .await
         .expect("process")
@@ -1031,7 +1034,7 @@ async fn manager_can_manage_stickers_but_not_governance() {
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
-            "!cumments site my-blog manager add @carol:hs",
+            "!cumments managers add my-blog @carol:hs",
         ))
         .await
         .expect("process")
@@ -1046,7 +1049,7 @@ async fn manager_can_manage_stickers_but_not_governance() {
     assert!(
         p.process_bot_command(&command_message(
             "@bob:hs",
-            "!cumments site my-blog page hello retire --confirm",
+            "!cumments pages retirements create my-blog hello --confirm",
         ))
         .await
         .expect("process")
@@ -1083,7 +1086,7 @@ async fn sticker_remove_requires_confirm_and_executes() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog sticker add default cat mxc://hs/1",
+            "!cumments stickers add my-blog default cat mxc://hs/1",
         ))
         .await
         .expect("add")
@@ -1094,7 +1097,7 @@ async fn sticker_remove_requires_confirm_and_executes() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog sticker remove default cat",
+            "!cumments stickers remove my-blog default cat",
         ))
         .await
         .expect("remove prompt")
@@ -1108,7 +1111,7 @@ async fn sticker_remove_requires_confirm_and_executes() {
     assert!(
         p.process_bot_command(&command_message(
             "@alice:hs",
-            "!cumments site my-blog sticker remove default cat --confirm",
+            "!cumments stickers remove my-blog default cat --confirm",
         ))
         .await
         .expect("remove confirmed")
@@ -1157,7 +1160,7 @@ async fn stranger_cannot_manage_stickers() {
     assert!(
         p.process_bot_command(&command_message(
             "@eve:hs",
-            "!cumments site my-blog sticker add default cat mxc://hs/1",
+            "!cumments stickers add my-blog default cat mxc://hs/1",
         ))
         .await
         .expect("process")
