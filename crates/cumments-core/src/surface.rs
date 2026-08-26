@@ -577,8 +577,8 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
-        "/api/v1/operator/room-upgrade-intents/{room_id}/recover",
-        "recoverRoomUpgradeIntent",
+        "/api/v1/operator/room-upgrade-intents/{room_id}/recoveries",
+        "createRoomUpgradeRecovery",
         "room.upgrade.intent.recover",
     ),
     http_operation(

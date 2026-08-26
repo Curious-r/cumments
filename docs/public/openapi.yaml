@@ -690,13 +690,13 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
-  /api/v1/operator/room-upgrade-intents/{room_id}/recover:
+  /api/v1/operator/room-upgrade-intents/{room_id}/recoveries:
     parameters:
       - $ref: "#/components/parameters/RoomId"
     post:
       tags: [Operator]
       summary: Recover a reviewed room upgrade
-      operationId: recoverRoomUpgradeIntent
+      operationId: createRoomUpgradeRecovery
       description: |
         Completes a bot-initiated room upgrade whose homeserver commit survived
         a local failure. The exact version and replacement must match the
@@ -708,14 +708,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RecoverUpgradeRequest"
+                $ref: "#/components/schemas/RoomUpgradeRecoveryRequest"
       responses:
         "200":
           description: Replacement adopted and registry converged
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RecoverUpgradeResponse"
+                $ref: "#/components/schemas/RoomUpgradeRecoveryResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
@@ -2781,7 +2781,7 @@ components:
             $ref: "#/components/schemas/OperatorRoomUpgradeIntent"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
-    RecoverUpgradeRequest:
+    RoomUpgradeRecoveryRequest:
       type: object
       required: [new_version, replacement_room]
       properties:
@@ -2789,7 +2789,7 @@ components:
           type: string
         replacement_room:
           type: string
-    RecoverUpgradeResponse:
+    RoomUpgradeRecoveryResponse:
       type: object
       required: [room_id, new_version, replacement_room, status]
       properties:

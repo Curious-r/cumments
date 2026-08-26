@@ -63,7 +63,7 @@ pub struct UpgradeRoomRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RecoverUpgradeRequest {
+pub struct RoomUpgradeRecoveryRequest {
     pub new_version: String,
     pub replacement_room: String,
 }
@@ -76,7 +76,7 @@ pub struct UpgradeRoomResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct RecoverUpgradeResponse {
+pub struct RoomUpgradeRecoveryResponse {
     pub room_id: String,
     pub new_version: String,
     pub replacement_room: String,
@@ -251,10 +251,10 @@ pub(crate) async fn list_upgrade_intents_handler(
     ))
 }
 
-pub(crate) async fn recover_upgrade_intent_handler(
+pub(crate) async fn create_room_upgrade_recovery_handler(
     State(state): State<ApiState>,
     Path(room_id): Path<String>,
-    Json(body): Json<RecoverUpgradeRequest>,
+    Json(body): Json<RoomUpgradeRecoveryRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let replacement = cumments_core::management::recover_comment_room_upgrade(
         state.driver.as_ref(),
@@ -266,7 +266,7 @@ pub(crate) async fn recover_upgrade_intent_handler(
     )
     .await
     .map_err(map_management_error)?;
-    Ok(Json(RecoverUpgradeResponse {
+    Ok(Json(RoomUpgradeRecoveryResponse {
         room_id,
         new_version: body.new_version,
         replacement_room: replacement,

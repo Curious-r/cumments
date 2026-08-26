@@ -115,7 +115,7 @@ observed replacement, lifecycle state (`requested`, `observed`, `adopted`,
 `failed`, `manual`) and error. The body supports `page`, `per_page` and an
 optional `status` filter.
 
-`POST /api/v1/operator/room-upgrade-intents/{room_id}/recover`
+`POST /api/v1/operator/room-upgrade-intents/{room_id}/recoveries`
 
 Body:
 `{"new_version": "13", "replacement_room": "!successor:server"}`.
