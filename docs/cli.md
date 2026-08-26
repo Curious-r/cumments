@@ -41,8 +41,12 @@ cumments
 │   ├── add-admin SITE_ID USER_ID
 │   ├── remove-admin SITE_ID USER_ID
 │   ├── add-manager SITE_ID USER_ID
+│   ├── add-moderator SITE_ID PAGE_SLUG USER_ID
 │   ├── remove-manager SITE_ID USER_ID
+│   ├── remove-moderator SITE_ID PAGE_SLUG USER_ID
 │   ├── transfer-owner SITE_ID USER_ID
+│   ├── add-sticker SITE_ID PACK_ID SHORTCODE URL [--body TEXT] [--info JSON]
+│   ├── remove-sticker SITE_ID PACK_ID SHORTCODE
 │   └── retire SITE_ID --yes [--wait]
 ├── rooms
 │   ├── list-quarantined [--site-id ID] [--page N] [--per-page N] [--table]
@@ -126,10 +130,14 @@ cumments sites export-config my-blog
 cumments sites export-config --raw my-blog >> cumments.toml
 ```
 
-Register or revoke a site-level role. Both `add-*` commands store a pending
-claim and print the one-time `verify_token`; the target Matrix account must
-DM `cumments-claim:<token>` to the AS bot before the role is applied. The
-CLI never writes Matrix power levels directly:
+cumments sites add-sticker my-blog default cat 'mxc://server/cat' \
+  --body 'A cat' --info '{"w":10}'
+cumments sites remove-sticker my-blog default cat
+
+Register or revoke a role. Role `add-*` commands store a pending claim and
+print the one-time `verify_token`; the target Matrix account must DM
+`cumments-claim:<token>` to the AS bot before the role is applied. Removal
+uses the same local management use case as the API:
 
 ```bash
 cumments sites add-admin my-blog '@alice:example.com'
@@ -139,9 +147,9 @@ cumments sites transfer-owner my-blog '@carol:example.com'
 ```
 
 `remove-*` cancels a pending claim; a role that has already been applied is
-removed from the Space power levels directly. In `matrix.mode = "logging"`
-there is no real homeserver, so the local claim row is updated but Matrix
-state is not actually changed.
+removed from Matrix power levels directly. In `matrix.mode = "logging"` there
+is no real homeserver, so the local claim row is updated but Matrix state is
+not actually changed.
 
 Retire a site (destructive, needs `--yes`). The command marks the site
 `retiring` — writes stop immediately — and the **running server's**

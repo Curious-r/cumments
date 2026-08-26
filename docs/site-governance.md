@@ -164,7 +164,8 @@ site registration (`X-Cumments-Claim-Token`). Operator fallbacks live under
 | `/api/v1/sites/{site_id}/admins/{user_id}` | DELETE | — | Revoke a pending/applied site admin |
 | `/api/v1/sites/{site_id}/manager-claims` | POST | `{ "user_id": ... }` | Create a manager claim |
 | `/api/v1/sites/{site_id}/managers/{user_id}` | DELETE | — | Revoke a pending/applied manager |
-| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators` | POST / DELETE | POST body or DELETE `?user_id=` | Appoint/revoke a room moderator (POST returns a pending claim + token) |
+| `/api/v1/sites/{site_id}/pages/{page_slug}/moderator-claims` | POST | `{ "user_id": ... }` | Create a room moderator claim |
+| `/api/v1/sites/{site_id}/pages/{page_slug}/moderators/{user_id}` | DELETE | — | Revoke a pending/applied room moderator |
 | `/api/v1/sites/{site_id}/roles` | GET | — | Projected admins and managers |
 | `/api/v1/sites/{site_id}/pages/{page_slug}/roles` | GET | — | Projected admins, managers and moderators |
 | `/api/v1/sites/{site_id}/ownership-transfers` | POST | `{ "user_id": ... }` | Start a two-phase ownership transfer |
@@ -176,13 +177,13 @@ DELETE responses are `{ "revoked": true, "user_id", "level" }` and are
 idempotent. Reads come from the projection and are therefore eventually
 consistent with Matrix.
 
-The CLI mirrors the admin and manager operations locally
+The CLI mirrors admin, manager and moderator operations locally
 (`cumments sites add-admin` / `remove-admin`, `add-manager` /
-`remove-manager`) and can start a transfer with `cumments sites transfer-owner`:
-`add-*` stores a pending claim and prints the `verify_token`, while
-`remove-*` revokes a pending claim. The CLI never writes power levels, so an
-already-applied role must be removed from a Matrix client or the Operator
-API (see [CLI](cli.md)).
+`remove-manager`, `add-moderator` / `remove-moderator`) and can start a
+transfer with `cumments sites transfer-owner`: `add-*` stores a pending claim
+and prints the `verify_token`, while `remove-*` cancels pending claims or
+removes applied roles through the shared management use case (see
+[CLI](cli.md)).
 
 ## Ownership transfer and recovery
 

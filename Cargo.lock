@@ -890,6 +890,7 @@ dependencies = [
  "cumments-projector",
  "cumments-reconciler",
  "cumments-store",
+ "cumments-test-utils",
  "dotenvy",
  "hex",
  "humantime",

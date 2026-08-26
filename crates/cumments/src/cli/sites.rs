@@ -1,17 +1,25 @@
 //! `cumments sites ...` command handling.
 
-use super::args::{ExportConfigArgs, RetireSiteArgs, SiteUserIdArg, SitesArgs, SitesCommand};
+use super::args::{
+    AddStickerArgs, ExportConfigArgs, PageUserIdArg, RemoveStickerArgs, RetireSiteArgs,
+    SiteUserIdArg, SitesArgs, SitesCommand,
+};
 use super::output::{print_json, print_site_table};
 use super::registration::generate_token;
 use anyhow::{Result, bail};
-use cumments_core::governance::{MANAGER_LEVEL, SITE_ADMIN_LEVEL};
-use cumments_core::models::SiteId;
+use cumments_core::governance::{
+    MANAGER_LEVEL, MODERATOR_LEVEL, SITE_ADMIN_LEVEL, validate_governance_user_id,
+};
+use cumments_core::models::{PageSlug, SiteId};
 use cumments_core::operator::{
     OperatorListQuery, config_snippet_toml, list_operator_sites, operator_site,
 };
-use cumments_core::ports::{MatrixDriver, SiteAuthStore};
+use cumments_core::ports::{MatrixDriver, RegistryStore, SiteAuthStore};
 use cumments_core::site_auth::{Origin, SiteAuthMode, SiteAuthPolicy, register_site, token_hash};
 use cumments_core::site_service::SiteService;
+use cumments_core::sticker_packs::{
+    AddStickerInput, add_site_sticker, pack_response_shape, remove_site_sticker,
+};
 
 pub async fn handle_sites_command(
     store: &cumments_store::DbStore,
@@ -159,7 +167,11 @@ pub async fn handle_sites_command(
         SitesCommand::RemoveManager(args) => {
             remove_role_claim(store, driver, site_service, args, MANAGER_LEVEL).await
         }
+        SitesCommand::AddModerator(args) => add_moderator_claim(store, args).await,
+        SitesCommand::RemoveModerator(args) => remove_room_moderator(store, driver, args).await,
         SitesCommand::TransferOwner(args) => transfer_owner(store, args).await,
+        SitesCommand::AddSticker(args) => add_sticker(store, driver, args).await,
+        SitesCommand::RemoveSticker(args) => remove_sticker(store, driver, args).await,
         SitesCommand::Retire(args) => retire_site(store, policy, args).await,
     }
 }
@@ -284,6 +296,111 @@ async fn remove_role_claim(
     Ok(())
 }
 
+/// Mirrors the page moderator claim endpoint for a registered comment room.
+async fn add_moderator_claim(store: &cumments_store::DbStore, args: &PageUserIdArg) -> Result<()> {
+    let (site_id, room_id) = resolve_page_room(store, args).await?;
+    let pending = cumments_core::management::create_role_claim(
+        store,
+        site_id.as_str(),
+        &room_id,
+        &args.user_id,
+        MODERATOR_LEVEL,
+    )
+    .await?;
+    print_json(&serde_json::json!({
+        "pending": true,
+        "user_id": pending.user_id,
+        "level": pending.level,
+        "verify_token": pending.verify_token,
+        "expires_at": pending.expires_at,
+    }))?;
+    eprintln!(
+        "The target MXID must DM `cumments-claim:{}` to the AS bot to activate the role.",
+        pending.verify_token
+    );
+    Ok(())
+}
+
+async fn remove_room_moderator(
+    store: &cumments_store::DbStore,
+    driver: &dyn MatrixDriver,
+    args: &PageUserIdArg,
+) -> Result<()> {
+    let (site_id, room_id) = resolve_page_room(store, args).await?;
+    cumments_core::management::remove_room_moderator(
+        store,
+        store,
+        driver,
+        site_id.as_str(),
+        &room_id,
+        &args.user_id,
+    )
+    .await?;
+    print_json(&serde_json::json!({
+        "revoked": true,
+        "user_id": args.user_id,
+        "level": MODERATOR_LEVEL,
+    }))?;
+    Ok(())
+}
+
+async fn add_sticker(
+    store: &cumments_store::DbStore,
+    driver: &dyn MatrixDriver,
+    args: &AddStickerArgs,
+) -> Result<()> {
+    require_api_registered_site(store, &args.site_id).await?;
+    let info = match &args.info {
+        Some(raw) => Some(serde_json::from_str(raw)?),
+        None => None,
+    };
+    let projection = add_site_sticker(
+        store,
+        driver,
+        AddStickerInput {
+            site_id: &args.site_id,
+            pack_id: &args.pack_id,
+            shortcode: &args.shortcode,
+            url: &args.url,
+            body: args.body.clone(),
+            info,
+        },
+    )
+    .await?;
+    print_json(&pack_response_shape(&projection.pack, |_| None, |_| None))?;
+    Ok(())
+}
+
+async fn remove_sticker(
+    store: &cumments_store::DbStore,
+    driver: &dyn MatrixDriver,
+    args: &RemoveStickerArgs,
+) -> Result<()> {
+    require_api_registered_site(store, &args.site_id).await?;
+    let projection =
+        remove_site_sticker(store, driver, &args.site_id, &args.pack_id, &args.shortcode).await?;
+    print_json(&pack_response_shape(&projection.pack, |_| None, |_| None))?;
+    Ok(())
+}
+
+async fn resolve_page_room(
+    store: &cumments_store::DbStore,
+    args: &PageUserIdArg,
+) -> Result<(SiteId, String)> {
+    let site_id =
+        SiteId::new(args.site_id.clone()).map_err(|e| anyhow::anyhow!("invalid site id: {e}"))?;
+    let page_slug = PageSlug::new(args.page_slug.clone())
+        .map_err(|e| anyhow::anyhow!("invalid page slug: {e}"))?;
+    validate_governance_user_id(&args.user_id)
+        .map_err(|e| anyhow::anyhow!("invalid user id: {e}"))?;
+    require_api_registered_site(store, site_id.as_str()).await?;
+    let room_id = store
+        .get_registered_room(&site_id, &page_slug)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no active comment room for this page"))?;
+    Ok((site_id, room_id))
+}
+
 async fn require_api_registered_site(store: &cumments_store::DbStore, site_id: &str) -> Result<()> {
     if store.get_site_auth(site_id).await?.is_none() {
         bail!(
@@ -344,12 +461,12 @@ async fn retire_site(
 #[cfg(test)]
 mod tests {
     use super::super::args::{
-        ExportConfigArgs, RetireSiteArgs, RevokeOriginArgs, RevokeSecretArgs, SiteIdArg,
-        SiteListArgs, SiteUserIdArg,
+        AddStickerArgs, ExportConfigArgs, PageUserIdArg, RemoveStickerArgs, RetireSiteArgs,
+        RevokeOriginArgs, RevokeSecretArgs, SiteIdArg, SiteListArgs, SiteUserIdArg,
     };
     use super::super::test_support::*;
     use super::*;
-    use cumments_core::ports::RoleClaimStore;
+    use cumments_core::ports::{RoleClaimStore, SiteStore};
     use cumments_core::site_auth::OriginPattern;
     use cumments_core::site_auth::SiteLifecycle;
     use cumments_store::DbStore;
@@ -564,6 +681,105 @@ mod tests {
         run_sites(&store, &policy, &list)
             .await
             .expect("list sites with config overlay");
+    }
+
+    #[tokio::test]
+    async fn moderator_and_sticker_management_work() {
+        let store = DbStore::connect(&test_db_url("moderator-sticker"))
+            .await
+            .expect("connect db");
+        let policy = test_policy();
+        let site_id = cumments_core::models::SiteId::from("my-blog");
+        let slug = cumments_core::models::PageSlug::from("hello");
+        store
+            .register_site("my-blog", &token_hash("token"), true)
+            .await
+            .expect("register site");
+        store
+            .ensure_site_exists("my-blog", "!space:hs")
+            .await
+            .expect("attach space");
+        store
+            .register_room("!room:hs", &site_id, &slug)
+            .await
+            .expect("register room");
+
+        let add_moderator = SitesArgs {
+            command: SitesCommand::AddModerator(PageUserIdArg {
+                site_id: "my-blog".to_string(),
+                page_slug: "hello".to_string(),
+                user_id: "@mod:hs".to_string(),
+            }),
+        };
+        run_sites(&store, &policy, &add_moderator)
+            .await
+            .expect("add moderator claim");
+        assert_eq!(
+            store
+                .pending_claims_for_user("@mod:hs")
+                .await
+                .expect("pending claims")
+                .len(),
+            1
+        );
+
+        let remove_moderator = SitesArgs {
+            command: SitesCommand::RemoveModerator(PageUserIdArg {
+                site_id: "my-blog".to_string(),
+                page_slug: "hello".to_string(),
+                user_id: "@mod:hs".to_string(),
+            }),
+        };
+        run_sites(&store, &policy, &remove_moderator)
+            .await
+            .expect("remove moderator claim");
+        assert!(
+            store
+                .pending_claims_for_user("@mod:hs")
+                .await
+                .expect("pending claims")
+                .is_empty()
+        );
+
+        let driver = cumments_test_utils::TestDriver::new();
+        let add_sticker = SitesArgs {
+            command: SitesCommand::AddSticker(AddStickerArgs {
+                site_id: "my-blog".to_string(),
+                pack_id: "default".to_string(),
+                shortcode: "cat".to_string(),
+                url: "mxc://hs/cat".to_string(),
+                body: Some("a cat".to_string()),
+                info: Some(r#"{"w":10}"#.to_string()),
+            }),
+        };
+        let site_service_for_stickers = SiteService::new(std::sync::Arc::new(store.clone())
+            as std::sync::Arc<dyn cumments_core::ports::SiteStore>);
+        handle_sites_command(
+            &store,
+            &driver,
+            &site_service_for_stickers,
+            &policy,
+            &add_sticker,
+        )
+        .await
+        .expect("add sticker");
+
+        let remove_sticker_args = SitesArgs {
+            command: SitesCommand::RemoveSticker(RemoveStickerArgs {
+                site_id: "my-blog".to_string(),
+                pack_id: "default".to_string(),
+                shortcode: "cat".to_string(),
+            }),
+        };
+        handle_sites_command(
+            &store,
+            &driver,
+            &site_service_for_stickers,
+            &policy,
+            &remove_sticker_args,
+        )
+        .await
+        .expect("remove sticker");
     }
 
     #[tokio::test]

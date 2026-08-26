@@ -104,12 +104,24 @@ pub enum SitesCommand {
     /// Start a pending manager claim and print its one-time verify token
     #[command(name = "add-manager")]
     AddManager(SiteUserIdArg),
+    /// Start a pending room moderator claim and print its verify token
+    #[command(name = "add-moderator")]
+    AddModerator(PageUserIdArg),
+    /// Remove a pending or applied room moderator
+    #[command(name = "remove-moderator")]
+    RemoveModerator(PageUserIdArg),
     /// Revoke a pending manager claim (applied roles are managed in Matrix)
     #[command(name = "remove-manager")]
     RemoveManager(SiteUserIdArg),
     /// Start an ownership transfer; the target must verify the claim token
     #[command(name = "transfer-owner")]
     TransferOwner(SiteUserIdArg),
+    /// Add or replace one sticker in a site pack
+    #[command(name = "add-sticker")]
+    AddSticker(AddStickerArgs),
+    /// Remove one sticker from a site pack
+    #[command(name = "remove-sticker")]
+    RemoveSticker(RemoveStickerArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -146,6 +158,38 @@ pub struct SiteIdArg {
 pub struct SiteUserIdArg {
     pub site_id: String,
     pub user_id: String,
+}
+
+/// A site id, page slug, and target Matrix user id.
+#[derive(clap::Args, Debug)]
+pub struct PageUserIdArg {
+    pub site_id: String,
+    pub page_slug: String,
+    pub user_id: String,
+}
+
+/// Arguments for adding a sticker image.
+#[derive(clap::Args, Debug)]
+pub struct AddStickerArgs {
+    pub site_id: String,
+    pub pack_id: String,
+    pub shortcode: String,
+    /// Matrix media URL, for example `mxc://server/media-id`
+    pub url: String,
+    /// Optional human-readable alt text
+    #[arg(long)]
+    pub body: Option<String>,
+    /// Optional JSON object with Matrix image info
+    #[arg(long)]
+    pub info: Option<String>,
+}
+
+/// Arguments for removing a sticker image.
+#[derive(clap::Args, Debug)]
+pub struct RemoveStickerArgs {
+    pub site_id: String,
+    pub pack_id: String,
+    pub shortcode: String,
 }
 
 /// Arguments for exporting a config snippet.
