@@ -2,7 +2,7 @@ openapi: 3.2.0
 $self: https://cumments.curious.host/openapi.yaml
 info:
   title: Cumments API
-  version: 0.27.0
+  version: 0.28.0
   license:
     name: MIT
     url: https://github.com/Curious-r/cumments/blob/main/LICENSE
