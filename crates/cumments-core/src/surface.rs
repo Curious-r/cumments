@@ -356,6 +356,13 @@ pub const CAPABILITIES: &[Capability] = &[
         AuditRequirement::Required,
     ),
     capability(
+        "visitor.reaction.remove",
+        "Remove a reaction from a comment.",
+        RiskTier::Medium,
+        LifecycleKind::Sync,
+        AuditRequirement::Required,
+    ),
+    capability(
         "visitor.poll.vote",
         "Vote in a poll.",
         RiskTier::Medium,
