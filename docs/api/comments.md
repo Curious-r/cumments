@@ -191,14 +191,32 @@ clients must percent-encode `comment_id`.
 
 Body: `{ "key", "author_public_key", "author_signature", "challenge_response" }`.
 The signature covers `["REACT", site_id, page_slug, comment_id, key, challenge]`;
-the reaction is sent as the visitor's virtual user (`m.reaction` with the
-signed proof block) and projected into the message's reaction counts.
+`key` is the reaction key (emoji, 1-32 bytes, trimmed, no control characters);
+duplicate annotations from the same virtual user are treated as idempotent
+(`M_DUPLICATE_ANNOTATION` maps to `204`). The reaction is sent as the visitor's
+virtual user (`m.reaction` with the signed proof block) and projected into the
+message's reaction counts.
 This endpoint does not use `Idempotency-Key`. Matrix uses a deterministic
 transaction ID derived from the signed request and PoW challenge, so retrying
 the exact same Matrix request does not create another aggregate reaction. The
 PoW challenge is single-use at the HTTP API boundary, however, so a repeated
 HTTP request after success returns invalid-PoW instead of duplicating the
-effect.
+effect. Percent-encode `comment_id` in the path.
+
+## Remove a reaction
+
+`DELETE /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions/{key}`
+
+Body: `{ "author_public_key", "author_signature", "challenge_response" }`.
+The signature covers `["UNREACT", site_id, page_slug, comment_id, key, challenge]`;
+`key` is the normalized reaction key from the path (trimmed, no control
+characters, 1-32 bytes). The reaction is resolved by
+`(comment, virtual user derived from author_public_key, key)` without
+exposing Matrix event IDs and redacted via the AS sender. This endpoint does
+not use `Idempotency-Key`; it is natural-idempotent (`204` even when the
+reaction is already absent, `M_NOT_FOUND` on the homeserver is treated as
+success). Matrix uses a deterministic transaction ID derived from the signed
+request and PoW challenge. Percent-encode `comment_id` and `key` (emoji) in the path.
 
 ## Vote on a poll
 

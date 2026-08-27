@@ -88,12 +88,14 @@ Rules:
 - Records are kept for 24 hours, aligned with Stripe's idempotency retention;
   after that the key can be reused.
 
-Reactions, poll votes, and visitor avatar DELETE are natural-idempotent
-synchronous operations and do not use this header. Reaction/vote retries derive
-a deterministic Matrix transaction ID from the exact signed request and PoW
-challenge. The PoW challenge itself is single-use, so an HTTP retry after an
-accepted action returns invalid-PoW rather than duplicating the effect; avatar
-DELETE simply sets the profile field to absent again.
+Reactions (add and remove), poll votes, and visitor avatar DELETE are
+natural-idempotent synchronous operations and do not use this header.
+Reaction/vote (and unreact) retries derive a deterministic Matrix transaction
+ID from the exact signed request and PoW challenge. The PoW challenge itself
+is single-use, so an HTTP retry after an accepted action returns invalid-PoW
+rather than duplicating the effect; avatar DELETE simply sets the profile
+field to absent again. Reaction removal resolves the annotation by
+`(comment, virtual user, key)` without exposing Matrix event IDs.
 
 Clients should generate a fresh key per logical write (e.g. `crypto.randomUUID()`)
 and reuse that exact key when retrying the same request. Use the same endpoint
@@ -213,10 +215,15 @@ HTTP spec; QUERY carries the payload while staying safe and cacheable. The
 API advertises `Accept-Query: application/json` and returns
 `405 code=method-not-allowed` for GET.
 
-**No request bodies on DELETE.** RFC 9110 leaves DELETE request-body
-semantics undefined, and some proxies/CDNs strip or reject body-bearing
-DELETEs. DELETE targets therefore travel as query parameters
-(`comment_id`, `user_id`), never in the body.
+**DELETE with author proof in the body.** RFC 9110 leaves DELETE
+request-body semantics undefined and some intermediaries strip it. Cumments
+nevertheless carries the author proof (`author_public_key`,
+`author_signature`, `challenge_response`) in the body for visitor-authored
+mutations (`DELETE /comments/{comment_id}` and
+`DELETE /comments/{comment_id}/reactions/{key}`) because the proof must be
+end-to-end verifiable and is not cacheable. Operator and governance
+`DELETE` operations that require no author proof remain body-free and use
+path or query parameters.
 
 **Missing parents are 404, empty children are 200.** A site that is not
 registered returns `404` for its nested resources (comment list, roles,
