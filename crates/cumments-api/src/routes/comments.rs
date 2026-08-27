@@ -263,12 +263,55 @@ pub(crate) async fn query_comments_handler(
         PaginationQuery {
             page: None,
             per_page: None,
+            author_public_key: None,
+            author_signature: None,
         }
     } else {
         serde_json::from_str(&body)
             .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?
     };
     query.validate().map_err(AppError::Validation)?;
+
+    // Optional personalization via visitor proof. When both fields are
+    // present the signature must verify; the derived virtual user is then
+    // used to mark `ReactionSummary.mine`. Anonymous default is unchanged.
+    let viewer_mxid: Option<String> = match (&query.author_public_key, &query.author_signature) {
+        (None, None) => None,
+        (Some(pk), Some(sig)) => {
+            let message = signature_message(&[
+                Some("QUERY_COMMENTS"),
+                Some(site_id_val.as_str()),
+                Some(page_slug_val.as_str()),
+            ]);
+            if !verify_signature(pk, &message, sig) {
+                return Err(AppError::InvalidSignature);
+            }
+            let visitor_id = derive_visitor_id_from_public_key(pk)
+                .ok_or_else(|| AppError::BadRequest("invalid author_public_key".to_string()))?;
+            let server_name = state.server_name.clone().or_else(|| {
+                state
+                    .driver
+                    .sender_user_id()
+                    .and_then(|mxid| mxid.split(':').nth(1).map(|s| s.to_string()))
+            });
+            let Some(server_name) = server_name else {
+                return Err(AppError::Internal(
+                    "server_name not configured; cannot resolve virtual user".to_string(),
+                ));
+            };
+            Some(format!(
+                "@_cumments_{}_{}:{}",
+                site_id_val.as_str(),
+                visitor_id,
+                server_name
+            ))
+        }
+        _ => {
+            return Err(AppError::BadRequest(
+                "both author_public_key and author_signature must be provided together".to_string(),
+            ));
+        }
+    };
 
     tracing::debug!(
         "QUERY comments for site: {}, post: {} (page: {:?}, per_page: {:?})",
@@ -290,6 +333,36 @@ pub(crate) async fn query_comments_handler(
         .await
     {
         Ok(mut page_data) => {
+            // Personalize reaction summaries if viewer proof was supplied.
+            if let Some(viewer) = &viewer_mxid {
+                let event_ids: Vec<String> =
+                    page_data.items.iter().map(|m| m.event_id.clone()).collect();
+                if !event_ids.is_empty() {
+                    match state
+                        .store
+                        .find_reaction_keys_by_sender(&event_ids, viewer)
+                        .await
+                    {
+                        Ok(own_map) => {
+                            for msg in &mut page_data.items {
+                                if let Some(keys) = own_map.get(&msg.event_id) {
+                                    for summary in &mut msg.reactions {
+                                        if keys.contains(&summary.key) {
+                                            summary.mine = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to personalize reactions: {:?}", e);
+                            return Err(AppError::Internal(
+                                "Failed to personalize reactions.".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
             if let Some(proxy) = &state.media_proxy {
                 for message in &mut page_data.items {
                     proxy.proxify_message(message, &media_base);

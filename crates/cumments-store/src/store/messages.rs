@@ -900,6 +900,28 @@ impl MessageStore for DbStore {
         }))
     }
 
+    async fn find_reaction_keys_by_sender(
+        &self,
+        message_event_ids: &[String],
+        sender_mxid: &str,
+    ) -> Result<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+        use std::collections::{HashMap, HashSet};
+        if message_event_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = reactions::Entity::find()
+            .filter(reactions::Column::MessageEventId.is_in(message_event_ids.iter().cloned()))
+            .filter(reactions::Column::SenderMxid.eq(sender_mxid))
+            .filter(reactions::Column::RedactedAt.is_null())
+            .all(&self.db)
+            .await?;
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        for row in rows {
+            map.entry(row.message_event_id).or_default().insert(row.key);
+        }
+        Ok(map)
+    }
+
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()> {
         self.save_poll_vote_with_selections(vote, &[], None).await
     }
@@ -1426,6 +1448,7 @@ impl DbStore {
                     .map(|(key, senders)| ReactionSummary {
                         key,
                         count: senders.len() as i64,
+                        mine: false,
                     })
                     .collect();
                 summaries.sort_by(|a, b| a.key.cmp(&b.key));

@@ -109,7 +109,7 @@ paths:
       summary: List comments (QUERY)
       description: |
         Sent as `QUERY /api/v1/sites/{site_id}/pages/{page_slug}/comments`
-        with a JSON body.
+        with a JSON body. When `author_public_key` and `author_signature` are supplied and verify against `["QUERY_COMMENTS", site_id, page_slug]`, each `ReactionSummary.mine` is set for that visitor (derived view, never stored). Anonymous reads return `mine: false`.
       parameters:
         - $ref: "#/components/parameters/SiteId"
         - $ref: "#/components/parameters/PageSlug"
@@ -129,6 +129,12 @@ paths:
                   minimum: 1
                   maximum: 100
                   default: 20
+                author_public_key:
+                  type: string
+                  description: Ed25519 public key (base64url) to personalize reaction summaries.
+                author_signature:
+                  type: string
+                  description: Ed25519 signature over ["QUERY_COMMENTS", site_id, page_slug] proving ownership of the public key.
             examples:
               firstPage:
                 summary: First page at the default page size
@@ -2402,6 +2408,10 @@ components:
         count:
           type: integer
           format: int64
+        mine:
+          type: boolean
+          default: false
+          description: Whether the requesting visitor (when the read is personalized with a valid author proof) has reacted with this key.
     PostCommentRequest:
       type: object
       required: [content, display_name, author_public_key, author_signature, challenge_response]

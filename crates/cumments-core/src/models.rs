@@ -381,6 +381,11 @@ pub struct UnknownContent {
 pub struct ReactionSummary {
     pub key: String,
     pub count: i64,
+    /// Whether the requesting visitor (when the read is personalized with a
+    /// valid `author_proof`) has reacted with this key. Defaults to false for
+    /// anonymous reads and is derived at query time, never stored.
+    #[serde(default)]
+    pub mine: bool,
 }
 
 /// A stored reaction event (one row per Matrix reaction event).

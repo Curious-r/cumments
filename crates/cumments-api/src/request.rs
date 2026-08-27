@@ -65,6 +65,14 @@ pub struct PaginationQuery {
     pub page: Option<i64>,
     #[validate(range(min = 1, max = 100))]
     pub per_page: Option<i64>,
+    /// Optional personalization: when both are present and the signature
+    /// verifies, each `ReactionSummary.mine` is set for the requesting
+    /// visitor. This is a derived view, never stored, and does not change
+    /// the anonymous default.
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: Option<String>,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: Option<String>,
 }
 
 #[derive(Serialize)]

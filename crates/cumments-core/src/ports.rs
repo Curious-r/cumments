@@ -298,6 +298,16 @@ pub trait MessageStore: ProjectionSink {
         key: &str,
     ) -> Result<Option<Reaction>>;
 
+    /// Batch lookup of which keys the given sender has reacted with for
+    /// a set of messages. Used to personalize `ReactionSummary.mine`
+    /// without exposing other senders. Returns map from message_event_id
+    /// to set of keys.
+    async fn find_reaction_keys_by_sender(
+        &self,
+        message_event_ids: &[String],
+        sender_mxid: &str,
+    ) -> Result<std::collections::HashMap<String, std::collections::HashSet<String>>>;
+
     /// Records a poll vote (upsert per voter; the latest vote wins).
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()>;
 

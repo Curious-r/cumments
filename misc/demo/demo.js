@@ -208,6 +208,7 @@
                     no_stickers: "站点暂无贴纸",
                     reaction_submitted: "已发送回应",
                     reaction_removed: "已移除回应",
+                    reaction_add: "点击以添加回应",
                     vote_submitted: "投票已提交",
                     location: "位置",
                     location_submitted: "位置已发送",
@@ -380,6 +381,7 @@
                     no_stickers: "No stickers in the site's packs",
                     reaction_submitted: "Reaction sent",
                     reaction_removed: "Reaction removed",
+                    reaction_add: "Click to add reaction",
                     vote_submitted: "Vote submitted",
                     location: "Location",
                     location_submitted: "Location sent",
@@ -1261,12 +1263,26 @@
             }
 
             async function queryComments(cfg, page, perPage) {
+                const body = { page, per_page: perPage };
+                try {
+                    if (identity) {
+                        const { publicKey, signature } = await authorSignature([
+                            "QUERY_COMMENTS",
+                            cfg.siteId,
+                            cfg.slug,
+                        ]);
+                        body.author_public_key = publicKey;
+                        body.author_signature = signature;
+                    }
+                } catch (e) {
+                    // personalization is best-effort; fall back to anonymous read
+                }
                 const res = await fetch(
                     `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments`,
                     {
                         method: "QUERY",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ page, per_page: perPage }),
+                        body: JSON.stringify(body),
                     },
                 );
                 if (!res.ok) throw new Error(await apiError(res));
@@ -1791,7 +1807,12 @@
                 }
                 el.querySelector(".react-btn").onclick = () => pickReaction(comment);
                 el.querySelectorAll(".reaction-pill").forEach((btn) => {
-                    btn.onclick = () => removeReaction(comment, btn.dataset.key);
+                    btn.onclick = () => {
+                        const key = btn.dataset.key;
+                        const mine = btn.dataset.mine === "1";
+                        if (mine) removeReaction(comment, key);
+                        else submitReaction(comment, key);
+                    };
                 });
                 el.querySelectorAll(".poll-option").forEach((btn) => {
                     btn.onclick = () => submitVote(comment.event_id, btn.dataset.option);
@@ -2779,8 +2800,14 @@
             function renderReactions(reactions) {
                 return reactions
                     .map(
-                        (reaction) =>
-                            `<button type="button" class="reaction-pill inline-flex items-center gap-1 text-xs bg-slate-100 hover:bg-rose-50 rounded-full px-2 py-0.5" data-key="${escapeHtml(reaction.key)}" title="${t("reaction_removed")}">${escapeHtml(reaction.key)} ${reaction.count}</button>`,
+                        (reaction) => {
+                            const mine = !!reaction.mine;
+                            const cls = mine
+                                ? "bg-rose-100 border border-rose-300 text-rose-700 hover:bg-rose-200"
+                                : "bg-slate-100 hover:bg-slate-200 border border-transparent";
+                            const title = mine ? t("reaction_removed") : t("reaction_add") || reaction.key;
+                            return `<button type="button" class="reaction-pill inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 ${cls}" data-key="${escapeHtml(reaction.key)}" data-mine="${mine ? "1" : "0"}" title="${escapeHtml(title)}" aria-pressed="${mine ? "true" : "false"}">${escapeHtml(reaction.key)} ${reaction.count}</button>`;
+                        },
                     )
                     .join("");
             }

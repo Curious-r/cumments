@@ -21,6 +21,17 @@ Body:
 { "page": 1, "per_page": 20 }
 ```
 
+Optional personalization — when `author_public_key` and `author_signature` are supplied and verify against `["QUERY_COMMENTS", site_id, page_slug]`, each `ReactionSummary` gains `mine: true` for keys the requesting virtual user reacted with (derived view, never stored). Anonymous reads return `mine: false`:
+
+```json
+{
+  "page": 1,
+  "per_page": 20,
+  "author_public_key": "...",
+  "author_signature": "..."
+}
+```
+
 Response:
 
 ```json
@@ -52,7 +63,7 @@ Response:
       "redacted_at": null,
       "redacted_by": null,
       "reactions": [
-        { "key": "👍", "count": 2 }
+        { "key": "👍", "count": 2, "mine": false }
       ]
     }
   ],
