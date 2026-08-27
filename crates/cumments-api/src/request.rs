@@ -174,6 +174,17 @@ pub struct ReactRequest {
     pub challenge_response: String,
 }
 
+/// Request DTO for removing a reaction (key comes from path).
+#[derive(Debug, Deserialize, Validate)]
+pub struct UnreactRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
 /// Request DTO for voting on a poll.
 #[derive(Debug, Deserialize, Validate)]
 pub struct VoteRequest {

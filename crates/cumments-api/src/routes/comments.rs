@@ -5,8 +5,8 @@ use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
     DeleteCommentRequest, IDEMPOTENT_REPLAYED, LocationRequest, PaginatedResponse, PaginationMeta,
-    PaginationQuery, PostCommentRequest, ReactRequest, UpdateCommentRequest, VoteRequest,
-    extract_idempotency_key, request_fingerprint,
+    PaginationQuery, PostCommentRequest, ReactRequest, UnreactRequest, UpdateCommentRequest,
+    VoteRequest, extract_idempotency_key, request_fingerprint,
 };
 use crate::routes::media::media_url_base;
 use axum::{
@@ -17,7 +17,10 @@ use axum::{
 };
 use cumments_core::{
     commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
-    identity::{post_signature_message, signature_message, verify_signature},
+    identity::{
+        derive_visitor_id_from_public_key, post_signature_message, signature_message,
+        verify_signature,
+    },
     models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
     submissions::{IdempotencyInput, IdempotencyOutcome, deterministic_transaction_id},
 };
@@ -35,6 +38,34 @@ pub(crate) static ACCEPT_QUERY: std::sync::LazyLock<HeaderName> =
 /// Build the CORS layer from a comma-separated origin list.
 pub(crate) fn challenge_prefix(challenge_response: &str) -> &str {
     challenge_response.split('|').next().unwrap_or("")
+}
+
+/// Normalize a reaction key (emoji) for storage and lookup.
+/// Trims surrounding whitespace, rejects empty, control characters and overly long keys.
+fn normalize_reaction_key(key: &str) -> Result<String, AppError> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "reaction key must not be empty or whitespace".to_string(),
+        ));
+    }
+    if trimmed != key {
+        return Err(AppError::BadRequest(
+            "reaction key must not have leading or trailing whitespace".to_string(),
+        ));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(AppError::BadRequest(
+            "reaction key must not contain control characters".to_string(),
+        ));
+    }
+    // Length check is already enforced by validator, but keep a defensive bound.
+    if trimmed.len() > 32 {
+        return Err(AppError::BadRequest(
+            "reaction key must be at most 32 bytes".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
 }
 
 /// 429 error for comment-write rate limiting, using the write limiter's
@@ -898,6 +929,7 @@ pub(crate) async fn react_handler(
     let req: ReactRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
     req.validate().map_err(AppError::Validation)?;
+    let normalized_key = normalize_reaction_key(&req.key)?;
     if let Err(msg) = validate_comment_id_format(&comment_id) {
         return Err(AppError::BadRequest(msg.to_string()));
     }
@@ -910,7 +942,7 @@ pub(crate) async fn react_handler(
         Some(site_id.as_str()),
         Some(page_slug.as_str()),
         Some(comment_id.as_str()),
-        Some(req.key.as_str()),
+        Some(normalized_key.as_str()),
         Some(challenge),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
@@ -941,12 +973,12 @@ pub(crate) async fn react_handler(
             "No room registered for this post.".to_string(),
         ));
     };
-    state
+    let result = state
         .driver
         .react_message(
             &room_id,
             &comment_id,
-            &req.key,
+            &normalized_key,
             &site_id_val,
             &req.author_public_key,
             &req.author_signature,
@@ -959,14 +991,156 @@ pub(crate) async fn react_handler(
                     room_id.as_str(),
                     comment_id.as_str(),
                     req.author_public_key.as_str(),
-                    req.key.as_str(),
+                    normalized_key.as_str(),
                     req.challenge_response.as_str(),
                 ],
             ),
         )
+        .await;
+    match result {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("M_DUPLICATE_ANNOTATION") {
+                // Idempotent: already reacted with this key.
+                return Ok(StatusCode::NO_CONTENT);
+            }
+            Err(AppError::Internal(format!(
+                "failed to send reaction: {msg}"
+            )))
+        }
+    }
+}
+
+/// `DELETE /api/v1/sites/{site}/pages/{post}/comments/{comment_id}/reactions/{key}`
+pub(crate) async fn unreact_handler(
+    State(state): State<ApiState>,
+    Path((site_id, page_slug, comment_id, key)): Path<(String, String, String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let client = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&client) {
+        return Err(comment_write_rate_limited(&state));
+    }
+    let req: UnreactRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+    req.validate().map_err(AppError::Validation)?;
+    let normalized_key = normalize_reaction_key(&key)?;
+    if let Err(msg) = validate_comment_id_format(&comment_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = signature_message(&[
+        Some("UNREACT"),
+        Some(site_id.as_str()),
+        Some(page_slug.as_str()),
+        Some(comment_id.as_str()),
+        Some(normalized_key.as_str()),
+        Some(challenge),
+    ]);
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+    let target = state
+        .store
+        .get_message(&comment_id)
         .await
-        .map_err(|e| AppError::Internal(format!("failed to send vote: {e}")))?;
-    Ok(StatusCode::NO_CONTENT)
+        .map_err(|e| AppError::Internal(format!("failed to verify target: {e}")))?;
+    let target_msg = target
+        .as_ref()
+        .ok_or_else(|| AppError::NotFound("Comment not found.".to_string()))?;
+    // Allow unreact even if the target is redacted? No, treat as NotFound for consistency.
+    if target_msg.status == MessageStatus::Redacted {
+        return Err(AppError::NotFound("Comment not found.".to_string()));
+    }
+    active_target_in_page(target_msg, site_id_val.as_str(), page_slug_val.as_str())?;
+    let Some(room_id) = state
+        .store
+        .get_registered_room(&site_id_val, &page_slug_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
+    else {
+        return Err(AppError::NotFound(
+            "No room registered for this post.".to_string(),
+        ));
+    };
+    // Resolve the virtual user MXID for this author to find the reaction row.
+    let server_name = state.server_name.clone().or_else(|| {
+        state
+            .driver
+            .sender_user_id()
+            .and_then(|mxid| mxid.split(':').nth(1).map(|s| s.to_string()))
+    });
+    let Some(server_name) = server_name else {
+        return Err(AppError::Internal(
+            "server_name not configured; cannot resolve virtual user".to_string(),
+        ));
+    };
+    let visitor_id = derive_visitor_id_from_public_key(&req.author_public_key)
+        .ok_or_else(|| AppError::BadRequest("invalid author_public_key".to_string()))?;
+    let virtual_user = format!(
+        "@_cumments_{}_{}:{}",
+        site_id_val.as_str(),
+        visitor_id,
+        server_name
+    );
+    let reaction = state
+        .store
+        .find_reaction_by_sender_and_key(&comment_id, &virtual_user, &normalized_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to lookup reaction: {e}")))?;
+    let Some(reaction) = reaction else {
+        // Idempotent delete: already removed. Return 204 to avoid leaking existence.
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    // Redact the reaction event via the AS sender (has redact power).
+    let proof = serde_json::json!({
+        "host.curious.cumments": {
+            "site_id": site_id_val.as_str(),
+            "page_slug": page_slug_val.as_str(),
+            "target_event_id": reaction.event_id,
+            "key": normalized_key,
+            "public_key": req.author_public_key,
+            "signature": req.author_signature,
+            "challenge": challenge,
+        }
+    });
+    let txn_id = deterministic_transaction_id(
+        "unreact",
+        &[
+            site_id_val.as_str(),
+            page_slug_val.as_str(),
+            room_id.as_str(),
+            comment_id.as_str(),
+            req.author_public_key.as_str(),
+            normalized_key.as_str(),
+            req.challenge_response.as_str(),
+        ],
+    );
+    let result = state
+        .driver
+        .redact_message(&room_id, &reaction.event_id, None, Some(&proof), &txn_id)
+        .await;
+    match result {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("M_NOT_FOUND") || msg.contains("M_UNKNOWN") {
+                // Already redacted on homeserver.
+                return Ok(StatusCode::NO_CONTENT);
+            }
+            Err(AppError::Internal(format!(
+                "failed to remove reaction: {msg}"
+            )))
+        }
+    }
 }
 
 /// `POST /api/v1/sites/{site}/pages/{post}/polls/{poll_id}/votes`

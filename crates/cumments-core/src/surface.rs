@@ -648,6 +648,12 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "visitor.reaction.add",
     ),
     http_operation(
+        "DELETE",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions/{key}",
+        "removeReaction",
+        "visitor.reaction.remove",
+    ),
+    http_operation(
         "POST",
         "/api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes",
         "votePoll",

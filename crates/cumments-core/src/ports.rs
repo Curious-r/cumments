@@ -289,6 +289,15 @@ pub trait MessageStore: ProjectionSink {
         redacted_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool>;
 
+    /// Finds an active reaction for a message by sender and key.
+    /// Used to resolve a visitor's reaction ID for idempotent unreact.
+    async fn find_reaction_by_sender_and_key(
+        &self,
+        message_event_id: &str,
+        sender_mxid: &str,
+        key: &str,
+    ) -> Result<Option<Reaction>>;
+
     /// Records a poll vote (upsert per voter; the latest vote wins).
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()>;
 

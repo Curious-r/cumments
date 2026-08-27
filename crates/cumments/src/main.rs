@@ -536,6 +536,15 @@ async fn run() -> Result<(), CliError> {
         governance_notify,
         site_auth_policy,
         operator_token_hash,
+        server_name: settings
+            .matrix
+            .homeserver
+            .as_ref()
+            .and_then(|h| h.domain.clone())
+            .or_else(|| {
+                // Fallback: derive from sender MXID when domain is implicit.
+                appservice.as_ref().map(|c| c.server_name.clone())
+            }),
         registration_limiter: Arc::new(cumments_api::rate_limit::RateLimiter::new(
             rate_limits.registration.requests,
             rate_limits.registration.window,

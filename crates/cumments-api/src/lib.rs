@@ -1,6 +1,6 @@
 use crate::routes::comments::{
     delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
-    react_handler, update_comment_handler, vote_handler,
+    react_handler, unreact_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
     create_admin_claim_handler, create_manager_claim_handler, create_page_retirement_handler,
@@ -118,6 +118,8 @@ pub struct ApiState {
     pub site_auth_policy: Arc<SiteAuthPolicy>,
     /// SHA-256 hash of the operator operator token, when enabled.
     pub operator_token_hash: Option<String>,
+    /// Homeserver domain used to derive virtual user MXIDs for reactions.
+    pub server_name: Option<String>,
     /// Anti-spam limiter for open site registration.
     pub registration_limiter: Arc<rate_limit::RateLimiter>,
     /// Anti-spam limiter for verification token issuance.
@@ -174,6 +176,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions",
             post(react_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions/{key}",
+            delete(unreact_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes",

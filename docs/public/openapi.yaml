@@ -1254,6 +1254,51 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions/{key}:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PageSlug"
+      - $ref: "#/components/parameters/CommentId"
+      - name: key
+        in: path
+        required: true
+        description: Reaction key (emoji) to remove; must match the normalized key used when reacting.
+        schema:
+          type: string
+    delete:
+      tags: [Comments]
+      summary: Remove a reaction
+      operationId: removeReaction
+      description: |
+        Natural-idempotent synchronous operation; no Idempotency-Key is used.
+        The reaction is resolved by (comment, virtual user derived from author_public_key, normalized key) and redacted via the AS sender. Repeating the request is a no-op.
+        Author signature covers ["UNREACT", site_id, page_slug, comment_id, key, challenge_prefix].
+        A deterministic Matrix transaction ID is derived from the signed request and single-use PoW challenge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [author_public_key, author_signature, challenge_response]
+              properties:
+                author_public_key:
+                  type: string
+                author_signature:
+                  type: string
+                challenge_response:
+                  type: string
+      responses:
+        "204":
+          description: Reaction removed (or already absent)
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes:
     parameters:
       - $ref: "#/components/parameters/SiteId"

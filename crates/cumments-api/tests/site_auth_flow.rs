@@ -92,6 +92,7 @@ async fn test_state_with_driver_and_claim_limit(
             sites: Default::default(),
         }),
         operator_token_hash: operator_token.map(token_hash),
+        server_name: Some("hs".to_string()),
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         operator_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),
@@ -3203,4 +3204,201 @@ async fn comment_stickers_must_reference_the_sites_packs() {
         .await
         .expect("call router");
     assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn reaction_remove_is_idempotent_and_uses_deterministic_txn() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::models::Reaction;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "reaction-unreact",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("test-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+    let comment_id = "$comment:hs";
+    store
+        .save_message(&Message {
+            event_id: comment_id.to_string(),
+            site_id: "test-blog".to_string(),
+            page_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Visitor,
+                display_name: Some("Alice".to_string()),
+                avatar_url: None,
+                public_key: Some("owner-key".to_string()),
+                mxid: None,
+            },
+            content: Content::Text(TextContent {
+                body: "hello".to_string(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            }),
+            timestamp: chrono::Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            submission_id: None,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@alice:hs".to_string(),
+            matrix_event_type: "m.room.message".to_string(),
+            raw_content: serde_json::Value::Null,
+        })
+        .await
+        .expect("save comment");
+
+    let signing_key = SigningKey::from_bytes(&[22u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let visitor_id = derive_visitor_id_from_public_key(&public_key).expect("visitor id");
+    let virtual_mxid = format!("@_cumments_test-blog_{}:hs", visitor_id);
+
+    // Pre-project one reaction so unreact can resolve it.
+    let reaction_event_id = "$reaction:hs";
+    store
+        .save_reaction(&Reaction {
+            event_id: reaction_event_id.to_string(),
+            message_event_id: comment_id.to_string(),
+            sender_mxid: virtual_mxid.clone(),
+            key: "👍".to_string(),
+            origin_server_ts: 1,
+            redacted_at: None,
+        })
+        .await
+        .expect("save reaction");
+
+    let router = cumments_api::build_router(state.clone());
+
+    // First unreact: should redact via driver with deterministic txn.
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let chal_prefix = challenge.prefix.clone();
+    let msg = signature_message(&[
+        Some("UNREACT"),
+        Some("test-blog"),
+        Some("hello"),
+        Some(comment_id),
+        Some("👍"),
+        Some(&chal_prefix),
+    ]);
+    let sig = URL_SAFE_NO_PAD.encode(signing_key.sign(msg.as_bytes()).to_bytes());
+    let body = serde_json::json!({
+        "author_public_key": public_key,
+        "author_signature": sig,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
+    let uri = "/api/v1/sites/test-blog/pages/hello/comments/$comment%3Ahs/reactions/%F0%9F%91%8D";
+    let resp = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::DELETE,
+            uri,
+            Some("null"),
+            &[],
+            &body,
+        ))
+        .await
+        .expect("unreact");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let redactions = driver.redactions.lock().await.clone();
+    assert_eq!(redactions.len(), 1);
+    assert_eq!(redactions[0].0, "!room:hs");
+    assert_eq!(redactions[0].1, reaction_event_id);
+    assert!(
+        redactions[0].2.starts_with("cumments_unreact_"),
+        "unreact must use namespaced txnId"
+    );
+
+    // Second unreact with fresh PoW but same key: idempotent 204, no new driver call expected
+    // because the reaction is still active in the store (test driver does not auto-redact the row),
+    // the handler will find the same row again and call driver again. We accept either 1 or 2 calls,
+    // but the response must be 204 and not leak existence.
+    let challenge2 = state.pow.generate_challenge();
+    let challenge_response2 = solve_pow(&challenge2);
+    let msg2 = signature_message(&[
+        Some("UNREACT"),
+        Some("test-blog"),
+        Some("hello"),
+        Some(comment_id),
+        Some("👍"),
+        Some(&challenge2.prefix),
+    ]);
+    let sig2 = URL_SAFE_NO_PAD.encode(signing_key.sign(msg2.as_bytes()).to_bytes());
+    let body2 = serde_json::json!({
+        "author_public_key": public_key,
+        "author_signature": sig2,
+        "challenge_response": challenge_response2,
+    })
+    .to_string();
+    let resp2 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::DELETE,
+            uri,
+            Some("null"),
+            &[],
+            &body2,
+        ))
+        .await
+        .expect("second unreact");
+    assert_eq!(resp2.status(), StatusCode::NO_CONTENT);
+
+    // Unreact with unknown key: also 204 idempotent (does not reveal absence).
+    let challenge3 = state.pow.generate_challenge();
+    let challenge_response3 = solve_pow(&challenge3);
+    let msg3 = signature_message(&[
+        Some("UNREACT"),
+        Some("test-blog"),
+        Some("hello"),
+        Some(comment_id),
+        Some("❤️"),
+        Some(&challenge3.prefix),
+    ]);
+    let sig3 = URL_SAFE_NO_PAD.encode(signing_key.sign(msg3.as_bytes()).to_bytes());
+    let body3 = serde_json::json!({
+        "author_public_key": public_key,
+        "author_signature": sig3,
+        "challenge_response": challenge_response3,
+    })
+    .to_string();
+    let uri_unknown =
+        "/api/v1/sites/test-blog/pages/hello/comments/$comment%3Ahs/reactions/%E2%9D%A4%EF%B8%8F";
+    let resp3 = router
+        .oneshot(request_with_body(
+            Method::DELETE,
+            uri_unknown,
+            Some("null"),
+            &[],
+            &body3,
+        ))
+        .await
+        .expect("unknown key unreact");
+    assert_eq!(resp3.status(), StatusCode::NO_CONTENT);
+    // No additional redaction for unknown key.
+    assert_eq!(
+        driver.redactions.lock().await.len(),
+        2,
+        "unknown key must not trigger a redaction"
+    );
 }

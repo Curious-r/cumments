@@ -485,6 +485,7 @@ fn api_state(driver: TestDriver, store: DbStore) -> ApiState {
             sites: Default::default(),
         }),
         operator_token_hash: None,
+        server_name: Some("hs".to_string()),
         registration_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         verification_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         operator_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(60))),

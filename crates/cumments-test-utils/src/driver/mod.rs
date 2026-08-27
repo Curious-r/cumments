@@ -39,6 +39,7 @@ pub struct TestDriver {
     pub poll_votes: Mutex<Vec<(String, String, String, String)>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
     pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
+    pub redactions: Mutex<Vec<(String, String, String)>>,
 }
 
 impl TestDriver {
@@ -66,6 +67,7 @@ impl TestDriver {
             poll_votes: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),
+            redactions: Mutex::new(Vec::new()),
         }
     }
 

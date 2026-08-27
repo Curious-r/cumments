@@ -234,13 +234,18 @@ impl MatrixDriver for TestDriver {
     #[allow(clippy::too_many_arguments)]
     async fn redact_message(
         &self,
-        _room_id: &str,
-        _event_id: &str,
+        room_id: &str,
+        event_id: &str,
         _submission_id: Option<i64>,
         _proof: Option<&serde_json::Value>,
-        _txn_id: &str,
+        txn_id: &str,
     ) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+        self.redactions.lock().await.push((
+            room_id.to_string(),
+            event_id.to_string(),
+            txn_id.to_string(),
+        ));
+        Ok(format!("{}-redacted", event_id))
     }
     async fn send_bot_message(&self, room_id: &str, body: &str) -> anyhow::Result<String> {
         self.replies

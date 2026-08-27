@@ -877,6 +877,29 @@ impl MessageStore for DbStore {
         Ok(result.rows_affected > 0)
     }
 
+    async fn find_reaction_by_sender_and_key(
+        &self,
+        message_event_id: &str,
+        sender_mxid: &str,
+        key: &str,
+    ) -> Result<Option<Reaction>> {
+        let model = reactions::Entity::find()
+            .filter(reactions::Column::MessageEventId.eq(message_event_id))
+            .filter(reactions::Column::SenderMxid.eq(sender_mxid))
+            .filter(reactions::Column::Key.eq(key))
+            .filter(reactions::Column::RedactedAt.is_null())
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| Reaction {
+            event_id: m.event_id,
+            message_event_id: m.message_event_id,
+            sender_mxid: m.sender_mxid,
+            key: m.key,
+            origin_server_ts: m.origin_server_ts,
+            redacted_at: m.redacted_at,
+        }))
+    }
+
     async fn save_poll_vote(&self, vote: &PollVote) -> Result<()> {
         self.save_poll_vote_with_selections(vote, &[], None).await
     }
