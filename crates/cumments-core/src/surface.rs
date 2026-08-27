@@ -862,6 +862,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 64);
+        assert_eq!(HTTP_OPERATIONS.len(), 65);
     }
 }
