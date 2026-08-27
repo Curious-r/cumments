@@ -207,6 +207,7 @@
                     attach_file: "文件",
                     no_stickers: "站点暂无贴纸",
                     reaction_submitted: "已发送回应",
+                    reaction_removed: "已移除回应",
                     vote_submitted: "投票已提交",
                     location: "位置",
                     location_submitted: "位置已发送",
@@ -378,6 +379,7 @@
                     attach_file: "File",
                     no_stickers: "No stickers in the site's packs",
                     reaction_submitted: "Reaction sent",
+                    reaction_removed: "Reaction removed",
                     vote_submitted: "Vote submitted",
                     location: "Location",
                     location_submitted: "Location sent",
@@ -1788,6 +1790,9 @@
                     };
                 }
                 el.querySelector(".react-btn").onclick = () => pickReaction(comment);
+                el.querySelectorAll(".reaction-pill").forEach((btn) => {
+                    btn.onclick = () => removeReaction(comment, btn.dataset.key);
+                });
                 el.querySelectorAll(".poll-option").forEach((btn) => {
                     btn.onclick = () => submitVote(comment.event_id, btn.dataset.option);
                 });
@@ -2183,6 +2188,39 @@
                     );
                     if (!res.ok) throw new Error(await apiError(res));
                     toast(t("reaction_submitted"), "success");
+                    loadList();
+                } catch (e) {
+                    toast(t("publish_failed") + e.message, "error");
+                }
+            }
+
+            async function removeReaction(comment, key) {
+                const cfg = getSettings();
+                try {
+                    const chal = await getChallenge(cfg);
+                    const nonce = await solvePow(chal.prefix, chal.difficulty);
+                    const { publicKey, signature } = await authorSignature([
+                        "UNREACT",
+                        cfg.siteId,
+                        cfg.slug,
+                        comment.event_id,
+                        key,
+                        chal.prefix,
+                    ]);
+                    const res = await fetch(
+                        `${cfg.api}/api/v1/sites/${cfg.siteId}/pages/${cfg.slug}/comments/${encodeURIComponent(comment.event_id)}/reactions/${encodeURIComponent(key)}`,
+                        {
+                            method: "DELETE",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                author_public_key: publicKey,
+                                author_signature: signature,
+                                challenge_response: `${chal.prefix}|${nonce}`,
+                            }),
+                        },
+                    );
+                    if (!res.ok) throw new Error(await apiError(res));
+                    toast(t("reaction_removed"), "success");
                     loadList();
                 } catch (e) {
                     toast(t("publish_failed") + e.message, "error");
@@ -2742,7 +2780,7 @@
                 return reactions
                     .map(
                         (reaction) =>
-                            `<span class="inline-flex items-center gap-1 text-xs bg-slate-100 rounded-full px-2 py-0.5">${escapeHtml(reaction.key)} ${reaction.count}</span>`,
+                            `<button type="button" class="reaction-pill inline-flex items-center gap-1 text-xs bg-slate-100 hover:bg-rose-50 rounded-full px-2 py-0.5" data-key="${escapeHtml(reaction.key)}" title="${t("reaction_removed")}">${escapeHtml(reaction.key)} ${reaction.count}</button>`,
                     )
                     .join("");
             }

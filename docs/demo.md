@@ -9,8 +9,10 @@ their own comment section for their own pages, using the
 `misc/demo/` is a standalone demo (no build step: `index.html` +
 `demo.css` + `demo.js`) that exercises the full API: it connects to a real
 backend and supports posting, editing and deleting your own comments,
-pagination, nested replies, SSE live updates, and a "My comments" management
-view. Use it as a reference implementation, not as a reusable component.
+adding and removing reactions, poll voting, pagination, nested replies, SSE
+live updates, and a "My comments" management view. Click a reaction count to
+remove your own reaction. Use it as a reference implementation, not as a
+reusable component.
 
 The demo posts directly to the API, so it works with `origin`-mode sites
 (including unverified sites under the `optional` policy). In strict
