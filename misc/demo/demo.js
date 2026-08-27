@@ -209,6 +209,7 @@
                     reaction_submitted: "已发送回应",
                     reaction_removed: "已移除回应",
                     reaction_add: "点击以添加回应",
+                    reaction_click_to_remove: "点击以移除回应",
                     vote_submitted: "投票已提交",
                     location: "位置",
                     location_submitted: "位置已发送",
@@ -382,6 +383,7 @@
                     reaction_submitted: "Reaction sent",
                     reaction_removed: "Reaction removed",
                     reaction_add: "Click to add reaction",
+                    reaction_click_to_remove: "Click to remove reaction",
                     vote_submitted: "Vote submitted",
                     location: "Location",
                     location_submitted: "Location sent",
@@ -2805,7 +2807,7 @@
                             const cls = mine
                                 ? "bg-rose-100 border border-rose-300 text-rose-700 hover:bg-rose-200"
                                 : "bg-slate-100 hover:bg-slate-200 border border-transparent";
-                            const title = mine ? t("reaction_removed") : t("reaction_add") || reaction.key;
+                            const title = mine ? t("reaction_click_to_remove") : t("reaction_add") || reaction.key;
                             return `<button type="button" class="reaction-pill inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 ${cls}" data-key="${escapeHtml(reaction.key)}" data-mine="${mine ? "1" : "0"}" title="${escapeHtml(title)}" aria-pressed="${mine ? "true" : "false"}">${escapeHtml(reaction.key)} ${reaction.count}</button>`;
                         },
                     )
