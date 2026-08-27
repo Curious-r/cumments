@@ -495,18 +495,24 @@ mod tests {
         let ok = PaginationQuery {
             page: Some(1_000_000),
             per_page: Some(100),
+            author_public_key: None,
+            author_signature: None,
         };
         assert!(ok.validate().is_ok());
 
         let too_large = PaginationQuery {
             page: Some(i64::MAX),
             per_page: Some(100),
+            author_public_key: None,
+            author_signature: None,
         };
         assert!(too_large.validate().is_err());
 
         let zero = PaginationQuery {
             page: Some(0),
             per_page: None,
+            author_public_key: None,
+            author_signature: None,
         };
         assert!(zero.validate().is_err());
     }
