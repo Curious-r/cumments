@@ -1473,6 +1473,7 @@ async fn location_posts_are_queued_and_idempotent() {
         None,
         None,
         Some(challenge.prefix.as_str()),
+        Some("1"),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
@@ -1707,6 +1708,7 @@ async fn redacted_comment_reads_as_tombstone_and_rejects_new_reaction() {
         Some("$deleted:hs"),
         Some("👍"),
         Some(challenge_prefix),
+        Some("1"),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
     let body = serde_json::json!({
@@ -2145,6 +2147,7 @@ async fn reaction_retries_do_not_require_idempotency_key_and_reuse_matrix_txn() 
         Some("$comment:hs"),
         Some("👍"),
         Some(challenge.prefix.as_str()),
+        Some("1"),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
     let body = serde_json::json!({

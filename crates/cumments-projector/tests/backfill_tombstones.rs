@@ -124,6 +124,7 @@ async fn visitor_location_verifies_with_locate_signature() {
         None,
         None,
         Some(challenge),
+        Some("1"),
     ]);
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(signed_message.as_bytes()).to_bytes());
 
@@ -170,6 +171,7 @@ async fn visitor_location_verifies_with_locate_signature() {
         None,
         None,
         Some(challenge),
+        Some("1"),
     ]);
     wrong.author_signature =
         Some(URL_SAFE_NO_PAD.encode(signing_key.sign(wrong_message.as_bytes()).to_bytes()));
