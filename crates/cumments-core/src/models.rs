@@ -376,6 +376,16 @@ pub struct UnknownContent {
     pub raw: serde_json::Value,
 }
 
+/// Presentation info for one reactor in a bounded sample.
+/// `avatar_url` is an `mxc://` URI at storage; the API layer rewrites it to a
+/// signed proxy URL. `None` means no usable profile (see
+/// `misc/design/reaction-reactors.md` \u00a76).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reactor {
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
 /// One aggregated reaction on a message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReactionSummary {
@@ -386,6 +396,11 @@ pub struct ReactionSummary {
     /// anonymous reads and is derived at query time, never stored.
     #[serde(default)]
     pub mine: bool,
+    /// Bounded sample of active reactors, ordered by representative
+    /// `origin_server_ts DESC, event_id DESC` (see
+    /// `misc/design/reaction-reactors.md` \u00a73-7). Always `[]` when empty.
+    #[serde(default)]
+    pub reactors: Vec<Reactor>,
 }
 
 /// A stored reaction event (one row per Matrix reaction event).

@@ -15,8 +15,8 @@ use cumments_core::media_upload::{
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message, MessagePage,
     MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
-    PollResponseSummary, PollVote, Reaction, ReactionSummary, SiteId, SubmissionCompletion,
-    UnknownContent,
+    PollResponseSummary, PollVote, Reaction, ReactionSummary, Reactor, SiteId,
+    SubmissionCompletion, UnknownContent,
 };
 use cumments_core::ports::{AppServiceTxnStore, MessageStore, ProjectionSink};
 use sea_orm::{
@@ -1419,33 +1419,88 @@ impl DbStore {
         Ok(())
     }
 
-    /// Aggregated reaction summaries keyed by message event ID. Redacted
-    /// reactions are excluded and multiple reactions from one sender collapse
-    /// into a single count.
+    /// Aggregated reaction summaries with bounded reactor sample.
     ///
-    /// Reactor sample (Phase 1): the same active unique-sender set is used to
-    /// deterministically select up to 5 senders per (message,key). See
-    /// `reaction_aggregate_map` and `misc/design/reaction-reactors.md` §3-5.
+    /// `count` and `reactors` derive from the same active unique-sender set.
+    /// `reactors` is the deterministic top-5 sample ordered by representative
+    /// `origin_server_ts DESC, event_id DESC` (see
+    /// `misc/design/reaction-reactors.md` \u00a73-7). Profile lookup is a
+    /// single batched query scoped by `(room_id, user_id)` with no
+    /// `membership` filter, so departed reactors remain visible.
     async fn reaction_summary_map(
         &self,
         message_event_ids: &[String],
     ) -> Result<HashMap<String, Vec<ReactionSummary>>> {
         let aggregates = self.reaction_aggregate_map(message_event_ids).await?;
-        Ok(aggregates
-            .into_iter()
-            .map(|(event_id, aggs)| {
-                let mut summaries: Vec<ReactionSummary> = aggs
-                    .into_iter()
-                    .map(|agg| ReactionSummary {
-                        key: agg.key,
-                        count: agg.count,
-                        mine: false,
+        if aggregates.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // Map message -> room for scoped profile lookup.
+        let message_rows = messages::Entity::find()
+            .filter(messages::Column::EventId.is_in(message_event_ids.iter().cloned()))
+            .all(&self.db)
+            .await?;
+        let mut room_by_message: HashMap<String, String> = HashMap::new();
+        for row in message_rows {
+            room_by_message.insert(row.event_id, row.room_id);
+        }
+        // Collect unique (room, sender) for batch profile lookup.
+        let mut sender_ids: HashSet<String> = HashSet::new();
+        let mut room_ids: HashSet<String> = HashSet::new();
+        for (msg_id, aggs) in &aggregates {
+            if let Some(room_id) = room_by_message.get(msg_id) {
+                room_ids.insert(room_id.clone());
+                for agg in aggs {
+                    for sender in &agg.selected_senders {
+                        sender_ids.insert(sender.clone());
+                    }
+                }
+            }
+        }
+        let members = if sender_ids.is_empty() || room_ids.is_empty() {
+            Vec::new()
+        } else {
+            room_members::Entity::find()
+                .filter(
+                    room_members::Column::RoomId.is_in(room_ids.into_iter().collect::<Vec<_>>()),
+                )
+                .filter(
+                    room_members::Column::UserId.is_in(sender_ids.into_iter().collect::<Vec<_>>()),
+                )
+                .all(&self.db)
+                .await?
+        };
+        let by_key: HashMap<(String, String), &room_members::Model> = members
+            .iter()
+            .map(|m| ((m.room_id.clone(), m.user_id.clone()), m))
+            .collect();
+        let mut out: HashMap<String, Vec<ReactionSummary>> = HashMap::new();
+        for (msg_id, aggs) in aggregates {
+            let room_id = room_by_message.get(&msg_id).cloned().unwrap_or_default();
+            let mut summaries = Vec::new();
+            for agg in aggs {
+                let reactors: Vec<Reactor> = agg
+                    .selected_senders
+                    .iter()
+                    .map(|sender| {
+                        let member = by_key.get(&(room_id.clone(), sender.clone()));
+                        Reactor {
+                            display_name: member.and_then(|m| m.display_name.clone()),
+                            avatar_url: member.and_then(|m| m.avatar_url.clone()),
+                        }
                     })
                     .collect();
-                summaries.sort_by(|a, b| a.key.cmp(&b.key));
-                (event_id, summaries)
-            })
-            .collect())
+                summaries.push(ReactionSummary {
+                    key: agg.key,
+                    count: agg.count,
+                    mine: false,
+                    reactors,
+                });
+            }
+            summaries.sort_by(|a, b| a.key.cmp(&b.key));
+            out.insert(msg_id, summaries);
+        }
+        Ok(out)
     }
 
     /// Internal aggregate with bounded reactor sender sample.
@@ -1666,10 +1721,10 @@ mod tests {
     use crate::DbStore;
     use chrono::Utc;
     use cumments_core::models::{
-        AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, Reaction, TextContent,
-        TextStyle,
+        AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, Reaction, RoomMember,
+        TextContent, TextStyle,
     };
-    use cumments_core::ports::MessageStore;
+    use cumments_core::ports::{MessageStore, RoomStore};
 
     fn test_db_url(name: &str) -> String {
         let path = std::path::Path::new("/tmp").join(format!(
@@ -2219,5 +2274,197 @@ mod tests {
             .await
             .expect("summary");
         assert!(summary.is_empty() || summary.get("$m11:hs").map(|v| v.is_empty()).unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn reaction_reactors_hydrate_joined_member() {
+        let store = DbStore::connect(&test_db_url("reactors-joined"))
+            .await
+            .expect("connect");
+        let msg = visitor_message("$m12:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_member(&RoomMember {
+                room_id: "!room:hs".to_string(),
+                user_id: "@alice:hs".to_string(),
+                display_name: Some("Alice".to_string()),
+                avatar_url: Some("mxc://hs/a".to_string()),
+                membership: "join".to_string(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .expect("save member");
+        store
+            .save_member(&RoomMember {
+                room_id: "!room:hs".to_string(),
+                user_id: "@bob:hs".to_string(),
+                display_name: Some("Bob".to_string()),
+                avatar_url: None,
+                membership: "join".to_string(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .expect("save member");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m12:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m12:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 200,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let stored = store
+            .get_message("$m12:hs")
+            .await
+            .expect("get")
+            .expect("exists");
+        assert_eq!(stored.reactions.len(), 1);
+        let agg = &stored.reactions[0];
+        assert_eq!(agg.key, "👍");
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.reactors.len(), 2);
+        // Ordered by ts DESC: Bob (200) before Alice (100)
+        assert_eq!(agg.reactors[0].display_name.as_deref(), Some("Bob"));
+        assert_eq!(agg.reactors[0].avatar_url.as_deref(), None);
+        assert_eq!(agg.reactors[1].display_name.as_deref(), Some("Alice"));
+        assert_eq!(agg.reactors[1].avatar_url.as_deref(), Some("mxc://hs/a"));
+    }
+
+    #[tokio::test]
+    async fn reaction_reactors_hydrate_departed_member() {
+        let store = DbStore::connect(&test_db_url("reactors-departed"))
+            .await
+            .expect("connect");
+        let msg = visitor_message("$m13:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_member(&RoomMember {
+                room_id: "!room:hs".to_string(),
+                user_id: "@alice:hs".to_string(),
+                display_name: Some("Alice".to_string()),
+                avatar_url: Some("mxc://hs/a".to_string()),
+                membership: "leave".to_string(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .expect("save member");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m13:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let stored = store
+            .get_message("$m13:hs")
+            .await
+            .expect("get")
+            .expect("exists");
+        let agg = &stored.reactions[0];
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.reactors.len(), 1);
+        assert_eq!(agg.reactors[0].display_name.as_deref(), Some("Alice"));
+        // Departed members must still appear (no membership filter)
+    }
+
+    #[tokio::test]
+    async fn reaction_reactors_hydrate_missing_profile() {
+        let store = DbStore::connect(&test_db_url("reactors-missing"))
+            .await
+            .expect("connect");
+        let msg = visitor_message("$m14:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        // No room_members for @alice
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m14:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let stored = store
+            .get_message("$m14:hs")
+            .await
+            .expect("get")
+            .expect("exists");
+        let agg = &stored.reactions[0];
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.reactors.len(), 1);
+        assert_eq!(agg.reactors[0].display_name, None);
+        assert_eq!(agg.reactors[0].avatar_url, None);
+        // Still occupies slot, others = count - reactors.len() = 0
+    }
+
+    #[tokio::test]
+    async fn reaction_reactors_hydrate_renamed_member() {
+        let store = DbStore::connect(&test_db_url("reactors-rename"))
+            .await
+            .expect("connect");
+        let msg = visitor_message("$m15:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_member(&RoomMember {
+                room_id: "!room:hs".to_string(),
+                user_id: "@alice:hs".to_string(),
+                display_name: Some("Alice".to_string()),
+                avatar_url: Some("mxc://hs/a".to_string()),
+                membership: "join".to_string(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .expect("save member");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m15:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        // Rename
+        store
+            .save_member(&RoomMember {
+                room_id: "!room:hs".to_string(),
+                user_id: "@alice:hs".to_string(),
+                display_name: Some("Alice Smith".to_string()),
+                avatar_url: Some("mxc://hs/b".to_string()),
+                membership: "join".to_string(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .expect("save member");
+        let stored = store
+            .get_message("$m15:hs")
+            .await
+            .expect("get")
+            .expect("exists");
+        let agg = &stored.reactions[0];
+        assert_eq!(agg.reactors[0].display_name.as_deref(), Some("Alice Smith"));
+        assert_eq!(agg.reactors[0].avatar_url.as_deref(), Some("mxc://hs/b"));
     }
 }

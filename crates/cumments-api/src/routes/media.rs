@@ -345,6 +345,17 @@ impl MediaProxy {
         {
             message.author.avatar_url = Some(avatar);
         }
+        for summary in &mut message.reactions {
+            for reactor in &mut summary.reactors {
+                if let Some(avatar) = reactor
+                    .avatar_url
+                    .as_deref()
+                    .and_then(|url| self.proxify_avatar(url, base))
+                {
+                    reactor.avatar_url = Some(avatar);
+                }
+            }
+        }
     }
 
     /// Verifies an HMAC-signed media URL without revealing the token.
