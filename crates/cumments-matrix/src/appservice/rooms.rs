@@ -660,20 +660,6 @@ impl AppServiceMatrixDriver {
         }
     }
 
-    /// Whether a room's metadata matches the expected identity.
-    #[allow(dead_code)]
-    async fn room_metadata_matches(
-        &self,
-        room_id: &str,
-        site_id: &SiteId,
-        page_slug: Option<&PageSlug>,
-    ) -> Result<bool> {
-        Ok(match self.fetch_room_metadata(room_id).await? {
-            Some(meta) => metadata_matches(&meta, site_id.as_str(), page_slug.map(|s| s.as_str())),
-            None => false,
-        })
-    }
-
     /// Idempotently link a comment room into its site Space (`m.space.child`
     /// on the Space, `m.space.parent` on the room). Errors are returned so
     /// the caller retries the submission, which re-enters `ensure_comment_room`
