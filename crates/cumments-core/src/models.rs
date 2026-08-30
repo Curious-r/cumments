@@ -823,4 +823,35 @@ mod tests {
         });
         assert_eq!(content.kind(), "text");
     }
+
+    #[test]
+    fn reaction_summary_always_serializes_reactors() {
+        let summary = ReactionSummary {
+            key: "👍".to_string(),
+            count: 0,
+            mine: false,
+            reactors: Vec::new(),
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(
+            json.get("reactors").is_some(),
+            "reactors must be present even when empty"
+        );
+        assert_eq!(json["reactors"], serde_json::json!([]));
+        let summary2 = ReactionSummary {
+            key: "👍".to_string(),
+            count: 1,
+            mine: false,
+            reactors: vec![Reactor {
+                display_name: Some("Alice".to_string()),
+                avatar_url: None,
+            }],
+        };
+        let json2 = serde_json::to_value(&summary2).unwrap();
+        assert_eq!(
+            json2["reactors"][0]["display_name"],
+            serde_json::json!("Alice")
+        );
+        assert!(json2["reactors"][0].get("avatar_url").is_some());
+    }
 }

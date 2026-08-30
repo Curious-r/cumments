@@ -2404,13 +2404,13 @@ components:
       properties:
         display_name:
           type: [string, "null"]
-          description: Display name at reaction time (current room profile, null if unavailable)
+          description: Current display name from the latest known room profile, or null if unavailable
         avatar_url:
           type: [string, "null"]
           description: Avatar URL (signed 96x96 proxy) or null if unavailable
     ReactionSummary:
       type: object
-      required: [key, count]
+      required: [key, count, reactors]
       properties:
         key:
           type: string
