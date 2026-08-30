@@ -24,6 +24,18 @@ use sea_orm::{
     QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
+/// Internal reaction aggregate for Phase 1 (count + bounded sender sample).
+/// `selected_senders` is the deterministic top-N sample; not yet exposed via
+/// public API. See `misc/design/reaction-reactors.md` §3-7.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionAggregate {
+    pub key: String,
+    pub count: i64,
+    /// Ordered top-5 sender_mxids for this (message,key), sorted by
+    /// representative `origin_server_ts DESC, event_id DESC, sender ASC`.
+    /// Internal only — never serialized to `ReactionSummary` in Phase 1.
+    pub selected_senders: Vec<String>,
+}
 
 fn content_to_json(content: &Content) -> String {
     serde_json::to_string(content).expect("content serializes")
@@ -1410,10 +1422,44 @@ impl DbStore {
     /// Aggregated reaction summaries keyed by message event ID. Redacted
     /// reactions are excluded and multiple reactions from one sender collapse
     /// into a single count.
+    ///
+    /// Reactor sample (Phase 1): the same active unique-sender set is used to
+    /// deterministically select up to 5 senders per (message,key). See
+    /// `reaction_aggregate_map` and `misc/design/reaction-reactors.md` §3-5.
     async fn reaction_summary_map(
         &self,
         message_event_ids: &[String],
     ) -> Result<HashMap<String, Vec<ReactionSummary>>> {
+        let aggregates = self.reaction_aggregate_map(message_event_ids).await?;
+        Ok(aggregates
+            .into_iter()
+            .map(|(event_id, aggs)| {
+                let mut summaries: Vec<ReactionSummary> = aggs
+                    .into_iter()
+                    .map(|agg| ReactionSummary {
+                        key: agg.key,
+                        count: agg.count,
+                        mine: false,
+                    })
+                    .collect();
+                summaries.sort_by(|a, b| a.key.cmp(&b.key));
+                (event_id, summaries)
+            })
+            .collect())
+    }
+
+    /// Internal aggregate with bounded reactor sender sample.
+    ///
+    /// `count` and `selected_senders` derive from the **same** active unique
+    /// sender set (single DB scan, no second query in the hydrate path).
+    /// `selected_senders` is ordered by representative
+    /// `origin_server_ts DESC, event_id DESC, sender_mxid ASC` and truncated
+    /// to `REACTION_SAMPLE_LIMIT` (5). Internal `sender_mxid`/`event_id` are
+    /// never exposed through the public `ReactionSummary` in Phase 1.
+    pub async fn reaction_aggregate_map(
+        &self,
+        message_event_ids: &[String],
+    ) -> Result<HashMap<String, Vec<ReactionAggregate>>> {
         if message_event_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -1430,31 +1476,68 @@ impl DbStore {
         )
         .await?;
         rows.retain(|row| active_parents.contains(&row.message_event_id));
+        Ok(Self::aggregate_reaction_rows(rows))
+    }
 
-        let mut senders_by_key: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
+    pub const REACTION_SAMPLE_LIMIT: usize = 5;
+
+    fn aggregate_reaction_rows(
+        rows: Vec<reactions::Model>,
+    ) -> HashMap<String, Vec<ReactionAggregate>> {
+        use std::collections::hash_map::Entry;
+        // (message_event_id, key) -> sender -> rep (origin_server_ts, event_id)
+        let mut per_key_sender_rep: HashMap<
+            String,
+            HashMap<String, HashMap<String, (i64, String)>>,
+        > = HashMap::new();
         for row in rows {
-            senders_by_key
+            let key_map = per_key_sender_rep
                 .entry(row.message_event_id)
                 .or_default()
                 .entry(row.key)
-                .or_default()
-                .insert(row.sender_mxid);
+                .or_default();
+            match key_map.entry(row.sender_mxid) {
+                Entry::Vacant(v) => {
+                    v.insert((row.origin_server_ts, row.event_id));
+                }
+                Entry::Occupied(mut o) => {
+                    let cur = o.get();
+                    if (row.origin_server_ts, &row.event_id) > (cur.0, &cur.1) {
+                        o.insert((row.origin_server_ts, row.event_id));
+                    }
+                }
+            }
         }
-        Ok(senders_by_key
-            .into_iter()
-            .map(|(event_id, keys)| {
-                let mut summaries: Vec<ReactionSummary> = keys
+        let mut out: HashMap<String, Vec<ReactionAggregate>> = HashMap::new();
+        for (msg_id, keys) in per_key_sender_rep {
+            let mut aggregates = Vec::new();
+            for (key, sender_rep) in keys {
+                let count = sender_rep.len() as i64;
+                // sort senders by rep ts DESC, event_id DESC, sender ASC
+                let mut senders: Vec<(String, i64, String)> = sender_rep
                     .into_iter()
-                    .map(|(key, senders)| ReactionSummary {
-                        key,
-                        count: senders.len() as i64,
-                        mine: false,
-                    })
+                    .map(|(sender, (ts, eid))| (sender, ts, eid))
                     .collect();
-                summaries.sort_by(|a, b| a.key.cmp(&b.key));
-                (event_id, summaries)
-            })
-            .collect())
+                senders.sort_by(|a, b| {
+                    b.1.cmp(&a.1)
+                        .then_with(|| b.2.cmp(&a.2))
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+                let selected_senders: Vec<String> = senders
+                    .into_iter()
+                    .take(Self::REACTION_SAMPLE_LIMIT)
+                    .map(|(sender, _, _)| sender)
+                    .collect();
+                aggregates.push(ReactionAggregate {
+                    key,
+                    count,
+                    selected_senders,
+                });
+            }
+            aggregates.sort_by(|a, b| a.key.cmp(&b.key));
+            out.insert(msg_id, aggregates);
+        }
+        out
     }
 
     /// Aggregated poll response summaries keyed by poll message ID. Redacted
