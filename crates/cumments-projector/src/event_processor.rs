@@ -1438,6 +1438,7 @@ impl EventProcessor {
                                 Some(relation.target_event_id.as_str()),
                                 Some(new_content),
                                 Some(chal),
+                                Some("1"),
                             ]);
                             verify_visitor_event(
                                 self.server_name.as_deref(),
@@ -1547,6 +1548,7 @@ impl EventProcessor {
                             event.reply_to.as_deref(),
                             event.thread_root.as_deref(),
                             Some(chal),
+                            Some("1"),
                         ]),
                         _ => match event.signable_content() {
                             Some(content) => post_signature_message(
@@ -1695,6 +1697,7 @@ impl EventProcessor {
                 Some(event.message_event_id.as_str()),
                 Some(event.key.as_str()),
                 Some(chal),
+                Some("1"),
             ]);
             if !verify_visitor_event(
                 self.server_name.as_deref(),
@@ -1815,6 +1818,7 @@ impl EventProcessor {
                 Some(event.poll_message_id.as_str()),
                 answer_id.map(String::as_str),
                 Some(chal),
+                Some("1"),
             ]);
             if !verify_visitor_event(
                 self.server_name.as_deref(),

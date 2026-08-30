@@ -881,6 +881,7 @@ async fn update_comment_common(
         Some(path.comment_id.as_str()),
         Some(req.content.as_str()),
         Some(challenge),
+        Some("1"),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
@@ -1017,6 +1018,7 @@ pub(crate) async fn react_handler(
         Some(comment_id.as_str()),
         Some(normalized_key.as_str()),
         Some(challenge),
+        Some("1"),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);
@@ -1245,6 +1247,7 @@ pub(crate) async fn vote_handler(
         Some(poll_id.as_str()),
         Some(req.option_id.as_str()),
         Some(challenge),
+        Some("1"),
     ]);
     if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
         return Err(AppError::InvalidSignature);

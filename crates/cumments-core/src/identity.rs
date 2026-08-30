@@ -40,6 +40,7 @@ pub fn signature_message(parts: &[Option<&str>]) -> String {
 ///
 /// Covers site, page, content (or mxc URL for media), both reply and thread
 /// relations (each as `null` when absent), and the PoW challenge.
+/// Includes trailing `1` for the `host.curious.cumments.message` schema.
 pub fn post_signature_message(
     site_id: &str,
     page_slug: &str,
@@ -56,10 +57,12 @@ pub fn post_signature_message(
         reply_to.map(|value| value as &str),
         thread_root.map(|value| value as &str),
         Some(challenge),
+        Some("1"),
     ])
 }
 
 /// Build the canonical message signed for a location share.
+/// Includes trailing `1` for the `host.curious.cumments.message` schema.
 pub fn locate_signature_message(
     site_id: &str,
     page_slug: &str,
@@ -76,6 +79,7 @@ pub fn locate_signature_message(
         reply_to.map(|value| value as &str),
         thread_root.map(|value| value as &str),
         Some(challenge),
+        Some("1"),
     ])
 }
 
@@ -186,6 +190,7 @@ mod tests {
                 serde_json::Value::String("$p:hs".to_string()),
                 serde_json::Value::Null,
                 serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
             ])
             .expect("valid json")
         );
@@ -199,6 +204,7 @@ mod tests {
                 serde_json::Value::Null,
                 serde_json::Value::Null,
                 serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
             ])
             .expect("valid json")
         );
@@ -212,6 +218,7 @@ mod tests {
                 serde_json::Value::Null,
                 serde_json::Value::String("$t:hs".to_string()),
                 serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
             ])
             .expect("valid json")
         );
@@ -252,6 +259,7 @@ mod tests {
                 serde_json::Value::String("$p:hs".to_string()),
                 serde_json::Value::String("$t:hs".to_string()),
                 serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
             ])
             .expect("valid json")
         );
