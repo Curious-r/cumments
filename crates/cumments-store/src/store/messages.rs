@@ -1481,6 +1481,7 @@ impl DbStore {
 
     pub const REACTION_SAMPLE_LIMIT: usize = 5;
 
+    #[allow(clippy::type_complexity)]
     fn aggregate_reaction_rows(
         rows: Vec<reactions::Model>,
     ) -> HashMap<String, Vec<ReactionAggregate>> {
