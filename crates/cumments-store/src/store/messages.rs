@@ -28,11 +28,11 @@ use std::collections::{HashMap, HashSet};
 /// `selected_senders` is the deterministic top-N sample; not yet exposed via
 /// public API. See `misc/design/reaction-reactors.md` §3-7.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReactionAggregate {
+pub(crate) struct ReactionAggregate {
     pub key: String,
     pub count: i64,
     /// Ordered top-5 sender_mxids for this (message,key), sorted by
-    /// representative `origin_server_ts DESC, event_id DESC, sender ASC`.
+    /// representative `origin_server_ts DESC, event_id DESC`.
     /// Internal only — never serialized to `ReactionSummary` in Phase 1.
     pub selected_senders: Vec<String>,
 }
@@ -1453,10 +1453,10 @@ impl DbStore {
     /// `count` and `selected_senders` derive from the **same** active unique
     /// sender set (single DB scan, no second query in the hydrate path).
     /// `selected_senders` is ordered by representative
-    /// `origin_server_ts DESC, event_id DESC, sender_mxid ASC` and truncated
+    /// `origin_server_ts DESC, event_id DESC` and truncated
     /// to `REACTION_SAMPLE_LIMIT` (5). Internal `sender_mxid`/`event_id` are
     /// never exposed through the public `ReactionSummary` in Phase 1.
-    pub async fn reaction_aggregate_map(
+    pub(crate) async fn reaction_aggregate_map(
         &self,
         message_event_ids: &[String],
     ) -> Result<HashMap<String, Vec<ReactionAggregate>>> {
@@ -1479,7 +1479,7 @@ impl DbStore {
         Ok(Self::aggregate_reaction_rows(rows))
     }
 
-    pub const REACTION_SAMPLE_LIMIT: usize = 5;
+    pub(crate) const REACTION_SAMPLE_LIMIT: usize = 5;
 
     #[allow(clippy::type_complexity)]
     fn aggregate_reaction_rows(
@@ -1514,16 +1514,12 @@ impl DbStore {
             let mut aggregates = Vec::new();
             for (key, sender_rep) in keys {
                 let count = sender_rep.len() as i64;
-                // sort senders by rep ts DESC, event_id DESC, sender ASC
+                // sort senders by rep ts DESC, event_id DESC
                 let mut senders: Vec<(String, i64, String)> = sender_rep
                     .into_iter()
                     .map(|(sender, (ts, eid))| (sender, ts, eid))
                     .collect();
-                senders.sort_by(|a, b| {
-                    b.1.cmp(&a.1)
-                        .then_with(|| b.2.cmp(&a.2))
-                        .then_with(|| a.0.cmp(&b.0))
-                });
+                senders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
                 let selected_senders: Vec<String> = senders
                     .into_iter()
                     .take(Self::REACTION_SAMPLE_LIMIT)
@@ -1662,4 +1658,566 @@ async fn active_message_ids(
         .all(db)
         .await?;
     Ok(models.into_iter().map(|model| model.event_id).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DbStore;
+    use chrono::Utc;
+    use cumments_core::models::{
+        AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, Reaction, TextContent,
+        TextStyle,
+    };
+    use cumments_core::ports::MessageStore;
+
+    fn test_db_url(name: &str) -> String {
+        let path = std::path::Path::new("/tmp").join(format!(
+            "cumments-message-test-{}-{}.db",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        format!("sqlite://{}", path.display())
+    }
+
+    fn visitor_message(event_id: &str, body: &str) -> Message {
+        Message {
+            event_id: event_id.to_string(),
+            site_id: "my-blog".to_string(),
+            page_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Visitor,
+                display_name: Some("Alice".to_string()),
+                avatar_url: None,
+                public_key: Some(
+                    "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+                        .to_string(),
+                ),
+                mxid: None,
+            },
+            content: Content::Text(TextContent {
+                body: body.to_string(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            }),
+            matrix_event_type: "m.room.message".to_string(),
+            timestamp: Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            submission_id: Some(42),
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
+            raw_content: serde_json::json!({ "msgtype": "m.text", "body": body }),
+        }
+    }
+
+    async fn reaction_aggregates_for(store: &DbStore, message_id: &str) -> Vec<ReactionAggregate> {
+        let map = store
+            .reaction_aggregate_map(&[message_id.to_string()])
+            .await
+            .expect("aggregate map");
+        map.get(message_id).cloned().unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_unique_senders() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-unique"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m1:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        for (eid, sender) in [
+            ("$r1:hs", "@alice:hs"),
+            ("$r2:hs", "@bob:hs"),
+            ("$r3:hs", "@carol:hs"),
+        ] {
+            store
+                .save_reaction(&Reaction {
+                    event_id: eid.to_string(),
+                    message_event_id: "$m1:hs".to_string(),
+                    sender_mxid: sender.to_string(),
+                    key: "👍".to_string(),
+                    origin_server_ts: 100,
+                    redacted_at: None,
+                })
+                .await
+                .expect("save");
+        }
+        let aggs = reaction_aggregates_for(&store, "$m1:hs").await;
+        assert_eq!(aggs.len(), 1);
+        let agg = &aggs[0];
+        assert_eq!(agg.key, "👍");
+        assert_eq!(agg.count, 3);
+        assert_eq!(agg.selected_senders.len(), 3);
+        let mut senders = agg.selected_senders.clone();
+        senders.sort();
+        assert_eq!(senders, vec!["@alice:hs", "@bob:hs", "@carol:hs"]);
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_duplicate_sender_collapses() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-dedup"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m2:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m2:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m2:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 200,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r3:hs".to_string(),
+                message_event_id: "$m2:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 150,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m2:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(agg.count, 2, "one sender = one reactor");
+        assert_eq!(agg.selected_senders.len(), 2);
+        assert!(agg.selected_senders.contains(&"@alice:hs".to_string()));
+        assert!(agg.selected_senders.contains(&"@bob:hs".to_string()));
+        assert_eq!(
+            agg.selected_senders
+                .iter()
+                .filter(|s| *s == "@alice:hs")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_redaction_removes_sender() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-redact"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m3:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m3:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m3:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .redact_reaction("$r1:hs", Utc::now())
+            .await
+            .expect("redact");
+        let aggs = reaction_aggregates_for(&store, "$m3:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.selected_senders, vec!["@bob:hs".to_string()]);
+        assert!(!agg.selected_senders.contains(&"@alice:hs".to_string()));
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_rereaction_after_redaction() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-rereact"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m4:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m4:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .redact_reaction("$r1:hs", Utc::now())
+            .await
+            .expect("redact");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r3:hs".to_string(),
+                message_event_id: "$m4:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 300,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m4:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 200,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m4:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.selected_senders.len(), 2);
+        assert_eq!(agg.selected_senders[0], "@alice:hs");
+        assert_eq!(agg.selected_senders[1], "@bob:hs");
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_multiple_keys_independent() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-multikey"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m5:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m5:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m5:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r3:hs".to_string(),
+                message_event_id: "$m5:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "❤️".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m5:hs").await;
+        assert_eq!(aggs.len(), 2);
+        let thumbs = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        let heart = aggs.iter().find(|a| a.key == "❤️").expect("heart");
+        assert_eq!(thumbs.count, 2);
+        assert_eq!(heart.count, 1);
+        assert_eq!(heart.selected_senders, vec!["@alice:hs".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_top5_truncation() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-top5"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m6:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        for i in 0..7 {
+            let eid = format!("$r{}:hs", i);
+            let sender = format!("@user{}:hs", i);
+            store
+                .save_reaction(&Reaction {
+                    event_id: eid,
+                    message_event_id: "$m6:hs".to_string(),
+                    sender_mxid: sender,
+                    key: "👍".to_string(),
+                    origin_server_ts: 100 + i as i64,
+                    redacted_at: None,
+                })
+                .await
+                .expect("save");
+        }
+        let aggs = reaction_aggregates_for(&store, "$m6:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(agg.count, 7);
+        assert_eq!(agg.selected_senders.len(), 5, "bounded to 5");
+        assert!(!agg.selected_senders.contains(&"@user0:hs".to_string()));
+        assert!(!agg.selected_senders.contains(&"@user1:hs".to_string()));
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_ordering_by_timestamp() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-order"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m7:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m7:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m7:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 300,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r3:hs".to_string(),
+                message_event_id: "$m7:hs".to_string(),
+                sender_mxid: "@carol:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 200,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m7:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(
+            agg.selected_senders,
+            vec![
+                "@bob:hs".to_string(),
+                "@carol:hs".to_string(),
+                "@alice:hs".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_tie_break_by_event_id() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-tie-event"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m8:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m8:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m8:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m8:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(
+            agg.selected_senders,
+            vec!["@bob:hs".to_string(), "@alice:hs".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_event_id_order_with_same_ts() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-event-id-order"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m9:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$a1:hs".to_string(),
+                message_event_id: "$m9:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$z9:hs".to_string(),
+                message_event_id: "$m9:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m9:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(
+            agg.selected_senders,
+            vec!["@bob:hs".to_string(), "@alice:hs".to_string()],
+            "same ts, different event_id → event_id DESC"
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_repeated_sender_uses_latest_rep() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-latest-rep"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m10:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m10:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m10:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 300,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r3:hs".to_string(),
+                message_event_id: "$m10:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 200,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        let aggs = reaction_aggregates_for(&store, "$m10:hs").await;
+        let agg = aggs.iter().find(|a| a.key == "👍").expect("thumbs");
+        assert_eq!(agg.count, 2);
+        assert_eq!(
+            agg.selected_senders,
+            vec!["@alice:hs".to_string(), "@bob:hs".to_string()],
+            "Alice's latest rep @300 outranks Bob @200"
+        );
+        assert_eq!(
+            agg.selected_senders
+                .iter()
+                .filter(|s| *s == "@alice:hs")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_sample_inactive_parent_excluded() {
+        let store = DbStore::connect(&test_db_url("reaction-sample-inactive-parent"))
+            .await
+            .expect("connect db");
+        let msg = visitor_message("$m11:hs", "hello");
+        store.save_message(&msg).await.expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r1:hs".to_string(),
+                message_event_id: "$m11:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .save_reaction(&Reaction {
+                event_id: "$r2:hs".to_string(),
+                message_event_id: "$m11:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                key: "👍".to_string(),
+                origin_server_ts: 100,
+                redacted_at: None,
+            })
+            .await
+            .expect("save");
+        store
+            .redact_message("$m11:hs", "!room:hs", Utc::now(), "@mod:hs")
+            .await
+            .expect("redact parent");
+        let aggs = reaction_aggregates_for(&store, "$m11:hs").await;
+        assert!(
+            aggs.is_empty() || aggs.iter().all(|a| a.count == 0),
+            "reactions on inactive parent must not contribute"
+        );
+        let stored = store
+            .get_message("$m11:hs")
+            .await
+            .expect("get")
+            .expect("exists");
+        assert_eq!(stored.reactions.len(), 0);
+        let summary = store
+            .reaction_aggregate_map(&["$m11:hs".to_string()])
+            .await
+            .expect("summary");
+        assert!(summary.is_empty() || summary.get("$m11:hs").map(|v| v.is_empty()).unwrap_or(true));
+    }
 }
