@@ -113,6 +113,15 @@ only two members are the bot and the sender). The bot's self-service
 already authenticated the sender in the DM; it records an applied claim
 instead.
 
+The site owner may use a Matrix account on a different homeserver from the
+Cumments instance (e.g. `@alice:matrix.org` inviting
+`@_cumments_bot:comments.example`). Self-service invite admission is
+available to any normal Matrix user — local or federated — that passes the
+existing governance identity check (valid MXID, not AS-managed), subject to
+a per-inviter invite rate limit (`5/min`). Group-room invites may still cause
+the bot to join, but governance commands remain blocked by the
+`is_private_channel` (exactly bot + sender joined) gate.
+
 ### Claim lifecycle
 
 ```text

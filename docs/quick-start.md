@@ -100,10 +100,15 @@ curl -sS -X POST http://localhost:8008/_matrix/client/v3/register \
 The response contains the `user_id` (e.g. `@alice:localhost:8008`).
 
 If alice is registering for herself, she can DM the bot
-`!cumments sites register my-blog`: the bot registers the site, creates the
-Space and makes her the first site admin immediately. The API path below is
-the generic path — use it when the registrant and the first admin are
-different accounts:
+`!cumments sites register my-blog`: invite `@_cumments_bot` to a DM (any
+Matrix user — local or federated, e.g. `@alice:matrix.org` — may invite the
+bot; the bot may auto-join subject to a per-inviter rate limit, which is
+independent from governance authorization) and send the command in that DM.
+The bot registers the site, creates the Space and makes the sender the
+first site admin immediately, without a prior pending claim. Bot membership
+alone grants no governance privilege; the private-channel check still
+applies. The API path below is the generic path — use it when the
+registrant and the first admin are different accounts:
 
 ```bash
 # Registration is mandatory before the site can receive comments. Pick an id

@@ -256,10 +256,18 @@ Security model:
   AppService retries.
 - Commands that pass admission are written to the command audit trail with a
   status (ok / invalid / denied / error).
-- Role claims are capabilities. The bot auto-joins a DM only when the inviter
-  has a pending claim, so it cannot be pulled into arbitrary rooms. Claim DMs
-  must stay unencrypted because the token is plain text; an
-  `m.room.encryption` event is warned about and ignored.
+- Invite admission and governance authorization are independent. The bot may
+  automatically join when invited by a normal Matrix user — local or
+  federated — that passes the governance identity check (valid MXID, not
+  AS-managed), subject to a per-inviter `SlidingWindowRateLimiter(5/min)`
+  that bounds `Bot JOIN -> AS-visible event stream`. Existing pending-claim
+  invites retain capability semantics. Bot membership does not grant
+  governance authority, but it does expand the room event stream visible to
+  the Application Service. All governance mutations — including
+  `!cumments sites register` self-service — remain protected by the existing
+  `is_private_channel` (exactly bot + sender joined) and command-specific
+  checks. Claim DMs must stay unencrypted because the token is plain text;
+  an `m.room.encryption` event is warned about and ignored.
 
 Backfill is also available to operators as `!cumments backfill [max_pages]`;
 it queues a worker request and the bot replies in the DM when the worker
