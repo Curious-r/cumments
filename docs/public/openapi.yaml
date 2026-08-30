@@ -2399,6 +2399,15 @@ components:
         count:
           type: integer
           format: int64
+    Reactor:
+      type: object
+      properties:
+        display_name:
+          type: [string, "null"]
+          description: Display name at reaction time (current room profile, null if unavailable)
+        avatar_url:
+          type: [string, "null"]
+          description: Avatar URL (signed 96x96 proxy) or null if unavailable
     ReactionSummary:
       type: object
       required: [key, count]
@@ -2412,6 +2421,12 @@ components:
           type: boolean
           default: false
           description: Whether the requesting visitor (when the read is personalized with a valid author proof) has reacted with this key.
+        reactors:
+          type: array
+          items:
+            $ref: "#/components/schemas/Reactor"
+          maxItems: 5
+          description: Bounded sample of active reactors ordered by representative origin_server_ts DESC, event_id DESC. Always [] when empty.
     PostCommentRequest:
       type: object
       required: [content, display_name, author_public_key, author_signature, challenge_response]
