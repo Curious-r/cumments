@@ -99,9 +99,30 @@ async fn bot_joins_dm_only_when_inviter_has_a_pending_claim() {
             .expect("connect db"),
     );
     let stranger_driver = Arc::new(common::TestDriver::new());
-    processor(stranger_store, stranger_driver.clone())
+    processor(stranger_store.clone(), stranger_driver.clone())
         .process_room_state(invite_event("!other-dm:hs", "@stranger:hs"))
         .await
         .expect("process invite");
-    assert!(stranger_driver.joined.lock().await.is_empty());
+    // Self-service bootstrap now allows normal users without pending claim to auto-join
+    // (public/federated service). Verify bootstrap join occurs without claim-DM bookkeeping.
+    assert_eq!(*stranger_driver.joined.lock().await, vec!["!other-dm:hs"]);
+    assert!(
+        !stranger_store
+            .claim_dm_room_exists("!other-dm:hs")
+            .await
+            .unwrap()
+    );
+
+    // AS-managed users must still be rejected even without pending claim
+    let managed_store = Arc::new(
+        DbStore::connect(&test_db_url("managed-no-join"))
+            .await
+            .expect("connect db"),
+    );
+    let managed_driver = Arc::new(common::TestDriver::new());
+    processor(managed_store, managed_driver.clone())
+        .process_room_state(invite_event("!managed-dm:hs", "@_cumments_bot:hs"))
+        .await
+        .expect("process invite");
+    assert!(managed_driver.joined.lock().await.is_empty());
 }
