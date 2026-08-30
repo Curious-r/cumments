@@ -22,3 +22,21 @@ pub const REDACTION_PROOF_KEY: &str = "host.curious.cumments.redaction";
 /// Body prefix of the token-DM message that proves ownership of a Matrix user
 /// ID for a pending governance role.
 pub const CLAIM_MESSAGE_PREFIX: &str = "cumments-claim:";
+
+/// Current schema version for `host.curious.cumments.metadata` state events.
+pub const METADATA_SCHEMA_VERSION: i64 = 1;
+
+/// Current schema version for the `host.curious.cumments.message` content block.
+pub const MESSAGE_SCHEMA_VERSION: i64 = 1;
+
+/// Returns `true` for a supported metadata schema version.
+/// `None` (absent field) is unsupported under the breaking v1 policy (legacy outside trusted boundary).
+pub fn is_supported_metadata_schema(schema: Option<i64>) -> bool {
+    matches!(schema, Some(1))
+}
+
+/// Returns `true` for a supported message-block schema version.
+/// `None` (absent field) is unsupported under the breaking v1 policy.
+pub fn is_supported_message_schema(schema: Option<i64>) -> bool {
+    matches!(schema, Some(1))
+}

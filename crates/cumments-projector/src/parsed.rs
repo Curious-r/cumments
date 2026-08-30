@@ -155,6 +155,8 @@ pub struct ParsedSpaceChild {
 /// Internal helper for deserialising Cumments room metadata.
 #[derive(Deserialize)]
 struct RoomMetadata {
+    #[serde(default)]
+    schema: Option<serde_json::Value>,
     site_id: String,
     page_slug: Option<String>,
 }
@@ -171,12 +173,33 @@ pub fn parse_room_identity(
     // Phase 1 – Try metadata first (source of truth)
     if let Some(json) = metadata_json
         && let Ok(m) = serde_json::from_str::<RoomMetadata>(json)
-        && let Some(slug) = m.page_slug
     {
-        return Some(RoomIdentity {
-            site_id: m.site_id,
-            page_slug: slug,
-        });
+        // v1 break: missing or non-1 → unsupported.
+        let schema_ok = match &m.schema {
+            Some(v)
+                if v.is_i64()
+                    && v.as_i64() == Some(cumments_core::protocol::METADATA_SCHEMA_VERSION) =>
+            {
+                true
+            }
+            Some(v)
+                if v.is_u64()
+                    && v.as_u64()
+                        == Some(cumments_core::protocol::METADATA_SCHEMA_VERSION as u64) =>
+            {
+                true
+            }
+            _ => false,
+        };
+        if !schema_ok {
+            return None;
+        }
+        if let Some(slug) = m.page_slug {
+            return Some(RoomIdentity {
+                site_id: m.site_id,
+                page_slug: slug,
+            });
+        }
     }
 
     // Phase 2 – Fallback to alias parsing for legacy rooms
@@ -218,7 +241,7 @@ mod tests {
 
     #[test]
     fn parse_room_identity_prefers_metadata_over_alias() {
-        let metadata = r#"{"site_id": "meta-site", "page_slug": "meta-post"}"#;
+        let metadata = r#"{"schema": 1, "site_id": "meta-site", "page_slug": "meta-post"}"#;
         let identity = parse_room_identity(
             Some(metadata),
             Some("#_cumments_alias-site_alias-post:example.com"),
@@ -231,5 +254,45 @@ mod tests {
                 page_slug
             }) if site_id == "meta-site" && page_slug == "meta-post"
         ));
+    }
+
+    #[test]
+    fn parse_room_identity_legacy_without_schema_rejected() {
+        // Missing schema → unsupported under v1 break
+        let legacy = r#"{"site_id": "my-blog", "page_slug": "hello"}"#;
+        assert!(parse_room_identity(Some(legacy), None).is_none());
+        let legacy_space = r#"{"site_id": "my-blog", "page_slug": null}"#;
+        // Space with missing schema also unsupported, but parse_room_identity returns None anyway for Space (no page_slug)
+        assert!(parse_room_identity(Some(legacy_space), None).is_none());
+    }
+
+    #[test]
+    fn parse_room_identity_schema_1_and_extra_fields_accepted() {
+        let with_schema = r#"{"schema": 1, "site_id": "my-blog", "page_slug": "hello"}"#;
+        let id = parse_room_identity(Some(with_schema), None).expect("schema 1 accepted");
+        assert_eq!(id.site_id, "my-blog");
+        assert_eq!(id.page_slug, "hello");
+        // Extra unknown fields with schema 1 → tolerant
+        let with_extra = r#"{"schema": 1, "site_id": "my-blog", "page_slug": "hello", "extra": "x", "owner": "y"}"#;
+        let id = parse_room_identity(Some(with_extra), None).expect("extra tolerant");
+        assert_eq!(id.site_id, "my-blog");
+    }
+
+    #[test]
+    fn parse_room_identity_unknown_schema_rejected() {
+        let unknown = r#"{"schema": 2, "site_id": "my-blog", "page_slug": "hello"}"#;
+        assert!(parse_room_identity(Some(unknown), None).is_none());
+        // Non-integer schema also rejected
+        let bad = r#"{"schema": "1", "site_id": "my-blog", "page_slug": "hello"}"#;
+        assert!(parse_room_identity(Some(bad), None).is_none());
+        // Unknown schema should not fall back to alias
+        let unknown_with_alias = r#"{"schema": 99, "site_id": "my-blog", "page_slug": "hello"}"#;
+        assert!(
+            parse_room_identity(
+                Some(unknown_with_alias),
+                Some("#_cumments_my-blog_hello:example.com")
+            )
+            .is_none()
+        );
     }
 }

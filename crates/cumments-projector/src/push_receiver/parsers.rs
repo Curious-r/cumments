@@ -10,7 +10,38 @@ use cumments_core::models::{
     Content, EncryptedPlaceholder, LocationContent, MediaContent, MediaKind, PollContent,
     PollOption, TextContent, TextStyle, UnknownContent,
 };
-use cumments_core::protocol::{MESSAGE_CONTENT_KEY, REDACTION_PROOF_KEY};
+use cumments_core::protocol::{MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, REDACTION_PROOF_KEY};
+
+/// Returns `true` if the Cumments message block's `schema` field is
+/// supported. `None` (absent) is unsupported under the v1 break. `1` is current.
+/// Any other integer, non-integer, or malformed value is unsupported.
+fn message_block_schema_is_supported(block: Option<&serde_json::Value>) -> bool {
+    let Some(block) = block else {
+        return true;
+    };
+    match block.get("schema") {
+        None => false,
+        Some(v) if v.is_i64() && v.as_i64() == Some(MESSAGE_SCHEMA_VERSION) => true,
+        Some(v) if v.is_u64() && v.as_u64() == Some(MESSAGE_SCHEMA_VERSION as u64) => true,
+        _ => false,
+    }
+}
+
+fn message_schema_is_supported(content: &serde_json::Value) -> bool {
+    // Check primary block (m.room.message, m.reaction, poll response, location)
+    let primary_ok = message_block_schema_is_supported(content.get(MESSAGE_CONTENT_KEY));
+    if !primary_ok {
+        return false;
+    }
+    // For edits (m.replace), also check m.new_content block if present.
+    if let Some(new_content) = content.get("m.new_content") {
+        let edit_ok = message_block_schema_is_supported(new_content.get(MESSAGE_CONTENT_KEY));
+        if !edit_ok {
+            return false;
+        }
+    }
+    true
+}
 
 // ── Event dispatch ────────────────────────────────────────────────
 
@@ -180,11 +211,16 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     let author_challenge = namespaced_string(content, "challenge").map(|s| s.to_string());
     let structured_content = namespaced_string(content, "content");
 
-    let trusted_block = is_virtual_sender
+    let mut trusted_block = is_virtual_sender
         && author_public_key.is_some()
         && author_signature.is_some()
         && author_challenge.is_some()
         && structured_content.is_some();
+    // Schema compatibility: missing → legacy 1, 1 → current, other → unsupported.
+    // Unsupported schema must not enter the trusted visitor path.
+    if trusted_block && !message_schema_is_supported(content) {
+        trusted_block = false;
+    }
 
     let mut parsed_content = if event.event_type == "m.room.encrypted" {
         Content::Encrypted(EncryptedPlaceholder {
@@ -452,6 +488,13 @@ fn parse_push_reaction(event: &PushEvent) -> Option<ParsedReaction> {
     let message_event_id = relates_to.get("event_id").and_then(|v| v.as_str())?;
     let key = relates_to.get("key").and_then(|v| v.as_str())?;
     let is_virtual_user_sender = is_virtual_user_sender(sender);
+    // For reactions, the trusted block is not gated by structured_content
+    // presence in the same way as messages, but schema still applies when
+    // a Cumments block is present. Unsupported schema should not be trusted
+    // even if sender is virtual.
+    let has_cumments_block = content.get(MESSAGE_CONTENT_KEY).is_some();
+    let schema_ok = message_block_schema_is_supported(content.get(MESSAGE_CONTENT_KEY));
+    let effective_virtual = is_virtual_user_sender && (!has_cumments_block || schema_ok);
     Some(ParsedReaction {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
@@ -459,10 +502,22 @@ fn parse_push_reaction(event: &PushEvent) -> Option<ParsedReaction> {
         message_event_id: message_event_id.to_string(),
         key: key.to_string(),
         origin_server_ts: event.origin_server_ts.unwrap_or(0),
-        is_virtual_user_sender,
-        author_public_key: namespaced_string(content, "public_key").map(|s| s.to_string()),
-        author_signature: namespaced_string(content, "signature").map(|s| s.to_string()),
-        author_challenge: namespaced_string(content, "challenge").map(|s| s.to_string()),
+        is_virtual_user_sender: effective_virtual,
+        author_public_key: if effective_virtual {
+            namespaced_string(content, "public_key").map(|s| s.to_string())
+        } else {
+            None
+        },
+        author_signature: if effective_virtual {
+            namespaced_string(content, "signature").map(|s| s.to_string())
+        } else {
+            None
+        },
+        author_challenge: if effective_virtual {
+            namespaced_string(content, "challenge").map(|s| s.to_string())
+        } else {
+            None
+        },
         room_identity: None,
     })
 }
@@ -491,6 +546,9 @@ fn parse_push_poll_vote(event: &PushEvent) -> Option<ParsedPollVote> {
         .and_then(|v| v.as_str())?
         .to_string();
     let is_virtual_user_sender = is_virtual_user_sender(sender);
+    let has_cumments_block = content.get(MESSAGE_CONTENT_KEY).is_some();
+    let schema_ok = message_block_schema_is_supported(content.get(MESSAGE_CONTENT_KEY));
+    let effective_virtual = is_virtual_user_sender && (!has_cumments_block || schema_ok);
     Some(ParsedPollVote {
         room_id: room_id.clone(),
         event_id: event_id.clone(),
@@ -498,10 +556,22 @@ fn parse_push_poll_vote(event: &PushEvent) -> Option<ParsedPollVote> {
         poll_message_id,
         answer_ids,
         origin_server_ts: event.origin_server_ts.unwrap_or(0),
-        is_virtual_user_sender,
-        author_public_key: namespaced_string(content, "public_key").map(|s| s.to_string()),
-        author_signature: namespaced_string(content, "signature").map(|s| s.to_string()),
-        author_challenge: namespaced_string(content, "challenge").map(|s| s.to_string()),
+        is_virtual_user_sender: effective_virtual,
+        author_public_key: if effective_virtual {
+            namespaced_string(content, "public_key").map(|s| s.to_string())
+        } else {
+            None
+        },
+        author_signature: if effective_virtual {
+            namespaced_string(content, "signature").map(|s| s.to_string())
+        } else {
+            None
+        },
+        author_challenge: if effective_virtual {
+            namespaced_string(content, "challenge").map(|s| s.to_string())
+        } else {
+            None
+        },
         room_identity: None,
     })
 }
@@ -693,6 +763,7 @@ mod tests {
                 "m.new_content": {
                     "body": "**Alice**: edited",
                     "host.curious.cumments.message": {
+                        "schema": 1,
                         "public_key": "pubkey",
                         "signature": "sig",
                         "challenge": "chal",
@@ -746,6 +817,7 @@ mod tests {
                 "msgtype": "m.text",
                 "body": "**Alice**: hello",
                 "host.curious.cumments.message": {
+                    "schema": 1,
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
@@ -1016,6 +1088,7 @@ mod tests {
                     "key": "👍",
                 },
                 "host.curious.cumments.message": {
+                    "schema": 1,
                     "public_key": "pubkey",
                     "signature": "sig",
                     "challenge": "chal",
@@ -1107,5 +1180,120 @@ mod tests {
         let parsed = parse_push_state(&event).expect("parse name state");
         assert_eq!(parsed.event_type, "m.room.name");
         assert_eq!(parsed.content["name"], "Comments: my-blog/hello");
+    }
+
+    #[test]
+    fn message_schema_legacy_and_1_accepted_2_rejected() {
+        // Legacy without schema → unsupported under v1 break (untrusted)
+        let legacy = PushEvent {
+            event_type: "m.room.message".to_string(),
+            event_id: Some("$legacy:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string()),
+            origin_server_ts: Some(1000),
+            state_key: None,
+            content: Some(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "hello",
+                "host.curious.cumments.message": {
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "challenge": "chal",
+                    "content": "hello",
+                }
+            })),
+            redacts: None,
+            unsigned: None,
+        };
+        let parsed = parse_push_message(&legacy).expect("parse legacy");
+        // Legacy without schema now untrusted
+        assert!(parsed.author_public_key.is_none());
+        assert!(parsed.author_signature.is_none());
+        assert!(parsed.submission_id.is_none());
+
+        // Schema 1 → accepted, extra fields ignored
+        let with_schema = PushEvent {
+            content: Some(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "hello",
+                "host.curious.cumments.message": {
+                    "schema": 1,
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "challenge": "chal",
+                    "content": "hello",
+                    "extra": "ignore-me",
+                }
+            })),
+            ..legacy.clone()
+        };
+        let parsed = parse_push_message(&with_schema).expect("parse schema1");
+        assert_eq!(parsed.author_public_key.as_deref(), Some("pubkey"));
+
+        // Schema 2 → unsupported → untrusted (author_* cleared)
+        let with_schema2 = PushEvent {
+            content: Some(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "hello",
+                "host.curious.cumments.message": {
+                    "schema": 2,
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "challenge": "chal",
+                    "content": "hello",
+                }
+            })),
+            ..legacy.clone()
+        };
+        let parsed = parse_push_message(&with_schema2).expect("parse schema2");
+        assert!(parsed.author_public_key.is_none());
+        assert!(parsed.author_signature.is_none());
+        assert!(parsed.submission_id.is_none());
+    }
+
+    #[test]
+    fn reaction_schema_2_is_untrusted() {
+        let mut legacy = event_with_content(
+            "m.reaction",
+            serde_json::json!({
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$target:hs",
+                    "key": "👍",
+                },
+                "host.curious.cumments.message": {
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "challenge": "chal",
+                    "content": "👍",
+                }
+            }),
+        );
+        legacy.sender = Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
+        let parsed = parse_push_reaction(&legacy).expect("legacy reaction");
+        assert!(!parsed.is_virtual_user_sender);
+
+        let mut with_schema2 = event_with_content(
+            "m.reaction",
+            serde_json::json!({
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$target:hs",
+                    "key": "👍",
+                },
+                "host.curious.cumments.message": {
+                    "schema": 2,
+                    "public_key": "pubkey",
+                    "signature": "sig",
+                    "challenge": "chal",
+                    "content": "👍",
+                }
+            }),
+        );
+        with_schema2.sender =
+            Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
+        let parsed = parse_push_reaction(&with_schema2).expect("schema2 reaction");
+        assert!(!parsed.is_virtual_user_sender);
+        assert!(parsed.author_public_key.is_none());
     }
 }

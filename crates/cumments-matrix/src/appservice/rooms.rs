@@ -85,6 +85,7 @@ impl AppServiceMatrixDriver {
         page_slug: Option<&PageSlug>,
     ) -> Result<()> {
         let content = serde_json::json!({
+            "schema": cumments_core::protocol::METADATA_SCHEMA_VERSION,
             "site_id": site_id.as_str(),
             "page_slug": page_slug.map(|s| s.as_str()),
         });
@@ -610,11 +611,22 @@ impl AppServiceMatrixDriver {
             ));
         }
         self.ensure_room_adoptable(room_id).await?;
-        if !self
-            .room_metadata_matches(room_id, site_id, page_slug)
-            .await?
-        {
-            self.set_room_metadata(room_id, site_id, page_slug).await?;
+        // Fetch current metadata to decide whether to (re)write it.
+        // - If it doesn't match → must write correct identity.
+        // - If it matches but lacks `schema` (legacy) → lazily upgrade to schema:1
+        //   while preserving (type, state_key) replacement semantics.
+        match self.fetch_room_metadata(room_id).await? {
+            Some(meta)
+                if metadata_matches(&meta, site_id.as_str(), page_slug.map(|s| s.as_str())) =>
+            {
+                if meta.get("schema").is_none() {
+                    // Legacy room without schema → upgrade.
+                    self.set_room_metadata(room_id, site_id, page_slug).await?;
+                }
+            }
+            _ => {
+                self.set_room_metadata(room_id, site_id, page_slug).await?;
+            }
         }
         Ok(())
     }
@@ -649,6 +661,7 @@ impl AppServiceMatrixDriver {
     }
 
     /// Whether a room's metadata matches the expected identity.
+    #[allow(dead_code)]
     async fn room_metadata_matches(
         &self,
         room_id: &str,
@@ -771,6 +784,7 @@ impl AppServiceMatrixDriver {
                         "type": ROOM_METADATA_EVENT_TYPE,
                         "state_key": "",
                         "content": {
+                            "schema": cumments_core::protocol::METADATA_SCHEMA_VERSION,
                             "site_id": site_id_str,
                             "page_slug": null
                         }
@@ -910,6 +924,7 @@ impl AppServiceMatrixDriver {
                             "type": ROOM_METADATA_EVENT_TYPE,
                             "state_key": "",
                             "content": {
+                                "schema": cumments_core::protocol::METADATA_SCHEMA_VERSION,
                                 "site_id": site_id.as_str(),
                                 "page_slug": page_slug.as_str()
                             }

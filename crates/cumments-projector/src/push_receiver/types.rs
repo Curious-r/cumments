@@ -11,7 +11,7 @@ pub(super) struct Transaction {
 }
 
 /// A single event from the AppService push transaction.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub(crate) struct PushEvent {
     #[serde(rename = "type")]
     pub(super) event_type: String,
@@ -28,7 +28,7 @@ pub(crate) struct PushEvent {
     pub(super) unsigned: Option<UnsignedData>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub(super) struct UnsignedData {
     // Ignored for now – may contain redacted_because etc.
 }

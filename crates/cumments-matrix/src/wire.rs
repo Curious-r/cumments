@@ -5,7 +5,9 @@
 //! and testable on its own.
 
 use cumments_core::models::{CommentMedia, MediaKind};
-use cumments_core::protocol::MESSAGE_CONTENT_KEY;
+use cumments_core::protocol::{
+    MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, METADATA_SCHEMA_VERSION,
+};
 
 /// Preferred alias localpart prefix. The Matrix spec recommends exclusive
 /// user and alias namespaces begin with `_` after the sigil, e.g.
@@ -37,6 +39,11 @@ pub(crate) fn metadata_matches(
     site_id: &str,
     page_slug: Option<&str>,
 ) -> bool {
+    // v1 break: missing or non-1 → unsupported (fail closed).
+    match meta.get("schema").and_then(|v| v.as_i64()) {
+        Some(s) if s == METADATA_SCHEMA_VERSION => {}
+        _ => return false,
+    }
     let site_ok = meta.get("site_id").and_then(|v| v.as_str()) == Some(site_id);
     let slug_ok = match page_slug {
         Some(slug) => meta.get("page_slug").and_then(|v| v.as_str()) == Some(slug),
@@ -150,6 +157,7 @@ pub(crate) fn build_message_body(
         "body": body,
     });
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "schema": MESSAGE_SCHEMA_VERSION,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
@@ -238,6 +246,7 @@ pub(crate) fn build_media_body(
         message_body["org.matrix.msc3245.voice"] = serde_json::json!({});
     }
     message_body[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "schema": MESSAGE_SCHEMA_VERSION,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
@@ -261,6 +270,7 @@ pub(crate) fn build_reaction_body(
             "key": key,
         },
         MESSAGE_CONTENT_KEY: {
+            "schema": MESSAGE_SCHEMA_VERSION,
             "public_key": author_public_key,
             "signature": author_signature,
             "challenge": author_challenge,
@@ -287,6 +297,7 @@ pub(crate) fn build_poll_vote_body(
             "event_id": poll_event_id,
         },
         MESSAGE_CONTENT_KEY: {
+            "schema": MESSAGE_SCHEMA_VERSION,
             "public_key": author_public_key,
             "signature": author_signature,
             "challenge": author_challenge,
@@ -311,6 +322,7 @@ pub(crate) fn build_location_body(
         "msgtype": "org.matrix.msc3488.location",
         "geo_uri": geo_uri,
         MESSAGE_CONTENT_KEY: {
+            "schema": MESSAGE_SCHEMA_VERSION,
             "public_key": author_public_key,
             "signature": author_signature,
             "challenge": author_challenge,
@@ -358,6 +370,7 @@ pub(crate) fn build_edit_body(
         "body": new_content,
     });
     new_content_obj[MESSAGE_CONTENT_KEY] = serde_json::json!({
+        "schema": MESSAGE_SCHEMA_VERSION,
         "public_key": author_public_key,
         "signature": author_signature,
         "challenge": author_challenge,
@@ -410,7 +423,7 @@ mod tests {
 
     #[test]
     fn metadata_matches_space() {
-        let meta = json!({"site_id": "my-blog", "page_slug": null});
+        let meta = json!({"schema": 1, "site_id": "my-blog", "page_slug": null});
         assert!(metadata_matches(&meta, "my-blog", None));
         assert!(!metadata_matches(&meta, "other", None));
         assert!(!metadata_matches(&meta, "my-blog", Some("hello")));
@@ -418,16 +431,53 @@ mod tests {
 
     #[test]
     fn metadata_matches_space_without_slug_key() {
-        let meta = json!({"site_id": "my-blog"});
-        assert!(metadata_matches(&meta, "my-blog", None));
+        // Missing schema is now unsupported (break), so legacy without schema fails
+        let legacy = json!({"site_id": "my-blog"});
+        assert!(!metadata_matches(&legacy, "my-blog", None));
+        let with_schema = json!({"schema": 1, "site_id": "my-blog"});
+        // Space without page_slug key but with schema is still Space (null handled)
+        // This still fails because page_slug missing is treated as null, but schema present
+        assert!(metadata_matches(&with_schema, "my-blog", None));
     }
 
     #[test]
     fn metadata_matches_comment_room() {
-        let meta = json!({"site_id": "my-blog", "page_slug": "hello-world"});
+        let meta = json!({"schema": 1, "site_id": "my-blog", "page_slug": "hello-world"});
         assert!(metadata_matches(&meta, "my-blog", Some("hello-world")));
         assert!(!metadata_matches(&meta, "my-blog", None));
         assert!(!metadata_matches(&meta, "my-blog", Some("other")));
+    }
+
+    #[test]
+    fn metadata_schema_legacy_rejected() {
+        // Missing schema → unsupported under v1 break
+        let legacy = json!({"site_id": "my-blog", "page_slug": "hello"});
+        assert!(!metadata_matches(&legacy, "my-blog", Some("hello")));
+        let legacy_space = json!({"site_id": "my-blog", "page_slug": null});
+        assert!(!metadata_matches(&legacy_space, "my-blog", None));
+    }
+
+    #[test]
+    fn metadata_schema_1_accepted_and_unknown_rejected() {
+        let with_schema = json!({"schema": 1, "site_id": "my-blog", "page_slug": "hello"});
+        assert!(metadata_matches(&with_schema, "my-blog", Some("hello")));
+        // Unknown future schema must fail closed
+        let unknown = json!({"schema": 2, "site_id": "my-blog", "page_slug": "hello"});
+        assert!(!metadata_matches(&unknown, "my-blog", Some("hello")));
+        let unknown_space = json!({"schema": 99, "site_id": "my-blog", "page_slug": null});
+        assert!(!metadata_matches(&unknown_space, "my-blog", None));
+        // Non-integer schema is unsupported
+        let bad_type = json!({"schema": "1", "site_id": "my-blog", "page_slug": "hello"});
+        assert!(!metadata_matches(&bad_type, "my-blog", Some("hello")));
+    }
+
+    #[test]
+    fn metadata_schema_unknown_fields_tolerant_for_known_schema() {
+        let with_extra = json!({"schema": 1, "site_id": "my-blog", "page_slug": "hello", "extra": "ignore-me", "owner": "something"});
+        assert!(metadata_matches(&with_extra, "my-blog", Some("hello")));
+        // Legacy without schema is now unsupported under v1 break, even with extra fields
+        let legacy_extra = json!({"site_id": "my-blog", "page_slug": "hello", "extra": 123});
+        assert!(!metadata_matches(&legacy_extra, "my-blog", Some("hello")));
     }
 
     #[test]
@@ -761,5 +811,58 @@ mod tests {
         ));
         assert!(!is_implicit_creator(Some("12"), other, None, bot));
         assert!(!is_implicit_creator(Some("12"), bot, None, other));
+    }
+
+    #[test]
+    fn all_message_builders_emit_schema_1() {
+        let text = build_message_body("hi", "pk", "sig", "chal", None, None, None, None, None);
+        assert_eq!(text[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        let media = build_media_body(
+            &CommentMedia {
+                kind: None,
+                url: "mxc://hs/a".into(),
+                filename: None,
+                mimetype: None,
+                size: None,
+                width: None,
+                height: None,
+                voice: false,
+            },
+            "pk",
+            "sig",
+            "chal",
+            None,
+        );
+        assert_eq!(media[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        let reaction = build_reaction_body("👍", "$t:hs", "pk", "sig", "chal");
+        assert_eq!(reaction[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        let vote = build_poll_vote_body("$p:hs", "1", "pk", "sig", "chal");
+        assert_eq!(vote[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        let loc = build_location_body("geo:1,2", None, "pk", "sig", "chal", None, None, None);
+        assert_eq!(loc[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        let edit = build_edit_body("$o:hs", "new", "pk", "sig", "chal", None);
+        assert_eq!(
+            edit["m.new_content"][MESSAGE_CONTENT_KEY]["schema"].as_i64(),
+            Some(1)
+        );
+        assert!(edit.get(MESSAGE_CONTENT_KEY).is_none());
+    }
+
+    #[test]
+    fn message_builders_unknown_extra_fields_tolerant() {
+        // Existing builders do not yet emit extra fields, but parsers must
+        // ignore them. This test documents the contract: a payload with
+        // schema 1 plus unknown extra keys still matches.
+        let mut extra_meta = json!({
+            "schema": 1,
+            "site_id": "my-blog",
+            "page_slug": "hello",
+            "extra": "keep",
+            "another": 123
+        });
+        assert!(metadata_matches(&extra_meta, "my-blog", Some("hello")));
+        // Mutate to schema 2 → must reject even with extra fields
+        extra_meta["schema"] = json!(2);
+        assert!(!metadata_matches(&extra_meta, "my-blog", Some("hello")));
     }
 }
