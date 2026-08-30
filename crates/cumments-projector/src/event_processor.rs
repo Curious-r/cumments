@@ -49,9 +49,6 @@ use std::time::Duration as StdDuration;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tracing::{debug, error, info, instrument, warn};
 
-#[cfg(test)]
-use std::time::Instant;
-
 // ── Core processing functions ─────────────────────────────────────
 
 /// The central processor – holds only abstract store references.
