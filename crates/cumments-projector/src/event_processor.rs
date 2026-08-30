@@ -19,6 +19,7 @@ use cumments_core::{
     governance::{
         MANAGER_LEVEL, MODERATOR_LEVEL, POWER_LEVELS_EVENT_TYPE, RoleEntry, SITE_ADMIN_LEVEL,
         SITE_ROLE_MIN_LEVEL, can_send_state_event, is_as_managed_user, role_entries,
+        validate_governance_user_id,
     },
     identity::{post_signature_message, signature_message},
     models::{
@@ -48,6 +49,9 @@ use std::time::Duration as StdDuration;
 use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tracing::{debug, error, info, instrument, warn};
 
+#[cfg(test)]
+use std::time::Instant;
+
 // ── Core processing functions ─────────────────────────────────────
 
 /// The central processor – holds only abstract store references.
@@ -69,6 +73,10 @@ pub struct EventProcessor {
     /// the periodic reconcile tick.
     projection_notify: Arc<Notify>,
     server_name: Option<String>,
+    /// Per-inviter limiter for Bot auto-join (invite admission).
+    /// Protects the resource cost of successful JOIN -> AS-visible event stream,
+    /// not governance privilege. Shared by claim-DM and bootstrap branches.
+    invite_join_limiter: SlidingWindowRateLimiter,
     /// Routes `!cumments` chat commands; kept separate so projection does not
     /// carry command-only state.
     command_router: BotCommandRouter,
@@ -1207,9 +1215,18 @@ impl EventProcessor {
             event_bus: deps.event_bus,
             projection_notify: deps.projection_notify,
             server_name: deps.server_name,
+            invite_join_limiter: SlidingWindowRateLimiter::new(
+                5,
+                StdDuration::from_secs(60),
+                cumments_core::rate_limit::DEFAULT_MAX_KEYS,
+            ),
             command_router,
             event_capture: Mutex::new(None),
         }
+    }
+
+    pub fn invite_join_limiter_for_test(&self) -> &SlidingWindowRateLimiter {
+        &self.invite_join_limiter
     }
 
     pub async fn start_event_capture(&self) {
@@ -1920,9 +1937,11 @@ impl EventProcessor {
                 .unwrap_or("")
                 .to_string();
             // Conditional auto-join: accept claim-DM invites only when the
-            // inviter has a pending role claim. Unconditional auto-join would
-            // let anyone pull the bot into arbitrary rooms, after which the
-            // homeserver pushes that room's whole event stream to the AS.
+            // Invite admission (membership/resource, pre-join) vs governance
+            // authorization (post-join private-channel + command auth) are
+            // independent. Bot membership does not grant governance authority,
+            // but it does expand the AS-visible event stream, bounded per
+            // inviter by invite_join_limiter.
             if membership == "invite"
                 && self
                     .driver
@@ -1932,27 +1951,76 @@ impl EventProcessor {
                     == Some(event.state_key.as_str())
             {
                 let inviter = &event.sender;
-                let claims = self
-                    .role_claim_store
-                    .pending_claims_for_user(inviter)
-                    .await?;
-                if claims.is_empty() {
+                // Per-inviter resource bound for all Bot joins (claim + bootstrap).
+                // Denied attempts do not query pending claims or call join_room.
+                if !self.invite_join_limiter.allow(inviter) {
                     debug!(
-                        "Ignoring invite for {} in {}: no pending role claim",
+                        "Ignoring invite for {} in {}: join_rate_limited",
                         inviter, event.room_id
                     );
-                } else if let Some(driver) = &self.driver {
-                    match driver.join_room(&event.room_id).await {
-                        Ok(()) => {
-                            self.role_claim_store
-                                .set_claim_dm_room_for_user(inviter, &event.room_id)
-                                .await?;
-                            info!("Bot joined claim DM {} for {}", event.room_id, inviter);
+                } else {
+                    let claims = self
+                        .role_claim_store
+                        .pending_claims_for_user(inviter)
+                        .await?;
+                    if !claims.is_empty() {
+                        // Existing capability-based path — preserve semantics,
+                        // including federated claimants. Do not narrow by
+                        // locality or extra identity filtering here.
+                        if let Some(driver) = &self.driver {
+                            match driver.join_room(&event.room_id).await {
+                                Ok(()) => {
+                                    self.role_claim_store
+                                        .set_claim_dm_room_for_user(inviter, &event.room_id)
+                                        .await?;
+                                    info!(
+                                        "Bot joined claim DM {} for {} (reason=role_claim)",
+                                        event.room_id, inviter
+                                    );
+                                }
+                                Err(e) => warn!(
+                                    "Bot failed to join claim DM {} for {}: {:#}",
+                                    event.room_id, inviter, e
+                                ),
+                            }
                         }
-                        Err(e) => warn!(
-                            "Bot failed to join claim DM {} for {}: {:#}",
-                            event.room_id, inviter, e
-                        ),
+                    } else {
+                        // Self-service bootstrap — only when no pending claim.
+                        // Requires a normal Matrix governance identity (valid
+                        // MXID, not AS-managed). No local-server restriction;
+                        // federated users are first-class.
+                        match validate_governance_user_id(inviter) {
+                            Ok(_) => {
+                                if let Some(driver) = &self.driver {
+                                    match driver.join_room(&event.room_id).await {
+                                        Ok(()) => {
+                                            info!(
+                                                "Bot joined bootstrap DM {} for {} (reason=self_service_bootstrap)",
+                                                event.room_id, inviter
+                                            );
+                                        }
+                                        Err(e) => warn!(
+                                            "Bot failed to join bootstrap DM {} for {}: {:#}",
+                                            event.room_id, inviter, e
+                                        ),
+                                    }
+                                }
+                            }
+                            Err(
+                                cumments_core::governance::GovernanceUserIdError::ServiceAccount,
+                            ) => {
+                                debug!(
+                                    "Ignoring invite for {} in {}: managed_user",
+                                    inviter, event.room_id
+                                );
+                            }
+                            Err(_) => {
+                                debug!(
+                                    "Ignoring invite for {} in {}: invalid_user",
+                                    inviter, event.room_id
+                                );
+                            }
+                        }
                     }
                 }
             }
