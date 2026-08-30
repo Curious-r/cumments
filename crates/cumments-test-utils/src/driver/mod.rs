@@ -5,7 +5,7 @@
 
 mod matrix;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
 
 use cumments_core::models::{MatrixEvent, VisitorProfile};
@@ -40,6 +40,8 @@ pub struct TestDriver {
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
     pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
     pub redactions: Mutex<Vec<(String, String, String)>>,
+    /// Rooms for which `join_room` should fail (test-only injection).
+    pub fail_join_rooms: Mutex<HashSet<String>>,
 }
 
 impl TestDriver {
@@ -68,6 +70,7 @@ impl TestDriver {
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),
             redactions: Mutex::new(Vec::new()),
+            fail_join_rooms: Mutex::new(HashSet::new()),
         }
     }
 

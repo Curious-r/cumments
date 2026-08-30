@@ -1222,10 +1222,6 @@ impl EventProcessor {
         }
     }
 
-    pub fn invite_join_limiter_for_test(&self) -> &SlidingWindowRateLimiter {
-        &self.invite_join_limiter
-    }
-
     pub async fn start_event_capture(&self) {
         let mut capture = self.event_capture.lock().await;
         *capture = Some(Vec::new());
@@ -1937,8 +1933,9 @@ impl EventProcessor {
             // Invite admission (membership/resource, pre-join) vs governance
             // authorization (post-join private-channel + command auth) are
             // independent. Bot membership does not grant governance authority,
-            // but it does expand the AS-visible event stream, bounded per
-            // inviter by invite_join_limiter.
+            // but it does expand the AS-visible event stream. The invite-side
+            // SlidingWindowRateLimiter(5/min per inviter) bounds join-admission
+            // attempts, not successful joins, before pending-claim lookup.
             if membership == "invite"
                 && self
                     .driver
@@ -1948,8 +1945,11 @@ impl EventProcessor {
                     == Some(event.state_key.as_str())
             {
                 let inviter = &event.sender;
-                // Per-inviter resource bound for all Bot joins (claim + bootstrap).
-                // Denied attempts do not query pending claims or call join_room.
+                // Per-inviter resource bound for all Bot join-admission attempts
+                // (claim + bootstrap). Denied attempts do not query pending
+                // claims or call join_room; admitted attempts consume quota
+                // before classification, even if bootstrap validation or
+                // join_room later fails.
                 if !self.invite_join_limiter.allow(inviter) {
                     debug!(
                         "Ignoring invite for {} in {}: join_rate_limited",

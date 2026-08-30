@@ -58,6 +58,9 @@ impl MatrixDriver for TestDriver {
         Ok(())
     }
     async fn join_room(&self, room_id: &str) -> anyhow::Result<()> {
+        if self.fail_join_rooms.lock().await.contains(room_id) {
+            anyhow::bail!("injected join failure for {}", room_id);
+        }
         self.joined.lock().await.push(room_id.to_string());
         Ok(())
     }
