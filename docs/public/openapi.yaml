@@ -76,7 +76,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
-        description: Author signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix] (reply_to/thread_root null when absent).
+        description: Author signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix, "1"] (reply_to/thread_root null when absent).
         content:
           application/json:
             schema:
@@ -1361,7 +1361,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
-        description: Author signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix] (reply_to/thread_root null when absent).
+        description: Author signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix, "1"] (reply_to/thread_root null when absent).
         content:
           application/json:
             schema:
@@ -1394,7 +1394,7 @@ paths:
                   description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
                 thread_root:
                   type: [string, "null"]
-                  description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix].
+                  description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["LOCATE", site, page, geo_uri, reply_to, thread_root, challenge_prefix, "1"].
                 challenge_response:
                   type: string
                   description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
@@ -2481,7 +2481,7 @@ components:
           description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
         thread_root:
           type: [string, "null"]
-          description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix].
+          description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["POST", site, page, content|media.url, reply_to, thread_root, challenge_prefix, "1"].
         challenge_response:
           type: string
           description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.

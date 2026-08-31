@@ -264,4 +264,147 @@ mod tests {
             .expect("valid json")
         );
     }
+
+    #[test]
+    fn all_operations_canonical_tuples_match_current_protocol() {
+        // 5 operations with trailing "1" (POST/LOCATE/PATCH/REACT/VOTE) and 3 without (DELETE/UNREACT/QUERY)
+        // Challenge must be immediately before "1" where present, and NULL handling must use JSON null.
+        assert_eq!(
+            post_signature_message("my-blog", "hello", "content", None, None, "ch"),
+            serde_json::to_string(&[
+                serde_json::Value::String("POST".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("content".to_string()),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
+            ])
+            .unwrap()
+        );
+        assert_eq!(
+            locate_signature_message("my-blog", "hello", "geo:1,2", None, None, "ch"),
+            serde_json::to_string(&[
+                serde_json::Value::String("LOCATE".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("geo:1,2".to_string()),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
+            ])
+            .unwrap()
+        );
+        assert_eq!(
+            signature_message(&[
+                Some("PATCH"),
+                Some("my-blog"),
+                Some("hello"),
+                Some("$c:hs"),
+                Some("new content"),
+                Some("ch"),
+                Some("1"),
+            ]),
+            serde_json::to_string(&[
+                serde_json::Value::String("PATCH".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("$c:hs".to_string()),
+                serde_json::Value::String("new content".to_string()),
+                serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
+            ])
+            .unwrap()
+        );
+        assert_eq!(
+            signature_message(&[
+                Some("REACT"),
+                Some("my-blog"),
+                Some("hello"),
+                Some("$c:hs"),
+                Some("👍"),
+                Some("ch"),
+                Some("1"),
+            ]),
+            serde_json::to_string(&[
+                serde_json::Value::String("REACT".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("$c:hs".to_string()),
+                serde_json::Value::String("👍".to_string()),
+                serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
+            ])
+            .unwrap()
+        );
+        assert_eq!(
+            signature_message(&[
+                Some("VOTE"),
+                Some("my-blog"),
+                Some("hello"),
+                Some("$p:hs"),
+                Some("opt1"),
+                Some("ch"),
+                Some("1"),
+            ]),
+            serde_json::to_string(&[
+                serde_json::Value::String("VOTE".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("$p:hs".to_string()),
+                serde_json::Value::String("opt1".to_string()),
+                serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
+            ])
+            .unwrap()
+        );
+        // 3 without trailing "1"
+        assert_eq!(
+            signature_message(&[
+                Some("DELETE"),
+                Some("my-blog"),
+                Some("hello"),
+                Some("$c:hs"),
+                Some("ch"),
+            ]),
+            serde_json::to_string(&[
+                serde_json::Value::String("DELETE".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("$c:hs".to_string()),
+                serde_json::Value::String("ch".to_string()),
+            ])
+            .unwrap()
+        );
+        assert_eq!(
+            signature_message(&[
+                Some("UNREACT"),
+                Some("my-blog"),
+                Some("hello"),
+                Some("$c:hs"),
+                Some("👍"),
+                Some("ch"),
+            ]),
+            serde_json::to_string(&[
+                serde_json::Value::String("UNREACT".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String("$c:hs".to_string()),
+                serde_json::Value::String("👍".to_string()),
+                serde_json::Value::String("ch".to_string()),
+            ])
+            .unwrap()
+        );
+        assert_eq!(
+            signature_message(&[Some("QUERY_COMMENTS"), Some("my-blog"), Some("hello")]),
+            serde_json::to_string(&[
+                serde_json::Value::String("QUERY_COMMENTS".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+            ])
+            .unwrap()
+        );
+    }
 }

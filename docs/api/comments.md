@@ -142,7 +142,7 @@ omit `submission_id`.
 Signature message (JSON array, `null` for absent relations):
 
 ```json
-["POST","{site_id}","{page_slug}","{content}",reply_to,thread_root,"{challenge_prefix}"]
+["POST","{site_id}","{page_slug}","{content}",reply_to,thread_root,"{challenge_prefix}","1"]
 ```
 
 `reply_to` is the parent for `m.in_reply_to`; `thread_root` is the root for
@@ -167,7 +167,7 @@ event proof block only carries `public_key`, `signature`, `challenge`,
 Signature message:
 
 ```json
-["PATCH","{site_id}","{page_slug}","{comment_id}","{content}","{challenge_prefix}"]
+["PATCH","{site_id}","{page_slug}","{comment_id}","{content}","{challenge_prefix}","1"]
 ```
 
 The request requires the `Idempotency-Key` header. Event IDs are opaque, so
@@ -201,7 +201,7 @@ clients must percent-encode `comment_id`.
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}/reactions`
 
 Body: `{ "key", "author_public_key", "author_signature", "challenge_response" }`.
-The signature covers `["REACT", site_id, page_slug, comment_id, key, challenge]`;
+The signature covers `["REACT", site_id, page_slug, comment_id, key, challenge, "1"]`;
 `key` is the reaction key (emoji, 1-32 bytes, trimmed, no control characters);
 duplicate annotations from the same virtual user are treated as idempotent
 (`M_DUPLICATE_ANNOTATION` maps to `204`). The reaction is sent as the visitor's
@@ -234,7 +234,7 @@ request and PoW challenge. Percent-encode `comment_id` and `key` (emoji) in the 
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes`
 
 Body: `{ "option_id", "author_public_key", "author_signature", "challenge_response" }`.
-The signature covers `["VOTE", site_id, page_slug, poll_id, option_id, challenge]`;
+The signature covers `["VOTE", site_id, page_slug, poll_id, option_id, challenge, "1"]`;
 the vote is sent as `m.poll.response` (MSC3381) with the signed proof block
 and aggregated into the poll's response counts.
 This endpoint does not use `Idempotency-Key`. Matrix uses a deterministic
@@ -249,7 +249,7 @@ request after success returns invalid-PoW instead of duplicating the effect.
 
 Body: `{ "geo_uri", "description?", "display_name", "author_public_key", "author_signature", "challenge_response", "reply_to?", "thread_root?" }`.
 The signature covers
-`["LOCATE", site_id, page_slug, geo_uri, reply_to, thread_root, challenge]`
+`["LOCATE", site_id, page_slug, geo_uri, reply_to, thread_root, challenge, "1"]`
 (`reply_to` / `thread_root` orthogonal, `null` when absent — same model as
 comment posts; Matrix encodes both in `m.relates_to`);
 the message is queued like a comment (same `Idempotency-Key` and
