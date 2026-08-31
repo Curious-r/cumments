@@ -87,11 +87,25 @@ time (admins + managers, moderators start empty).
    register through the API and appoint any Matrix account as the first
    admin (the API returns a one-time verification token because the
    registrant and target are not necessarily the same account).
+   The DM for `!cumments` (including this first `sites register`) must be
+   **unencrypted** — the Bot currently does not decrypt `m.room.encrypted`
+   and therefore cannot read commands in E2EE rooms (it will join but not
+   respond). If the homeserver is configured with
+   `encryption_enabled_by_default_for_room_type = "invite"` (Tuwunel) or
+   the client creates E2EE DMs by default, create the DM with encryption
+   disabled, re-invite the bot and resend the command. This is a Bot
+   implementation limit, not a Matrix or DM-in-general requirement; comment
+   rooms may be encrypted or not, and the site owner may be on a different
+   homeserver (federated) — e.g. `@alice:matrix.org` inviting
+   `@_cumments_bot:comments.example` — as long as the Bot DM itself is
+   unencrypted.
 2. For API/operator-appointed roles, the target Matrix account sends
    `cumments-claim:<token>` as a direct
-   message to the AppService bot in a 1:1 DM (the only two members are the
-   bot and the sender). Once the homeserver pushes that DM, Cumments
-   activates the claim and writes the role into Matrix power levels.
+   message to the AppService bot in an **unencrypted** 1:1 DM (the only two
+   members are the bot and the sender; same `m.room.encrypted` limitation
+   as above — the Bot cannot read `cumments-claim:` in an encrypted room).
+   Once the homeserver pushes that DM, Cumments activates the claim and
+   writes the role into Matrix power levels.
 3. Site admins manage the Space in a Matrix client or through the bot: they
    add/remove managers, retire rooms, issue secrets and appoint room
    moderators.
@@ -107,8 +121,10 @@ time (admins + managers, moderators start empty).
 Every role registration through the API/operator path — including the first
 site admin — starts as a **pending claim** with a 24-hour expiry. The claim
 does not affect Matrix until the target MXID proves ownership by sending the
-exact text `cumments-claim:<token>` to the AppService bot in a 1:1 DM (the
-only two members are the bot and the sender). The bot's self-service
+exact text `cumments-claim:<token>` to the AppService bot in an
+**unencrypted** 1:1 DM (the only two members are the bot and the sender;
+the Bot does not decrypt `m.room.encrypted`, so the token DM must also be
+unencrypted). The bot's self-service
 `site register` path skips this second step because the homeserver has
 already authenticated the sender in the DM; it records an applied claim
 instead.

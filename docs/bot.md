@@ -5,6 +5,17 @@ sender and the Cumments bot. A command elsewhere is consumed silently so it is
 never projected as a comment. Sensitive tokens are printed only in that private
 channel.
 
+The private channel for Bot commands and `cumments-claim:...` tokens must be
+**unencrypted** — the Bot currently does not decrypt `m.room.encrypted` and
+therefore cannot read `!cumments ...` or claim tokens in an encrypted room
+(it will join but appear unresponsive). If the homeserver or client creates
+E2EE DMs by default (notably Tuwunel
+`encryption_enabled_by_default_for_room_type = "invite"`), create the DM with
+encryption disabled, re-invite the bot and resend the command. This is a
+Bot-command limitation, not a Matrix rule; comment rooms may be encrypted or
+not, and site owners may be on a different homeserver (federated) — only the
+Bot DM for commands must be unencrypted.
+
 Commands use `<domain> <resource> <verb>` syntax. Commands marked **confirm**
 must be repeated with `--confirm`; the first invocation returns the exact
 confirmation command.

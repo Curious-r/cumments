@@ -107,7 +107,24 @@ independent from governance authorization) and send the command in that DM.
 The bot registers the site, creates the Space and makes the sender the
 first site admin immediately, without a prior pending claim. Bot membership
 alone grants no governance privilege; the private-channel check still
-applies. The API path below is the generic path — use it when the
+applies.
+
+> **DM must be unencrypted for Bot commands.** The Bot currently does not
+> decrypt `m.room.encrypted`, so it cannot read `!cumments ...` (including
+> the first `sites register`) in an encrypted room — it will join but appear
+> unresponsive. Create / recreate the DM with encryption **off**. In
+> particular, if Tuwunel is configured with
+> `encryption_enabled_by_default_for_room_type = "invite"`, new DMs are E2EE
+> by default: turn that off for the Bot DM or set it to `none`, create a
+> fresh unencrypted DM, re-invite the bot and resend the command. This is a
+> Cumments Bot-command limitation, not a Matrix rule (comment rooms themselves
+> may be encrypted or not; only the Bot DM for commands must be
+> unencrypted). The site owner may still be on a different homeserver than
+> Cumments — federated `@alice:matrix.org` inviting
+> `@_cumments_bot:comments.example` works the same, provided the DM is
+> unencrypted.
+
+The API path below is the generic path — use it when the
 registrant and the first admin are different accounts:
 
 ```bash

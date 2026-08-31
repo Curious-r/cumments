@@ -266,8 +266,19 @@ Security model:
   the Application Service. All governance mutations — including
   `!cumments sites register` self-service — remain protected by the existing
   `is_private_channel` (exactly bot + sender joined) and command-specific
-  checks. Claim DMs must stay unencrypted because the token is plain text;
-  an `m.room.encryption` event is warned about and ignored.
+  checks. **DMs for Bot commands and claim tokens must be unencrypted:**
+  the Bot currently does not decrypt `m.room.encrypted`, so `!cumments ...`
+  and `cumments-claim:...` in an encrypted room cannot be read (the Bot
+  will join but appear unresponsive). Claim DMs must stay unencrypted
+  because the token is plain text; likewise `!cumments` commands — especially
+  the first `sites register` self-service — require an unencrypted DM. If
+  the homeserver or client creates E2EE DMs by default (e.g. Tuwunel
+  `encryption_enabled_by_default_for_room_type = "invite"`), create the DM
+  with encryption disabled and re-invite the bot. This is a current Bot
+  command-implementation limit, not a Matrix rule and not a statement that
+  Cumments does not support encrypted comment rooms; comment rooms may be
+  encrypted or not — only the Bot DM for commands must be unencrypted. An
+  `m.room.encryption` event in such a DM is warned about and ignored.
 
 Backfill is also available to operators as `!cumments backfill [max_pages]`;
 it queues a worker request and the bot replies in the DM when the worker

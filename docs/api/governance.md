@@ -10,10 +10,14 @@ Operator API.
 
 Every role registration starts as a **pending claim**: the POST response
 returns a one-time `verify_token`, and the target Matrix account must send
-`cumments-claim:<token>` in a 1:1 DM with the AppService bot (a room whose
-only two members are the bot and the sender) before the role is written to
-Matrix power levels. The full role model and verification flow are documented
-in [Site governance](../site-governance.md).
+`cumments-claim:<token>` in an **unencrypted** 1:1 DM with the AppService
+bot (a room whose only two members are the bot and the sender; the Bot
+currently does not decrypt `m.room.encrypted`, so both `!cumments ...` and
+`cumments-claim:...` require an unencrypted DM — if DMs are E2EE by default
+such as Tuwunel `encryption_enabled_by_default_for_room_type = "invite"`,
+recreate the DM with encryption off) before the role is written to Matrix
+power levels. The full role model and verification flow are documented in
+[Site governance](../site-governance.md).
 
 ## Site admins
 
