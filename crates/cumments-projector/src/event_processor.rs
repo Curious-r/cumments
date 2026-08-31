@@ -384,7 +384,7 @@ impl BotCommandRouter {
                 } else {
                     CommandAuditStatus::Error
                 };
-                let msg = format!("错误：{}", error.message);
+                let msg = format!("Error: {}", error.message);
                 self.reply(event, &msg).await;
                 self.record_audit(event, line, None, status, Some(error.message))
                     .await;
@@ -408,13 +408,13 @@ impl BotCommandRouter {
                 )
                 .await?;
                 let reply = if sites.is_empty() {
-                    "没有站点。".to_string()
+                    "No sites.".to_string()
                 } else {
                     sites
                         .iter()
                         .map(|s| {
                             if s.from_config {
-                                format!("{}（配置）", s.site_id)
+                                format!("{} (config)", s.site_id)
                             } else {
                                 s.site_id.clone()
                             }
@@ -430,7 +430,7 @@ impl BotCommandRouter {
                 active.put(event.sender.clone(), id.to_string());
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("当前站点已设为 {id}"),
+                    reply: format!("Active site set to {id}."),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -470,7 +470,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "站点 {id} 已注册，{} 已登记为本站第一个站点管理员。claim token（只显示一次，请勿转发）：\n{token}",
+                        "Site {id} registered. {} is now its first site admin. Claim token (shown once, do not share):\n{token}",
                         event.sender
                     ),
                     site_id: Some(id.to_string()),
@@ -489,7 +489,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "已为 {mxid} 创建主管认领。请对方给 bot 发送：\ncumments-claim:{}",
+                        "Created manager claim for {mxid}. Ask them to send to the bot:\ncumments-claim:{}",
                         pending.verify_token
                     ),
                     site_id: Some(id.to_string()),
@@ -500,7 +500,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id} 的主管 {mxid}？请回复：\n!cumments managers remove {id} {mxid} --confirm"
+                        "Confirm removal of manager {mxid} from {id}? Reply:\n!cumments managers remove {id} {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -523,14 +523,14 @@ impl BotCommandRouter {
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已移除 {id} 的主管 {mxid}。"),
+                    reply: format!("Removed manager {mxid} from {id}."),
                     site_id: Some(id.to_string()),
                 })
             }
             ["managers", "resign", id] => Ok(CommandOutcome {
                 invalid: false,
                 reply: format!(
-                    "确认辞去 {id} 的主管？此操作只移除权限，不会让你离开房间。请回复：\n!cumments managers resign {id} --confirm"
+                    "Confirm resigning as manager of {id}? This only removes the role, it won't make you leave the room. Reply:\n!cumments managers resign {id} --confirm"
                 ),
                 site_id: Some(id.to_string()),
             }),
@@ -551,7 +551,7 @@ impl BotCommandRouter {
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: "已辞去主管权限。".to_string(),
+                    reply: "Resigned as manager.".to_string(),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -562,7 +562,9 @@ impl BotCommandRouter {
                     .registry_store
                     .get_registered_room(&site_id, &page_slug)
                     .await?
-                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                    .ok_or_else(|| {
+                        CommandError::error(format!("No room registered for {id}/{slug}."))
+                    })?;
                 self.require_room_state_permission(event, &room_id).await?;
                 let pending = cumments_core::management::create_role_claim(
                     self.role_claim_store.as_ref(),
@@ -575,7 +577,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "已为 {mxid} 创建版主认领。请对方给 bot 发送：\ncumments-claim:{}",
+                        "Created moderator claim for {mxid}. Ask them to send to the bot:\ncumments-claim:{}",
                         pending.verify_token
                     ),
                     site_id: Some(id.to_string()),
@@ -588,12 +590,14 @@ impl BotCommandRouter {
                     .registry_store
                     .get_registered_room(&site_id, &page_slug)
                     .await?
-                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                    .ok_or_else(|| {
+                        CommandError::error(format!("No room registered for {id}/{slug}."))
+                    })?;
                 self.require_room_state_permission(event, &room_id).await?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认移除 {id}/{slug} 的版主 {mxid}？请回复：\n!cumments moderators remove {id} {slug} {mxid} --confirm"
+                        "Confirm removal of moderator {mxid} from {id}/{slug}? Reply:\n!cumments moderators remove {id} {slug} {mxid} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -605,7 +609,9 @@ impl BotCommandRouter {
                     .registry_store
                     .get_registered_room(&site_id, &page_slug)
                     .await?
-                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                    .ok_or_else(|| {
+                        CommandError::error(format!("No room registered for {id}/{slug}."))
+                    })?;
                 self.require_room_state_permission(event, &room_id).await?;
                 let removal = cumments_core::management::remove_room_moderator(
                     self.role_claim_store.as_ref(),
@@ -621,7 +627,7 @@ impl BotCommandRouter {
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已移除 {id}/{slug} 的版主 {mxid}。"),
+                    reply: format!("Removed moderator {mxid} from {id}/{slug}."),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -632,11 +638,13 @@ impl BotCommandRouter {
                     .registry_store
                     .get_registered_room(&site_id, &page_slug)
                     .await?
-                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                    .ok_or_else(|| {
+                        CommandError::error(format!("No room registered for {id}/{slug}."))
+                    })?;
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认辞去 {id}/{slug}（{room_id}）的版主？此操作只移除权限，不会让你离开房间。请回复：\n!cumments moderators resign {id} {slug} --confirm"
+                        "Confirm resigning as moderator of {id}/{slug} ({room_id})? This only removes the role, it won't make you leave the room. Reply:\n!cumments moderators resign {id} {slug} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -648,7 +656,9 @@ impl BotCommandRouter {
                     .registry_store
                     .get_registered_room(&site_id, &page_slug)
                     .await?
-                    .ok_or_else(|| CommandError::error(format!("没有为 {id}/{slug} 注册的房间")))?;
+                    .ok_or_else(|| {
+                        CommandError::error(format!("No room registered for {id}/{slug}."))
+                    })?;
                 let removal = cumments_core::management::remove_room_moderator(
                     self.role_claim_store.as_ref(),
                     self.governance_store.as_ref(),
@@ -663,7 +673,7 @@ impl BotCommandRouter {
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: "已辞去版主权限。".to_string(),
+                    reply: "Resigned as moderator.".to_string(),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -672,7 +682,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认升级 {id}/{slug} 到 {version}？请回复：\n!cumments pages upgrades create {id} {slug} {version} --confirm"
+                        "Confirm upgrading {id}/{slug} to {version}? Reply:\n!cumments pages upgrades create {id} {slug} {version} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -701,7 +711,9 @@ impl BotCommandRouter {
                 .await?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("房间 {id}/{slug} 已升级到 {version}，新房间：{replacement}"),
+                    reply: format!(
+                        "Room {id}/{slug} upgraded to {version}, new room: {replacement}"
+                    ),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -710,7 +722,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役 {id}/{slug} 的评论区？此操作不可撤销。请回复：\n!cumments pages retirements create {id} {slug} --confirm"
+                        "Confirm retiring the comment room for {id}/{slug}? This cannot be undone. Reply:\n!cumments pages retirements create {id} {slug} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -727,13 +739,15 @@ impl BotCommandRouter {
                 .await?
                 {
                     return Err(CommandError::error(format!(
-                        "没有为 {id}/{slug} 注册的活动房间"
+                        "No active room registered for {id}/{slug}."
                     )));
                 }
                 self.governance_notify.notify_one();
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("{id}/{slug} 的评论区已标记退役，后台正在处理。"),
+                    reply: format!(
+                        "Comment room for {id}/{slug} marked as retired. Processing in background."
+                    ),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -741,7 +755,7 @@ impl BotCommandRouter {
                 self.require_site_sticker_access(event, id).await?;
                 let packs = list_site_sticker_packs(self.sticker_pack_store.as_ref(), id).await?;
                 let reply = if packs.is_empty() {
-                    "没有贴纸包。".to_string()
+                    "No sticker packs.".to_string()
                 } else {
                     packs
                         .iter()
@@ -755,7 +769,7 @@ impl BotCommandRouter {
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             if images.is_empty() {
-                                format!("{}（空）", pack.state_key)
+                                format!("{} (empty)", pack.state_key)
                             } else {
                                 format!("{}: {}", pack.state_key, images)
                             }
@@ -787,7 +801,7 @@ impl BotCommandRouter {
                 .await?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已添加贴纸 {shortcode} 到包 {pack_id}。"),
+                    reply: format!("Added sticker {shortcode} to pack {pack_id}."),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -809,7 +823,7 @@ impl BotCommandRouter {
                 .await?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已添加贴纸 {shortcode} 到包 {pack_id}。"),
+                    reply: format!("Added sticker {shortcode} to pack {pack_id}."),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -818,7 +832,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认从包 {pack_id} 移除贴纸 {shortcode}？请回复：\n!cumments stickers remove {id} {pack_id} {shortcode} --confirm"
+                        "Confirm removing sticker {shortcode} from pack {pack_id}? Reply:\n!cumments stickers remove {id} {pack_id} {shortcode} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -830,7 +844,7 @@ impl BotCommandRouter {
                     .await?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("已从包 {pack_id} 移除贴纸 {shortcode}。"),
+                    reply: format!("Removed sticker {shortcode} from pack {pack_id}."),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -841,10 +855,10 @@ impl BotCommandRouter {
                     id,
                 )
                 .await?
-                .ok_or_else(|| CommandError::error("站点不存在"))?;
+                .ok_or_else(|| CommandError::error("Site not found."))?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("新 claim token（只显示一次，请勿转发）：\n{token}"),
+                    reply: format!("New claim token (shown once, do not share):\n{token}"),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -853,10 +867,10 @@ impl BotCommandRouter {
                 let secret =
                     cumments_core::management::issue_secret(self.site_auth_store.as_ref(), id)
                         .await?
-                        .ok_or_else(|| CommandError::error("站点不存在"))?;
+                        .ok_or_else(|| CommandError::error("Site not found."))?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("HMAC secret（只显示一次，请勿转发）：\n{secret}"),
+                    reply: format!("HMAC secret (shown once, do not share):\n{secret}"),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -865,7 +879,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役站点 {id}？此操作不可撤销。请回复：\n!cumments retirements create {id} --confirm"
+                        "Confirm retiring site {id}? This cannot be undone. Reply:\n!cumments retirements create {id} --confirm"
                     ),
                     site_id: Some(id.to_string()),
                 })
@@ -875,12 +889,12 @@ impl BotCommandRouter {
                 if !cumments_core::management::retire_site(self.site_auth_store.as_ref(), id)
                     .await?
                 {
-                    return Err(CommandError::error("站点不存在或已退役"));
+                    return Err(CommandError::error("Site not found or already retired."));
                 }
                 self.governance_notify.notify_one();
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("站点 {id} 已标记退役，后台正在处理。"),
+                    reply: format!("Site {id} marked as retiring. Processing in background."),
                     site_id: Some(id.to_string()),
                 })
             }
@@ -888,7 +902,7 @@ impl BotCommandRouter {
                 self.require_operator(event)?;
                 let rooms = self.registry_store.get_quarantined_rooms().await?;
                 let reply = if rooms.is_empty() {
-                    "没有隔离房间。".to_string()
+                    "No quarantined rooms.".to_string()
                 } else {
                     rooms
                         .iter()
@@ -902,7 +916,7 @@ impl BotCommandRouter {
             ["backfill", pages] => {
                 let pages: u32 = pages
                     .parse()
-                    .map_err(|_| CommandError::error(format!("无效的 max_pages：{pages}")))?;
+                    .map_err(|_| CommandError::error(format!("Invalid max_pages: {pages}")))?;
                 self.backfill_command(event, pages).await
             }
             ["quarantined-rooms", "reinstate", room_id] => {
@@ -910,7 +924,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认恢复房间 {room_id}？请回复：\n!cumments quarantined-rooms reinstate {room_id} --confirm"
+                        "Confirm reinstating room {room_id}? Reply:\n!cumments quarantined-rooms reinstate {room_id} --confirm"
                     ),
                     site_id: None,
                 })
@@ -918,11 +932,11 @@ impl BotCommandRouter {
             ["quarantined-rooms", "reinstate", room_id, "--confirm"] => {
                 self.require_operator(event)?;
                 if !self.registry_store.reinstate_room(room_id).await? {
-                    return Err(CommandError::error("房间不在 registry 中"));
+                    return Err(CommandError::error("Room not found in registry."));
                 }
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("房间 {room_id} 已恢复。"),
+                    reply: format!("Room {room_id} reinstated."),
                     site_id: None,
                 })
             }
@@ -931,7 +945,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认升级房间 {room_id} 到 {new_version}？请回复：\n!cumments rooms upgrades create {room_id} {new_version} --confirm"
+                        "Confirm upgrading room {room_id} to {new_version}? Reply:\n!cumments rooms upgrades create {room_id} {new_version} --confirm"
                     ),
                     site_id: None,
                 })
@@ -956,7 +970,9 @@ impl BotCommandRouter {
                 .await?;
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("房间 {room_id} 已升级到 {new_version}，新房间：{replacement}"),
+                    reply: format!(
+                        "Room {room_id} upgraded to {new_version}, new room: {replacement}"
+                    ),
                     site_id: None,
                 })
             }
@@ -965,7 +981,7 @@ impl BotCommandRouter {
                 Ok(CommandOutcome {
                     invalid: false,
                     reply: format!(
-                        "确认退役房间 {room_id}？此操作不可撤销。请回复：\n!cumments rooms retirements create {room_id} --confirm"
+                        "Confirm retiring room {room_id}? This cannot be undone. Reply:\n!cumments rooms retirements create {room_id} --confirm"
                     ),
                     site_id: None,
                 })
@@ -978,12 +994,12 @@ impl BotCommandRouter {
                 )
                 .await?
                 {
-                    return Err(CommandError::error("房间不存在或不是活动状态"));
+                    return Err(CommandError::error("Room not found or not active."));
                 }
                 self.governance_notify.notify_one();
                 Ok(CommandOutcome {
                     invalid: false,
-                    reply: format!("房间 {room_id} 已标记退役，后台正在处理。"),
+                    reply: format!("Room {room_id} marked as retired. Processing in background."),
                     site_id: None,
                 })
             }
@@ -999,7 +1015,7 @@ impl BotCommandRouter {
         self.require_operator(event)?;
         let Some(tx) = &self.backfill_tx else {
             return Ok(CommandOutcome::plain(
-                "backfill 未启用（当前进程未运行 worker）；可用 CLI：cumments backfill",
+                "Backfill not enabled (no worker in this process); use CLI: cumments backfill",
             ));
         };
         match tx.try_send(BackfillRequest {
@@ -1008,13 +1024,13 @@ impl BotCommandRouter {
             max_pages,
         }) {
             Ok(()) => Ok(CommandOutcome::plain(format!(
-                "backfill 已开始（每房间最多 {max_pages} 页），完成后会通知你。"
+                "Backfill started (up to {max_pages} pages per room), you will be notified when it completes."
             ))),
             Err(mpsc::error::TrySendError::Full(_)) => Ok(CommandOutcome::plain(
-                "已有 backfill 正在运行，请稍后再试。",
+                "A backfill is already running. Please try again later.",
             )),
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                Ok(CommandOutcome::plain("backfill worker 已停止。"))
+                Ok(CommandOutcome::plain("Backfill worker stopped."))
             }
         }
     }
@@ -1023,7 +1039,9 @@ impl BotCommandRouter {
         if self.operator_mxids.iter().any(|m| m == &event.sender) {
             Ok(())
         } else {
-            Err(CommandError::denied("此命令仅限实例管理员"))
+            Err(CommandError::denied(
+                "This command is restricted to instance operators.",
+            ))
         }
     }
 
@@ -1063,7 +1081,7 @@ impl BotCommandRouter {
             Ok(())
         } else {
             Err(CommandError::denied(format!(
-                "你没有权限在房间 {room_id} 执行此操作"
+                "You don't have permission to perform this operation in room {room_id}."
             )))
         }
     }
@@ -1098,7 +1116,7 @@ impl BotCommandRouter {
             .map_err(CommandError::error)?
         else {
             return Err(CommandError::denied(format!(
-                "站点 {} 还没有 Matrix Space",
+                "Site {} does not have a Matrix Space yet.",
                 site_id.as_str()
             )));
         };
@@ -1112,7 +1130,7 @@ impl BotCommandRouter {
             Ok(())
         } else {
             Err(CommandError::denied(format!(
-                "你没有权限在站点 {} 执行此操作",
+                "You don't have permission to perform this operation for site {}.",
                 site_id.as_str()
             )))
         }
@@ -1138,11 +1156,11 @@ impl BotCommandRouter {
         }
         match owned.len() {
             0 => Err(CommandError::error(
-                "你不是任何站点的管理员；请先 `!cumments sites register <site_id>` 注册",
+                "You are not an admin of any site. Register first with `!cumments sites register <site_id>`.",
             )),
             1 => Ok(owned.remove(0)),
             _ => Err(CommandError::error(format!(
-                "你管理多个站点：{}；请用 `!cumments sites use <site_id>` 指定",
+                "You manage multiple sites: {}. Use `!cumments sites use <site_id>` to select one.",
                 owned.join(", ")
             ))),
         }
@@ -1152,11 +1170,11 @@ impl BotCommandRouter {
         let Some(auth) = self.site_auth_store.get_site_auth(site_id).await? else {
             if let Some(entry) = self.site_auth_policy.entry(site_id) {
                 return Ok(format!(
-                    "站点 {site_id}\n来源: 配置声明\n认证: {}\n聊天命令只管理 API 注册站点",
+                    "Site {site_id}\nSource: config\nAuth: {}\nChat commands only manage API-registered sites.",
                     entry.auth_mode.unwrap_or(SiteAuthMode::Origin).as_str()
                 ));
             }
-            return Err(CommandError::error("站点不存在"));
+            return Err(CommandError::error("Site not found."));
         };
         let roles = self.governance_store.list_site_roles(site_id).await?;
         let admins = roles
@@ -1172,15 +1190,11 @@ impl BotCommandRouter {
             .collect::<Vec<_>>()
             .join(", ");
         Ok(format!(
-            "站点 {site_id}\n状态: {}\n站点管理员: {}\n主管: {}",
+            "Site {site_id}\nStatus: {}\nSite admins: {}\nManagers: {}",
             auth.auth_mode.as_str(),
-            if admins.is_empty() {
-                "（无）"
-            } else {
-                &admins
-            },
+            if admins.is_empty() { "(none)" } else { &admins },
             if managers.is_empty() {
-                "（无）"
+                "(none)"
             } else {
                 &managers
             },
@@ -1190,7 +1204,7 @@ impl BotCommandRouter {
     fn require_driver(&self) -> Result<&dyn cumments_core::ports::MatrixDriver, CommandError> {
         self.driver
             .as_deref()
-            .ok_or_else(|| CommandError::error("当前模式没有 Matrix driver"))
+            .ok_or_else(|| CommandError::error("No Matrix driver in current mode."))
     }
 }
 

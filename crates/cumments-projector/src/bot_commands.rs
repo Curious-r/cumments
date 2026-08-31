@@ -174,19 +174,21 @@ pub const BOT_COMMANDS: &[BotCommand] = &[
 ];
 
 pub fn help_text() -> String {
-    let mut help = String::from("Cumments bot 命令：\n");
+    let mut help = String::from("Cumments bot commands:\n");
     for command in BOT_COMMANDS {
         let confirm = match command.confirm {
             ConfirmTier::None => "",
             ConfirmTier::Explicit => "",
-            ConfirmTier::ConfirmFlag => "（需要 --confirm）",
+            ConfirmTier::ConfirmFlag => " (requires --confirm)",
         };
         help.push_str(&format!(
             "!cumments {} — {}{}\n",
             command.syntax, command.summary, confirm
         ));
     }
-    help.push_str("敏感 token 只在本私聊显示。admin/ownership 命令刻意不开放。");
+    help.push_str(
+        "Sensitive tokens are shown only in this private chat. Admin and ownership commands are intentionally unavailable.",
+    );
     help
 }
 
@@ -208,6 +210,6 @@ mod tests {
         let help = help_text();
         assert!(help.contains("!cumments sites register <site_id>"));
         assert!(help.contains("--confirm"));
-        assert!(help.contains("admin/ownership"));
+        assert!(help.contains("Admin and ownership"));
     }
 }

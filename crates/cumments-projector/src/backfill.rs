@@ -97,10 +97,10 @@ impl BackfillWorker {
             );
             let message = match backfiller.run(request.max_pages).await {
                 Ok(summary) => format!(
-                    "backfill 完成：{} 个房间 / {} 个事件",
+                    "Backfill completed: {} rooms / {} events",
                     summary.rooms, summary.events
                 ),
-                Err(error) => format!("backfill 失败：{:#}", error),
+                Err(error) => format!("Backfill failed: {:#}", error),
             };
             if let Err(error) = self
                 .driver

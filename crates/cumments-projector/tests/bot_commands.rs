@@ -720,7 +720,7 @@ async fn site_registration_is_public_self_service() {
     assert!(
         replies
             .iter()
-            .any(|(_, body)| body.contains("已登记为本站第一个站点管理员"))
+            .any(|(_, body)| body.contains("is now its first site admin"))
     );
 }
 
@@ -969,7 +969,7 @@ async fn operator_sites_list_includes_config_only_sites() {
         .iter()
         .find(|(_, body)| body.contains("my-blog"))
         .expect("list reply");
-    assert!(reply.1.contains("config-blog（配置）"));
+    assert!(reply.1.contains("config-blog (config)"));
 }
 
 fn power_levels(users: serde_json::Value) -> serde_json::Value {

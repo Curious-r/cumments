@@ -477,7 +477,7 @@ mod tests {
         assert!(
             replies
                 .iter()
-                .any(|(room, body)| room == "!dm:hs" && body.contains("新 claim token"))
+                .any(|(room, body)| room == "!dm:hs" && body.contains("New claim token"))
         );
     }
 

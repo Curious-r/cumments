@@ -548,7 +548,7 @@ pub async fn complete_owner_transfer(
     if let Err(error) = driver
         .send_bot_message(
             dm_room_id,
-            &format!("新 claim token（只显示一次，请勿转发）：\n{new_token}"),
+            &format!("New claim token (shown once, do not share):\n{new_token}"),
         )
         .await
     {
