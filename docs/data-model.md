@@ -118,8 +118,7 @@ Author profiles are projected into `author_display_name` / `author_avatar_url`
 when a message is stored, but the public read path (message list, single
 message, SSE) overlays the author's current joined `m.room.member` profile.
 Visitors and Matrix-native authors behave identically: display data is Matrix
-profile state, never signed event content (see the
-[demo frontend](demo.md)). Members who
+profile state, never signed event content. Members who
 left the room keep the stored projection as a fallback; a redacted member
 state keeps the membership but drops the profile, so reads show no profile,
 same as a cleared display name or avatar.
@@ -195,8 +194,9 @@ Notes on the layout:
   latest non-redacted response; it stores normalized MSC3381 selections while
   retaining a first-choice index for older rows. Redacting that response clears
   its selections and restores the previous valid vote.
-- `formatted_body` is passed through unchanged. The demo renders plain text
-  only; any client rendering HTML must sanitize it first.
+- `formatted_body` is passed through unchanged. Clients that render plain
+  text only may skip sanitization; any client rendering HTML must sanitize
+  it first.
 - `media_uploads.page_slug` is nullable: comment media records the page it
   was authorized for, while visitor avatars are site-scoped records with a
   `NULL` page. Avatar media is marked referenced at upload time so the

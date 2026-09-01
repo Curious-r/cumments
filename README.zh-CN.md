@@ -70,7 +70,11 @@ docker compose up -d
 **开发**
 
 - [开发](docs/development.md) —— 工具链、检查、从 main 构建镜像。
-- [演示页](docs/demo.md) —— 后端定位说明、演示页、身份、proof of work。
+
+Cumments 是后端/API 基础设施。
+
+面向访客的前端在独立仓库维护：
+https://github.com/Curious-r/cumments-web
 
 ## 灵感来源
 

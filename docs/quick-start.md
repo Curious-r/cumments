@@ -158,8 +158,7 @@ comment room, and can appoint managers and per-room moderators (see
 
 ## 6. Verify
 
-1. Open the [demo frontend](demo.md) (`misc/demo/index.html`) against
-   `http://localhost:7931` and post a comment.
+1. Use the visitor frontend from <https://github.com/Curious-r/cumments-web> (or any API client) against `http://localhost:7931` and post a comment.
 2. In Matrix, check that a Space (`Comments: <site>`), a comment room
    (`Comments: <site>/<page>`), and the virtual user were created, and that
    the admin account appears with power 100 in both.

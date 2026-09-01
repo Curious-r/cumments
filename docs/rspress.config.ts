@@ -84,10 +84,6 @@ export default defineConfig({
       {
         text: "Development",
         link: "/development",
-        items: [
-          { text: "Development", link: "/development" },
-          { text: "Demo frontend", link: "/demo" },
-        ],
       },
     ],
     sidebar: {
@@ -145,10 +141,6 @@ export default defineConfig({
         {
           text: "Development",
           link: "/development",
-          items: [
-            { text: "Development", link: "/development" },
-            { text: "Demo frontend", link: "/demo" },
-          ],
         },
       ],
     },

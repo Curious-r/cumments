@@ -127,8 +127,8 @@ state such as typing indicators:
 ```
 
 Typing events also arrive as an initial snapshot on connect. Read receipts
-and presence are forwarded when the homeserver exposes them, but the demo
-only renders typing. See
+and presence are forwarded when the homeserver exposes them; clients
+may choose to only render typing. See
 [Ephemeral events](../data-model.md#ephemeral-events) for the channel's
 limits.
 

@@ -40,8 +40,11 @@ Matrix is the **source of truth**. SQLite is only a disposable read model:
 ## Development
 
 - [Development](development.md) — toolchain, checks and image builds.
-- [Demo frontend](demo.md) — the standalone browser demo page and identity
-  model.
+
+Cumments is backend/API infrastructure.
+
+The visitor-facing frontend is maintained separately:
+https://github.com/Curious-r/cumments-web
 
 The OpenAPI contract lives at [`/openapi.yaml`](/openapi.yaml) and is validated
 by CI (Redocly lint).

@@ -80,8 +80,11 @@ The full documentation is rendered at <https://cumments.curious.host/>.
 
 - [Development](docs/development.md) — toolchain, checks, building the image
   from main.
-- [Demo](docs/demo.md) — backend-only positioning, demo page, identity,
-  proof of work.
+
+Cumments is backend/API infrastructure.
+
+The visitor-facing frontend is maintained separately:
+https://github.com/Curious-r/cumments-web
 
 ## Inspiration
 

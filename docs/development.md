@@ -13,9 +13,6 @@ cargo test --locked --all-targets --all-features
 cargo test --locked --doc --all-features
 ```
 
-CI also runs a syntax check of the demo's inline scripts with
-`node --check`.
-
 ## Documentation site
 
 The documentation site is built with Rspress. Install JavaScript dependencies

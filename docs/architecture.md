@@ -98,7 +98,7 @@ recorded, event-level idempotency prevents duplicate facts/submissions.
 SSE output uses a local transactional outbox: projector events are persisted
 before publication and deleted after broadcast. A crash between those steps can
 therefore repeat one frame, never lose a committed live update; each comment SSE
-frame carries a deterministic `id`, and the demo ignores IDs it has already seen.
+frame carries a deterministic `id`, and clients should ignore IDs they have already seen.
 
 ### Boundaries to watch
 
@@ -498,7 +498,7 @@ the backup command.
 ## Known limitations
 
 - Reply trees use Matrix rich replies (`m.in_reply_to`) with no depth limit;
-  the demo UI only collapses rendering past 8 levels. Email is deliberately
+  comment UIs may collapse rendering past a depth limit (e.g. 8 levels). Email is deliberately
   not collected.
 - Distributed/global rate limiting, multi-instance/Postgres support, and
   operational monitoring are not implemented yet. In-process rate limits

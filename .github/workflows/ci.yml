@@ -28,7 +28,6 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       audit: ${{ steps.filter.outputs.audit }}
       toolchain: ${{ steps.filter.outputs.toolchain }}
-      frontend: ${{ steps.filter.outputs.frontend }}
       openapi: ${{ steps.filter.outputs.openapi }}
       docs: ${{ steps.filter.outputs.docs }}
       workflow: ${{ steps.filter.outputs.workflow }}
@@ -55,8 +54,6 @@ jobs:
               - 'rust-toolchain.toml'
               - 'misc/docker/Dockerfile'
               - 'misc/docker/check-toolchain-sync.sh'
-            frontend:
-              - 'misc/demo/**'
             openapi:
               - 'docs/public/openapi.yaml'
             docs:
@@ -165,20 +162,6 @@ jobs:
         # yet. Revisit this ignore when rust_decimal or sea-orm updates.
         run: cargo audit --ignore RUSTSEC-2026-0235
 
-  frontend:
-    name: Frontend syntax
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.frontend == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Check demo script
-        run: node --check misc/demo/demo.js
 
   openapi:
     name: OpenAPI
@@ -241,7 +224,6 @@ jobs:
       - clippy
       - test
       - audit
-      - frontend
       - openapi
       - docs
     # 即使依赖的 job 被跳过或失败，这个 job 也必须运行

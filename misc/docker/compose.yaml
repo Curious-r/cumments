@@ -15,7 +15,8 @@
 #        docker compose up -d
 #
 #   3. Create a Matrix account for the site owner, register the owner with
-#      Cumments, then post a comment from misc/demo/index.html. The full
+#      Cumments, then post a comment using the visitor frontend
+#      (https://github.com/Curious-r/cumments-web) or any API client. The full
 #      walkthrough, including the exact registration request, is in
 #      docs/installation.md.
 #
