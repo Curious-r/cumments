@@ -1826,7 +1826,7 @@ async fn poll_my_votes_batch_personalization_and_latest_wins() {
         .await
         .expect("spoiled");
     assert!(
-        alice_spoiled.get("$poll1:hs").is_none() || alice_spoiled["$poll1:hs"].is_empty(),
+        !alice_spoiled.contains_key("$poll1:hs") || alice_spoiled["$poll1:hs"].is_empty(),
         "spoiled should be []"
     );
     // Aggregate should have 0 responses (no valid vote)

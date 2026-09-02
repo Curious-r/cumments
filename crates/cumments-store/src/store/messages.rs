@@ -1104,12 +1104,12 @@ impl MessageStore for DbStore {
                 serde_json::from_str(&row.answer_ids_json).unwrap_or_default();
             if selections.is_empty() {
                 // Legacy fallback: option_index -> option_id.
-                if let Some(idx) = row.option_index {
-                    if let Some(opts) = option_ids_map.get(&poll_id) {
-                        if idx >= 0 && (idx as usize) < opts.len() {
-                            out.insert(poll_id, vec![opts[idx as usize].clone()]);
-                        }
-                    }
+                if let Some(idx) = row.option_index
+                    && let Some(opts) = option_ids_map.get(&poll_id)
+                    && idx >= 0
+                    && (idx as usize) < opts.len()
+                {
+                    out.insert(poll_id, vec![opts[idx as usize].clone()]);
                 }
                 continue;
             }
