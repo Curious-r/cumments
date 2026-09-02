@@ -232,7 +232,7 @@ before trusting the projection.
 | Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; orphaned uploads are garbage-collected |
 | Sticker | Supported | Choose from the site's sticker packs (`m.room.image_pack` on the site Space); the API validates the reference and fills metadata, visitors cannot upload stickers |
 | Location | Supported | `m.location` (MSC3488), queued like a comment |
-| Poll | Supported | API proxies `m.poll.start` / `m.poll.response` with proof |
+| Poll | Supported | `POST /polls` queues `m.poll.start` (MSC3381, single-select `max_selections: 1`) through the durable post pipeline; `POST /polls/{poll_id}/votes` proxies `m.poll.response` with proof |
 | Reaction | Supported | API proxies `m.reaction` with proof; deduplicated per sender + key |
 | Encrypted | Excluded | Conflicts with visitor verification, AS proxying and auditing |
 | Unknown / arbitrary raw events | Excluded | Visitors may only send the whitelisted typed requests |

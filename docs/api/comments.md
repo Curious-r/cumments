@@ -229,6 +229,56 @@ reaction is already absent, `M_NOT_FOUND` on the homeserver is treated as
 success). Matrix uses a deterministic transaction ID derived from the signed
 request and PoW challenge. Percent-encode `comment_id` and `key` (emoji) in the path.
 
+## Create a poll
+
+`POST /api/v1/sites/{site_id}/pages/{page_slug}/polls`
+
+Body:
+
+```json
+{
+  "question": "Which language do you prefer?",
+  "options": ["Rust", "TypeScript", "Python"],
+  "max_selections": 1,
+  "display_name": "Alice",
+  "author_public_key": "...",
+  "author_signature": "...",
+  "reply_to": null,
+  "thread_root": null,
+  "challenge_response": "challenge|nonce"
+}
+```
+
+* `question` — 1–500 characters, no leading/trailing whitespace, no control characters.
+* `options` — 2–20 ordered option texts, each 1–200 bytes, no leading/trailing whitespace, no control characters.
+* `max_selections` — optional, defaults to `1`; only `1` is accepted (single-select). The current authoring API is single-select even though MSC3381 supports multi-select; the wire format preserves the declared limit.
+* `display_name` — presentation data written to the virtual user's Matrix profile, not covered by the signature.
+* `reply_to` / `thread_root` — orthogonal reply/thread relations, `null` when absent, same model as comment posts; Matrix encodes both in `m.relates_to`.
+
+Successful writes are asynchronous and return `202` with the queue row ID:
+
+```json
+{ "submission_id": 42 }
+```
+
+The request requires the `Idempotency-Key` header and is durable: it is queued as a `PostCommentCommand { poll: Some(...) }` through the existing `PendingPostSubmission` pipeline (`save_post_submission_idempotent` → `PostsPass` → `MatrixDriver::post_poll` → `m.poll.start`), sharing the same transaction-ID, retry, `waiting_for_sync`, and idempotency semantics as comments and locations.
+
+Signature message (JSON array, `null` for absent relations):
+
+```json
+["POLL","{site_id}","{page_slug}","{canonical_poll_payload}",reply_to,thread_root,"{challenge_prefix}","1"]
+```
+
+where `canonical_poll_payload` is the deterministic JSON string
+
+```json
+{"question":"...","options":["...","..."],"max_selections":1}
+```
+
+with ordered `options`. Any change to `question`, option text, option order, or `max_selections` invalidates the signature; `display_name` is not signed.
+
+The Matrix event is `m.room.message` with `msgtype: "org.matrix.msc3381.poll.start"` and `org.matrix.msc3381.poll.start` containing `question`, `answers` with deterministic IDs `"0"`, `"1"`, …, and `max_selections`. The fallback `body` is the question followed by a numbered option list. Reply/thread relations are emitted as `m.relates_to`.
+
 ## Vote on a poll
 
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes`

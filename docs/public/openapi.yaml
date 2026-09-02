@@ -1305,6 +1305,88 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/pages/{page_slug}/polls:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PageSlug"
+    post:
+      tags: [Comments]
+      summary: Create a poll
+      operationId: createPoll
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        description: 'Author signature covers ["POLL", site, page, canonical_poll_payload, reply_to, thread_root, challenge_prefix, "1"] (reply_to/thread_root null when absent). Single-select only: max_selections must be 1.'
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, options, display_name, author_public_key, author_signature, challenge_response]
+              properties:
+                question:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                  description: Poll question (1-500 chars, no leading/trailing whitespace, no control characters).
+                options:
+                  type: array
+                  minItems: 2
+                  maxItems: 20
+                  description: Ordered poll options (2-20); each 1-200 bytes, no leading/trailing whitespace, no control characters.
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                max_selections:
+                  type: integer
+                  default: 1
+                  enum: [1]
+                  description: MSC3381 selection limit; currently only single-select (1) is supported.
+                display_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                  description: |
+                    Display name written to the virtual user's Matrix
+                    profile. Presentation data; deliberately not covered by
+                    the author signature.
+                author_public_key:
+                  type: string
+                author_signature:
+                  type: string
+                reply_to:
+                  type: [string, "null"]
+                  description: Reply parent event ID (m.in_reply_to). Part of the author signature JSON array as `reply_to` (null when absent).
+                thread_root:
+                  type: [string, "null"]
+                  description: Thread root event ID (m.thread). Orthogonal to reply_to. Part of the author signature JSON array as `thread_root` (null when absent). Signature covers ["POLL", site, page, canonical_poll_payload, reply_to, thread_root, challenge_prefix, "1"].
+                challenge_response:
+                  type: string
+                  description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
+      responses:
+        "202":
+          description: "Poll submission accepted (replays carry Idempotent-Replayed: true)"
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes:
     parameters:
       - $ref: "#/components/parameters/SiteId"
