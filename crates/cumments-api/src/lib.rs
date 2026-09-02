@@ -60,6 +60,7 @@ pub mod request;
 pub mod routes;
 pub mod site_auth;
 pub mod trusted_proxy;
+pub mod validation;
 
 // ----------------------
 

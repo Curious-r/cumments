@@ -63,9 +63,9 @@ fn normalize_reaction_key(key: &str) -> Result<String, AppError> {
         ));
     }
     // Length check is already enforced by validator, but keep a defensive bound.
-    if trimmed.len() > 32 {
+    if crate::validation::grapheme_len(trimmed) > 32 {
         return Err(AppError::BadRequest(
-            "reaction key must be at most 32 bytes".to_string(),
+            "reaction key must be at most 32 grapheme clusters".to_string(),
         ));
     }
     Ok(trimmed.to_string())
@@ -460,7 +460,10 @@ pub(crate) async fn post_comment_handler(
             ));
         }
         if media.mimetype.as_deref().is_some_and(|m| m.len() > 128)
-            || media.filename.as_deref().is_some_and(|f| f.len() > 255)
+            || media.filename.as_deref().is_some_and(|f| {
+                let len = crate::validation::grapheme_len(f);
+                len == 0 || len > 255
+            })
         {
             return Err(AppError::BadRequest(
                 "media metadata is invalid.".to_string(),

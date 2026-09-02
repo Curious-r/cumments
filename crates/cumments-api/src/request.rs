@@ -117,7 +117,7 @@ fn validate_post_content(req: &PostCommentRequest) -> Result<(), validator::Vali
 #[derive(Debug, Deserialize, Validate)]
 #[validate(schema(function = "validate_post_content"))]
 pub struct PostCommentRequest {
-    #[validate(length(max = 5000))]
+    #[validate(custom(function = "crate::validation::validate_comment_content"))]
     pub content: String,
     /// Optional media attachment; when present the signature covers
     /// `media.url` and `content` is only the fallback filename.
@@ -126,7 +126,7 @@ pub struct PostCommentRequest {
     /// Display name to write to the virtual user's Matrix profile. It is
     /// presentation data and is deliberately not covered by the author
     /// signature; the signed payload covers only content and reply relation.
-    #[validate(length(min = 1, max = 50))]
+    #[validate(custom(function = "crate::validation::validate_display_name"))]
     pub display_name: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
     #[validate(length(min = 1, max = 128))]
@@ -159,7 +159,7 @@ pub struct DeleteCommentRequest {
 /// Request DTO for updating a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateCommentRequest {
-    #[validate(length(min = 1, max = 5000))]
+    #[validate(custom(function = "crate::validation::validate_comment_content_update"))]
     pub content: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
@@ -172,7 +172,7 @@ pub struct UpdateCommentRequest {
 /// Request DTO for reacting to a comment.
 #[derive(Debug, Deserialize, Validate)]
 pub struct ReactRequest {
-    #[validate(length(min = 1, max = 32))]
+    #[validate(custom(function = "crate::validation::validate_reaction_key"))]
     pub key: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
@@ -232,8 +232,8 @@ pub fn validate_poll_details(req: &PollRequest) -> Result<(), String> {
         if option.chars().any(|c| c.is_control()) {
             return Err("poll option must not contain control characters".to_string());
         }
-        if option.len() > 200 {
-            return Err("poll option must be at most 200 bytes".to_string());
+        if crate::validation::grapheme_len(option) > 200 {
+            return Err("poll option must be at most 200 grapheme clusters".to_string());
         }
     }
     if req.max_selections != 1 {
@@ -250,7 +250,7 @@ pub fn validate_poll_details(req: &PollRequest) -> Result<(), String> {
 /// remains single-select as documented in `docs/data-model.md`.
 #[derive(Debug, Deserialize, Validate)]
 pub struct PollRequest {
-    #[validate(length(min = 1, max = 500))]
+    #[validate(custom(function = "crate::validation::validate_poll_question"))]
     pub question: String,
     #[validate(length(min = 2, max = 20))]
     pub options: Vec<String>,
@@ -260,7 +260,7 @@ pub struct PollRequest {
     /// Display name to write to the virtual user's Matrix profile. It is
     /// presentation data and is deliberately not covered by the author
     /// signature; the signed payload covers only the poll payload.
-    #[validate(length(min = 1, max = 50))]
+    #[validate(custom(function = "crate::validation::validate_display_name"))]
     pub display_name: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
@@ -280,13 +280,13 @@ pub struct PollRequest {
 pub struct LocationRequest {
     #[validate(length(min = 4, max = 512))]
     pub geo_uri: String,
-    #[validate(length(min = 0, max = 255))]
+    #[validate(custom(function = "crate::validation::validate_location_description"))]
     #[serde(default)]
     pub description: Option<String>,
     /// Display name to write to the virtual user's Matrix profile. It is
     /// presentation data and is deliberately not covered by the author
     /// signature; the signed payload covers only the geo URI.
-    #[validate(length(min = 1, max = 50))]
+    #[validate(custom(function = "crate::validation::validate_display_name"))]
     pub display_name: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
@@ -406,5 +406,199 @@ mod tests {
     #[test]
     fn poll_details_accepts_valid() {
         assert!(validate_poll_details(&valid_poll()).is_ok());
+    }
+
+    #[test]
+    fn poll_option_grapheme_limits_with_chinese_and_emoji() {
+        // 200 Chinese graphemes should be accepted (600 bytes but 200 graphemes)
+        let mut req = valid_poll();
+        req.options = vec!["中".repeat(200), "B".to_string()];
+        assert!(validate_poll_details(&req).is_ok());
+        // 201 Chinese graphemes should be rejected
+        req.options = vec!["中".repeat(201), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+
+        // Flag emoji: 200 flags = 200 graphemes
+        req.options = vec!["🇩🇪".repeat(200), "B".to_string()];
+        assert!(validate_poll_details(&req).is_ok());
+        req.options = vec!["🇩🇪".repeat(201), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+
+        // ZWJ family: 200 families = 200 graphemes
+        req.options = vec!["👩‍👩‍👧‍👦".repeat(200), "B".to_string()];
+        assert!(validate_poll_details(&req).is_ok());
+        req.options = vec!["👩‍👩‍👧‍👦".repeat(201), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+
+        // Combining sequence: e + combining acute = 1 grapheme
+        req.options = vec!["e\u{301}".repeat(200), "B".to_string()];
+        assert!(validate_poll_details(&req).is_ok());
+        req.options = vec!["e\u{301}".repeat(201), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+    }
+
+    #[test]
+    fn poll_question_grapheme_boundaries() {
+        let mut req = valid_poll();
+        req.question = "a".repeat(499);
+        assert!(req.validate().is_ok());
+        req.question = "a".repeat(500);
+        assert!(req.validate().is_ok());
+        req.question = "a".repeat(501);
+        assert!(req.validate().is_err());
+
+        // Chinese 500
+        req.question = "中".repeat(500);
+        assert!(req.validate().is_ok());
+        req.question = "中".repeat(501);
+        assert!(req.validate().is_err());
+
+        // Flag 500
+        req.question = "🇩🇪".repeat(500);
+        assert!(req.validate().is_ok());
+        req.question = "🇩🇪".repeat(501);
+        assert!(req.validate().is_err());
+
+        // Combining
+        req.question = "e\u{301}".repeat(500);
+        assert!(req.validate().is_ok());
+        req.question = "e\u{301}".repeat(501);
+        assert!(req.validate().is_err());
+
+        // ZWJ
+        req.question = "👩‍👩‍👧‍👦".repeat(500);
+        assert!(req.validate().is_ok());
+        req.question = "👩‍👩‍👧‍👦".repeat(501);
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn reaction_key_grapheme_boundaries() {
+        let mut req = ReactRequest {
+            key: "a".repeat(32),
+            author_public_key: "pk".to_string(),
+            author_signature: "sig".to_string(),
+            challenge_response: "chal|nonce".to_string(),
+        };
+        assert!(req.validate().is_ok());
+        req.key = "a".repeat(33);
+        assert!(req.validate().is_err());
+
+        // 32 flags = 32 graphemes but >32 bytes
+        req.key = "🇩🇪".repeat(32);
+        assert!(req.key.len() > 32);
+        assert!(req.validate().is_ok());
+        req.key = "🇩🇪".repeat(33);
+        assert!(req.validate().is_err());
+
+        // ZWJ 32
+        req.key = "👩‍👩‍👧‍👦".repeat(32);
+        assert!(req.validate().is_ok());
+        req.key = "👩‍👩‍👧‍👦".repeat(33);
+        assert!(req.validate().is_err());
+
+        // Combining 32
+        req.key = "e\u{301}".repeat(32);
+        assert!(req.validate().is_ok());
+        req.key = "e\u{301}".repeat(33);
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn display_name_and_comment_grapheme_boundaries() {
+        // Post comment display_name 50
+        let mut post = PostCommentRequest {
+            content: "hi".to_string(),
+            media: None,
+            display_name: "a".repeat(50),
+            author_public_key: "pk".to_string(),
+            author_signature: "sig".to_string(),
+            reply_to: None,
+            thread_root: None,
+            challenge_response: "chal|nonce".to_string(),
+        };
+        assert!(post.validate().is_ok());
+        post.display_name = "a".repeat(51);
+        assert!(post.validate().is_err());
+        post.display_name = "🇩🇪".repeat(50);
+        assert!(post.validate().is_ok());
+        post.display_name = "🇩🇪".repeat(51);
+        assert!(post.validate().is_err());
+
+        // Post content 5000 (allow empty when media present, but we test max)
+        post.display_name = "Alice".to_string();
+        post.content = "a".repeat(5000);
+        assert!(post.validate().is_ok());
+        post.content = "a".repeat(5001);
+        assert!(post.validate().is_err());
+        // Chinese 5000
+        post.content = "中".repeat(5000);
+        assert!(post.validate().is_ok());
+        post.content = "中".repeat(5001);
+        assert!(post.validate().is_err());
+        // Flag 5000
+        post.content = "🇩🇪".repeat(5000);
+        assert!(post.validate().is_ok());
+        post.content = "🇩🇪".repeat(5001);
+        assert!(post.validate().is_err());
+
+        // Update content 1-5000
+        let mut upd = UpdateCommentRequest {
+            content: "a".repeat(5000),
+            author_public_key: "pk".to_string(),
+            author_signature: "sig".to_string(),
+            challenge_response: "chal|nonce".to_string(),
+        };
+        assert!(upd.validate().is_ok());
+        upd.content = "a".repeat(5001);
+        assert!(upd.validate().is_err());
+        upd.content = "".to_string();
+        assert!(upd.validate().is_err());
+        upd.content = "🇩🇪".repeat(5000);
+        assert!(upd.validate().is_ok());
+
+        // Location description 0-255
+        let mut loc = LocationRequest {
+            geo_uri: "geo:30,120".to_string(),
+            description: Some("a".repeat(255)),
+            display_name: "Alice".to_string(),
+            author_public_key: "pk".to_string(),
+            author_signature: "sig".to_string(),
+            reply_to: None,
+            thread_root: None,
+            challenge_response: "chal|nonce".to_string(),
+        };
+        assert!(loc.validate().is_ok());
+        loc.description = Some("a".repeat(256));
+        assert!(loc.validate().is_err());
+        loc.description = Some("".to_string());
+        assert!(loc.validate().is_ok()); // empty allowed
+        loc.description = Some("中".repeat(255));
+        assert!(loc.validate().is_ok());
+        loc.description = Some("中".repeat(256));
+        assert!(loc.validate().is_err());
+        loc.description = Some("🇩🇪".repeat(255));
+        assert!(loc.validate().is_ok());
+        loc.description = Some("🇩🇪".repeat(256));
+        assert!(loc.validate().is_err());
+        loc.description = None;
+        assert!(loc.validate().is_ok());
+    }
+
+    #[test]
+    fn basic_unicode_grapheme_len() {
+        use crate::validation::grapheme_len;
+        assert_eq!(grapheme_len("a"), 1);
+        assert_eq!(grapheme_len("é"), 1);
+        assert_eq!(grapheme_len("e\u{301}"), 1);
+        assert_eq!(grapheme_len("🇩🇪"), 1);
+        assert_eq!(grapheme_len("👩‍👩‍👧‍👦"), 1);
+        assert_eq!(grapheme_len("中"), 1);
+        // Mixed
+        assert_eq!(grapheme_len("aé中"), 3);
+        assert_eq!(grapheme_len("a e\u{301} b"), 5); // a, space, e-acute, space, b? Actually spaces are graphemes
+        // Verify that ascii and CJK each count as 1
+        assert_eq!(grapheme_len(&"a".repeat(10)), 10);
+        assert_eq!(grapheme_len(&"中".repeat(10)), 10);
     }
 }

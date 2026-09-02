@@ -8,6 +8,7 @@ info:
     url: https://github.com/Curious-r/cumments/blob/main/LICENSE
   description: |
     Backend-only comment API backed by Matrix. Writes are asynchronous:
+    Length limits for user-facing text are measured in Unicode extended grapheme clusters according to UAX #29, not UTF-8 bytes, Unicode scalar values, or UTF-16 code units.
     POST/PATCH/DELETE accept a submission and return `202 { "submission_id" }`;
     the projected comment later carries the same `submission_id`.
 
@@ -1243,6 +1244,9 @@ paths:
               properties:
                 key:
                   type: string
+                  minLength: 1
+                  maxLength: 32
+                  description: Reaction key (emoji, 1-32 Unicode extended grapheme clusters per UAX #29, trimmed, no control characters).
                 author_public_key:
                   type: string
                 author_signature:
@@ -1268,7 +1272,7 @@ paths:
       - name: key
         in: path
         required: true
-        description: Reaction key (emoji) to remove; must match the normalized key used when reacting.
+        description: "Reaction key (emoji) to remove; must match the normalized key used when reacting (1-32 Unicode extended grapheme clusters per UAX #29)."
         schema:
           type: string
     delete:
@@ -1328,12 +1332,12 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 500
-                  description: Poll question (1-500 chars, no leading/trailing whitespace, no control characters).
+                  description: Poll question (1-500 Unicode extended grapheme clusters per UAX #29, no leading/trailing whitespace, no control characters).
                 options:
                   type: array
                   minItems: 2
                   maxItems: 20
-                  description: Ordered poll options (2-20); each 1-200 bytes, no leading/trailing whitespace, no control characters.
+                  description: Ordered poll options (2-20); each 1-200 Unicode extended grapheme clusters per UAX #29, no leading/trailing whitespace, no control characters.
                   items:
                     type: string
                     minLength: 1
@@ -1349,7 +1353,7 @@ paths:
                   maxLength: 50
                   description: |
                     Display name written to the virtual user's Matrix
-                    profile. Presentation data; deliberately not covered by
+                    profile (1-50 Unicode extended grapheme clusters per UAX #29). Presentation data; deliberately not covered by
                     the author signature.
                 author_public_key:
                   type: string
@@ -1457,15 +1461,18 @@ paths:
               properties:
                 geo_uri:
                   type: string
+                  description: "geo URI (4-512 ASCII characters, must be valid geo: URI)."
                 description:
                   type: [string, "null"]
+                  maxLength: 255
+                  description: "Optional location description (0-255 Unicode extended grapheme clusters per UAX #29)."
                 display_name:
                   type: string
                   minLength: 1
                   maxLength: 50
                   description: |
                     Display name written to the virtual user's Matrix
-                    profile. Presentation data; deliberately not covered by
+                    profile (1-50 Unicode extended grapheme clusters per UAX #29). Presentation data; deliberately not covered by
                     the author signature.
                 author_public_key:
                   type: string
@@ -2517,6 +2524,7 @@ components:
           type: string
           minLength: 1
           maxLength: 5000
+          description: Comment content (1-5000 Unicode extended grapheme clusters per UAX #29; empty allowed only when media is present).
         media:
           description: |
             Optional media attachment; when present the signature covers
@@ -2534,6 +2542,8 @@ components:
               description: MXC URI returned by the media upload endpoint
             filename:
               type: [string, "null"]
+              maxLength: 255
+              description: "Media filename (1-255 Unicode extended grapheme clusters per UAX #29)."
             mimetype:
               type: [string, "null"]
             size:
@@ -2575,6 +2585,7 @@ components:
           type: string
           minLength: 1
           maxLength: 5000
+          description: Updated comment content (1-5000 Unicode extended grapheme clusters per UAX #29).
         author_public_key:
           type: string
         author_signature:

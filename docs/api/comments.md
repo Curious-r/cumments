@@ -1,5 +1,7 @@
 # Comments
 
+Length limits for user-facing text are measured in Unicode extended grapheme clusters according to UAX #29, not UTF-8 bytes, Unicode scalar values, or UTF-16 code units.
+
 Comment writes are gated by site authentication: either the browser
 `Origin` must match the site's verified/configured origins, or (secret mode)
 the request must carry `X-Cumments-Timestamp` and `X-Cumments-Signature`
@@ -202,7 +204,7 @@ clients must percent-encode `comment_id`.
 
 Body: `{ "key", "author_public_key", "author_signature", "challenge_response" }`.
 The signature covers `["REACT", site_id, page_slug, comment_id, key, challenge, "1"]`;
-`key` is the reaction key (emoji, 1-32 bytes, trimmed, no control characters);
+`key` is the reaction key (emoji, 1-32 Unicode extended grapheme clusters per UAX #29, trimmed, no control characters);
 duplicate annotations from the same virtual user are treated as idempotent
 (`M_DUPLICATE_ANNOTATION` maps to `204`). The reaction is sent as the visitor's
 virtual user (`m.reaction` with the signed proof block) and projected into the
@@ -221,7 +223,7 @@ effect. Percent-encode `comment_id` in the path.
 Body: `{ "author_public_key", "author_signature", "challenge_response" }`.
 The signature covers `["UNREACT", site_id, page_slug, comment_id, key, challenge]`;
 `key` is the normalized reaction key from the path (trimmed, no control
-characters, 1-32 bytes). The reaction is resolved by
+characters, 1-32 Unicode extended grapheme clusters per UAX #29). The reaction is resolved by
 `(comment, virtual user derived from author_public_key, key)` without
 exposing Matrix event IDs and redacted via the AS sender. This endpoint does
 not use `Idempotency-Key`; it is natural-idempotent (`204` even when the
@@ -249,8 +251,8 @@ Body:
 }
 ```
 
-* `question` — 1–500 characters, no leading/trailing whitespace, no control characters.
-* `options` — 2–20 ordered option texts, each 1–200 bytes, no leading/trailing whitespace, no control characters.
+* `question` — 1–500 Unicode extended grapheme clusters per UAX #29, no leading/trailing whitespace, no control characters.
+* `options` — 2–20 ordered option texts, each 1–200 Unicode extended grapheme clusters per UAX #29, no leading/trailing whitespace, no control characters.
 * `max_selections` — optional, defaults to `1`; only `1` is accepted (single-select). The current authoring API is single-select even though MSC3381 supports multi-select; the wire format preserves the declared limit.
 * `display_name` — presentation data written to the virtual user's Matrix profile, not covered by the signature.
 * `reply_to` / `thread_root` — orthogonal reply/thread relations, `null` when absent, same model as comment posts; Matrix encodes both in `m.relates_to`.
