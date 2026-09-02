@@ -17,7 +17,7 @@
   },
   "lsp": {
     "nixd": {
-      "initialization_options": {
+      "settings": {
         "formatting": {
           "command": ["nixfmt"],
         },
