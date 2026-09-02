@@ -1,6 +1,6 @@
 use crate::routes::comments::{
-    delete_comment_handler, location_handler, post_comment_handler, query_comments_handler,
-    react_handler, unreact_handler, update_comment_handler, vote_handler,
+    delete_comment_handler, location_handler, poll_handler, post_comment_handler,
+    query_comments_handler, react_handler, unreact_handler, update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
     create_admin_claim_handler, create_manager_claim_handler, create_page_retirement_handler,
@@ -193,6 +193,10 @@ pub fn build_router(state: ApiState) -> Router {
             post(upload_media_handler)
                 .fallback(method_not_allowed_handler)
                 .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/pages/{page_slug}/polls",
+            post(poll_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/location",

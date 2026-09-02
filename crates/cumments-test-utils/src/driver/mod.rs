@@ -37,6 +37,8 @@ pub struct TestDriver {
     pub invites: Mutex<Vec<(String, String)>>,
     pub reactions: Mutex<Vec<(String, String, String, String)>>,
     pub poll_votes: Mutex<Vec<(String, String, String, String)>>,
+    #[allow(clippy::type_complexity)]
+    pub polls: Mutex<Vec<(String, String, Vec<String>, u8, Option<i64>, String)>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
     pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
     pub redactions: Mutex<Vec<(String, String, String)>>,
@@ -67,6 +69,7 @@ impl TestDriver {
             invites: Mutex::new(Vec::new()),
             reactions: Mutex::new(Vec::new()),
             poll_votes: Mutex::new(Vec::new()),
+            polls: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),
             redactions: Mutex::new(Vec::new()),

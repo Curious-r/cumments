@@ -172,6 +172,40 @@ impl MatrixDriver for AppServiceMatrixDriver {
         .await
     }
 
+    async fn post_poll(
+        &self,
+        room_id: &str,
+        question: &str,
+        options: &[String],
+        max_selections: u8,
+        display_name: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+        submission_id: Option<i64>,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
+        txn_id: &str,
+    ) -> Result<String> {
+        self.post_poll_impl(
+            room_id,
+            question,
+            options,
+            max_selections,
+            display_name,
+            site_id,
+            author_public_key,
+            author_signature,
+            author_challenge,
+            submission_id,
+            reply_to,
+            thread_root,
+            txn_id,
+        )
+        .await
+    }
+
     async fn post_location(
         &self,
         room_id: &str,

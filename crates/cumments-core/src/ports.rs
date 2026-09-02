@@ -1040,6 +1040,27 @@ pub trait MatrixDriver: Send + Sync {
         txn_id: &str,
     ) -> Result<String>;
 
+    /// Sends a poll (`m.poll.start`, MSC3381) as the visitor's virtual user.
+    /// Returns the Matrix event ID and carries the submission correlation
+    /// hint, like [`Self::post_message`].
+    async fn post_poll(
+        &self,
+        room_id: &str,
+        question: &str,
+        options: &[String],
+        max_selections: u8,
+        display_name: &str,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+        submission_id: Option<i64>,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
+        // See [`Self::post_message`].
+        txn_id: &str,
+    ) -> Result<String>;
+
     /// Updates an existing message in a specific room using m.replace.
     async fn update_message(
         &self,

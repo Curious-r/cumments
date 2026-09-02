@@ -5,8 +5,8 @@ use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
     DeleteCommentRequest, IDEMPOTENT_REPLAYED, LocationRequest, PaginatedResponse, PaginationMeta,
-    PaginationQuery, PostCommentRequest, ReactRequest, UnreactRequest, UpdateCommentRequest,
-    VoteRequest, extract_idempotency_key, request_fingerprint,
+    PaginationQuery, PollRequest, PostCommentRequest, ReactRequest, UnreactRequest,
+    UpdateCommentRequest, VoteRequest, extract_idempotency_key, request_fingerprint,
 };
 use crate::routes::media::media_url_base;
 use axum::{
@@ -16,10 +16,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cumments_core::{
-    commands::{DeleteCommentCommand, LocationPayload, PostCommentCommand, UpdateCommentCommand},
+    commands::{
+        DeleteCommentCommand, LocationPayload, PollPayload, PostCommentCommand,
+        UpdateCommentCommand,
+    },
     identity::{
-        derive_visitor_id_from_public_key, post_signature_message, signature_message,
-        verify_signature,
+        derive_visitor_id_from_public_key, poll_signature_message, post_signature_message,
+        signature_message, verify_signature,
     },
     models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
     submissions::{IdempotencyInput, IdempotencyOutcome, deterministic_transaction_id},
@@ -604,6 +607,7 @@ pub(crate) async fn post_comment_handler(
         content: req.content,
         media: req.media,
         location: None,
+        poll: None,
         display_name: req.display_name,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
@@ -1440,6 +1444,7 @@ pub(crate) async fn location_handler(
             geo_uri: req.geo_uri,
             description: req.description,
         }),
+        poll: None,
         display_name: req.display_name,
         author_public_key: req.author_public_key,
         author_signature: req.author_signature,
@@ -1476,6 +1481,177 @@ pub(crate) async fn location_handler(
         Err(e) => {
             tracing::error!("Failed to save location submission: {:?}", e);
             Err(AppError::Internal("Failed to queue location.".to_string()))
+        }
+    }
+}
+
+pub(crate) async fn poll_handler(
+    State(state): State<ApiState>,
+    Path((site_id, page_slug)): Path<(String, String)>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(comment_write_rate_limited(&state));
+    }
+    let idempotency_key = extract_idempotency_key(&headers)?;
+    let req: PollRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+    let fingerprint = request_fingerprint(
+        "POST",
+        &format!("/api/v1/sites/{}/pages/{}/polls", site_id, page_slug),
+        body.as_bytes(),
+    );
+    req.validate().map_err(AppError::Validation)?;
+    crate::request::validate_poll_details(&req).map_err(AppError::BadRequest)?;
+    // Idempotency replay short-circuit.
+    if let Some(response) = idempotency_short_circuit(
+        &state,
+        &IdempotencyInput {
+            author_public_key: req.author_public_key.clone(),
+            key: idempotency_key.clone(),
+            request_fingerprint: fingerprint.clone(),
+        },
+    )
+    .await?
+    {
+        return Ok(response);
+    }
+    if req
+        .reply_to
+        .as_deref()
+        .is_some_and(|reply_to| reply_to.trim().is_empty())
+    {
+        return Err(AppError::BadRequest(
+            "reply_to must not be empty when provided.".to_string(),
+        ));
+    }
+    if let Some(reply_to) = req.reply_to.as_deref()
+        && let Err(msg) = validate_reply_to_format(reply_to)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if req
+        .thread_root
+        .as_deref()
+        .is_some_and(|thread_root| thread_root.trim().is_empty())
+    {
+        return Err(AppError::BadRequest(
+            "thread_root must not be empty when provided.".to_string(),
+        ));
+    }
+    if let Some(thread_root) = req.thread_root.as_deref()
+        && let Err(msg) = validate_thread_root_format(thread_root)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&req.challenge_response);
+    let message = poll_signature_message(
+        &site_id,
+        &page_slug,
+        &req.question,
+        &req.options,
+        req.max_selections,
+        req.reply_to.as_deref(),
+        req.thread_root.as_deref(),
+        challenge,
+    );
+    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+    if let Some(reply_to) = req.reply_to.as_deref() {
+        match state.store.get_message(reply_to).await {
+            Ok(Some(parent)) => {
+                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
+                    AppError::BadRequest(
+                        "reply_to must reference an active comment in the same site and post."
+                            .to_string(),
+                    )
+                })?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("Failed to validate reply target: {:?}", e);
+                return Err(AppError::Internal(
+                    "Failed to validate reply target.".to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(thread_root) = req.thread_root.as_deref() {
+        match state.store.get_message(thread_root).await {
+            Ok(Some(parent)) => {
+                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
+                    AppError::BadRequest(
+                        "thread_root must reference an active comment in the same site and post."
+                            .to_string(),
+                    )
+                })?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("Failed to validate thread root: {:?}", e);
+                return Err(AppError::Internal(
+                    "Failed to validate thread root.".to_string(),
+                ));
+            }
+        }
+    }
+
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+    let command = PostCommentCommand {
+        site_id: site_id_val,
+        page_slug: page_slug_val,
+        content: String::new(),
+        media: None,
+        location: None,
+        poll: Some(PollPayload {
+            question: req.question,
+            options: req.options,
+            max_selections: req.max_selections,
+        }),
+        display_name: req.display_name,
+        author_public_key: req.author_public_key,
+        author_signature: req.author_signature,
+        author_challenge: challenge.to_string(),
+        reply_to: req.reply_to,
+        thread_root: req.thread_root,
+    };
+
+    match state
+        .store
+        .save_post_submission_idempotent(
+            &command,
+            &IdempotencyInput {
+                author_public_key: command.author_public_key.clone(),
+                key: idempotency_key,
+                request_fingerprint: fingerprint,
+            },
+        )
+        .await
+    {
+        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
+            tracing::debug!("Successfully saved a new poll submission.");
+            state.submission_notify.notify_one();
+            Ok(accepted_response(submission_id, false))
+        }
+        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
+            tracing::info!(
+                "Replayed idempotent POLL with submission_id {}",
+                submission_id
+            );
+            Ok(accepted_response(submission_id, true))
+        }
+        Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
+        Err(e) => {
+            tracing::error!("Failed to save poll submission: {:?}", e);
+            Err(AppError::Internal("Failed to queue poll.".to_string()))
         }
     }
 }

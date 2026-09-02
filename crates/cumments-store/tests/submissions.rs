@@ -17,6 +17,7 @@ fn post_command() -> PostCommentCommand {
         content: "hello".to_string(),
         media: None,
         location: None,
+        poll: None,
         display_name: "Alice".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),

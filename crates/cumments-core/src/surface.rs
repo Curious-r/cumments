@@ -363,6 +363,13 @@ pub const CAPABILITIES: &[Capability] = &[
         AuditRequirement::Required,
     ),
     capability(
+        "visitor.poll.create",
+        "Create a poll.",
+        RiskTier::Medium,
+        LifecycleKind::Accepted,
+        AuditRequirement::Required,
+    ),
+    capability(
         "visitor.poll.vote",
         "Vote in a poll.",
         RiskTier::Medium,
@@ -662,6 +669,12 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "POST",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/polls",
+        "createPoll",
+        "visitor.poll.create",
+    ),
+    http_operation(
+        "POST",
         "/api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes",
         "votePoll",
         "visitor.poll.vote",
@@ -862,6 +875,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 65);
+        assert_eq!(HTTP_OPERATIONS.len(), 66);
     }
 }

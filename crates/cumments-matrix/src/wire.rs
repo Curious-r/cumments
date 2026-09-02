@@ -130,6 +130,13 @@ pub(crate) fn reply_fallback_body(
     Some(quoted)
 }
 
+#[derive(serde::Serialize)]
+struct PollPayloadForWire<'a> {
+    question: &'a str,
+    options: &'a [String],
+    max_selections: u8,
+}
+
 /// Build the `m.room.message` content for a new Cumments comment.
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
 pub(crate) fn build_message_body(
@@ -304,6 +311,88 @@ pub(crate) fn build_poll_vote_body(
             "content": answer_id,
         }
     })
+}
+
+/// Build the `m.room.message` content for a visitor poll (MSC3381).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_poll_body(
+    question: &str,
+    options: &[String],
+    max_selections: u8,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    submission_id: Option<i64>,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
+) -> serde_json::Value {
+    // Fallback body for clients without poll support.
+    let fallback = {
+        let mut out = String::new();
+        out.push_str(question);
+        out.push_str("\n\n");
+        for (idx, option) in options.iter().enumerate() {
+            out.push_str(&format!("{}. {}\n", idx + 1, option));
+        }
+        out.trim_end().to_string()
+    };
+    let answers: Vec<serde_json::Value> = options
+        .iter()
+        .enumerate()
+        .map(|(idx, text)| {
+            serde_json::json!({
+                "id": idx.to_string(),
+                "org.matrix.msc3381.poll.answer": { "text": text }
+            })
+        })
+        .collect();
+    // Canonical poll payload — same string that `POLL` signatures cover.
+    let payload = serde_json::to_string(&PollPayloadForWire {
+        question,
+        options,
+        max_selections,
+    })
+    .expect("poll payload is valid JSON");
+    let mut body = serde_json::json!({
+        "msgtype": "org.matrix.msc3381.poll.start",
+        "body": fallback,
+        "org.matrix.msc3381.poll.start": {
+            "question": { "text": question },
+            "kind": "org.matrix.msc3381.poll.disclosed",
+            "max_selections": max_selections,
+            "answers": answers,
+        },
+        MESSAGE_CONTENT_KEY: {
+            "schema": MESSAGE_SCHEMA_VERSION,
+            "public_key": author_public_key,
+            "signature": author_signature,
+            "challenge": author_challenge,
+            "content": payload,
+            "submission_id": submission_id,
+        }
+    });
+    match (reply_to, thread_root) {
+        (Some(reply), Some(thread)) => {
+            body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (Some(reply), None) => {
+            body["m.relates_to"] = serde_json::json!({
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (None, Some(thread)) => {
+            body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+            });
+        }
+        (None, None) => {}
+    }
+    body
 }
 
 /// Build the `m.room.message` content for a visitor location (MSC3488).
@@ -610,6 +699,91 @@ mod tests {
     }
 
     #[test]
+    fn poll_body_carries_question_options_and_ids() {
+        let body = build_poll_body(
+            "Which?",
+            &["Rust".to_string(), "TS".to_string(), "Py".to_string()],
+            1,
+            "pk",
+            "sig",
+            "chal",
+            Some(42),
+            None,
+            None,
+        );
+        assert_eq!(body["msgtype"], "org.matrix.msc3381.poll.start");
+        assert!(body["body"].as_str().unwrap().contains("Which?"));
+        assert!(body["body"].as_str().unwrap().contains("1. Rust"));
+        assert_eq!(
+            body["org.matrix.msc3381.poll.start"]["question"]["text"],
+            "Which?"
+        );
+        assert_eq!(body["org.matrix.msc3381.poll.start"]["max_selections"], 1);
+        let answers = body["org.matrix.msc3381.poll.start"]["answers"]
+            .as_array()
+            .expect("answers");
+        assert_eq!(answers.len(), 3);
+        assert_eq!(answers[0]["id"], "0");
+        assert_eq!(answers[1]["id"], "1");
+        assert_eq!(answers[2]["id"], "2");
+        assert_eq!(answers[0]["org.matrix.msc3381.poll.answer"]["text"], "Rust");
+        assert_eq!(answers[1]["org.matrix.msc3381.poll.answer"]["text"], "TS");
+        // proof block
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["schema"], 1);
+        assert_eq!(body[MESSAGE_CONTENT_KEY]["submission_id"], 42);
+        let payload: serde_json::Value =
+            serde_json::from_str(body[MESSAGE_CONTENT_KEY]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["question"], "Which?");
+        assert_eq!(payload["options"][0], "Rust");
+        assert_eq!(payload["max_selections"], 1);
+    }
+
+    #[test]
+    fn poll_body_supports_reply_and_thread_relations() {
+        let with_reply = build_poll_body(
+            "q?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            Some("$p:hs"),
+            None,
+        );
+        assert_eq!(
+            with_reply["m.relates_to"]["m.in_reply_to"]["event_id"],
+            "$p:hs"
+        );
+        let with_thread = build_poll_body(
+            "q?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            None,
+            Some("$t:hs"),
+        );
+        assert_eq!(with_thread["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(with_thread["m.relates_to"]["event_id"], "$t:hs");
+        let both = build_poll_body(
+            "q?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            Some("$p:hs"),
+            Some("$t:hs"),
+        );
+        assert_eq!(both["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(both["m.relates_to"]["m.in_reply_to"]["event_id"], "$p:hs");
+    }
+
+    #[test]
     fn poll_vote_body_carries_answer_and_reference() {
         let body = build_poll_vote_body("$poll:hs", "2", "pk", "sig", "chal");
         assert_eq!(body["msgtype"], "org.matrix.msc3381.poll.response");
@@ -838,6 +1012,18 @@ mod tests {
         assert_eq!(reaction[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         let vote = build_poll_vote_body("$p:hs", "1", "pk", "sig", "chal");
         assert_eq!(vote[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        let poll = build_poll_body(
+            "q?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            None,
+            None,
+        );
+        assert_eq!(poll[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         let loc = build_location_body("geo:1,2", None, "pk", "sig", "chal", None, None, None);
         assert_eq!(loc[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         let edit = build_edit_body("$o:hs", "new", "pk", "sig", "chal", None);

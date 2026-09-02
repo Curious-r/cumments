@@ -201,6 +201,33 @@ impl MatrixDriver for TestDriver {
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
+    async fn post_poll(
+        &self,
+        _room_id: &str,
+        _question: &str,
+        _options: &[String],
+        _max_selections: u8,
+        _display_name: &str,
+        _site_id: &SiteId,
+        _author_public_key: &str,
+        _author_signature: &str,
+        _author_challenge: &str,
+        _submission_id: Option<i64>,
+        _reply_to: Option<&str>,
+        _thread_root: Option<&str>,
+        _txn_id: &str,
+    ) -> anyhow::Result<String> {
+        self.polls.lock().await.push((
+            _room_id.to_string(),
+            _question.to_string(),
+            _options.to_vec(),
+            _max_selections,
+            _submission_id,
+            _txn_id.to_string(),
+        ));
+        Ok(format!("poll_event_{}", _submission_id.unwrap_or(0)))
+    }
+    #[allow(clippy::too_many_arguments)]
     async fn post_location(
         &self,
         _room_id: &str,

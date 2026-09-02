@@ -206,6 +206,74 @@ pub struct VoteRequest {
     pub challenge_response: String,
 }
 
+fn default_poll_max_selections() -> u8 {
+    1
+}
+
+/// Validate poll-specific constraints that `validator` cannot express
+/// (whitespace, control characters, per-option length).
+pub fn validate_poll_details(req: &PollRequest) -> Result<(), String> {
+    if req.question.trim().is_empty() {
+        return Err("question must not be empty or whitespace".to_string());
+    }
+    if req.question.trim() != req.question {
+        return Err("question must not have leading or trailing whitespace".to_string());
+    }
+    if req.question.chars().any(|c| c.is_control()) {
+        return Err("question must not contain control characters".to_string());
+    }
+    for option in &req.options {
+        if option.trim().is_empty() {
+            return Err("poll options must not be empty or whitespace".to_string());
+        }
+        if option.trim() != option {
+            return Err("poll options must not have leading or trailing whitespace".to_string());
+        }
+        if option.chars().any(|c| c.is_control()) {
+            return Err("poll option must not contain control characters".to_string());
+        }
+        if option.len() > 200 {
+            return Err("poll option must be at most 200 bytes".to_string());
+        }
+    }
+    if req.max_selections != 1 {
+        return Err("max_selections must be 1".to_string());
+    }
+    Ok(())
+}
+
+/// Request DTO for creating a poll (MSC3381).
+///
+/// The single-select restriction is enforced here: `max_selections` must be
+/// exactly `1`. The wire format preserves MSC3381's `max_selections` so the
+/// projector can faithfully store the declared limit, but the authoring API
+/// remains single-select as documented in `docs/data-model.md`.
+#[derive(Debug, Deserialize, Validate)]
+pub struct PollRequest {
+    #[validate(length(min = 1, max = 500))]
+    pub question: String,
+    #[validate(length(min = 2, max = 20))]
+    pub options: Vec<String>,
+    #[serde(default = "default_poll_max_selections")]
+    #[validate(range(min = 1, max = 1))]
+    pub max_selections: u8,
+    /// Display name to write to the virtual user's Matrix profile. It is
+    /// presentation data and is deliberately not covered by the author
+    /// signature; the signed payload covers only the poll payload.
+    #[validate(length(min = 1, max = 50))]
+    pub display_name: String,
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[serde(default)]
+    pub reply_to: Option<String>,
+    #[serde(default)]
+    pub thread_root: Option<String>,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
 /// Request DTO for posting a location. Like `PostCommentRequest`, it may
 /// carry `reply_to` / `thread_root` so locations can start or join threads.
 #[derive(Debug, Deserialize, Validate)]
@@ -230,4 +298,113 @@ pub struct LocationRequest {
     pub thread_root: Option<String>,
     #[validate(length(min = 1, max = 1024))]
     pub challenge_response: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use validator::Validate;
+
+    fn valid_poll() -> PollRequest {
+        PollRequest {
+            question: "Best?".to_string(),
+            options: vec!["A".to_string(), "B".to_string()],
+            max_selections: 1,
+            display_name: "Alice".to_string(),
+            author_public_key: "pk".to_string(),
+            author_signature: "sig".to_string(),
+            reply_to: None,
+            thread_root: None,
+            challenge_response: "chal|nonce".to_string(),
+        }
+    }
+
+    #[test]
+    fn poll_request_validates_success() {
+        assert!(valid_poll().validate().is_ok());
+    }
+
+    #[test]
+    fn poll_question_empty_rejected() {
+        let mut req = valid_poll();
+        req.question = "".to_string();
+        assert!(req.validate().is_err());
+        req.question = "  ".to_string();
+        // validator sees length 2, so it passes length check, but handler's manual trim check would reject.
+        // We test that the derived validator alone would pass whitespace-only, so handler must have extra check.
+        // For this test we just ensure empty string is rejected by validator.
+    }
+
+    #[test]
+    fn poll_fewer_than_two_options_rejected() {
+        let mut req = valid_poll();
+        req.options = vec!["only".to_string()];
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn poll_more_than_twenty_options_rejected() {
+        let mut req = valid_poll();
+        req.options = (0..21).map(|i| format!("opt{i}")).collect();
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn poll_invalid_max_selections_rejected() {
+        let mut req = valid_poll();
+        req.max_selections = 2;
+        assert!(req.validate().is_err());
+        req.max_selections = 0;
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn poll_exactly_two_and_twenty_are_allowed() {
+        let mut req = valid_poll();
+        req.options = vec!["a".to_string(), "b".to_string()];
+        assert!(req.validate().is_ok());
+        req.options = (0..20).map(|i| format!("opt{i}")).collect();
+        assert!(req.validate().is_ok());
+    }
+    #[test]
+    fn poll_question_whitespace_and_control_rejected_by_details() {
+        let mut req = valid_poll();
+        req.question = "  Best?".to_string();
+        assert!(validate_poll_details(&req).is_err());
+        req.question = "Best? ".to_string();
+        assert!(validate_poll_details(&req).is_err());
+        req.question = "Best\u{0000}?".to_string();
+        assert!(validate_poll_details(&req).is_err());
+        req.question = "   ".to_string();
+        assert!(validate_poll_details(&req).is_err());
+    }
+
+    #[test]
+    fn poll_option_empty_and_whitespace_rejected() {
+        let mut req = valid_poll();
+        req.options = vec!["A".to_string(), "".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+        req.options = vec!["A".to_string(), "  ".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+        req.options = vec![" A".to_string(), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+        req.options = vec!["A".to_string(), "B ".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+    }
+
+    #[test]
+    fn poll_option_control_and_length_rejected() {
+        let mut req = valid_poll();
+        req.options = vec!["A\u{0007}".to_string(), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+        req.options = vec!["a".repeat(201), "B".to_string()];
+        assert!(validate_poll_details(&req).is_err());
+        req.options = vec!["a".repeat(200), "B".to_string()];
+        assert!(validate_poll_details(&req).is_ok());
+    }
+
+    #[test]
+    fn poll_details_accepts_valid() {
+        assert!(validate_poll_details(&valid_poll()).is_ok());
+    }
 }

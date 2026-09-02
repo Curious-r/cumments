@@ -184,6 +184,35 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
+    async fn post_poll(
+        &self,
+        room_id: &str,
+        question: &str,
+        options: &[String],
+        max_selections: u8,
+        display_name: &str,
+        _site_id: &SiteId,
+        author_public_key: &str,
+        _author_signature: &str,
+        _author_challenge: &str,
+        submission_id: Option<i64>,
+        _reply_to: Option<&str>,
+        _thread_root: Option<&str>,
+        _txn_id: &str,
+    ) -> Result<String> {
+        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+            .unwrap_or_else(|| "invalid".to_string());
+        debug!(
+            "LOGGING: Post poll to room={}. Author={} (visitor={}, submission={:?}): {} / {:?} (max {})",
+            room_id, display_name, visitor_id, submission_id, question, options, max_selections
+        );
+        Ok(format!(
+            "log_poll_{}_{}",
+            submission_id.unwrap_or(0),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ))
+    }
+
     async fn post_location(
         &self,
         room_id: &str,

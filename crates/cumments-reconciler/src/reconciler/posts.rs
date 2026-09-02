@@ -156,7 +156,26 @@ impl PostsPass {
                     txn_id
                 };
                 let event_id = {
-                    let result = if let Some(location) = &command.location {
+                    let result = if let Some(poll) = &command.poll {
+                        self.deps
+                            .driver
+                            .post_poll(
+                                &room_id,
+                                &poll.question,
+                                &poll.options,
+                                poll.max_selections,
+                                &command.display_name,
+                                &command.site_id,
+                                &command.author_public_key,
+                                &command.author_signature,
+                                &command.author_challenge,
+                                Some(id),
+                                command.reply_to.as_deref(),
+                                command.thread_root.as_deref(),
+                                &txn_id,
+                            )
+                            .await
+                    } else if let Some(location) = &command.location {
                         self.deps
                             .driver
                             .post_location(

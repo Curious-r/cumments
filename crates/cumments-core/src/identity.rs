@@ -15,6 +15,7 @@
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, VerifyingKey};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 /// Build the canonical message a client signs for a given operation.
@@ -76,6 +77,62 @@ pub fn locate_signature_message(
         Some(site_id),
         Some(page_slug),
         Some(geo_uri),
+        reply_to.map(|value| value as &str),
+        thread_root.map(|value| value as &str),
+        Some(challenge),
+        Some("1"),
+    ])
+}
+
+#[derive(Serialize)]
+struct PollPayloadForSig<'a> {
+    question: &'a str,
+    options: &'a [String],
+    max_selections: u8,
+}
+
+/// Canonical JSON payload for a poll creation signature.
+///
+/// Deterministically serializes `question`, ordered `options`, and
+/// `max_selections` into a single JSON string. The field order is fixed
+/// by the struct definition, so the same poll always yields the same
+/// string and any change to question / option order / option text /
+/// `max_selections` invalidates the signature.
+pub fn poll_canonical_payload(question: &str, options: &[String], max_selections: u8) -> String {
+    serde_json::to_string(&PollPayloadForSig {
+        question,
+        options,
+        max_selections,
+    })
+    .expect("poll payload is valid JSON")
+}
+
+/// Build the canonical message signed when creating a poll.
+///
+/// Covers site, page, the canonical poll payload (`question` + ordered
+/// `options` + `max_selections`), both reply and thread relations
+/// (each as `null` when absent), and the PoW challenge.
+/// Includes trailing `1` for the `host.curious.cumments.message` schema.
+/// The `max_selections` field is part of the signed payload; the
+/// current authoring API only permits `1` (single-select) and the wire
+/// format preserves the declared limit.
+#[allow(clippy::too_many_arguments)]
+pub fn poll_signature_message(
+    site_id: &str,
+    page_slug: &str,
+    question: &str,
+    options: &[String],
+    max_selections: u8,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
+    challenge: &str,
+) -> String {
+    let payload = poll_canonical_payload(question, options, max_selections);
+    signature_message(&[
+        Some("POLL"),
+        Some(site_id),
+        Some(page_slug),
+        Some(payload.as_str()),
         reply_to.map(|value| value as &str),
         thread_root.map(|value| value as &str),
         Some(challenge),
@@ -267,7 +324,7 @@ mod tests {
 
     #[test]
     fn all_operations_canonical_tuples_match_current_protocol() {
-        // 5 operations with trailing "1" (POST/LOCATE/PATCH/REACT/VOTE) and 3 without (DELETE/UNREACT/QUERY)
+        // 6 operations with trailing "1" (POST/LOCATE/PATCH/REACT/VOTE/POLL) and 3 without (DELETE/UNREACT/QUERY)
         // Challenge must be immediately before "1" where present, and NULL handling must use JSON null.
         assert_eq!(
             post_signature_message("my-blog", "hello", "content", None, None, "ch"),
@@ -360,6 +417,33 @@ mod tests {
             ])
             .unwrap()
         );
+        assert_eq!(
+            poll_signature_message(
+                "my-blog",
+                "hello",
+                "best?",
+                &["A".to_string(), "B".to_string()],
+                1,
+                None,
+                None,
+                "ch"
+            ),
+            serde_json::to_string(&[
+                serde_json::Value::String("POLL".to_string()),
+                serde_json::Value::String("my-blog".to_string()),
+                serde_json::Value::String("hello".to_string()),
+                serde_json::Value::String(poll_canonical_payload(
+                    "best?",
+                    &["A".to_string(), "B".to_string()],
+                    1
+                )),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::String("ch".to_string()),
+                serde_json::Value::String("1".to_string()),
+            ])
+            .unwrap()
+        );
         // 3 without trailing "1"
         assert_eq!(
             signature_message(&[
@@ -406,5 +490,105 @@ mod tests {
             ])
             .unwrap()
         );
+    }
+
+    #[test]
+    fn poll_signature_covers_all_security_sensitive_fields() {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let public_key_b64 = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let base = poll_signature_message(
+            "my-blog",
+            "hello",
+            "best?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            None,
+            None,
+            "ch",
+        );
+        let sig = URL_SAFE_NO_PAD.encode(signing_key.sign(base.as_bytes()).to_bytes());
+        assert!(verify_signature(&public_key_b64, &base, &sig));
+        // Tampered question must fail.
+        let tampered_q = poll_signature_message(
+            "my-blog",
+            "hello",
+            "other?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            None,
+            None,
+            "ch",
+        );
+        assert!(!verify_signature(&public_key_b64, &tampered_q, &sig));
+        // Tampered option text must fail.
+        let tampered_opt = poll_signature_message(
+            "my-blog",
+            "hello",
+            "best?",
+            &["A".to_string(), "C".to_string()],
+            1,
+            None,
+            None,
+            "ch",
+        );
+        assert!(!verify_signature(&public_key_b64, &tampered_opt, &sig));
+        // Tampered option order must fail.
+        let reordered = poll_signature_message(
+            "my-blog",
+            "hello",
+            "best?",
+            &["B".to_string(), "A".to_string()],
+            1,
+            None,
+            None,
+            "ch",
+        );
+        assert!(!verify_signature(&public_key_b64, &reordered, &sig));
+        // Tampered max_selections must fail.
+        let tampered_max = poll_signature_message(
+            "my-blog",
+            "hello",
+            "best?",
+            &["A".to_string(), "B".to_string()],
+            2,
+            None,
+            None,
+            "ch",
+        );
+        assert!(!verify_signature(&public_key_b64, &tampered_max, &sig));
+        // Reply/thread are part of the signature.
+        let with_reply = poll_signature_message(
+            "my-blog",
+            "hello",
+            "best?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            Some("$p:hs"),
+            None,
+            "ch",
+        );
+        assert!(!verify_signature(&public_key_b64, &with_reply, &sig));
+        let with_thread = poll_signature_message(
+            "my-blog",
+            "hello",
+            "best?",
+            &["A".to_string(), "B".to_string()],
+            1,
+            None,
+            Some("$t:hs"),
+            "ch",
+        );
+        assert!(!verify_signature(&public_key_b64, &with_thread, &sig));
+    }
+
+    #[test]
+    fn poll_canonical_payload_is_deterministic() {
+        let a = poll_canonical_payload("q", &["x".to_string(), "y".to_string()], 1);
+        let b = poll_canonical_payload("q", &["x".to_string(), "y".to_string()], 1);
+        assert_eq!(a, b);
+        let swapped = poll_canonical_payload("q", &["y".to_string(), "x".to_string()], 1);
+        assert_ne!(a, swapped);
+        let c = poll_canonical_payload("q", &["x".to_string()], 1);
+        assert_ne!(a, c);
     }
 }
