@@ -472,6 +472,7 @@ fn poll_content(content: &serde_json::Value, body: &str) -> Content {
         options,
         max_selections,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     })
 }
 

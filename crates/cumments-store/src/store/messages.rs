@@ -1028,6 +1028,101 @@ impl MessageStore for DbStore {
         Ok(result.rows_affected > 0)
     }
 
+    async fn find_poll_my_votes(
+        &self,
+        poll_message_ids: &[String],
+        sender_mxid: &str,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        use std::collections::HashMap;
+        if poll_message_ids.is_empty() || sender_mxid.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut rows = poll_response_events::Entity::find()
+            .filter(
+                poll_response_events::Column::PollMessageId.is_in(poll_message_ids.iter().cloned()),
+            )
+            .filter(poll_response_events::Column::SenderMxid.eq(sender_mxid))
+            .filter(poll_response_events::Column::RedactedAt.is_null())
+            .all(&self.db)
+            .await?;
+        // Keep only votes whose poll is still active, mirroring poll_response_summary_map.
+        let active_parents = active_message_ids(
+            &self.db,
+            rows.iter().map(|r| r.poll_message_id.clone()).collect(),
+        )
+        .await?;
+        rows.retain(|r| active_parents.contains(&r.poll_message_id));
+
+        let poll_rows = if rows.is_empty() {
+            Vec::new()
+        } else {
+            messages::Entity::find()
+                .filter(
+                    messages::Column::EventId.is_in(
+                        rows.iter()
+                            .map(|r| r.poll_message_id.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                )
+                .all(&self.db)
+                .await?
+        };
+        let option_ids_map: HashMap<String, Vec<String>> = poll_rows
+            .into_iter()
+            .filter_map(|row| {
+                let content = serde_json::from_str::<Content>(&row.content_json).ok()?;
+                let Content::Poll(poll) = content else {
+                    return None;
+                };
+                Some((
+                    row.event_id,
+                    poll.options.into_iter().map(|o| o.id).collect(),
+                ))
+            })
+            .collect();
+
+        // Latest vote per poll for this sender, by (origin_server_ts, event_id).
+        let mut latest_by_poll: HashMap<String, poll_response_events::Model> = HashMap::new();
+        for row in rows {
+            let key = row.poll_message_id.clone();
+            match latest_by_poll.get(&key) {
+                Some(cur)
+                    if (cur.origin_server_ts, &cur.event_id)
+                        >= (row.origin_server_ts, &row.event_id) => {}
+                _ => {
+                    latest_by_poll.insert(key, row);
+                }
+            }
+        }
+
+        let mut out: HashMap<String, Vec<String>> = HashMap::new();
+        for (poll_id, row) in latest_by_poll {
+            if row.spoiled_reason.is_some() {
+                continue;
+            }
+            let mut selections: Vec<String> =
+                serde_json::from_str(&row.answer_ids_json).unwrap_or_default();
+            if selections.is_empty() {
+                // Legacy fallback: option_index -> option_id.
+                if let Some(idx) = row.option_index {
+                    if let Some(opts) = option_ids_map.get(&poll_id) {
+                        if idx >= 0 && (idx as usize) < opts.len() {
+                            out.insert(poll_id, vec![opts[idx as usize].clone()]);
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(opts) = option_ids_map.get(&poll_id) {
+                selections.retain(|id| opts.contains(id));
+                if !selections.is_empty() {
+                    out.insert(poll_id, selections);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     async fn record_backfill_tombstone(
         &self,
         event_id: &str,

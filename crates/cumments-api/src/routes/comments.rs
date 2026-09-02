@@ -366,6 +366,40 @@ pub(crate) async fn query_comments_handler(
                     }
                 }
             }
+            // Personalize poll my_votes if viewer proof was supplied.
+            // Uses the same viewer_mxid derived from QUERY_COMMENTS proof.
+            // Batch query to avoid N+1. Empty when viewer unknown or no vote.
+            if let Some(viewer) = &viewer_mxid {
+                let poll_ids: Vec<String> = page_data
+                    .items
+                    .iter()
+                    .filter_map(|m| match &m.content {
+                        Content::Poll(_) => Some(m.event_id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                if !poll_ids.is_empty() {
+                    match state.store.find_poll_my_votes(&poll_ids, viewer).await {
+                        Ok(my_votes_map) => {
+                            for msg in &mut page_data.items {
+                                if let Content::Poll(poll) = &mut msg.content {
+                                    if let Some(votes) = my_votes_map.get(&msg.event_id) {
+                                        poll.my_votes = votes.clone();
+                                    } else {
+                                        poll.my_votes = Vec::new();
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to personalize poll votes: {:?}", e);
+                            return Err(AppError::Internal(
+                                "Failed to personalize poll votes.".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
             if let Some(proxy) = &state.media_proxy {
                 for message in &mut page_data.items {
                     proxy.proxify_message(message, &media_base);
@@ -1748,5 +1782,46 @@ mod tests {
             response.headers().get(&*IDEMPOTENT_REPLAYED).is_none(),
             "fresh accepts must not carry the replay marker"
         );
+    }
+
+    #[test]
+    fn poll_content_my_votes_serializes_and_defaults() {
+        use cumments_core::models::{PollContent, PollOption};
+        let poll = PollContent {
+            question: "q".to_string(),
+            options: vec![PollOption {
+                id: "0".to_string(),
+                text: "A".to_string(),
+            }],
+            max_selections: 1,
+            responses: Vec::new(),
+            my_votes: vec!["0".to_string()],
+        };
+        let v = serde_json::to_value(&poll).unwrap();
+        assert_eq!(v["my_votes"], serde_json::json!(["0"]));
+        let de: PollContent = serde_json::from_value(v).unwrap();
+        assert_eq!(de.my_votes, vec!["0".to_string()]);
+        // Old data without my_votes should default to []
+        let json2 = serde_json::json!({
+            "question": "q",
+            "options": [{"id": "0", "text": "A"}],
+            "max_selections": 1,
+            "responses": []
+        });
+        let de2: PollContent = serde_json::from_value(json2).unwrap();
+        assert_eq!(de2.my_votes, Vec::<String>::new());
+        // Empty my_votes serializes as []
+        let poll_empty = PollContent {
+            question: "q".to_string(),
+            options: vec![PollOption {
+                id: "0".to_string(),
+                text: "A".to_string(),
+            }],
+            max_selections: 1,
+            responses: Vec::new(),
+            my_votes: Vec::new(),
+        };
+        let v2 = serde_json::to_value(&poll_empty).unwrap();
+        assert_eq!(v2["my_votes"], serde_json::json!([]));
     }
 }

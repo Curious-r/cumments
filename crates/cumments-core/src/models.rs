@@ -339,6 +339,11 @@ pub struct PollContent {
     pub max_selections: u8,
     #[serde(default)]
     pub responses: Vec<PollResponseSummary>,
+    /// The current viewer's vote, as option IDs. Empty when the viewer has no
+    /// valid vote. Derived per-request from `author_public_key` proof and never
+    /// stored, mirroring `ReactionSummary.mine`.
+    #[serde(default)]
+    pub my_votes: Vec<String>,
 }
 
 fn default_poll_max_selections() -> u8 {

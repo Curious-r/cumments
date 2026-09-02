@@ -331,6 +331,16 @@ pub trait MessageStore: ProjectionSink {
         redacted_by: &str,
     ) -> Result<bool>;
 
+    /// Batch lookup of the current viewer's vote for a set of polls.
+    /// Returns `poll_message_id -> Vec<option_id>` for polls where the
+    /// viewer has a valid latest response; absent entries mean `[]`.
+    /// Uses the same latest-wins semantics as `poll_response_summary_map`.
+    async fn find_poll_my_votes(
+        &self,
+        poll_message_ids: &[String],
+        sender_mxid: &str,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>>;
+
     /// Records a visitor upload so comment submissions can later prove ownership.
     async fn record_media_upload(
         &self,

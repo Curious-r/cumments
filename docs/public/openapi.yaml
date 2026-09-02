@@ -2457,6 +2457,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PollResponseSummary"
+        my_votes:
+          type: array
+          items:
+            type: string
+          description: Current viewer's vote selections as option IDs (derived per-request from QUERY_COMMENTS viewer proof via author_public_key/signature). Empty array when viewer has no valid vote or viewer proof not provided.
         # redacted tombstone; no original fields are retained
         # encrypted
         algorithm:

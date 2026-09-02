@@ -721,6 +721,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
         ],
         max_selections: 1,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     });
     store
         .save_message(&message)
@@ -794,6 +795,7 @@ async fn redacting_the_latest_poll_response_restores_the_previous_vote() {
         ],
         max_selections: 1,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     });
     store.save_message(&message).await.expect("save poll");
 
@@ -866,6 +868,7 @@ async fn poll_selections_aggregate_per_option() {
         ],
         max_selections: 2,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     });
     store.save_message(&message).await.expect("save poll");
 
@@ -923,6 +926,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
         }],
         max_selections: 1,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     });
     store
         .save_message(&message)
@@ -1020,6 +1024,7 @@ async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
         ],
         max_selections: 1,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     });
     store
         .save_message(&message)
@@ -1630,4 +1635,305 @@ async fn projection_sink_redaction_sanitizes_retained_payloads() {
         revisions.is_empty(),
         "parent deletion must remove all revision payloads"
     );
+}
+
+#[tokio::test]
+async fn poll_my_votes_batch_personalization_and_latest_wins() {
+    let store = DbStore::connect(&test_db_url("poll-my-votes"))
+        .await
+        .expect("connect db");
+
+    // Two polls on same page, to test batch query (N+1 check)
+    let mut poll1 = visitor_message("$poll1:hs", "poll1");
+    poll1.content = Content::Poll(PollContent {
+        question: "best?".to_string(),
+        options: vec![
+            PollOption {
+                id: "0".to_string(),
+                text: "A".to_string(),
+            },
+            PollOption {
+                id: "1".to_string(),
+                text: "B".to_string(),
+            },
+        ],
+        max_selections: 1,
+        responses: Vec::new(),
+        my_votes: Vec::new(),
+    });
+    let mut poll2 = visitor_message("$poll2:hs", "poll2");
+    poll2.content = Content::Poll(PollContent {
+        question: "other?".to_string(),
+        options: vec![
+            PollOption {
+                id: "0".to_string(),
+                text: "X".to_string(),
+            },
+            PollOption {
+                id: "1".to_string(),
+                text: "Y".to_string(),
+            },
+        ],
+        max_selections: 1,
+        responses: Vec::new(),
+        my_votes: Vec::new(),
+    });
+    store.save_message(&poll1).await.expect("save poll1");
+    store.save_message(&poll2).await.expect("save poll2");
+    // Register rooms for active check (messages are already active)
+    // Viewer identification: no proof -> empty (tested via unknown sender)
+    let empty = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@unknown:hs")
+        .await
+        .expect("query unknown");
+    assert!(empty.is_empty(), "unknown voter should have no my_votes");
+
+    // Alice has no vote yet -> empty, even though she could have Matrix activity
+    let alice_no_vote = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("alice no vote");
+    assert!(alice_no_vote.is_empty());
+
+    // 4. Alice votes A on poll1, Bob not voted
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$vote-alice-1:hs".to_string(),
+                poll_message_id: "$poll1:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                option_index: Some(0),
+                origin_server_ts: 10,
+            },
+            &["0".to_string()],
+            None,
+        )
+        .await
+        .expect("alice vote A");
+    let alice_votes = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("alice votes");
+    assert_eq!(
+        alice_votes.get("$poll1:hs").cloned().unwrap_or_default(),
+        vec!["0".to_string()]
+    );
+    let bob_votes = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@bob:hs")
+        .await
+        .expect("bob votes");
+    assert!(bob_votes.is_empty(), "Bob should have []");
+
+    // Ensure public aggregate unchanged by my_votes logic: poll1 should have 1 vote for option 0
+    let stored = store
+        .get_message("$poll1:hs")
+        .await
+        .expect("get poll1")
+        .expect("exists");
+    match stored.content {
+        Content::Poll(p) => {
+            assert_eq!(p.responses.len(), 1);
+            assert_eq!(p.responses[0].option_index, 0);
+            assert_eq!(p.responses[0].count, 1);
+        }
+        _ => panic!("expected poll"),
+    }
+
+    // 5. Alice changes vote from A -> B (latest wins)
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$vote-alice-2:hs".to_string(),
+                poll_message_id: "$poll1:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                option_index: Some(1),
+                origin_server_ts: 20,
+            },
+            &["1".to_string()],
+            None,
+        )
+        .await
+        .expect("alice vote B");
+    let alice_b = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("alice B");
+    assert_eq!(
+        alice_b.get("$poll1:hs").cloned().unwrap_or_default(),
+        vec!["1".to_string()]
+    );
+    // Aggregate should now be B count 1, not A
+    let stored2 = store
+        .get_message("$poll1:hs")
+        .await
+        .expect("get poll1")
+        .expect("exists");
+    match stored2.content {
+        Content::Poll(p) => {
+            assert_eq!(p.responses.len(), 1);
+            assert_eq!(p.responses[0].option_index, 1);
+        }
+        _ => panic!("expected poll"),
+    }
+
+    // 6. Redaction restore: redact Alice's latest B, should restore A
+    store
+        .redact_poll_vote("$vote-alice-2:hs", Utc::now(), "@alice:hs")
+        .await
+        .expect("redact B");
+    let alice_after_redact = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("after redact");
+    assert_eq!(
+        alice_after_redact
+            .get("$poll1:hs")
+            .cloned()
+            .unwrap_or_default(),
+        vec!["0".to_string()],
+        "redacting latest should restore previous A"
+    );
+    // Aggregate also restores A
+    let stored3 = store
+        .get_message("$poll1:hs")
+        .await
+        .expect("get poll1")
+        .expect("exists");
+    match stored3.content {
+        Content::Poll(p) => {
+            assert_eq!(p.responses[0].option_index, 0);
+        }
+        _ => panic!("expected poll"),
+    }
+
+    // 7. Spoiled/unvote: latest response with empty selections and spoiled_reason
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$vote-alice-spoiled:hs".to_string(),
+                poll_message_id: "$poll1:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                option_index: None,
+                origin_server_ts: 30,
+            },
+            &[],
+            Some("unknown_answer"),
+        )
+        .await
+        .expect("spoiled");
+    let alice_spoiled = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("spoiled");
+    assert!(
+        alice_spoiled.get("$poll1:hs").is_none() || alice_spoiled["$poll1:hs"].is_empty(),
+        "spoiled should be []"
+    );
+    // Aggregate should have 0 responses (no valid vote)
+    let stored4 = store
+        .get_message("$poll1:hs")
+        .await
+        .expect("get poll1")
+        .expect("exists");
+    match stored4.content {
+        Content::Poll(p) => {
+            assert!(
+                p.responses.is_empty(),
+                "spoiled vote should produce empty responses"
+            );
+        }
+        _ => panic!("expected poll"),
+    }
+    // Redacting spoiled restores A again
+    store
+        .redact_poll_vote("$vote-alice-spoiled:hs", Utc::now(), "@alice:hs")
+        .await
+        .expect("redact spoiled");
+    let alice_restored = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("restored");
+    assert_eq!(
+        alice_restored.get("$poll1:hs").cloned().unwrap_or_default(),
+        vec!["0".to_string()]
+    );
+
+    // 8. Public aggregate not changed by my_votes: ensure my_votes does not affect other voters
+    // Bob votes B on poll1, Alice's my_votes still A, aggregate should have 2 voters (A and B)
+    // First restore: ensure Alice is A, then Bob votes B
+    // (Alice currently A after redact of spoiled)
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$vote-bob-1:hs".to_string(),
+                poll_message_id: "$poll1:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                option_index: Some(1),
+                origin_server_ts: 40,
+            },
+            &["1".to_string()],
+            None,
+        )
+        .await
+        .expect("bob vote B");
+    let stored5 = store
+        .get_message("$poll1:hs")
+        .await
+        .expect("get poll1")
+        .expect("exists");
+    match stored5.content {
+        Content::Poll(p) => {
+            // Should have 2 distinct voters, each counting once
+            assert_eq!(p.responses.len(), 2);
+            let counts: std::collections::HashMap<i64, i64> = p
+                .responses
+                .into_iter()
+                .map(|r| (r.option_index, r.count))
+                .collect();
+            assert_eq!(counts.get(&0), Some(&1));
+            assert_eq!(counts.get(&1), Some(&1));
+        }
+        _ => panic!("expected poll"),
+    }
+    // Alice's my_votes still A, not affected by Bob
+    let alice_still_a = store
+        .find_poll_my_votes(&["$poll1:hs".to_string()], "@alice:hs")
+        .await
+        .expect("alice still");
+    assert_eq!(
+        alice_still_a.get("$poll1:hs").cloned().unwrap_or_default(),
+        vec!["0".to_string()]
+    );
+
+    // Batch test: Alice votes on poll2 as well, batch query returns both
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$vote-alice-poll2:hs".to_string(),
+                poll_message_id: "$poll2:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                option_index: Some(1),
+                origin_server_ts: 50,
+            },
+            &["1".to_string()],
+            None,
+        )
+        .await
+        .expect("alice poll2");
+    let batch = store
+        .find_poll_my_votes(
+            &["$poll1:hs".to_string(), "$poll2:hs".to_string()],
+            "@alice:hs",
+        )
+        .await
+        .expect("batch");
+    assert_eq!(
+        batch.get("$poll1:hs").cloned().unwrap_or_default(),
+        vec!["0".to_string()]
+    );
+    assert_eq!(
+        batch.get("$poll2:hs").cloned().unwrap_or_default(),
+        vec!["1".to_string()]
+    );
+    // Ensure batch is single query (indirectly verified by not doing N+1, but functional test covers correctness)
 }

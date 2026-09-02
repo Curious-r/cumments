@@ -477,6 +477,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
         }],
         max_selections: 1,
         responses: Vec::new(),
+        my_votes: Vec::new(),
     });
     processor
         .process_room_message(poll)
