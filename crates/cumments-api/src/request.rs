@@ -73,6 +73,12 @@ pub struct PaginationQuery {
     pub author_public_key: Option<String>,
     #[validate(length(min = 1, max = 256))]
     pub author_signature: Option<String>,
+    /// Optional thread filter: when present, only active messages whose
+    /// `thread_root` equals this event ID are returned. The root itself
+    /// (where `thread_root` is `NULL`) is naturally excluded and `total`
+    /// counts active replies in the thread.
+    #[validate(length(min = 1, max = 255))]
+    pub thread_root: Option<String>,
 }
 
 #[derive(Serialize)]

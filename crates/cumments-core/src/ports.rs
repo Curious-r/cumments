@@ -226,12 +226,18 @@ pub trait MessageStore: ProjectionSink {
     async fn get_message(&self, event_id: &str) -> Result<Option<Message>>;
 
     /// Fetches one page of projected messages for a given site and post.
+    ///
+    /// When `thread_root` is `Some`, only active messages with that exact
+    /// `thread_root` are returned within the given `site_id`/`page_slug`
+    /// scope. The root itself (where `thread_root` is `NULL`) is naturally
+    /// excluded. The `total` counts active replies in the thread.
     async fn get_messages(
         &self,
         site_id: &SiteId,
         page_slug: &PageSlug,
         limit: i64,
         offset: i64,
+        thread_root: Option<&str>,
     ) -> Result<MessagePage>;
 
     /// Saves a new message without overwriting an already-projected event.

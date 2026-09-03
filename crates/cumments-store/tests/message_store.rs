@@ -119,7 +119,7 @@ async fn save_message_records_typed_content_and_internal_fields() {
     assert_eq!(stored.status, MessageStatus::Active);
 
     let page = store
-        .get_messages(&site, &slug, 10, 0)
+        .get_messages(&site, &slug, 10, 0, None)
         .await
         .expect("query messages");
     assert_eq!(page.total, 2);
@@ -1936,4 +1936,203 @@ async fn poll_my_votes_batch_personalization_and_latest_wins() {
         vec!["1".to_string()]
     );
     // Ensure batch is single query (indirectly verified by not doing N+1, but functional test covers correctness)
+}
+#[tokio::test]
+async fn thread_query_filters_replies_and_supports_pagination() {
+    let store = DbStore::connect(&test_db_url("thread-query"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PageSlug::from("hello");
+
+    // Helper to create a message with explicit thread_root/reply_to/status
+    fn make_message(
+        event_id: &str,
+        thread_root: Option<String>,
+        reply_to: Option<String>,
+        status: MessageStatus,
+        ts: chrono::DateTime<chrono::Utc>,
+    ) -> Message {
+        let mut msg = visitor_message(event_id, event_id);
+        msg.thread_root = thread_root;
+        msg.reply_to = reply_to;
+        msg.status = status;
+        msg.timestamp = ts;
+        msg.redacted_at = if status == MessageStatus::Redacted {
+            Some(chrono::Utc::now())
+        } else {
+            None
+        };
+        msg.redacted_by = if status == MessageStatus::Redacted {
+            Some("@mod:hs".to_string())
+        } else {
+            None
+        };
+        msg
+    }
+
+    let base = chrono::Utc::now();
+    // Root is a top-level comment (thread_root = None)
+    let root = make_message(
+        "$root:hs",
+        None,
+        None,
+        MessageStatus::Active,
+        base + chrono::Duration::seconds(1),
+    );
+    let reply1 = make_message(
+        "$reply1:hs",
+        Some("$root:hs".to_string()),
+        Some("$root:hs".to_string()),
+        MessageStatus::Active,
+        base + chrono::Duration::seconds(2),
+    );
+    // Nested reply shares the same thread_root
+    let reply2 = make_message(
+        "$reply2:hs",
+        Some("$root:hs".to_string()),
+        Some("$reply1:hs".to_string()),
+        MessageStatus::Active,
+        base + chrono::Duration::seconds(3),
+    );
+    let other_root = make_message(
+        "$other_root:hs",
+        None,
+        None,
+        MessageStatus::Active,
+        base + chrono::Duration::seconds(4),
+    );
+    let other_reply = make_message(
+        "$other_reply:hs",
+        Some("$other_root:hs".to_string()),
+        Some("$other_root:hs".to_string()),
+        MessageStatus::Active,
+        base + chrono::Duration::seconds(5),
+    );
+    let top = make_message(
+        "$top:hs",
+        None,
+        None,
+        MessageStatus::Active,
+        base + chrono::Duration::seconds(6),
+    );
+    // A redacted reply that should never be returned in thread queries
+    let redacted = make_message(
+        "$redacted:hs",
+        Some("$root:hs".to_string()),
+        Some("$root:hs".to_string()),
+        MessageStatus::Redacted,
+        base + chrono::Duration::seconds(7),
+    );
+
+    for msg in [
+        &root,
+        &reply1,
+        &reply2,
+        &other_root,
+        &other_reply,
+        &top,
+        &redacted,
+    ] {
+        store.save_message(msg).await.expect("save message");
+    }
+
+    // 1. Without thread_root, existing page-level behavior is unchanged:
+    // total counts all rows (including redacted as tombstones) and pagination still works.
+    // Our get_messages without filter currently returns all rows regardless of status,
+    // so total should be 7.
+    let page_all = store
+        .get_messages(&site, &slug, 10, 0, None)
+        .await
+        .expect("query all");
+    assert_eq!(
+        page_all.total, 7,
+        "page-level total must remain unchanged (includes tombstones)"
+    );
+    assert_eq!(page_all.items.len(), 7);
+
+    // 2. With thread_root = $root, only active replies in that thread are returned.
+    // Root itself (thread_root NULL) must not be returned.
+    // Other thread's reply must not be returned. Nested reply must be included.
+    // Redacted reply must not be counted.
+    let thread = store
+        .get_messages(&site, &slug, 10, 0, Some("$root:hs"))
+        .await
+        .expect("thread query");
+    assert_eq!(thread.total, 2, "thread total must be active replies only");
+    assert_eq!(thread.items.len(), 2);
+    let ids: std::collections::HashSet<String> =
+        thread.items.iter().map(|m| m.event_id.clone()).collect();
+    assert!(ids.contains("$reply1:hs"), "direct reply must be included");
+    assert!(
+        ids.contains("$reply2:hs"),
+        "nested reply must be included (same thread_root)"
+    );
+    assert!(
+        !ids.contains("$root:hs"),
+        "root itself must not be returned"
+    );
+    assert!(
+        !ids.contains("$other_reply:hs"),
+        "other thread must not be included"
+    );
+    assert!(
+        !ids.contains("$top:hs"),
+        "top-level unrelated must not be included"
+    );
+    assert!(
+        !ids.contains("$redacted:hs"),
+        "redacted reply must not be counted"
+    );
+
+    // 6. total is active reply count, not page-local count.
+    // 7. pagination works within the thread.
+    let page1 = store
+        .get_messages(&site, &slug, 1, 0, Some("$root:hs"))
+        .await
+        .expect("thread page1");
+    assert_eq!(page1.total, 2);
+    assert_eq!(page1.items.len(), 1);
+    let page2 = store
+        .get_messages(&site, &slug, 1, 1, Some("$root:hs"))
+        .await
+        .expect("thread page2");
+    assert_eq!(page2.total, 2);
+    assert_eq!(page2.items.len(), 1);
+    assert_ne!(page1.items[0].event_id, page2.items[0].event_id);
+    // Ensure pagination covers both replies.
+    let mut all_ids = std::collections::HashSet::new();
+    all_ids.insert(page1.items[0].event_id.clone());
+    all_ids.insert(page2.items[0].event_id.clone());
+    assert_eq!(all_ids, ids);
+
+    // 8. deleted/redacted reply does not appear and total decreases.
+    store
+        .redact_message("$reply1:hs", "!room:hs", chrono::Utc::now(), "@mod:hs")
+        .await
+        .expect("redact reply1");
+    let after_redact = store
+        .get_messages(&site, &slug, 10, 0, Some("$root:hs"))
+        .await
+        .expect("thread after redact");
+    assert_eq!(
+        after_redact.total, 1,
+        "redacted reply must not be counted in total"
+    );
+    assert_eq!(after_redact.items.len(), 1);
+    assert_eq!(after_redact.items[0].event_id, "$reply2:hs");
+
+    // Verify page-level still returns tombstone (behavior unchanged).
+    let page_all_after = store
+        .get_messages(&site, &slug, 10, 0, None)
+        .await
+        .expect("page all after redact");
+    // page-level still includes all rows (including the newly redacted one as tombstone)
+    assert_eq!(page_all_after.total, 7);
+    assert!(
+        page_all_after
+            .items
+            .iter()
+            .any(|m| m.event_id == "$reply1:hs" && m.status == MessageStatus::Redacted)
+    );
 }

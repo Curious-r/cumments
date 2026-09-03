@@ -633,13 +633,22 @@ impl MessageStore for DbStore {
         page_slug: &PageSlug,
         limit: i64,
         offset: i64,
+        thread_root: Option<&str>,
     ) -> Result<MessagePage> {
         let site_id_str = site_id.as_str();
         let page_slug_str = page_slug.as_str();
 
-        let query = messages::Entity::find()
+        let mut query = messages::Entity::find()
             .filter(messages::COLUMN.site_id.eq(site_id_str))
-            .filter(messages::COLUMN.page_slug.eq(page_slug_str))
+            .filter(messages::COLUMN.page_slug.eq(page_slug_str));
+
+        if let Some(root) = thread_root {
+            query = query
+                .filter(messages::COLUMN.thread_root.eq(root))
+                .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()));
+        }
+
+        query = query
             .order_by_desc(messages::Column::Timestamp)
             .order_by_asc(messages::Column::EventId);
 

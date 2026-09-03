@@ -110,7 +110,7 @@ paths:
       summary: List comments (QUERY)
       description: |
         Sent as `QUERY /api/v1/sites/{site_id}/pages/{page_slug}/comments`
-        with a JSON body. When `author_public_key` and `author_signature` are supplied and verify against `["QUERY_COMMENTS", site_id, page_slug]`, each `ReactionSummary.mine` is set for that visitor (derived view, never stored). Anonymous reads return `mine: false`.
+        with a JSON body. When `author_public_key` and `author_signature` are supplied and verify against `["QUERY_COMMENTS", site_id, page_slug]`, each `ReactionSummary.mine` is set for that visitor (derived view, never stored). Anonymous reads return `mine: false`. When `thread_root` is supplied, only active messages with that `thread_root` are returned within the site/page scope; the thread root itself (where `thread_root` is `NULL`) is naturally excluded and `total` counts active replies in the thread (usable as `↳ N replies`).
       parameters:
         - $ref: "#/components/parameters/SiteId"
         - $ref: "#/components/parameters/PageSlug"
@@ -136,6 +136,12 @@ paths:
                 author_signature:
                   type: string
                   description: Ed25519 signature over ["QUERY_COMMENTS", site_id, page_slug] proving ownership of the public key.
+                thread_root:
+                  type: string
+                  description: Filter to replies in this thread (event ID of the thread root). When present, only active messages with this thread_root are returned; the thread root itself is excluded and pagination total is the active reply count.
+                  example: "$root:hs"
+                  minLength: 1
+                  maxLength: 255
             examples:
               firstPage:
                 summary: First page at the default page size

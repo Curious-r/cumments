@@ -268,12 +268,18 @@ pub(crate) async fn query_comments_handler(
             per_page: None,
             author_public_key: None,
             author_signature: None,
+            thread_root: None,
         }
     } else {
         serde_json::from_str(&body)
             .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?
     };
     query.validate().map_err(AppError::Validation)?;
+    if let Some(thread_root) = query.thread_root.as_deref()
+        && let Err(msg) = validate_thread_root_format(thread_root)
+    {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
 
     // Optional personalization via visitor proof. When both fields are
     // present the signature must verify; the derived virtual user is then
@@ -332,7 +338,13 @@ pub(crate) async fn query_comments_handler(
 
     match state
         .store
-        .get_messages(&site_id_val, &page_slug_val, limit, offset)
+        .get_messages(
+            &site_id_val,
+            &page_slug_val,
+            limit,
+            offset,
+            query.thread_root.as_deref(),
+        )
         .await
     {
         Ok(mut page_data) => {

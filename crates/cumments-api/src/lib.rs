@@ -502,6 +502,7 @@ mod tests {
             per_page: Some(100),
             author_public_key: None,
             author_signature: None,
+            thread_root: None,
         };
         assert!(ok.validate().is_ok());
 
@@ -510,6 +511,7 @@ mod tests {
             per_page: Some(100),
             author_public_key: None,
             author_signature: None,
+            thread_root: None,
         };
         assert!(too_large.validate().is_err());
 
@@ -518,6 +520,7 @@ mod tests {
             per_page: None,
             author_public_key: None,
             author_signature: None,
+            thread_root: None,
         };
         assert!(zero.validate().is_err());
     }
