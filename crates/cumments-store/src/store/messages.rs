@@ -194,6 +194,10 @@ async fn redact_message_on<C: ConnectionTrait>(
     // homeserver strips the original event, so the read model must do the
     // same. Revisions are removed in the same transaction because each one
     // contains an earlier displayable version of the deleted comment.
+    //
+    // The already-established relation structure (`reply_to`/`thread_root`)
+    // is deliberately kept: redaction removes activity, not structure, and
+    // thread aggregation plus rebuilds still need the stored relations.
     let existing = messages::Entity::find()
         .filter(messages::COLUMN.event_id.eq(event_id))
         .one(conn)
@@ -239,14 +243,6 @@ async fn redact_message_on<C: ConnectionTrait>(
         )
         .col_expr(
             messages::Column::LastEditEventId,
-            sea_orm::sea_query::Expr::value(Option::<String>::None),
-        )
-        .col_expr(
-            messages::Column::ReplyTo,
-            sea_orm::sea_query::Expr::value(Option::<String>::None),
-        )
-        .col_expr(
-            messages::Column::ThreadRoot,
             sea_orm::sea_query::Expr::value(Option::<String>::None),
         )
         .col_expr(
@@ -510,35 +506,28 @@ fn message_from_model(model: messages::Model) -> Message {
         MessageStatus::Active
     });
     // Defense in depth for rows written by an old binary or before migration.
-    let (content, raw_content, edited_at, reply_to, thread_root, submission_id) =
-        if status == MessageStatus::Redacted {
-            (
-                Content::redacted(),
-                serde_json::json!({}),
-                None,
-                None,
-                None,
-                None,
-            )
-        } else {
-            (
-                content_from_json(&model.content_json),
-                serde_json::from_str(&model.raw_content_json).unwrap_or_else(|_| {
-                    tracing::warn!(
-                        event_id = %event_id_for_warn,
-                        raw = %raw_content_for_warn,
-                        "falling back to Null for dirty raw_content_json"
-                    );
-                    serde_json::Value::Null
-                }),
-                model
-                    .last_edit_ts
-                    .and_then(chrono::DateTime::from_timestamp_millis),
-                model.reply_to,
-                model.thread_root,
-                model.submission_id,
-            )
-        };
+    // Redacted rows keep their structural relation metadata: redaction
+    // changes content and activity, not the event's already-established
+    // relation structure, which thread aggregation and rebuilds still need.
+    let (content, raw_content, edited_at, submission_id) = if status == MessageStatus::Redacted {
+        (Content::redacted(), serde_json::json!({}), None, None)
+    } else {
+        (
+            content_from_json(&model.content_json),
+            serde_json::from_str(&model.raw_content_json).unwrap_or_else(|_| {
+                tracing::warn!(
+                    event_id = %event_id_for_warn,
+                    raw = %raw_content_for_warn,
+                    "falling back to Null for dirty raw_content_json"
+                );
+                serde_json::Value::Null
+            }),
+            model
+                .last_edit_ts
+                .and_then(chrono::DateTime::from_timestamp_millis),
+            model.submission_id,
+        )
+    };
     Message {
         event_id: model.event_id,
         site_id: model.site_id,
@@ -558,8 +547,8 @@ fn message_from_model(model: messages::Model) -> Message {
         matrix_event_type: model.matrix_event_type,
         timestamp: model.timestamp,
         edited_at,
-        reply_to,
-        thread_root,
+        reply_to: model.reply_to,
+        thread_root: model.thread_root,
         submission_id,
         status,
         redacted_at: model.redacted_at,
@@ -1445,18 +1434,18 @@ impl DbStore {
         Ok(())
     }
 
-    /// Relations to deleted or missing messages are not part of the public
+    /// Reply edges to deleted or missing messages are not part of the public
     /// contract. Clear them in the derived view while preserving the child's
     /// immutable Matrix fact.
+    ///
+    /// `thread_root` is deliberately not sanitized: a redacted root remains
+    /// the identity of its Thread, so membership stays visible and the Thread
+    /// collection keeps describing the same member set as the derived
+    /// ThreadSummary.
     async fn sanitize_relations(&self, messages: &mut [Message]) -> Result<()> {
         let targets: Vec<String> = messages
             .iter()
-            .filter_map(|message| {
-                message
-                    .reply_to
-                    .clone()
-                    .or_else(|| message.thread_root.clone())
-            })
+            .filter_map(|message| message.reply_to.clone())
             .collect();
         if targets.is_empty() {
             return Ok(());
@@ -1476,11 +1465,6 @@ impl DbStore {
                 && !active_targets.contains(reply_to)
             {
                 message.reply_to = None;
-            }
-            if let Some(thread_root) = &message.thread_root
-                && !active_targets.contains(thread_root)
-            {
-                message.thread_root = None;
             }
         }
         Ok(())

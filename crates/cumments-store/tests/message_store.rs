@@ -458,7 +458,7 @@ async fn redacting_the_only_revision_restores_the_original() {
 }
 
 #[tokio::test]
-async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates() {
+async fn redact_message_rewrites_content_and_suppresses_content_metadata() {
     let url = test_db_url("message-redact");
     let store = DbStore::connect(&url).await.expect("connect db");
     let message = visitor_message("$event:hs", "secret");
@@ -519,8 +519,6 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
     assert_eq!(stored.content, Content::Redacted);
     assert_eq!(stored.raw_content, serde_json::json!({}));
     assert!(stored.edited_at.is_none());
-    assert!(stored.reply_to.is_none());
-    assert!(stored.thread_root.is_none());
     assert!(stored.submission_id.is_none());
     assert!(stored.reactions.is_empty());
 
@@ -572,6 +570,123 @@ async fn redact_message_rewrites_content_and_suppresses_metadata_and_aggregates(
             .await
             .expect("missing target"),
         MessageRedactionOutcome::Rejected
+    );
+}
+
+#[tokio::test]
+async fn redaction_preserves_relation_metadata_on_the_redacted_message() {
+    let url = test_db_url("redact-preserves-relations");
+    let store = DbStore::connect(&url).await.expect("connect db");
+    let root = visitor_message("$root:hs", "root");
+    store.save_message(&root).await.expect("save root");
+    let parent = visitor_message("$parent:hs", "parent");
+    store.save_message(&parent).await.expect("save parent");
+
+    let mut member = visitor_message("$member:hs", "secret");
+    member.reply_to = Some("$parent:hs".to_string());
+    member.thread_root = Some("$root:hs".to_string());
+    store.save_message(&member).await.expect("save member");
+
+    store
+        .redact_message("$member:hs", "!room:hs", Utc::now(), "@mod:hs")
+        .await
+        .expect("redact member");
+
+    let stored = store
+        .get_message("$member:hs")
+        .await
+        .expect("get message")
+        .expect("message exists");
+    assert_eq!(stored.status, MessageStatus::Redacted);
+    assert_eq!(stored.content, Content::Redacted);
+    assert_eq!(
+        stored.reply_to.as_deref(),
+        Some("$parent:hs"),
+        "redacted hydration must preserve the stored reply_to"
+    );
+    assert_eq!(
+        stored.thread_root.as_deref(),
+        Some("$root:hs"),
+        "redacted hydration must preserve the stored thread_root"
+    );
+
+    let db = Database::connect(&url).await.expect("connect raw db");
+    let row = messages::Entity::find()
+        .filter(messages::COLUMN.event_id.eq("$member:hs"))
+        .one(&db)
+        .await
+        .expect("query redacted row")
+        .expect("redacted row exists");
+    assert_eq!(
+        row.reply_to.as_deref(),
+        Some("$parent:hs"),
+        "redaction mutation must not erase reply_to"
+    );
+    assert_eq!(
+        row.thread_root.as_deref(),
+        Some("$root:hs"),
+        "redaction mutation must not erase thread_root"
+    );
+}
+
+#[tokio::test]
+async fn redacted_root_keeps_its_thread_queryable() {
+    let store = DbStore::connect(&test_db_url("redacted-root-thread"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PageSlug::from("hello");
+
+    let mut root = visitor_message("$root:hs", "root");
+    root.reply_to = None;
+    store.save_message(&root).await.expect("save root");
+
+    let mut member_a = visitor_message("$a:hs", "a");
+    member_a.reply_to = Some("$root:hs".to_string());
+    member_a.thread_root = Some("$root:hs".to_string());
+    store.save_message(&member_a).await.expect("save member a");
+
+    let mut member_b = visitor_message("$b:hs", "b");
+    member_b.reply_to = None;
+    member_b.thread_root = Some("$root:hs".to_string());
+    store.save_message(&member_b).await.expect("save member b");
+
+    assert_eq!(
+        store
+            .redact_message("$root:hs", "!room:hs", Utc::now(), "@mod:hs")
+            .await
+            .expect("redact root"),
+        MessageRedactionOutcome::Redacted
+    );
+
+    // Root redaction does not delete members: the Thread collection still
+    // returns the active members of the still-identified Thread.
+    let thread = store
+        .get_messages(&site, &slug, 10, 0, Some("$root:hs"))
+        .await
+        .expect("thread query");
+    assert_eq!(thread.total, 2);
+    let ids: std::collections::HashSet<String> =
+        thread.items.iter().map(|m| m.event_id.clone()).collect();
+    assert_eq!(ids, ["$a:hs".to_string(), "$b:hs".to_string()].into());
+    for member in &thread.items {
+        assert_eq!(
+            member.thread_root.as_deref(),
+            Some("$root:hs"),
+            "members of a redacted root keep their thread relation in the public view"
+        );
+    }
+
+    // The redacted root remains individually addressable.
+    let stored_root = store
+        .get_message("$root:hs")
+        .await
+        .expect("get root")
+        .expect("root exists");
+    assert_eq!(stored_root.status, MessageStatus::Redacted);
+    assert!(
+        stored_root.thread_root.is_none(),
+        "the root is the Thread identity, never a member of its own Thread"
     );
 }
 
@@ -642,7 +757,7 @@ async fn reactions_aggregate_by_key_and_ignore_redacted() {
 }
 
 #[tokio::test]
-async fn relations_to_redacted_parents_are_hidden_from_the_child_view() {
+async fn redacted_parent_hides_reply_to_but_keeps_thread_membership_visible() {
     let store = DbStore::connect(&test_db_url("child-dangling-relations"))
         .await
         .expect("connect db");
@@ -676,8 +791,15 @@ async fn relations_to_redacted_parents_are_hidden_from_the_child_view() {
         .expect("get child after parent redaction")
         .expect("child exists");
     assert_eq!(visible.status, MessageStatus::Active);
-    assert!(visible.reply_to.is_none());
-    assert!(visible.thread_root.is_none());
+    assert!(
+        visible.reply_to.is_none(),
+        "reply edges to redacted parents stay hidden from the child view"
+    );
+    assert_eq!(
+        visible.thread_root.as_deref(),
+        Some("$parent:hs"),
+        "thread membership survives the root's redaction: the root event ID remains the Thread identity"
+    );
 }
 
 #[tokio::test]
