@@ -30,6 +30,10 @@ Everything below follows from three invariants:
    back, the projector updates the read model, and the reconciler confirms
    its work. The same idempotent projection also serves `backfill`; Logging
    mode has no homeserver push and therefore no closed loop.
+4. **Semantic parity with Matrix.** Cumments models Matrix concepts at the 
+   semantic/domain boundary whenever those concepts are part of the 
+   application's model. Matrix wire-format and transport-specific details 
+   remain behind MatrixDriver and the projector.
 
 ### Local data layers
 

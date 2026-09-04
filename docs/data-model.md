@@ -20,17 +20,22 @@ state with their own durability rules (see
 2. **Raw JSON is the escape hatch.** The protocol keeps evolving; unknown or
    future types keep their original payload so history is never lost and can
    be reinterpreted later.
-3. **Relations are not content.** Replies, edits, threads, reactions and
-   deletions are attributes or edges of a message, modeled separately from
-   the body.
-   Public reads hide a reply/thread edge when its target is deleted or no
-   longer visible; the child remains an ordinary comment.
+3. **Relations are not content.** Replies, threads, edits, reactions and 
+   deletions are attributes or edges of a message, modeled separately from 
+   the body. Redaction removes the message's active content from public 
+   presentation but does not erase already-established relation metadata from
+   the projection.
 4. **Authors follow live profiles.** Display name and avatar render from the
    author's current joined `m.room.member` profile, so renames and avatar
    changes propagate to old comments. The values captured at projection time
    are kept as a fallback for authors who left the room.
 5. **Boundaries are explicit.** Voice/video calls are out of scope, and
    encrypted content is modeled only as a placeholder.
+6. **Matrix semantics are preserved at the domain boundary.** When a Matrix 
+   concept is represented by the Cumments model, semantically distinct Matrix
+   concepts remain distinct in the model even when Cumments exposes a 
+   simplified API. Matrix-specific wire representation remains an implementation
+   detail of the Matrix integration layer.
 
 ## Message shape
 
@@ -71,7 +76,7 @@ their `mxid` and never a `public_key`.
 | `media` | `kind` (image/video/audio/file/sticker), `url`, optional filename, mimetype, size, dimensions, thumbnail, alt text, `voice` flag |
 | `location` | `geo_uri`, optional description and thumbnail |
 | `poll` | `question`, `options`, MSC3381 `max_selections`, aggregated `responses` |
-| `redacted` | Stable empty tombstone; no original body, URL, relations or raw payload |
+| `redacted` | Stable empty tombstone; no original body, URL or raw payload |
 | `encrypted` | algorithm and sender key placeholder only |
 | `unknown` | optional `fallback` text plus the original raw JSON |
 

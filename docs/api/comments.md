@@ -157,6 +157,10 @@ while room v3+ IDs are bare hashes (v3 may even contain `/`). When an event ID
 is used in a request path (the path-based edit form) or query string (delete),
 clients must percent-encode it.
 
+These fields are Cumments' semantic representation of the corresponding
+Matrix relations; clients do not construct raw Matrix relation JSON such as
+`m.relates_to`.
+
 `display_name` is presentation data and is deliberately **not** part of the
 signature: the API writes it to the virtual user's Matrix profile, and the
 event proof block only carries `public_key`, `signature`, `challenge`,

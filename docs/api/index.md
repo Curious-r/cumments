@@ -269,3 +269,9 @@ affected resource as JSON (the updated site, the pending role claim, the
 revoked role). `DELETE /api/v1/operator/quarantined-rooms/{room_id}` is the
 single exception and returns `204`: the quarantine row is gone, so there is
 no surviving resource to serialize.
+
+**Semantic API over Matrix.** Public APIs use Cumments semantic types rather
+than raw Matrix event JSON. Where a public API represents a Matrix concept, 
+its semantics should remain aligned with Matrix unless Cumments has an 
+explicit product-level reason to differ. Matrix wire-format details remain 
+behind the Matrix integration boundary.
