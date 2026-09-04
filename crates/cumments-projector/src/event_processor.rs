@@ -24,9 +24,9 @@ use cumments_core::{
     identity::{post_signature_message, signature_message},
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
-        MessageRedactionOutcome, MessageRevision, MessageStatus, PageSlug, PollVote,
-        ProjectionRepairInput, Reaction, RoomIdentity, RoomMember, RoomStateEvent, RoomStatus,
-        SiteId, SubmissionCompletion, TextStyle,
+        MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
+        PollVote, ProjectionRepairInput, Reaction, RoomIdentity, RoomMember, RoomStateEvent,
+        RoomStatus, SiteId, SubmissionCompletion, TextStyle,
     },
     ports::{
         CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore,
@@ -1668,9 +1668,32 @@ impl EventProcessor {
         self.emit(ProjectorEvent::MessageCreated {
             site_id,
             page_slug,
-            message,
+            message: message.clone(),
         })
         .await;
+        // A new Thread member changes the root's derived summary. The root
+        // annotation re-reads committed state, so the payload is an
+        // authoritative snapshot rather than a predicted transition.
+        if let (MessageSaveOutcome::Inserted, Some(root)) = (&outcome, &message.thread_root) {
+            self.emit_thread_summary_snapshot(root).await?;
+        }
+        Ok(())
+    }
+
+    /// Emit `MessageAnnotationsChanged` for a Thread root with the current
+    /// committed state, so clients can replace their stored summary with an
+    /// authoritative snapshot. A no-op when the root is not in the read model
+    /// (e.g. the member arrived before its root during backfill); the root's
+    /// summary is derived on the next read anyway.
+    async fn emit_thread_summary_snapshot(&self, root_event_id: &str) -> Result<()> {
+        if let Some(root) = self.message_store.get_message(root_event_id).await? {
+            self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                site_id: root.site_id.clone(),
+                page_slug: root.page_slug.clone(),
+                message: root,
+            })
+            .await;
+        }
         Ok(())
     }
 
@@ -2609,11 +2632,24 @@ impl EventProcessor {
                     &event.event_id,
                 )
                 .await?;
-            if matches!(
-                outcome,
-                MessageRedactionOutcome::Redacted | MessageRedactionOutcome::AlreadyRedacted
-            ) {
+            if matches!(outcome, MessageRedactionOutcome::Redacted) {
                 info!("Successfully redacted message {}", target_event_id);
+                self.emit(ProjectorEvent::MessageDeleted {
+                    site_id: c.site_id,
+                    page_slug: c.page_slug,
+                    event_id: target_event_id,
+                    submission_id: event.submission_id,
+                })
+                .await;
+                // A member leaving the active set changes the root's derived
+                // summary; publish an authoritative snapshot of committed
+                // state. Root redaction changes no membership, so it needs no
+                // annotation.
+                if let Some(root) = &c.thread_root {
+                    self.emit_thread_summary_snapshot(root).await?;
+                }
+            } else if matches!(outcome, MessageRedactionOutcome::AlreadyRedacted) {
+                info!("Message {} was already redacted", target_event_id);
                 self.emit(ProjectorEvent::MessageDeleted {
                     site_id: c.site_id,
                     page_slug: c.page_slug,
