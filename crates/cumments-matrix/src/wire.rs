@@ -207,6 +207,8 @@ pub(crate) fn build_media_body(
     author_signature: &str,
     author_challenge: &str,
     submission_id: Option<i64>,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
 ) -> serde_json::Value {
     let msgtype = match media.kind {
         Some(MediaKind::Sticker) => "m.sticker",
@@ -260,6 +262,27 @@ pub(crate) fn build_media_body(
         "content": media.url,
         "submission_id": submission_id,
     });
+    match (reply_to, thread_root) {
+        (Some(reply), Some(thread)) => {
+            message_body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (Some(reply), None) => {
+            message_body["m.relates_to"] = serde_json::json!({
+                "m.in_reply_to": { "event_id": reply },
+            });
+        }
+        (None, Some(thread)) => {
+            message_body["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": thread,
+            });
+        }
+        (None, None) => {}
+    }
     message_body
 }
 /// Build the `m.reaction` content for a visitor reaction.
@@ -654,6 +677,8 @@ mod tests {
             "sig",
             "chal",
             Some(7),
+            None,
+            None,
         );
         assert_eq!(body["msgtype"], "m.image");
         assert_eq!(body["body"], "cat.png");
@@ -681,6 +706,8 @@ mod tests {
             "pubkey",
             "sig",
             "chal",
+            None,
+            None,
             None,
         );
         assert_eq!(body["msgtype"], "m.audio");
@@ -1005,6 +1032,8 @@ mod tests {
             "pk",
             "sig",
             "chal",
+            None,
+            None,
             None,
         );
         assert_eq!(media[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));

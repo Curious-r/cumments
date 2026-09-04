@@ -247,12 +247,25 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
     }
 
     // Extract the standard rich-reply relation, if any.
-    let reply_to = content
+    // `is_falling_back` distinguishes a genuine direct reply from a
+    // fallback-only `m.in_reply_to` that accompanies a Thread. See
+    // `misc/design/thread-redesign-0903.md` §5: fallback targets must not be
+    // projected as `reply_to`.
+    let is_falling_back = content
         .get("m.relates_to")
-        .and_then(|rel| rel.get("m.in_reply_to"))
-        .and_then(|reply| reply.get("event_id"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .and_then(|rel| rel.get("is_falling_back"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let reply_to = if is_falling_back {
+        None
+    } else {
+        content
+            .get("m.relates_to")
+            .and_then(|rel| rel.get("m.in_reply_to"))
+            .and_then(|reply| reply.get("event_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
 
     // Extract the thread relation (m.thread), if any.
     let thread_root = content.get("m.relates_to").and_then(|rel| {

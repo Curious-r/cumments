@@ -154,6 +154,8 @@ impl AppServiceMatrixDriver {
                 author_signature,
                 author_challenge,
                 submission_id,
+                reply_to,
+                thread_root,
             ),
             None => build_message_body(
                 content,
