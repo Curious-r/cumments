@@ -5,7 +5,8 @@ use cumments_core::models::{
     AuthorKind, AuthorSnapshot, CommentMedia, Content, EditProjectionOutcome, MediaContent,
     MediaKind, Message, MessageRedactionOutcome, MessageRevision, MessageSaveOutcome,
     MessageStatus, PageSlug, PollContent, PollOption, PollResponseSummary, PollVote, Reaction,
-    RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, UnknownContent,
+    RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, ThreadSummary,
+    UnknownContent,
 };
 use cumments_core::ports::{
     AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
@@ -52,6 +53,8 @@ fn visitor_message(event_id: &str, body: &str) -> Message {
         redacted_at: None,
         redacted_by: None,
         reactions: Vec::new(),
+
+        thread_summary: None,
         room_id: "!room:hs".to_string(),
         sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
         raw_content: serde_json::json!({ "msgtype": "m.text", "body": body }),
@@ -2257,4 +2260,261 @@ async fn thread_query_filters_replies_and_supports_pagination() {
             .iter()
             .any(|m| m.event_id == "$reply1:hs" && m.status == MessageStatus::Redacted)
     );
+}
+
+#[tokio::test]
+async fn thread_summary_is_derived_for_roots_and_absent_for_members() {
+    let store = DbStore::connect(&test_db_url("summary-placement"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PageSlug::from("hello");
+
+    let mut root = visitor_message("$root:hs", "root");
+    root.reply_to = None;
+    store.save_message(&root).await.expect("save root");
+
+    let empty_root = store
+        .get_message("$root:hs")
+        .await
+        .expect("get root")
+        .expect("root exists");
+    assert_eq!(
+        empty_root.thread_summary,
+        Some(ThreadSummary::default()),
+        "a root without members exposes the zero/empty summary"
+    );
+
+    let mut member = visitor_message("$member:hs", "member");
+    member.reply_to = None;
+    member.thread_root = Some("$root:hs".to_string());
+    store.save_message(&member).await.expect("save member");
+
+    let stored_root = store
+        .get_message("$root:hs")
+        .await
+        .expect("get root")
+        .expect("root exists");
+    assert_eq!(
+        stored_root.thread_summary,
+        Some(ThreadSummary {
+            num_replies: 1,
+            latest_reply: Some("$member:hs".to_string())
+        })
+    );
+
+    let stored_member = store
+        .get_message("$member:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(
+        stored_member.thread_summary, None,
+        "a Thread member never carries a ThreadSummary merely because it belongs to a Thread"
+    );
+
+    // Collection and single GET expose the same derived summaries.
+    let page = store
+        .get_messages(&site, &slug, 10, 0, None)
+        .await
+        .expect("page query");
+    let mut items = page.items;
+    items.sort_by(|a, b| a.event_id.cmp(&b.event_id));
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].event_id, "$member:hs");
+    assert_eq!(items[0].thread_summary, None);
+    assert_eq!(items[1].event_id, "$root:hs");
+    assert_eq!(
+        items[1].thread_summary,
+        Some(ThreadSummary {
+            num_replies: 1,
+            latest_reply: Some("$member:hs".to_string())
+        })
+    );
+}
+
+#[tokio::test]
+async fn thread_summary_counts_active_members_and_picks_latest_by_canonical_order() {
+    let store = DbStore::connect(&test_db_url("summary-ordering"))
+        .await
+        .expect("connect db");
+
+    let mut root = visitor_message("$root:hs", "root");
+    root.reply_to = None;
+    store.save_message(&root).await.expect("save root");
+
+    let base = Utc::now();
+    // Direct reply to the root.
+    let mut a = visitor_message("$a:hs", "a");
+    a.reply_to = Some("$root:hs".to_string());
+    a.thread_root = Some("$root:hs".to_string());
+    a.timestamp = base + chrono::Duration::seconds(2);
+    store.save_message(&a).await.expect("save a");
+
+    // Member without a direct reply: contributes to the summary even though
+    // it has no reply_to relation.
+    let mut b = visitor_message("$b:hs", "b");
+    b.reply_to = None;
+    b.thread_root = Some("$root:hs".to_string());
+    b.timestamp = base + chrono::Duration::seconds(3);
+    store.save_message(&b).await.expect("save b");
+
+    // Nested member sharing B's timestamp: canonical ordering
+    // (timestamp DESC, event_id ASC) prefers the lexicographically smaller
+    // event ID on ties.
+    let mut c = visitor_message("$c:hs", "c");
+    c.reply_to = Some("$a:hs".to_string());
+    c.thread_root = Some("$root:hs".to_string());
+    c.timestamp = base + chrono::Duration::seconds(3);
+    store.save_message(&c).await.expect("save c");
+
+    let stored_root = store
+        .get_message("$root:hs")
+        .await
+        .expect("get root")
+        .expect("root exists");
+    assert_eq!(
+        stored_root.thread_summary,
+        Some(ThreadSummary {
+            num_replies: 3,
+            latest_reply: Some("$b:hs".to_string())
+        }),
+        "count covers nested members and members without reply_to; latest is the canonical first member"
+    );
+}
+
+#[tokio::test]
+async fn thread_summary_excludes_redacted_members_and_recomputes_latest() {
+    let store = DbStore::connect(&test_db_url("summary-redaction"))
+        .await
+        .expect("connect db");
+
+    let mut root = visitor_message("$root:hs", "root");
+    root.reply_to = None;
+    store.save_message(&root).await.expect("save root");
+
+    let base = Utc::now();
+    let mut a = visitor_message("$a:hs", "a");
+    a.reply_to = Some("$root:hs".to_string());
+    a.thread_root = Some("$root:hs".to_string());
+    a.timestamp = base + chrono::Duration::seconds(2);
+    store.save_message(&a).await.expect("save a");
+
+    let mut b = visitor_message("$b:hs", "b");
+    b.reply_to = None;
+    b.thread_root = Some("$root:hs".to_string());
+    b.timestamp = base + chrono::Duration::seconds(3);
+    store.save_message(&b).await.expect("save b");
+
+    async fn summary_of(store: &DbStore) -> Option<ThreadSummary> {
+        store
+            .get_message("$root:hs")
+            .await
+            .expect("get root")
+            .expect("root exists")
+            .thread_summary
+    }
+    assert_eq!(
+        summary_of(&store).await,
+        Some(ThreadSummary {
+            num_replies: 2,
+            latest_reply: Some("$b:hs".to_string())
+        })
+    );
+
+    // Redacting the latest member removes it from the count and promotes the
+    // previous member; a stale latest_reply can never survive.
+    store
+        .redact_message("$b:hs", "!room:hs", Utc::now(), "@mod:hs")
+        .await
+        .expect("redact b");
+    assert_eq!(
+        summary_of(&store).await,
+        Some(ThreadSummary {
+            num_replies: 1,
+            latest_reply: Some("$a:hs".to_string())
+        })
+    );
+
+    store
+        .redact_message("$a:hs", "!room:hs", Utc::now(), "@mod:hs")
+        .await
+        .expect("redact a");
+    assert_eq!(
+        summary_of(&store).await,
+        Some(ThreadSummary::default()),
+        "no active members left means zero/null"
+    );
+}
+
+#[tokio::test]
+async fn thread_summary_matches_thread_collection_total() {
+    let store = DbStore::connect(&test_db_url("summary-collection"))
+        .await
+        .expect("connect db");
+    let site = SiteId::from("my-blog");
+    let slug = PageSlug::from("hello");
+
+    let mut root = visitor_message("$root:hs", "root");
+    root.reply_to = None;
+    store.save_message(&root).await.expect("save root");
+
+    let mut other_root = visitor_message("$other_root:hs", "other");
+    other_root.reply_to = None;
+    other_root.timestamp = Utc::now() + chrono::Duration::seconds(9);
+    store.save_message(&other_root).await.expect("save other");
+
+    let base = Utc::now();
+    for (event_id, ts) in [("$m1:hs", 1), ("$m2:hs", 2)] {
+        let mut member = visitor_message(event_id, event_id);
+        member.reply_to = None;
+        member.thread_root = Some("$root:hs".to_string());
+        member.timestamp = base + chrono::Duration::seconds(ts);
+        store.save_message(&member).await.expect("save member");
+    }
+    let mut other_member = visitor_message("$other_member:hs", "other member");
+    other_member.reply_to = None;
+    other_member.thread_root = Some("$other_root:hs".to_string());
+    other_member.timestamp = base + chrono::Duration::seconds(5);
+    store
+        .save_message(&other_member)
+        .await
+        .expect("save other member");
+
+    // A redacted root stays the basis for aggregation: its summary keeps
+    // counting active members even though the root itself is inactive.
+    store
+        .redact_message("$other_root:hs", "!room:hs", Utc::now(), "@mod:hs")
+        .await
+        .expect("redact other root");
+
+    // One collection read attaches correct summaries to every root in the
+    // page (batch aggregation, no per-root query).
+    let page = store
+        .get_messages(&site, &slug, 10, 0, None)
+        .await
+        .expect("page query");
+    let summary_of = |id: &str| {
+        page.items
+            .iter()
+            .find(|m| m.event_id == id)
+            .expect("root in page")
+            .thread_summary
+            .clone()
+            .expect("roots expose a summary")
+    };
+    assert_eq!(summary_of("$root:hs").num_replies, 2);
+    assert_eq!(
+        summary_of("$root:hs").latest_reply,
+        Some("$m2:hs".to_string())
+    );
+    assert_eq!(summary_of("$other_root:hs").num_replies, 1);
+
+    // Consistency: num_replies equals the Thread collection total for the
+    // same root (same active predicate, same membership key).
+    let thread = store
+        .get_messages(&site, &slug, 10, 0, Some("$root:hs"))
+        .await
+        .expect("thread query");
+    assert_eq!(thread.total, summary_of("$root:hs").num_replies);
 }

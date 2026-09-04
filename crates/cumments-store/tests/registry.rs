@@ -178,6 +178,8 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
         redacted_at: None,
         redacted_by: None,
         reactions: Vec::new(),
+
+        thread_summary: None,
         room_id: "!room:hs".to_string(),
         sender_mxid: "@_cumments_my-blog_abc:hs".to_string(),
         raw_content: serde_json::json!({}),

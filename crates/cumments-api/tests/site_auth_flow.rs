@@ -1662,6 +1662,8 @@ async fn redacted_comment_reads_as_tombstone_and_rejects_new_reaction() {
         redacted_at: Some(chrono::Utc::now()),
         redacted_by: Some("@moderator:hs".to_string()),
         reactions: Vec::new(),
+
+        thread_summary: None,
         room_id: "!room:hs".to_string(),
         sender_mxid: "@_cumments_test-blog_abcd:hs".to_string(),
         matrix_event_type: "m.room.message".to_string(),
@@ -2127,6 +2129,8 @@ async fn reaction_retries_do_not_require_idempotency_key_and_reuse_matrix_txn() 
             redacted_at: None,
             redacted_by: None,
             reactions: Vec::new(),
+
+            thread_summary: None,
             room_id: "!room:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
             matrix_event_type: "m.room.message".to_string(),
@@ -3263,6 +3267,8 @@ async fn reaction_remove_is_idempotent_and_uses_deterministic_txn() {
             redacted_at: None,
             redacted_by: None,
             reactions: Vec::new(),
+
+            thread_summary: None,
             room_id: "!room:hs".to_string(),
             sender_mxid: "@alice:hs".to_string(),
             matrix_event_type: "m.room.message".to_string(),

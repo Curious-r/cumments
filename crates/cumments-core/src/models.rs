@@ -128,6 +128,11 @@ pub struct Message {
     /// Aggregated reaction counts for this message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<ReactionSummary>,
+    /// Derived Thread summary for messages that may serve as a Thread root
+    /// (no `thread_root` of their own). `None` for Thread members: belonging
+    /// to a Thread never attaches a ThreadSummary to a member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_summary: Option<ThreadSummary>,
     /// Matrix room the message lives in. Internal integrity check for edits
     /// and redactions; never exposed through the API/SSE.
     #[serde(skip)]
@@ -152,6 +157,21 @@ pub struct Message {
 pub enum MessageStatus {
     Active,
     Redacted,
+}
+
+/// Derived summary of the Thread rooted at a message, computed from the
+/// currently active Thread members. Never persisted as a mutable counter:
+/// the read model derives it from the stored `thread_root` relations on
+/// every read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ThreadSummary {
+    /// Number of currently active Thread members, excluding the root.
+    pub num_replies: i64,
+    /// Event ID of the latest active Thread member under canonical comment
+    /// ordering (`timestamp DESC, event_id ASC`); `None` without members.
+    /// Despite the name this is the latest Thread member, not necessarily a
+    /// message with a `reply_to` relation.
+    pub latest_reply: Option<String>,
 }
 
 impl MessageStatus {

@@ -1644,6 +1644,7 @@ impl EventProcessor {
             redacted_at: None,
             redacted_by: None,
             reactions: Vec::new(),
+            thread_summary: None,
             room_id: event.room_id.clone(),
             sender_mxid: event.sender.clone(),
             raw_content: event.raw_content.clone(),

@@ -190,6 +190,9 @@ paths:
                         redacted_at: null
                         redacted_by: null
                         reactions: []
+                        thread_summary:
+                          num_replies: 0
+                          latest_reply: null
                     meta:
                       total: 1
                       page: 1
@@ -2397,6 +2400,28 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReactionSummary"
+        thread_summary:
+          $ref: "#/components/schemas/ThreadSummary"
+    ThreadSummary:
+      type: object
+      description: |
+        Derived Thread metadata attached to messages that may serve as a
+        Thread root (no `thread_root` of their own). Computed from the
+        currently active Thread members on every read, never stored as a
+        mutable counter. Omitted for Thread members: belonging to a Thread
+        never attaches a ThreadSummary to a member.
+      required: [num_replies, latest_reply]
+      properties:
+        num_replies:
+          type: integer
+          description: Number of currently active Thread members, excluding the root.
+        latest_reply:
+          type: [string, "null"]
+          description: |
+            Event ID of the latest active Thread member under canonical
+            comment ordering (`timestamp DESC, event_id ASC`); null when the
+            Thread has no active members. The value is the latest Thread
+            member, not necessarily a message with a reply_to relation.
     Content:
       type: object
       description: |

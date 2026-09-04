@@ -16,7 +16,7 @@ use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message, MessagePage,
     MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
     PollResponseSummary, PollVote, Reaction, ReactionSummary, Reactor, SiteId,
-    SubmissionCompletion, UnknownContent,
+    SubmissionCompletion, ThreadSummary, UnknownContent,
 };
 use cumments_core::ports::{AppServiceTxnStore, MessageStore, ProjectionSink};
 use sea_orm::{
@@ -554,6 +554,7 @@ fn message_from_model(model: messages::Model) -> Message {
         redacted_at: model.redacted_at,
         redacted_by: model.redacted_by,
         reactions: Vec::new(),
+        thread_summary: None,
         room_id: model.room_id,
         sender_mxid: model.sender_mxid,
         raw_content,
@@ -1411,6 +1412,8 @@ impl DbStore {
                 .await?;
             poll.responses = responses.remove(&message.event_id).unwrap_or_default();
         }
+        self.attach_thread_summaries(std::slice::from_mut(&mut message))
+            .await?;
         self.sanitize_relations(std::slice::from_mut(&mut message))
             .await?;
         self.enrich_author_profiles(std::slice::from_mut(&mut message))
@@ -1429,9 +1432,87 @@ impl DbStore {
                 poll.responses = responses.remove(&message.event_id).unwrap_or_default();
             }
         }
+        self.attach_thread_summaries(messages).await?;
         self.sanitize_relations(messages).await?;
         self.enrich_author_profiles(messages).await?;
         Ok(())
+    }
+
+    /// Attach derived [`ThreadSummary`] values to every message in the batch
+    /// that may serve as a Thread root (no `thread_root` of its own). One
+    /// batch aggregation for the whole page; a message is never queried per
+    /// root. Roots without active members keep the zero/empty summary, and
+    /// Thread members never receive one.
+    async fn attach_thread_summaries(&self, messages: &mut [Message]) -> Result<()> {
+        let root_ids: Vec<String> = messages
+            .iter()
+            .filter(|message| message.thread_root.is_none())
+            .map(|message| message.event_id.clone())
+            .collect();
+        if root_ids.is_empty() {
+            return Ok(());
+        }
+        // A hydrate batch is site/page-scoped (the page query filters both);
+        // the single-message path uses the message's own scope.
+        let (site_id, page_slug) = match messages.first() {
+            Some(message) => (message.site_id.clone(), message.page_slug.clone()),
+            None => return Ok(()),
+        };
+        let summaries = self
+            .thread_summary_map(&site_id, &page_slug, &root_ids)
+            .await?;
+        for message in messages.iter_mut() {
+            if message.thread_root.is_none() {
+                message.thread_summary = Some(
+                    summaries
+                        .get(&message.event_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Batch-derived [`ThreadSummary`] keyed by root event ID, computed from
+    /// the same active member set and canonical comment ordering
+    /// (`timestamp DESC, event_id ASC`) that the Thread collection query uses,
+    /// so the summary and the collection always describe the same membership.
+    /// Roots without active members are absent from the map; callers default
+    /// them to the zero/empty summary.
+    async fn thread_summary_map(
+        &self,
+        site_id: &str,
+        page_slug: &str,
+        root_ids: &[String],
+    ) -> Result<HashMap<String, ThreadSummary>> {
+        if root_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // Rows arrive in canonical ordering, so the first row per thread_root
+        // is that Thread's latest active member.
+        let members = messages::Entity::find()
+            .filter(messages::COLUMN.site_id.eq(site_id))
+            .filter(messages::COLUMN.page_slug.eq(page_slug))
+            .filter(messages::COLUMN.thread_root.is_in(root_ids.iter().cloned()))
+            .filter(messages::COLUMN.status.eq(MessageStatus::Active.as_str()))
+            .order_by_desc(messages::Column::Timestamp)
+            .order_by_asc(messages::Column::EventId)
+            .all(&self.db)
+            .await?;
+
+        let mut summaries: HashMap<String, ThreadSummary> = HashMap::new();
+        for member in members {
+            let Some(root) = member.thread_root else {
+                continue;
+            };
+            let summary = summaries.entry(root).or_default();
+            summary.num_replies += 1;
+            if summary.latest_reply.is_none() {
+                summary.latest_reply = Some(member.event_id);
+            }
+        }
+        Ok(summaries)
     }
 
     /// Reply edges to deleted or missing messages are not part of the public
@@ -1854,6 +1935,7 @@ mod tests {
             redacted_at: None,
             redacted_by: None,
             reactions: Vec::new(),
+            thread_summary: None,
             room_id: "!room:hs".to_string(),
             sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
             raw_content: serde_json::json!({ "msgtype": "m.text", "body": body }),

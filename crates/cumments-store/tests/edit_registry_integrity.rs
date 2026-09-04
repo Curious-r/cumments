@@ -45,6 +45,8 @@ async fn save_message(store: &DbStore, event_id: &str, room_id: &str, content: &
         redacted_at: None,
         redacted_by: None,
         reactions: Vec::new(),
+
+        thread_summary: None,
         room_id: room_id.to_string(),
         sender_mxid: "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs".to_string(),
         raw_content: serde_json::Value::Null,
