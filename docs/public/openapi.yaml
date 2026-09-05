@@ -205,6 +205,30 @@ paths:
       - $ref: "#/components/parameters/SiteId"
       - $ref: "#/components/parameters/PageSlug"
       - $ref: "#/components/parameters/CommentId"
+    get:
+      tags: [Comments]
+      summary: Fetch a single comment
+      operationId: getComment
+      description: |
+        Returns the same public Message representation the collection
+        exposes, including `thread_summary` when the comment may serve as a
+        Thread root (no `thread_root` of its own). Active and redacted
+        comments are both addressable; missing or out-of-scope comments are
+        404. This is how clients fetch a Thread root that is not already in
+        the page state.
+      responses:
+        "200":
+          description: The requested comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     patch:
       tags: [Comments]
       summary: Edit a comment (path form)

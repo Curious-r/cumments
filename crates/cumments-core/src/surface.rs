@@ -469,6 +469,12 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "visitor.comment.list",
     ),
     http_operation(
+        "GET",
+        "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
+        "getComment",
+        "visitor.comment.list",
+    ),
+    http_operation(
         "PATCH",
         "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
         "updateCommentPath",
@@ -875,6 +881,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 66);
+        assert_eq!(HTTP_OPERATIONS.len(), 67);
     }
 }

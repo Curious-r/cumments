@@ -1,6 +1,7 @@
 use crate::routes::comments::{
-    delete_comment_handler, location_handler, poll_handler, post_comment_handler,
-    query_comments_handler, react_handler, unreact_handler, update_comment_handler, vote_handler,
+    delete_comment_handler, get_comment_handler, location_handler, poll_handler,
+    post_comment_handler, query_comments_handler, react_handler, unreact_handler,
+    update_comment_handler, vote_handler,
 };
 use crate::routes::governance::{
     create_admin_claim_handler, create_manager_claim_handler, create_page_retirement_handler,
@@ -36,7 +37,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, post, put},
 };
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
@@ -170,7 +171,8 @@ pub fn build_router(state: ApiState) -> Router {
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/comments/{comment_id}",
-            patch(update_comment_handler)
+            get(get_comment_handler)
+                .patch(update_comment_handler)
                 .delete(delete_comment_handler)
                 .fallback(method_not_allowed_handler),
         )

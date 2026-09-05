@@ -3411,3 +3411,265 @@ async fn reaction_remove_is_idempotent_and_uses_deterministic_txn() {
         "unknown key must not trigger a redaction"
     );
 }
+
+#[tokio::test]
+async fn thread_query_and_single_get_expose_the_semantic_read_model() {
+    let (state, store) =
+        test_state("thread-query-api", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("test-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+
+    let base = chrono::Utc::now();
+    let seed = |event_id: &str,
+                reply_to: Option<String>,
+                thread_root: Option<String>,
+                ts: i64,
+                status: MessageStatus| Message {
+        event_id: event_id.to_string(),
+        site_id: "test-blog".to_string(),
+        page_slug: "hello".to_string(),
+        author: AuthorSnapshot {
+            kind: AuthorKind::Visitor,
+            display_name: Some("Alice".to_string()),
+            avatar_url: None,
+            public_key: Some("visitor-key".to_string()),
+            mxid: None,
+        },
+        content: if status == MessageStatus::Redacted {
+            Content::Redacted
+        } else {
+            Content::Text(TextContent {
+                body: event_id.to_string(),
+                formatted_body: None,
+                style: TextStyle::Normal,
+            })
+        },
+        matrix_event_type: "m.room.message".to_string(),
+        timestamp: base + chrono::Duration::seconds(ts),
+        edited_at: None,
+        reply_to,
+        thread_root,
+        submission_id: None,
+        status,
+        redacted_at: (status == MessageStatus::Redacted)
+            .then(|| base + chrono::Duration::seconds(ts)),
+        redacted_by: (status == MessageStatus::Redacted).then(|| "@moderator:hs".to_string()),
+        reactions: Vec::new(),
+        thread_summary: None,
+        room_id: "!room:hs".to_string(),
+        sender_mxid: "@_cumments_test-blog_abcd:hs".to_string(),
+        raw_content: serde_json::json!({}),
+    };
+
+    for message in [
+        seed("$root:hs", None, None, 1, MessageStatus::Active),
+        // Direct reply inside the Thread.
+        seed(
+            "$a:hs",
+            Some("$root:hs".to_string()),
+            Some("$root:hs".to_string()),
+            2,
+            MessageStatus::Active,
+        ),
+        // Matrix-native style member without a direct reply.
+        seed(
+            "$b:hs",
+            None,
+            Some("$root:hs".to_string()),
+            3,
+            MessageStatus::Active,
+        ),
+        // Redacted member: excluded from the active Thread collection.
+        seed(
+            "$red:hs",
+            Some("$root:hs".to_string()),
+            Some("$root:hs".to_string()),
+            4,
+            MessageStatus::Redacted,
+        ),
+        // A different Thread.
+        seed("$other:hs", None, None, 9, MessageStatus::Active),
+        seed(
+            "$other_member:hs",
+            Some("$other:hs".to_string()),
+            Some("$other:hs".to_string()),
+            5,
+            MessageStatus::Active,
+        ),
+    ] {
+        store.save_message(&message).await.expect("seed message");
+    }
+
+    let router = cumments_api::build_router(state.clone());
+
+    // The Thread collection returns the active members only: the root, the
+    // redacted member, the other Thread, and unrelated top-level messages
+    // are all excluded. Membership comes from thread_root, not reply_to.
+    let thread = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            r#"{"thread_root":"$root:hs"}"#,
+        ))
+        .await
+        .expect("thread query");
+    assert_eq!(thread.status(), StatusCode::OK);
+    let thread: serde_json::Value = serde_json::from_str(&body_text(thread).await).expect("json");
+    assert_eq!(thread["meta"]["total"], 2);
+    let mut ids: Vec<String> = thread["data"]
+        .as_array()
+        .expect("data array")
+        .iter()
+        .map(|item| item["event_id"].as_str().expect("event id").to_string())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["$a:hs", "$b:hs"]);
+    for item in thread["data"].as_array().expect("data array") {
+        assert_eq!(item["thread_root"], "$root:hs");
+        assert!(
+            item.get("thread_summary").is_none(),
+            "members never carry a ThreadSummary: {item}"
+        );
+    }
+    let by_id = |id: &str| {
+        thread["data"]
+            .as_array()
+            .expect("data array")
+            .iter()
+            .find(|item| item["event_id"] == id)
+            .expect("thread member")
+            .clone()
+    };
+    assert_eq!(by_id("$a:hs")["reply_to"], "$root:hs");
+    assert!(
+        by_id("$b:hs").get("reply_to").is_none(),
+        "a member without a direct reply keeps reply_to unset"
+    );
+
+    // The page collection exposes derived summaries on roots, none on
+    // members, and keeps its total unchanged (tombstones included).
+    let page = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            "",
+        ))
+        .await
+        .expect("page query");
+    assert_eq!(page.status(), StatusCode::OK);
+    let page: serde_json::Value = serde_json::from_str(&body_text(page).await).expect("json");
+    assert_eq!(page["meta"]["total"], 6);
+    let page_item = |id: &str| {
+        page["data"]
+            .as_array()
+            .expect("data array")
+            .iter()
+            .find(|item| item["event_id"] == id)
+            .expect("page item")
+            .clone()
+    };
+    assert_eq!(page_item("$root:hs")["thread_summary"]["num_replies"], 2);
+    assert_eq!(
+        page_item("$root:hs")["thread_summary"]["latest_reply"],
+        "$b:hs"
+    );
+    assert_eq!(page_item("$other:hs")["thread_summary"]["num_replies"], 1);
+    assert!(page_item("$a:hs").get("thread_summary").is_none());
+
+    // The single GET returns the same public representation for the root,
+    // including the derived summary.
+    let root = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/comments/$root%3Ahs",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("get root");
+    assert_eq!(root.status(), StatusCode::OK);
+    let root: serde_json::Value = serde_json::from_str(&body_text(root).await).expect("json");
+    assert_eq!(root["event_id"], "$root:hs");
+    assert_eq!(root["thread_summary"]["num_replies"], 2);
+    assert_eq!(root["thread_summary"]["latest_reply"], "$b:hs");
+
+    // A member is individually addressable but carries no summary.
+    let member = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/comments/$b%3Ahs",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("get member");
+    assert_eq!(member.status(), StatusCode::OK);
+    let member: serde_json::Value = serde_json::from_str(&body_text(member).await).expect("json");
+    assert_eq!(member["event_id"], "$b:hs");
+    assert!(member.get("thread_summary").is_none());
+
+    // Redacted comments stay individually addressable and keep their
+    // structural relation metadata.
+    let redacted = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/comments/$red%3Ahs",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("get redacted");
+    assert_eq!(redacted.status(), StatusCode::OK);
+    let redacted: serde_json::Value =
+        serde_json::from_str(&body_text(redacted).await).expect("json");
+    assert_eq!(redacted["status"], "redacted");
+    assert_eq!(redacted["content"]["type"], "redacted");
+    assert_eq!(redacted["reply_to"], "$root:hs");
+    assert_eq!(redacted["thread_root"], "$root:hs");
+
+    // Out-of-scope and missing comments are 404.
+    let out_of_scope = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/comments/$missing%3Ahs",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("get missing");
+    assert_eq!(out_of_scope.status(), StatusCode::NOT_FOUND);
+
+    let mut foreign = seed("$foreign:hs", None, None, 1, MessageStatus::Active);
+    foreign.page_slug = "elsewhere".to_string();
+    store.save_message(&foreign).await.expect("seed foreign");
+    let wrong_page = router
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/comments/$foreign%3Ahs",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .expect("get cross-page");
+    assert_eq!(wrong_page.status(), StatusCode::NOT_FOUND);
+}

@@ -447,6 +447,63 @@ pub(crate) async fn query_comments_handler(
     }
 }
 
+/// Handler for a single public comment resource.
+///
+/// Returns the same public Message representation the collection exposes,
+/// including the derived `thread_summary` when the comment may serve as a
+/// Thread root. Active and redacted comments are both addressable; missing or
+/// out-of-scope comments are `404`.
+pub(crate) async fn get_comment_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path((site_id, page_slug, comment_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.public_read_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "public reads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.public_read_limiter.window().as_secs(),
+        });
+    }
+
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+    if let Err(msg) = validate_comment_id_format(&comment_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+
+    // The parent site must exist: a missing parent is a 404, not an empty
+    // response, matching the REST convention for nested resources.
+    if state
+        .store
+        .get_site(&site_id_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to look up site: {e}")))?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Site not found.".to_string()));
+    }
+
+    let Some(mut message) = state.store.get_message(&comment_id).await.map_err(|e| {
+        tracing::error!("Failed to fetch comment: {e:?}");
+        AppError::Internal("Failed to retrieve comment.".to_string())
+    })?
+    else {
+        return Err(AppError::NotFound("Comment not found.".to_string()));
+    };
+    if message.site_id != site_id_val.as_str() || message.page_slug != page_slug_val.as_str() {
+        return Err(AppError::NotFound("Comment not found.".to_string()));
+    }
+
+    if let Some(proxy) = &state.media_proxy {
+        let media_base = media_url_base(&state, &headers, Some(addr));
+        proxy.proxify_message(&mut message, &media_base);
+    }
+
+    Ok(Json(message))
+}
+
 /// The handler for receiving a new comment post.
 pub(crate) async fn post_comment_handler(
     State(state): State<ApiState>,
