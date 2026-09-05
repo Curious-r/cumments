@@ -1167,6 +1167,60 @@ mod tests {
         );
         let parsed = parse_push_message(&event).expect("parse thread message");
         assert_eq!(parsed.thread_root.as_deref(), Some("$thread:hs"));
+        assert!(
+            parsed.reply_to.is_none(),
+            "thread membership alone must not imply a direct reply"
+        );
+    }
+
+    #[test]
+    fn fallback_only_in_reply_to_is_not_projected_as_reply_to() {
+        // Thread events emitted through the reply fallback carry an
+        // `m.in_reply_to` that points at a fallback target, not the genuine
+        // direct parent; `is_falling_back` marks it as such.
+        let event = event_with_content(
+            "m.room.message",
+            serde_json::json!({
+                "msgtype": "m.text",
+                "body": "in thread via fallback",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread:hs",
+                    "m.in_reply_to": { "event_id": "$fallback:hs" },
+                    "is_falling_back": true,
+                },
+            }),
+        );
+        let parsed = parse_push_message(&event).expect("parse fallback thread message");
+        assert_eq!(
+            parsed.thread_root.as_deref(),
+            Some("$thread:hs"),
+            "fallback must not affect Thread membership"
+        );
+        assert_eq!(
+            parsed.reply_to, None,
+            "a fallback-only m.in_reply_to must not become reply_to"
+        );
+    }
+
+    #[test]
+    fn genuine_in_thread_reply_projects_both_relations() {
+        let event = event_with_content(
+            "m.room.message",
+            serde_json::json!({
+                "msgtype": "m.text",
+                "body": "genuine reply",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread:hs",
+                    "m.in_reply_to": { "event_id": "$parent:hs" },
+                    "is_falling_back": false,
+                },
+            }),
+        );
+        let parsed = parse_push_message(&event).expect("parse in-thread reply");
+        assert_eq!(parsed.thread_root.as_deref(), Some("$thread:hs"));
+        assert_eq!(parsed.reply_to.as_deref(), Some("$parent:hs"));
     }
 
     #[test]
