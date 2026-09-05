@@ -922,6 +922,117 @@ mod tests {
     }
 
     #[test]
+    fn thread_only_message_encodes_membership_without_reply() {
+        // Thread membership without a direct reply is a first-class creation
+        // state: the event expresses m.thread only, with no m.in_reply_to
+        // and no fallback quote in the body.
+        let body = build_message_body(
+            "hello",
+            "pubkey",
+            "sig",
+            "chal",
+            Some(7),
+            None,
+            Some("$thread:hs"),
+            None,
+            None,
+        );
+        assert_eq!(body["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(body["m.relates_to"]["event_id"], "$thread:hs");
+        assert!(body["m.relates_to"].get("m.in_reply_to").is_none());
+        assert_eq!(body["body"], "hello");
+        assert!(
+            body["m.relates_to"].get("is_falling_back").is_none(),
+            "the sender never emits is_falling_back; it is a receiver-side interpretation"
+        );
+    }
+
+    #[test]
+    fn media_body_supports_reply_and_thread_relations() {
+        let media = CommentMedia {
+            kind: None,
+            url: "mxc://hs/abc".to_string(),
+            filename: Some("cat.png".to_string()),
+            mimetype: None,
+            size: None,
+            width: None,
+            height: None,
+            voice: false,
+        };
+        let with_reply = build_media_body(&media, "pk", "sig", "chal", None, Some("$p:hs"), None);
+        assert_eq!(
+            with_reply["m.relates_to"]["m.in_reply_to"]["event_id"],
+            "$p:hs"
+        );
+        assert!(with_reply["m.relates_to"].get("rel_type").is_none());
+
+        let with_thread = build_media_body(&media, "pk", "sig", "chal", None, None, Some("$t:hs"));
+        assert_eq!(with_thread["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(with_thread["m.relates_to"]["event_id"], "$t:hs");
+        assert!(with_thread["m.relates_to"].get("m.in_reply_to").is_none());
+
+        let both = build_media_body(
+            &media,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            Some("$p:hs"),
+            Some("$t:hs"),
+        );
+        assert_eq!(both["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(both["m.relates_to"]["event_id"], "$t:hs");
+        assert_eq!(both["m.relates_to"]["m.in_reply_to"]["event_id"], "$p:hs");
+    }
+
+    #[test]
+    fn location_body_supports_reply_and_thread_relations() {
+        let with_reply = build_location_body(
+            "geo:31.2,121.5",
+            None,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            Some("$p:hs"),
+            None,
+        );
+        assert_eq!(
+            with_reply["m.relates_to"]["m.in_reply_to"]["event_id"],
+            "$p:hs"
+        );
+        assert!(with_reply["m.relates_to"].get("rel_type").is_none());
+
+        let with_thread = build_location_body(
+            "geo:31.2,121.5",
+            None,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            None,
+            Some("$t:hs"),
+        );
+        assert_eq!(with_thread["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(with_thread["m.relates_to"]["event_id"], "$t:hs");
+        assert!(with_thread["m.relates_to"].get("m.in_reply_to").is_none());
+
+        let both = build_location_body(
+            "geo:31.2,121.5",
+            None,
+            "pk",
+            "sig",
+            "chal",
+            None,
+            Some("$p:hs"),
+            Some("$t:hs"),
+        );
+        assert_eq!(both["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(both["m.relates_to"]["event_id"], "$t:hs");
+        assert_eq!(both["m.relates_to"]["m.in_reply_to"]["event_id"], "$p:hs");
+    }
+
+    #[test]
     fn edit_body_uses_namespaced_block_in_new_content() {
         let body = build_edit_body(
             "$original:hs",
