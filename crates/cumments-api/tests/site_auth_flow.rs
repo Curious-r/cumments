@@ -3684,7 +3684,6 @@ async fn thread_query_and_single_get_expose_the_semantic_read_model() {
 #[tokio::test]
 async fn post_comment_accepts_all_relation_combinations_independently() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use cumments_core::ports::SubmissionStore;
     use ed25519_dalek::{Signer, SigningKey};
 
     let (state, store) = test_state("thread-create", SiteVerificationPolicy::Disabled, None).await;
@@ -3828,7 +3827,14 @@ async fn post_comment_accepts_all_relation_combinations_independently() {
 
     // Cross-combination controls: a signature made for one relation state
     // must not authorize a request carrying a different relation state.
-    let mismatched: [(Option<&str>, Option<&str>, Option<&str>, Option<&str>); 2] = [
+    /// (signed reply_to, signed thread_root, sent reply_to, sent thread_root)
+    type SignedAndSent<'a> = (
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+    let mismatched: [SignedAndSent; 2] = [
         // Signed without relations, submitted with a thread root.
         (None, None, None, Some("$root:hs")),
         // Signed with reply only, submitted with both relations.
