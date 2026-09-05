@@ -3673,3 +3673,214 @@ async fn thread_query_and_single_get_expose_the_semantic_read_model() {
         .expect("get cross-page");
     assert_eq!(wrong_page.status(), StatusCode::NOT_FOUND);
 }
+
+/// The creation API treats `thread_root` and `reply_to` as independently
+/// meaningful inputs: each referenced event must satisfy the existing
+/// site/page scope and creation eligibility rules on its own, and no rule
+/// requires `reply_to == thread_root` or `reply_to.thread_root == thread_root`
+/// (the deliberately-removed cross-relation restriction). The durable command
+/// must record both values exactly as submitted, and the visitor signature
+/// must distinguish every relation combination.
+#[tokio::test]
+async fn post_comment_accepts_all_relation_combinations_independently() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::ports::SubmissionStore;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let (state, store) = test_state("thread-create", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    store
+        .register_room(
+            "!room:hs",
+            &SiteId::from("test-blog"),
+            &PageSlug::from("hello"),
+        )
+        .await
+        .expect("register room");
+
+    // Seed two distinct active comments so both relation targets are known
+    // and resolvable in scope: `$root:hs` is a Thread root candidate and
+    // `$parent:hs` is an unrelated top-level comment that is NOT a member of
+    // any Thread. Accepting `reply_to = $parent` together with
+    // `thread_root = $root` is therefore the strongest form of the
+    // independence guarantee: neither value is rewritten, rejected, or
+    // derived from the other even though they disagree.
+    let seed = |event_id: &str| Message {
+        event_id: event_id.to_string(),
+        site_id: "test-blog".to_string(),
+        page_slug: "hello".to_string(),
+        author: AuthorSnapshot {
+            kind: AuthorKind::Visitor,
+            display_name: Some("Alice".to_string()),
+            avatar_url: None,
+            public_key: Some("visitor-key".to_string()),
+            mxid: None,
+        },
+        content: Content::Text(TextContent {
+            body: event_id.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
+        }),
+        matrix_event_type: "m.room.message".to_string(),
+        timestamp: chrono::Utc::now(),
+        edited_at: None,
+        reply_to: None,
+        thread_root: None,
+        submission_id: None,
+        status: MessageStatus::Active,
+        redacted_at: None,
+        redacted_by: None,
+        reactions: Vec::new(),
+        thread_summary: None,
+        room_id: "!room:hs".to_string(),
+        sender_mxid: "@_cumments_test-blog_abcd:hs".to_string(),
+        raw_content: serde_json::json!({}),
+    };
+    for event_id in ["$root:hs", "$parent:hs"] {
+        store
+            .save_message(&seed(event_id))
+            .await
+            .expect("seed target");
+    }
+
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[19u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+
+    let combinations: [(&str, Option<&str>, Option<&str>); 4] = [
+        ("no-relation", None, None),
+        ("thread-only", None, Some("$root:hs")),
+        ("reply-only", Some("$parent:hs"), None),
+        ("thread-and-reply", Some("$parent:hs"), Some("$root:hs")),
+    ];
+    for (index, (name, reply_to, thread_root)) in combinations.iter().enumerate() {
+        let challenge = state.pow.generate_challenge();
+        let challenge_response = solve_pow(&challenge);
+        let message = post_signature_message(
+            "test-blog",
+            "hello",
+            "a reply",
+            *reply_to,
+            *thread_root,
+            &challenge.prefix,
+        );
+        let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+        let mut body = serde_json::json!({
+            "content": "a reply",
+            "display_name": "Alice",
+            "author_public_key": public_key,
+            "author_signature": signature,
+            "challenge_response": challenge_response,
+        });
+        if let Some(reply_to) = reply_to {
+            body["reply_to"] = serde_json::json!(reply_to);
+        }
+        if let Some(thread_root) = thread_root {
+            body["thread_root"] = serde_json::json!(thread_root);
+        }
+
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                Method::POST,
+                "/api/v1/sites/test-blog/pages/hello/comments",
+                Some("null"),
+                &[("idempotency-key", format!("thread-create-{name}-{index}"))],
+                &body.to_string(),
+            ))
+            .await
+            .expect("post comment");
+        assert_eq!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "combination {name} must be accepted as-is"
+        );
+        let accepted: serde_json::Value =
+            serde_json::from_str(&body_text(response).await).expect("json");
+        let submission_id = accepted["submission_id"]
+            .as_i64()
+            .expect("submission id in 202 body");
+
+        // The durable command preserves both semantic values unchanged.
+        let pending = store
+            .get_pending_post_submissions(100)
+            .await
+            .expect("pending submissions");
+        let command = pending
+            .iter()
+            .find(|submission| submission.id == submission_id)
+            .map(|submission| &submission.command)
+            .expect("202 submission queued");
+        assert_eq!(
+            command.reply_to.as_deref(),
+            *reply_to,
+            "reply_to must reach the durable command for {name}"
+        );
+        assert_eq!(
+            command.thread_root.as_deref(),
+            *thread_root,
+            "thread_root must reach the durable command for {name}"
+        );
+    }
+
+    // Cross-combination controls: a signature made for one relation state
+    // must not authorize a request carrying a different relation state.
+    let mismatched: [(Option<&str>, Option<&str>, Option<&str>, Option<&str>); 2] = [
+        // Signed without relations, submitted with a thread root.
+        (None, None, None, Some("$root:hs")),
+        // Signed with reply only, submitted with both relations.
+        (
+            Some("$parent:hs"),
+            None,
+            Some("$parent:hs"),
+            Some("$root:hs"),
+        ),
+    ];
+    for (index, (signed_reply, signed_thread, sent_reply, sent_thread)) in
+        mismatched.iter().enumerate()
+    {
+        let challenge = state.pow.generate_challenge();
+        let challenge_response = solve_pow(&challenge);
+        let message = post_signature_message(
+            "test-blog",
+            "hello",
+            "a reply",
+            *signed_reply,
+            *signed_thread,
+            &challenge.prefix,
+        );
+        let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+        let mut body = serde_json::json!({
+            "content": "a reply",
+            "display_name": "Alice",
+            "author_public_key": public_key,
+            "author_signature": signature,
+            "challenge_response": challenge_response,
+        });
+        if let Some(sent_reply) = sent_reply {
+            body["reply_to"] = serde_json::json!(sent_reply);
+        }
+        if let Some(sent_thread) = sent_thread {
+            body["thread_root"] = serde_json::json!(sent_thread);
+        }
+        let response = router
+            .clone()
+            .oneshot(request_with_body(
+                Method::POST,
+                "/api/v1/sites/test-blog/pages/hello/comments",
+                Some("null"),
+                &[("idempotency-key", format!("thread-tamper-{index}"))],
+                &body.to_string(),
+            ))
+            .await
+            .expect("post comment");
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "relation state diverging from the signed payload must be rejected ({index})"
+        );
+    }
+}
