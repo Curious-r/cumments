@@ -694,3 +694,56 @@ async fn failure_records_do_not_resurrect_failed_submissions() {
             .is_empty()
     );
 }
+
+/// The durable creation command is the single carrier of the visitor's
+/// relation intent between the HTTP handler and the reconciler's Matrix
+/// write. `thread_root` (Thread membership) and `reply_to` (genuine direct
+/// parent) are independent semantic values: every supported combination must
+/// survive the `payload` serialization boundary unchanged, with neither
+/// value derived from or collapsed into the other.
+///
+/// Text, media, poll, and location creations all share this one
+/// `PostCommentCommand` payload, so covering the relation combinations here
+/// covers every content type's durability.
+#[tokio::test]
+async fn post_submissions_preserve_both_relation_fields() {
+    for (name, reply_to, thread_root) in [
+        ("no-relation", None, None),
+        ("thread-only", None, Some("$root:hs")),
+        ("reply-only", Some("$parent:hs"), None),
+        ("thread-and-reply", Some("$parent:hs"), Some("$root:hs")),
+    ] {
+        let store = DbStore::connect(&test_db_url(&format!("relations-{name}")))
+            .await
+            .expect("connect db");
+        let mut command = post_command();
+        command.reply_to = reply_to.map(str::to_string);
+        command.thread_root = thread_root.map(str::to_string);
+
+        let id = store
+            .save_post_submission(&command)
+            .await
+            .expect("save submission");
+
+        let claimed = store
+            .claim_pending_post_submissions(10, lease(Duration::minutes(5)))
+            .await
+            .expect("claim submissions");
+        assert_eq!(claimed.len(), 1);
+        let pending = &claimed[0];
+        assert_eq!(pending.id, id);
+        assert_eq!(
+            pending.command.reply_to.as_deref(),
+            reply_to,
+            "reply_to must survive the durable queue for {name}"
+        );
+        assert_eq!(
+            pending.command.thread_root.as_deref(),
+            thread_root,
+            "thread_root must survive the durable queue for {name}"
+        );
+        // The executed Matrix write receives exactly the submitted relations.
+        assert_eq!(pending.command.reply_to, command.reply_to);
+        assert_eq!(pending.command.thread_root, command.thread_root);
+    }
+}
