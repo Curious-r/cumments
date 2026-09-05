@@ -591,4 +591,74 @@ mod tests {
         let c = poll_canonical_payload("q", &["x".to_string()], 1);
         assert_ne!(a, c);
     }
+
+    /// A signature bound to one semantic relation combination must verify
+    /// only for that exact combination: changing either relation, adding a
+    /// relation, or removing one must invalidate it. `thread_root` (Thread
+    /// membership) and `reply_to` (direct parent) are signed independently —
+    /// neither is derived from the other, and no wire-level detail such as
+    /// `is_falling_back` participates (the canonical payloads above pin the
+    /// exact slot lists, so any extra field would break them).
+    fn assert_relation_combinations_bind<F>(build: F)
+    where
+        F: Fn(Option<&str>, Option<&str>) -> String,
+    {
+        let signing_key = SigningKey::from_bytes(&[11u8; 32]);
+        let public_key_b64 = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let combinations = [
+            (None, None),
+            (None, Some("$t:hs")),
+            (Some("$p:hs"), None),
+            (Some("$p:hs"), Some("$t:hs")),
+        ];
+        for (reply_to, thread_root) in combinations {
+            let message = build(reply_to, thread_root);
+            let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+            assert!(
+                verify_signature(&public_key_b64, &message, &signature),
+                "unchanged relations must verify: reply_to={reply_to:?} thread_root={thread_root:?}"
+            );
+            for (other_reply, other_thread) in combinations {
+                let tampered = build(other_reply, other_thread);
+                let unchanged = (other_reply, other_thread) == (reply_to, thread_root);
+                assert_eq!(
+                    verify_signature(&public_key_b64, &tampered, &signature),
+                    unchanged,
+                    "signed reply_to={reply_to:?} thread_root={thread_root:?} must \
+                     {}verify against reply_to={other_reply:?} thread_root={other_thread:?}",
+                    if unchanged { "" } else { "not " }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn post_signature_binds_each_relation_combination() {
+        assert_relation_combinations_bind(|reply_to, thread_root| {
+            post_signature_message("my-blog", "hello", "content", reply_to, thread_root, "ch")
+        });
+    }
+
+    #[test]
+    fn locate_signature_binds_each_relation_combination() {
+        assert_relation_combinations_bind(|reply_to, thread_root| {
+            locate_signature_message("my-blog", "hello", "geo:1,2", reply_to, thread_root, "ch")
+        });
+    }
+
+    #[test]
+    fn poll_signature_binds_each_relation_combination() {
+        assert_relation_combinations_bind(|reply_to, thread_root| {
+            poll_signature_message(
+                "my-blog",
+                "hello",
+                "best?",
+                &["A".to_string(), "B".to_string()],
+                1,
+                reply_to,
+                thread_root,
+                "ch",
+            )
+        });
+    }
 }
