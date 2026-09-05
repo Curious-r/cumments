@@ -139,7 +139,7 @@ struct PollPayloadForWire<'a> {
 
 /// Build the `m.room.message` content for a new Cumments comment.
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
-pub(crate) fn build_message_body(
+pub fn build_message_body(
     content: &str,
     author_public_key: &str,
     author_signature: &str,
@@ -201,7 +201,7 @@ pub(crate) fn build_message_body(
 /// Build the `m.room.message` content for a visitor media message
 /// (image/audio/video/file). The structured block carries the media URL as
 /// the canonical signed content.
-pub(crate) fn build_media_body(
+pub fn build_media_body(
     media: &CommentMedia,
     author_public_key: &str,
     author_signature: &str,
@@ -338,7 +338,7 @@ pub(crate) fn build_poll_vote_body(
 
 /// Build the `m.room.message` content for a visitor poll (MSC3381).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_poll_body(
+pub fn build_poll_body(
     question: &str,
     options: &[String],
     max_selections: u8,
@@ -420,7 +420,7 @@ pub(crate) fn build_poll_body(
 
 /// Build the `m.room.message` content for a visitor location (MSC3488).
 #[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
-pub(crate) fn build_location_body(
+pub fn build_location_body(
     geo_uri: &str,
     description: Option<&str>,
     author_public_key: &str,
