@@ -105,6 +105,19 @@ pub struct ParsedPollVote {
     pub room_identity: Option<RoomIdentity>,
 }
 
+/// A parsed poll end (`org.matrix.msc3381.poll.end`).
+#[derive(Debug)]
+pub struct ParsedPollEnd {
+    pub room_id: String,
+    pub event_id: String,
+    pub sender: String,
+    /// Matrix event ID of the referenced poll start event.
+    pub poll_message_id: String,
+    pub origin_server_ts: i64,
+    /// The room's Cumments identity, if available.
+    pub room_identity: Option<RoomIdentity>,
+}
+
 /// A parsed room state event (system message / room metadata).
 #[derive(Debug)]
 pub struct ParsedRoomState {

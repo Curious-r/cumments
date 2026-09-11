@@ -4,10 +4,11 @@ use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempo
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, CommentMedia, Content, EditProjectionOutcome, MediaContent,
     MediaKind, Message, MessageRedactionOutcome, MessageRevision, MessageSaveOutcome,
-    MessageStatus, PageSlug, PollContent, PollOption, PollResponseSummary, PollVote, Reaction,
-    RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, ThreadSummary,
+    MessageStatus, PageSlug, PollContent, PollEnd, PollOption, PollResponseSummary, PollVote,
+    Reaction, RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, ThreadSummary,
     UnknownContent,
 };
+use cumments_core::poll::PollStatus;
 use cumments_core::ports::{
     AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
 };
@@ -2517,4 +2518,288 @@ async fn thread_summary_matches_thread_collection_total() {
         .await
         .expect("thread query");
     assert_eq!(thread.total, summary_of("$root:hs").num_replies);
+}
+
+// ── Poll end reduction ────────────────────────────────────────────
+
+/// A projected poll message with the given wire `kind` and declared answers.
+fn poll_message(event_id: &str, kind: &str, max_selections: u8) -> Message {
+    let mut message = visitor_message(event_id, "poll placeholder");
+    message.reply_to = None;
+    message.thread_root = None;
+    message.content = Content::Poll(PollContent {
+        question: "best?".to_string(),
+        options: vec![
+            PollOption {
+                id: "a".to_string(),
+                text: "A".to_string(),
+            },
+            PollOption {
+                id: "b".to_string(),
+                text: "B".to_string(),
+            },
+        ],
+        max_selections,
+        responses: Vec::new(),
+        my_votes: Vec::new(),
+    });
+    message.raw_content = serde_json::json!({
+        "org.matrix.msc3381.poll.start": {
+            "kind": kind,
+            "question": { "org.matrix.msc1767.text": "best?" },
+            "answers": [
+                { "id": "a", "org.matrix.msc1767.text": "A" },
+                { "id": "b", "org.matrix.msc1767.text": "B" },
+            ],
+        }
+    });
+    message
+}
+
+fn poll_end(event_id: &str, ts: i64, authorized: bool) -> PollEnd {
+    PollEnd {
+        event_id: event_id.to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        sender_mxid: if authorized {
+            "@alice:hs".to_string()
+        } else {
+            "@mallory:hs".to_string()
+        },
+        origin_server_ts: ts,
+        authorized,
+    }
+}
+
+#[tokio::test]
+async fn poll_ends_reduce_to_the_earliest_authorized_end() {
+    let store = DbStore::connect(&test_db_url("poll-end-earliest"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+
+    // An earlier unauthorized end must not preempt the later valid one.
+    store
+        .save_poll_end(&poll_end("$bad:hs", 100, false))
+        .await
+        .expect("save unauthorized end");
+    store
+        .save_poll_end(&poll_end("$good:hs", 200, true))
+        .await
+        .expect("save authorized end");
+    store
+        .save_poll_end(&poll_end("$later:hs", 300, true))
+        .await
+        .expect("save later end");
+
+    let projection = store
+        .poll_projection("$poll:hs")
+        .await
+        .expect("derive projection")
+        .expect("poll exists");
+    assert_eq!(projection.status, PollStatus::Ended);
+    let effective = projection.end.expect("effective end");
+    assert_eq!(effective.event_id, "$good:hs");
+    assert_eq!(effective.origin_server_ts, 200);
+}
+
+#[tokio::test]
+async fn unauthorized_poll_ends_do_not_close_the_poll() {
+    let store = DbStore::connect(&test_db_url("poll-end-unauthorized"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+    store
+        .save_poll_end(&poll_end("$bad:hs", 100, false))
+        .await
+        .expect("save unauthorized end");
+
+    let projection = store
+        .poll_projection("$poll:hs")
+        .await
+        .expect("derive projection")
+        .expect("poll exists");
+    assert_eq!(projection.status, PollStatus::Open);
+    assert!(projection.end.is_none());
+}
+
+#[tokio::test]
+async fn redacting_the_effective_poll_end_reverts_to_the_next_valid_end() {
+    let store = DbStore::connect(&test_db_url("poll-end-redact-rollback"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+    store
+        .save_poll_end(&poll_end("$e1:hs", 100, true))
+        .await
+        .expect("save e1");
+    store
+        .save_poll_end(&poll_end("$e2:hs", 200, true))
+        .await
+        .expect("save e2");
+
+    assert_eq!(
+        store
+            .poll_projection("$poll:hs")
+            .await
+            .unwrap()
+            .unwrap()
+            .end
+            .unwrap()
+            .event_id,
+        "$e1:hs"
+    );
+
+    assert!(
+        store
+            .redact_poll_end("$e1:hs", Utc::now(), "@mod:hs")
+            .await
+            .expect("redact e1")
+    );
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Ended);
+    assert_eq!(projection.end.unwrap().event_id, "$e2:hs");
+
+    // Redacting every end reopens the poll.
+    assert!(
+        store
+            .redact_poll_end("$e2:hs", Utc::now(), "@mod:hs")
+            .await
+            .expect("redact e2")
+    );
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Open);
+    assert!(projection.end.is_none());
+}
+
+#[tokio::test]
+async fn duplicate_poll_end_delivery_is_idempotent() {
+    let store = DbStore::connect(&test_db_url("poll-end-duplicate"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+    let end = poll_end("$e1:hs", 100, true);
+    store.save_poll_end(&end).await.expect("save end");
+    store.save_poll_end(&end).await.expect("re-deliver end");
+
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Ended);
+    assert_eq!(projection.end.unwrap().event_id, "$e1:hs");
+    // The event id is unique, so `get_poll_end_by_event` is stable too.
+    assert!(
+        store
+            .get_poll_end_by_event("$e1:hs")
+            .await
+            .unwrap()
+            .unwrap()
+            .authorized
+    );
+}
+
+#[tokio::test]
+async fn responses_after_the_effective_poll_end_are_ignored() {
+    let store = DbStore::connect(&test_db_url("poll-end-vote-window"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+
+    let vote = |event_id: &str, sender: &str, ts: i64| PollVote {
+        event_id: event_id.to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        sender_mxid: sender.to_string(),
+        option_index: Some(0),
+        origin_server_ts: ts,
+    };
+    store
+        .save_poll_vote_with_selections(&vote("$v-before:hs", "@bob:hs", 100), &["a".into()], None)
+        .await
+        .expect("vote before close");
+    store
+        .save_poll_end(&poll_end("$e:hs", 200, true))
+        .await
+        .expect("close poll");
+    store
+        .save_poll_vote_with_selections(&vote("$v-after:hs", "@carol:hs", 300), &["a".into()], None)
+        .await
+        .expect("vote after close");
+
+    // Only the vote cast on or before the closing timestamp counts.
+    assert_eq!(poll_counts(&store).await, [(0, 1)]);
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.total_votes, 1);
+    assert!(projection.vote_of("@carol:hs").is_none());
+    assert_eq!(projection.count_for("a"), 1);
+}
+
+#[tokio::test]
+async fn poll_projection_retains_kind_and_zero_counts() {
+    let store = DbStore::connect(&test_db_url("poll-projection-kind"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.undisclosed",
+            2,
+        ))
+        .await
+        .expect("save undisclosed poll");
+
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert!(!projection.disclosed, "wire kind must be retained");
+    assert_eq!(projection.answer_ids(), vec!["a", "b"]);
+    // Zero counts are present for every declared answer.
+    assert_eq!(projection.count_for("a"), 0);
+    assert_eq!(projection.count_for("b"), 0);
+
+    store
+        .save_message(&poll_message(
+            "$disclosed:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            2,
+        ))
+        .await
+        .expect("save disclosed poll");
+    assert!(
+        store
+            .poll_projection("$disclosed:hs")
+            .await
+            .unwrap()
+            .unwrap()
+            .disclosed
+    );
 }

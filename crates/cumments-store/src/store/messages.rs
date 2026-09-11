@@ -3,7 +3,7 @@ use super::is_unique_violation;
 use crate::entities::active_enums::SubmissionStatus;
 use crate::entities::{
     backfill_tombstones, delete_submissions, media_upload_idempotency, media_uploads,
-    message_revisions, messages, poll_response_events, post_submissions,
+    message_revisions, messages, poll_end_events, poll_response_events, post_submissions,
     processed_appservice_transactions, reactions, room_members, update_submissions,
 };
 use anyhow::{Result, anyhow};
@@ -14,9 +14,13 @@ use cumments_core::media_upload::{
 };
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message, MessagePage,
-    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
+    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug, PollEnd,
     PollResponseSummary, PollVote, Reaction, ReactionSummary, Reactor, SiteId,
     SubmissionCompletion, ThreadSummary, UnknownContent,
+};
+use cumments_core::poll::{
+    EndAuthorization, PollAnswerFact, PollEndFact, PollProjection, PollResponseFact, PollStartFact,
+    reduce_poll,
 };
 use cumments_core::ports::{AppServiceTxnStore, MessageStore, ProjectionSink};
 use sea_orm::{
@@ -1036,90 +1040,86 @@ impl MessageStore for DbStore {
         if poll_message_ids.is_empty() || sender_mxid.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut rows = poll_response_events::Entity::find()
-            .filter(
-                poll_response_events::Column::PollMessageId.is_in(poll_message_ids.iter().cloned()),
-            )
-            .filter(poll_response_events::Column::SenderMxid.eq(sender_mxid))
-            .filter(poll_response_events::Column::RedactedAt.is_null())
-            .all(&self.db)
-            .await?;
-        // Keep only votes whose poll is still active, mirroring poll_response_summary_map.
-        let active_parents = active_message_ids(
-            &self.db,
-            rows.iter().map(|r| r.poll_message_id.clone()).collect(),
-        )
-        .await?;
-        rows.retain(|r| active_parents.contains(&r.poll_message_id));
-
-        let poll_rows = if rows.is_empty() {
-            Vec::new()
-        } else {
-            messages::Entity::find()
-                .filter(
-                    messages::Column::EventId.is_in(
-                        rows.iter()
-                            .map(|r| r.poll_message_id.clone())
-                            .collect::<Vec<_>>(),
-                    ),
-                )
-                .all(&self.db)
-                .await?
-        };
-        let option_ids_map: HashMap<String, Vec<String>> = poll_rows
-            .into_iter()
-            .filter_map(|row| {
-                let content = serde_json::from_str::<Content>(&row.content_json).ok()?;
-                let Content::Poll(poll) = content else {
-                    return None;
-                };
-                Some((
-                    row.event_id,
-                    poll.options.into_iter().map(|o| o.id).collect(),
-                ))
-            })
-            .collect();
-
-        // Latest vote per poll for this sender, by (origin_server_ts, event_id).
-        let mut latest_by_poll: HashMap<String, poll_response_events::Model> = HashMap::new();
-        for row in rows {
-            let key = row.poll_message_id.clone();
-            match latest_by_poll.get(&key) {
-                Some(cur)
-                    if (cur.origin_server_ts, &cur.event_id)
-                        >= (row.origin_server_ts, &row.event_id) => {}
-                _ => {
-                    latest_by_poll.insert(key, row);
-                }
-            }
-        }
-
+        // Same derived reduction as `poll_response_summary_map`: the viewer's
+        // most recent non-redacted response, with legacy single-choice rows
+        // mapped through their option index.
+        let facts = self.load_poll_facts(poll_message_ids).await?;
         let mut out: HashMap<String, Vec<String>> = HashMap::new();
-        for (poll_id, row) in latest_by_poll {
-            if row.spoiled_reason.is_some() {
+        for (poll_id, facts) in facts {
+            let Ok(projection) = reduce_poll(&facts.start, &facts.responses, &facts.ends) else {
                 continue;
-            }
-            let mut selections: Vec<String> =
-                serde_json::from_str(&row.answer_ids_json).unwrap_or_default();
-            if selections.is_empty() {
-                // Legacy fallback: option_index -> option_id.
-                if let Some(idx) = row.option_index
-                    && let Some(opts) = option_ids_map.get(&poll_id)
-                    && idx >= 0
-                    && (idx as usize) < opts.len()
-                {
-                    out.insert(poll_id, vec![opts[idx as usize].clone()]);
-                }
-                continue;
-            }
-            if let Some(opts) = option_ids_map.get(&poll_id) {
-                selections.retain(|id| opts.contains(id));
-                if !selections.is_empty() {
-                    out.insert(poll_id, selections);
-                }
+            };
+            if let Some(vote) = projection.vote_of(sender_mxid)
+                && !vote.selections.is_empty()
+            {
+                out.insert(poll_id, vote.selections.clone());
             }
         }
         Ok(out)
+    }
+
+    async fn save_poll_end(&self, end: &PollEnd) -> Result<()> {
+        let txn = self.db.begin().await?;
+        if poll_end_events::Entity::find()
+            .filter(poll_end_events::COLUMN.event_id.eq(end.event_id.clone()))
+            .one(&txn)
+            .await?
+            .is_some()
+        {
+            txn.commit().await?;
+            return Ok(());
+        }
+        let active_model = poll_end_events::ActiveModel {
+            event_id: Set(end.event_id.clone()),
+            poll_message_id: Set(end.poll_message_id.clone()),
+            sender_mxid: Set(end.sender_mxid.clone()),
+            authorized: Set(end.authorized),
+            origin_server_ts: Set(end.origin_server_ts),
+            redacted_at: Set(None),
+            redacted_by: Set(None),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        poll_end_events::Entity::insert(active_model)
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    async fn get_poll_end_by_event(&self, event_id: &str) -> Result<Option<PollEnd>> {
+        let model = poll_end_events::Entity::find()
+            .filter(poll_end_events::COLUMN.event_id.eq(event_id))
+            .one(&self.db)
+            .await?;
+        Ok(model.map(|m| PollEnd {
+            event_id: m.event_id,
+            poll_message_id: m.poll_message_id,
+            sender_mxid: m.sender_mxid,
+            origin_server_ts: m.origin_server_ts,
+            authorized: m.authorized,
+        }))
+    }
+
+    async fn redact_poll_end(
+        &self,
+        event_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+    ) -> Result<bool> {
+        let result = poll_end_events::Entity::update_many()
+            .col_expr(
+                poll_end_events::Column::RedactedAt,
+                sea_orm::sea_query::Expr::value(Some(redacted_at)),
+            )
+            .col_expr(
+                poll_end_events::Column::RedactedBy,
+                sea_orm::sea_query::Expr::value(Some(redacted_by.to_owned())),
+            )
+            .filter(poll_end_events::Column::EventId.eq(event_id))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
     }
 
     async fn record_backfill_tombstone(
@@ -1761,110 +1761,195 @@ impl DbStore {
         out
     }
 
+    /// Derive the effective Poll projection for one poll from its canonical
+    /// relation facts. Returns `None` when the poll is not a projected, active
+    /// poll. The projection is disposable read-model state: it is always
+    /// recomputed from the stored Matrix facts.
+    pub async fn poll_projection(&self, poll_message_id: &str) -> Result<Option<PollProjection>> {
+        let mut facts = self
+            .load_poll_facts(std::slice::from_ref(&poll_message_id.to_string()))
+            .await?;
+        match facts.remove(poll_message_id) {
+            Some(facts) => Ok(Some(reduce_poll(
+                &facts.start,
+                &facts.responses,
+                &facts.ends,
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Load the canonical facts the deterministic reducer needs for a set of
+    /// polls in three queries: the active poll start messages (with their
+    /// declared answers) plus their response and end relation facts. Inactive,
+    /// missing or non-poll parents are omitted, so their relations do not
+    /// contribute to any projection.
+    async fn load_poll_facts(
+        &self,
+        poll_message_ids: &[String],
+    ) -> Result<HashMap<String, PollFacts>> {
+        if poll_message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut facts: HashMap<String, PollFacts> = HashMap::new();
+        let poll_rows = messages::Entity::find()
+            .filter(messages::Column::EventId.is_in(poll_message_ids.to_vec()))
+            .filter(messages::Column::Status.eq(MessageStatus::Active.as_str()))
+            .all(&self.db)
+            .await?;
+        for row in poll_rows {
+            let Ok(content) = serde_json::from_str::<Content>(&row.content_json) else {
+                continue;
+            };
+            let Content::Poll(poll) = content else {
+                continue;
+            };
+            facts.insert(
+                row.event_id.clone(),
+                PollFacts {
+                    start: PollStartFact {
+                        event_id: row.event_id.clone(),
+                        sender: row.sender_mxid.clone(),
+                        origin_server_ts: row.timestamp.timestamp_millis(),
+                        question: poll.question,
+                        answers: poll
+                            .options
+                            .into_iter()
+                            .map(|option| PollAnswerFact::new(option.id, option.text))
+                            .collect(),
+                        max_selections: u64::from(poll.max_selections),
+                        // The read-model `PollContent` has no kind field, so the
+                        // wire kind is recovered from the retained raw Matrix
+                        // content until the read model carries it directly.
+                        disclosed: raw_poll_disclosed(&row.raw_content_json),
+                        reply_to: row.reply_to.clone(),
+                        thread_root: row.thread_root.clone(),
+                    },
+                    responses: Vec::new(),
+                    ends: Vec::new(),
+                },
+            );
+        }
+        if facts.is_empty() {
+            return Ok(facts);
+        }
+        let poll_ids: Vec<String> = facts.keys().cloned().collect();
+
+        let response_rows = poll_response_events::Entity::find()
+            .filter(
+                poll_response_events::COLUMN
+                    .poll_message_id
+                    .is_in(poll_ids.clone()),
+            )
+            .all(&self.db)
+            .await?;
+        for row in response_rows {
+            let Some(entry) = facts.get_mut(&row.poll_message_id) else {
+                continue;
+            };
+            let stored: Vec<String> =
+                serde_json::from_str(&row.answer_ids_json).unwrap_or_default();
+            let selections = if stored.is_empty() {
+                // Legacy single-choice rows predate `answer_ids_json`; their
+                // option index maps back to the declared answer id.
+                row.option_index
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| entry.start.answers.get(index))
+                    .map(|answer| vec![answer.id.clone()])
+                    .unwrap_or_default()
+            } else {
+                stored
+            };
+            entry.responses.push(PollResponseFact {
+                event_id: row.event_id,
+                sender: row.sender_mxid,
+                origin_server_ts: row.origin_server_ts,
+                selections,
+                redacted: row.redacted_at.is_some(),
+            });
+        }
+
+        let end_rows = poll_end_events::Entity::find()
+            .filter(poll_end_events::COLUMN.poll_message_id.is_in(poll_ids))
+            .all(&self.db)
+            .await?;
+        for row in end_rows {
+            let Some(entry) = facts.get_mut(&row.poll_message_id) else {
+                continue;
+            };
+            entry.ends.push(PollEndFact {
+                event_id: row.event_id,
+                sender: row.sender_mxid,
+                origin_server_ts: row.origin_server_ts,
+                // Only the stored authorization effect matters to the
+                // reduction; the protocol-level reason is not persisted.
+                authorization: if row.authorized {
+                    EndAuthorization::Creator
+                } else {
+                    EndAuthorization::Unauthorized
+                },
+                redacted: row.redacted_at.is_some(),
+            });
+        }
+        Ok(facts)
+    }
+
     /// Aggregated poll response summaries keyed by poll message ID. Redacted
     /// votes are excluded.
     async fn poll_response_summary_map(
         &self,
         poll_message_ids: &[String],
     ) -> Result<HashMap<String, Vec<PollResponseSummary>>> {
-        if poll_message_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let mut rows = poll_response_events::Entity::find()
-            .filter(
-                poll_response_events::COLUMN
-                    .poll_message_id
-                    .is_in(poll_message_ids.iter().cloned()),
-            )
-            .filter(poll_response_events::Column::RedactedAt.is_null())
-            .all(&self.db)
-            .await?;
-        let active_parents = active_message_ids(
-            &self.db,
-            rows.iter().map(|row| row.poll_message_id.clone()).collect(),
-        )
-        .await?;
-        rows.retain(|row| active_parents.contains(&row.poll_message_id));
-
-        let poll_rows = messages::Entity::find()
-            .filter(
-                messages::COLUMN.event_id.is_in(
-                    rows.iter()
-                        .map(|row| row.poll_message_id.clone())
-                        .collect::<Vec<_>>(),
-                ),
-            )
-            .all(&self.db)
-            .await?;
-        let answer_indexes: HashMap<String, Vec<String>> = poll_rows
-            .into_iter()
-            .filter_map(|row| {
-                let content = serde_json::from_str::<Content>(&row.content_json).ok()?;
-                let Content::Poll(poll) = content else {
-                    return None;
-                };
-                Some((
-                    row.event_id,
-                    poll.options.into_iter().map(|option| option.id).collect(),
-                ))
-            })
-            .collect();
-
-        // Select each voter's latest non-redacted relation event. An event with
-        // no mapped option is a spoiled/unvote response and contributes nothing.
-        let mut latest_by_voter: HashMap<(String, String), poll_response_events::Model> =
-            HashMap::new();
-        for row in rows {
-            let key = (row.poll_message_id.clone(), row.sender_mxid.clone());
-            match latest_by_voter.get_mut(&key) {
-                Some(current)
-                    if (current.origin_server_ts, &current.event_id)
-                        >= (row.origin_server_ts, &row.event_id) => {}
-                _ => {
-                    latest_by_voter.insert(key, row);
-                }
-            }
-        }
-
-        let mut counts_by_poll: HashMap<String, HashMap<i64, i64>> = HashMap::new();
-        for (_, row) in latest_by_voter {
-            let selections: Vec<String> =
-                serde_json::from_str(&row.answer_ids_json).unwrap_or_default();
-            let Some(options) = answer_indexes.get(&row.poll_message_id) else {
+        let facts = self.load_poll_facts(poll_message_ids).await?;
+        let mut out: HashMap<String, Vec<PollResponseSummary>> = HashMap::new();
+        for (poll_id, facts) in facts {
+            let Ok(projection) = reduce_poll(&facts.start, &facts.responses, &facts.ends) else {
                 continue;
             };
-            if selections.is_empty() {
-                if let Some(legacy_option_index) = row.option_index {
-                    *counts_by_poll
-                        .entry(row.poll_message_id)
-                        .or_default()
-                        .entry(legacy_option_index)
-                        .or_default() += 1;
-                }
-            } else {
-                let counts = counts_by_poll.entry(row.poll_message_id).or_default();
-                for selection in selections {
-                    if let Some(index) = options.iter().position(|option| option == &selection) {
-                        *counts.entry(index as i64).or_default() += 1;
-                    }
-                }
+            // Responses are ordered by declared answer index; only answers with
+            // at least one vote are reported, matching the read-model contract.
+            let summaries: Vec<PollResponseSummary> = projection
+                .tallies
+                .iter()
+                .enumerate()
+                .filter(|(_, tally)| tally.count > 0)
+                .map(|(index, tally)| PollResponseSummary {
+                    option_index: index as i64,
+                    count: tally.count as i64,
+                })
+                .collect();
+            if !summaries.is_empty() {
+                out.insert(poll_id, summaries);
             }
         }
-        Ok(counts_by_poll
-            .into_iter()
-            .map(|(poll_id, counts)| {
-                let mut summaries: Vec<PollResponseSummary> = counts
-                    .into_iter()
-                    .map(|(option_index, count)| PollResponseSummary {
-                        option_index,
-                        count,
-                    })
-                    .collect();
-                summaries.sort_by_key(|s| s.option_index);
-                (poll_id, summaries)
-            })
-            .collect())
+        Ok(out)
     }
+}
+
+/// Canonical poll facts loaded from the derived read model, ready for the
+/// deterministic reducer in `cumments_core::poll`.
+struct PollFacts {
+    start: PollStartFact,
+    responses: Vec<PollResponseFact>,
+    ends: Vec<PollEndFact>,
+}
+
+/// Whether a poll start's wire `kind` is disclosed. The projected
+/// `PollContent` has no kind field, so the value is recovered from the retained
+/// raw Matrix content. A disclosed kind is the only affirmative value; absent
+/// or unknown kinds are treated as undisclosed, per MSC3381.
+fn raw_poll_disclosed(raw_content_json: &str) -> bool {
+    matches!(
+        serde_json::from_str::<serde_json::Value>(raw_content_json)
+            .ok()
+            .and_then(|raw| raw
+                .get("org.matrix.msc3381.poll.start")
+                .and_then(|poll| poll.get("kind"))
+                .and_then(|kind| kind.as_str())
+                .map(str::to_owned))
+            .as_deref(),
+        Some("org.matrix.msc3381.poll.disclosed")
+    )
 }
 
 /// Annotation aggregates are part of a live comment's public view; suppress

@@ -6,7 +6,7 @@ use crate::media_upload::{
 };
 use crate::models::{
     CommentMedia, EditProjectionOutcome, MatrixEvent, Message, MessagePage,
-    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, PageSlug, PollVote,
+    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, PageSlug, PollEnd, PollVote,
     ProjectionRepair, ProjectionRepairInput, QuarantinedRoom, Reaction, RoomEventPage,
     RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot, RoomStatus,
     RoomUpgradeIntent, SiteId, SseOutbox, SubmissionCompletion, VisitorProfile,
@@ -346,6 +346,20 @@ pub trait MessageStore: ProjectionSink {
         poll_message_ids: &[String],
         sender_mxid: &str,
     ) -> Result<std::collections::HashMap<String, Vec<String>>>;
+
+    /// Records an immutable `org.matrix.msc3381.poll.end` relation fact.
+    async fn save_poll_end(&self, end: &PollEnd) -> Result<()>;
+
+    /// Looks up a stored poll end by its Matrix event ID.
+    async fn get_poll_end_by_event(&self, event_id: &str) -> Result<Option<PollEnd>>;
+
+    /// Marks a poll end as redacted (it no longer closes the poll).
+    async fn redact_poll_end(
+        &self,
+        event_id: &str,
+        redacted_at: chrono::DateTime<chrono::Utc>,
+        redacted_by: &str,
+    ) -> Result<bool>;
 
     /// Records a visitor upload so comment submissions can later prove ownership.
     async fn record_media_upload(

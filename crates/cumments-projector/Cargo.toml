@@ -9,6 +9,7 @@ documentation.workspace = true
 
 [dependencies]
 cumments-core.workspace = true
+cumments-matrix.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
@@ -25,7 +26,6 @@ async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 ed25519-dalek.workspace = true
-cumments-matrix.workspace = true
 cumments-store.workspace = true
 cumments-test-utils.workspace = true
 tower.workspace = true

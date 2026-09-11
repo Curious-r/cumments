@@ -3,14 +3,20 @@
 use super::types::PushEvent;
 use crate::event_processor::EventProcessor;
 use crate::parsed::{
-    ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction,
-    ParsedRoomState, ParsedSpaceChild,
+    ParsedPollEnd, ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage,
+    ParsedRoomRedaction, ParsedRoomState, ParsedSpaceChild,
 };
 use cumments_core::models::{
     Content, EncryptedPlaceholder, LocationContent, MediaContent, MediaKind, PollContent,
     PollOption, TextContent, TextStyle, UnknownContent,
 };
+use cumments_core::poll::{PollAnswerFact, PollStartFact};
 use cumments_core::protocol::{MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, REDACTION_PROOF_KEY};
+use cumments_matrix::poll::{
+    POLL_END_EVENT_TYPE, POLL_RESPONSE_EVENT_TYPE, POLL_START_EVENT_TYPE, PollEndEvent, PollEvent,
+    PollResponseEvent, PollStartEvent,
+};
+use tracing::warn;
 
 /// Returns `true` if the Cumments message block's `schema` field is
 /// supported. `None` (absent) is unsupported under the v1 break. `1` is current.
@@ -110,6 +116,11 @@ pub(crate) async fn process_single_event(
                     processor.process_space_child(parsed).await?;
                 }
             }
+        }
+        // The adopted MSC3381 direct event types (not the `m.room.message`
+        // wrapper) are parsed through the typed poll layer.
+        POLL_START_EVENT_TYPE | POLL_RESPONSE_EVENT_TYPE | POLL_END_EVENT_TYPE => {
+            process_poll_event(event, processor).await?;
         }
         _ => {
             // Ignore other event types
@@ -246,37 +257,12 @@ fn parse_push_message(event: &PushEvent) -> Option<ParsedRoomMessage> {
         text.body = structured.to_string();
     }
 
-    // Extract the standard rich-reply relation, if any.
+    // Extract the standard rich-reply and Thread relations, if any.
     // `is_falling_back` distinguishes a genuine direct reply from a
     // fallback-only `m.in_reply_to` that accompanies a Thread. See
     // `misc/design/thread-redesign-0903.md` §5: fallback targets must not be
     // projected as `reply_to`.
-    let is_falling_back = content
-        .get("m.relates_to")
-        .and_then(|rel| rel.get("is_falling_back"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let reply_to = if is_falling_back {
-        None
-    } else {
-        content
-            .get("m.relates_to")
-            .and_then(|rel| rel.get("m.in_reply_to"))
-            .and_then(|reply| reply.get("event_id"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    };
-
-    // Extract the thread relation (m.thread), if any.
-    let thread_root = content.get("m.relates_to").and_then(|rel| {
-        let rel_type = rel.get("rel_type").and_then(|v| v.as_str())?;
-        if rel_type != "m.thread" {
-            return None;
-        }
-        rel.get("event_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
+    let (reply_to, thread_root) = parse_relations(content);
 
     // Extract relation (edit)
     let relates_to = content.get("m.relates_to").and_then(|rel| {
@@ -676,6 +662,248 @@ async fn parse_push_space_child(
         child_room_id,
         is_attached,
         child_room_identity,
+    })
+}
+
+/// Extract the standard rich-reply and Thread relations from event content.
+///
+/// `is_falling_back` distinguishes a genuine direct reply from a fallback-only
+/// `m.in_reply_to` that accompanies a Thread; fallback targets must not be
+/// projected as `reply_to`.
+fn parse_relations(content: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let is_falling_back = content
+        .get("m.relates_to")
+        .and_then(|rel| rel.get("is_falling_back"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let reply_to = if is_falling_back {
+        None
+    } else {
+        content
+            .get("m.relates_to")
+            .and_then(|rel| rel.get("m.in_reply_to"))
+            .and_then(|reply| reply.get("event_id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    };
+    let thread_root = content.get("m.relates_to").and_then(|rel| {
+        let rel_type = rel.get("rel_type").and_then(|v| v.as_str())?;
+        if rel_type != "m.thread" {
+            return None;
+        }
+        rel.get("event_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    });
+    (reply_to, thread_root)
+}
+
+// ── Direct MSC3381 poll events ────────────────────────────────────
+
+/// Route one adopted `org.matrix.msc3381.poll.*` direct event into the existing
+/// projection pipeline. The typed poll layer validates the wire content; a
+/// malformed event is dropped so it cannot corrupt an otherwise valid poll.
+async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> anyhow::Result<()> {
+    let (Some(event_id), Some(sender)) = (event.event_id.as_ref(), event.sender.as_ref()) else {
+        return Ok(());
+    };
+    let Some(content) = event.content.as_ref() else {
+        return Ok(());
+    };
+    let origin_server_ts = event.origin_server_ts.unwrap_or(0);
+    let parsed = match PollEvent::parse(
+        &event.event_type,
+        Some(event_id),
+        sender,
+        origin_server_ts,
+        content,
+    ) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            warn!(
+                event_id = %event_id,
+                error = %error,
+                "Ignoring malformed MSC3381 poll event"
+            );
+            return Ok(());
+        }
+    };
+
+    match parsed {
+        PollEvent::Start(start) => {
+            let Some(mut message) = parse_push_poll_start(event, &start) else {
+                return Ok(());
+            };
+            message.room_identity = processor.resolve_room_identity(&message.room_id).await?;
+            processor.process_room_message(message).await?;
+        }
+        PollEvent::Response(response) => {
+            let Some(mut vote) = parse_push_poll_response(event, &response) else {
+                return Ok(());
+            };
+            vote.room_identity = processor.resolve_room_identity(&vote.room_id).await?;
+            processor.process_poll_vote(vote).await?;
+        }
+        PollEvent::End(end) => {
+            let Some(mut parsed_end) = parse_push_poll_end(event, &end) else {
+                return Ok(());
+            };
+            parsed_end.room_identity = processor.resolve_room_identity(&parsed_end.room_id).await?;
+            processor.process_poll_end(parsed_end).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Project a direct `poll.start` event as a Poll-backed comment. The same
+/// definition rules the reducer applies decide whether the start is valid;
+/// an invalid definition never becomes a projected poll.
+fn parse_push_poll_start(event: &PushEvent, start: &PollStartEvent) -> Option<ParsedRoomMessage> {
+    let room_id = event.room_id.as_ref()?;
+    let content = event.content.as_ref()?;
+    let poll = &start.content.poll;
+
+    let Some(max_selections) = u8::try_from(poll.max_selections).ok() else {
+        warn!(
+            event_id = ?event.event_id,
+            max_selections = poll.max_selections,
+            "Ignoring poll start with an unsupported selection limit"
+        );
+        return None;
+    };
+    let definition = PollStartFact {
+        event_id: event.event_id.clone().unwrap_or_default(),
+        sender: start.sender.clone(),
+        origin_server_ts: start.origin_server_ts,
+        question: poll.question.text.clone(),
+        answers: poll
+            .answers
+            .iter()
+            .map(|answer| PollAnswerFact::new(answer.id.clone(), answer.text.clone()))
+            .collect(),
+        max_selections: poll.max_selections,
+        disclosed: poll.kind.is_disclosed(),
+        reply_to: None,
+        thread_root: None,
+    };
+    if let Err(error) = definition.validate() {
+        warn!(
+            event_id = ?event.event_id,
+            %error,
+            "Ignoring invalid poll start"
+        );
+        return None;
+    }
+
+    let is_virtual_sender = is_virtual_user_sender(&start.sender);
+    let author_public_key = namespaced_string(content, "public_key").map(str::to_owned);
+    let author_signature = namespaced_string(content, "signature").map(str::to_owned);
+    let author_challenge = namespaced_string(content, "challenge").map(str::to_owned);
+    let trusted_block = is_virtual_sender
+        && author_public_key.is_some()
+        && author_signature.is_some()
+        && author_challenge.is_some()
+        && message_schema_is_supported(content);
+    let (reply_to, thread_root) = parse_relations(content);
+
+    Some(ParsedRoomMessage {
+        room_id: room_id.clone(),
+        event_id: event.event_id.clone().unwrap_or_default(),
+        event_type: event.event_type.clone(),
+        sender: start.sender.clone(),
+        content: Content::Poll(PollContent {
+            question: poll.question.text.clone(),
+            options: poll
+                .answers
+                .iter()
+                .map(|answer| PollOption {
+                    id: answer.id.clone(),
+                    text: answer.text.clone(),
+                })
+                .collect(),
+            max_selections,
+            responses: Vec::new(),
+            my_votes: Vec::new(),
+        }),
+        author_public_key: if trusted_block {
+            author_public_key
+        } else {
+            None
+        },
+        author_signature: if trusted_block {
+            author_signature
+        } else {
+            None
+        },
+        author_challenge: if trusted_block {
+            author_challenge
+        } else {
+            None
+        },
+        is_virtual_user_sender: is_virtual_sender,
+        submission_id: if trusted_block {
+            namespaced_i64(content, "submission_id")
+        } else {
+            None
+        },
+        reply_to,
+        thread_root,
+        origin_server_ts: start.origin_server_ts,
+        relates_to: None,
+        room_identity: None,
+        raw_content: content.clone(),
+    })
+}
+
+/// Parse a direct `poll.response` event into a [`ParsedPollVote`].
+fn parse_push_poll_response(
+    event: &PushEvent,
+    response: &PollResponseEvent,
+) -> Option<ParsedPollVote> {
+    let room_id = event.room_id.as_ref()?;
+    let content = event.content.as_ref()?;
+    let is_virtual_user_sender = is_virtual_user_sender(&response.sender);
+    let has_cumments_block = content.get(MESSAGE_CONTENT_KEY).is_some();
+    let schema_ok = message_block_schema_is_supported(content.get(MESSAGE_CONTENT_KEY));
+    let effective_virtual = is_virtual_user_sender && (!has_cumments_block || schema_ok);
+    Some(ParsedPollVote {
+        room_id: room_id.clone(),
+        event_id: response.event_id.clone().unwrap_or_default(),
+        sender: response.sender.clone(),
+        poll_message_id: response.content.relates_to.event_id.clone(),
+        answer_ids: response.content.response.answers.clone(),
+        origin_server_ts: response.origin_server_ts,
+        is_virtual_user_sender: effective_virtual,
+        author_public_key: if effective_virtual {
+            namespaced_string(content, "public_key").map(str::to_owned)
+        } else {
+            None
+        },
+        author_signature: if effective_virtual {
+            namespaced_string(content, "signature").map(str::to_owned)
+        } else {
+            None
+        },
+        author_challenge: if effective_virtual {
+            namespaced_string(content, "challenge").map(str::to_owned)
+        } else {
+            None
+        },
+        room_identity: None,
+    })
+}
+
+/// Parse a direct `poll.end` event into a [`ParsedPollEnd`].
+fn parse_push_poll_end(event: &PushEvent, end: &PollEndEvent) -> Option<ParsedPollEnd> {
+    let room_id = event.room_id.as_ref()?;
+    Some(ParsedPollEnd {
+        room_id: room_id.clone(),
+        event_id: end.event_id.clone().unwrap_or_default(),
+        sender: end.sender.clone(),
+        poll_message_id: end.content.relates_to.event_id.clone(),
+        origin_server_ts: end.origin_server_ts,
+        room_identity: None,
     })
 }
 
@@ -1363,5 +1591,191 @@ mod tests {
         let parsed = parse_push_reaction(&with_schema2).expect("schema2 reaction");
         assert!(!parsed.is_virtual_user_sender);
         assert!(parsed.author_public_key.is_none());
+    }
+
+    // ── Direct MSC3381 poll events ────────────────────────────────
+
+    fn direct_event(event_type: &str, content: serde_json::Value) -> PushEvent {
+        PushEvent {
+            event_type: event_type.to_string(),
+            event_id: Some("$e:hs".to_string()),
+            room_id: Some("!room:hs".to_string()),
+            sender: Some("@alice:hs".to_string()),
+            origin_server_ts: Some(100),
+            state_key: None,
+            content: Some(content),
+            redacts: None,
+            unsigned: None,
+        }
+    }
+
+    fn poll_start_wire() -> serde_json::Value {
+        serde_json::json!({
+            "org.matrix.msc1767.text": "best?",
+            "org.matrix.msc3381.poll.start": {
+                "kind": "org.matrix.msc3381.poll.disclosed",
+                "max_selections": 2,
+                "question": { "org.matrix.msc1767.text": "best?" },
+                "answers": [
+                    { "id": "a", "org.matrix.msc1767.text": "A" },
+                    { "id": "b", "org.matrix.msc1767.text": "B" },
+                ],
+            },
+        })
+    }
+
+    #[test]
+    fn direct_poll_start_projects_into_poll_content() {
+        let event = direct_event(POLL_START_EVENT_TYPE, poll_start_wire());
+        let parsed = PollEvent::parse(
+            POLL_START_EVENT_TYPE,
+            Some("$e:hs"),
+            "@alice:hs",
+            100,
+            event.content.as_ref().unwrap(),
+        )
+        .expect("typed parse")
+        .expect("is a poll");
+        let PollEvent::Start(start) = parsed else {
+            panic!("expected start");
+        };
+        let message = parse_push_poll_start(&event, &start).expect("project start");
+        match message.content {
+            Content::Poll(poll) => {
+                assert_eq!(poll.question, "best?");
+                assert_eq!(poll.max_selections, 2);
+                assert_eq!(poll.options.len(), 2);
+                assert_eq!(poll.options[0].id, "a");
+                assert_eq!(poll.options[1].id, "b");
+            }
+            other => panic!("expected poll content, got {other:?}"),
+        }
+        assert!(!message.is_virtual_user_sender);
+        assert_eq!(message.event_type, POLL_START_EVENT_TYPE);
+    }
+
+    #[test]
+    fn direct_poll_start_carries_thread_relation() {
+        let mut content = poll_start_wire();
+        content["m.relates_to"] = serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$thread:hs",
+        });
+        let event = direct_event(POLL_START_EVENT_TYPE, content);
+        let PollEvent::Start(start) = PollEvent::parse(
+            POLL_START_EVENT_TYPE,
+            Some("$e:hs"),
+            "@alice:hs",
+            100,
+            event.content.as_ref().unwrap(),
+        )
+        .unwrap()
+        .unwrap() else {
+            panic!("expected start");
+        };
+        let message = parse_push_poll_start(&event, &start).expect("project start");
+        assert_eq!(message.thread_root.as_deref(), Some("$thread:hs"));
+        assert!(message.reply_to.is_none());
+    }
+
+    #[test]
+    fn direct_poll_start_with_invalid_definition_is_rejected() {
+        // Duplicate answer ids violate the poll definition rules.
+        let content = serde_json::json!({
+            "org.matrix.msc1767.text": "best?",
+            "org.matrix.msc3381.poll.start": {
+                "question": { "org.matrix.msc1767.text": "best?" },
+                "answers": [
+                    { "id": "a", "org.matrix.msc1767.text": "A" },
+                    { "id": "a", "org.matrix.msc1767.text": "A again" },
+                ],
+            },
+        });
+        let event = direct_event(POLL_START_EVENT_TYPE, content);
+        let PollEvent::Start(start) = PollEvent::parse(
+            POLL_START_EVENT_TYPE,
+            Some("$e:hs"),
+            "@alice:hs",
+            100,
+            event.content.as_ref().unwrap(),
+        )
+        .unwrap()
+        .unwrap() else {
+            panic!("expected start");
+        };
+        assert!(parse_push_poll_start(&event, &start).is_none());
+    }
+
+    #[test]
+    fn direct_poll_response_parses_selections_and_reference() {
+        let event = direct_event(
+            POLL_RESPONSE_EVENT_TYPE,
+            serde_json::json!({
+                "m.relates_to": { "rel_type": "m.reference", "event_id": "$poll:hs" },
+                "org.matrix.msc3381.poll.response": { "answers": ["a", "b"] },
+            }),
+        );
+        let PollEvent::Response(response) = PollEvent::parse(
+            POLL_RESPONSE_EVENT_TYPE,
+            Some("$e:hs"),
+            "@bob:hs",
+            100,
+            event.content.as_ref().unwrap(),
+        )
+        .unwrap()
+        .unwrap() else {
+            panic!("expected response");
+        };
+        let vote = parse_push_poll_response(&event, &response).expect("project response");
+        assert_eq!(vote.poll_message_id, "$poll:hs");
+        assert_eq!(vote.answer_ids, vec!["a".to_string(), "b".to_string()]);
+        assert!(!vote.is_virtual_user_sender);
+    }
+
+    #[test]
+    fn direct_poll_end_parses_reference() {
+        let event = direct_event(
+            POLL_END_EVENT_TYPE,
+            serde_json::json!({
+                "m.relates_to": { "rel_type": "m.reference", "event_id": "$poll:hs" },
+                "org.matrix.msc1767.text": "The poll has closed.",
+                "org.matrix.msc3381.poll.end": {},
+            }),
+        );
+        let PollEvent::End(end) = PollEvent::parse(
+            POLL_END_EVENT_TYPE,
+            Some("$e:hs"),
+            "@alice:hs",
+            100,
+            event.content.as_ref().unwrap(),
+        )
+        .unwrap()
+        .unwrap() else {
+            panic!("expected end");
+        };
+        let parsed = parse_push_poll_end(&event, &end).expect("project end");
+        assert_eq!(parsed.poll_message_id, "$poll:hs");
+        assert_eq!(parsed.sender, "@alice:hs");
+        assert_eq!(parsed.origin_server_ts, 100);
+    }
+
+    #[test]
+    fn malformed_direct_poll_event_is_reported_not_reinterpreted() {
+        // The reference relation is required; without it the typed layer
+        // rejects the event instead of manufacturing a poll fact.
+        let content = serde_json::json!({
+            "org.matrix.msc3381.poll.end": {},
+            "org.matrix.msc1767.text": "closed",
+        });
+        assert!(
+            PollEvent::parse(
+                POLL_END_EVENT_TYPE,
+                Some("$e:hs"),
+                "@alice:hs",
+                100,
+                &content,
+            )
+            .is_err()
+        );
     }
 }

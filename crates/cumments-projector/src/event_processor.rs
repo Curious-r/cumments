@@ -8,8 +8,8 @@
 
 use crate::backfill::BackfillRequest;
 use crate::parsed::{
-    ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction, ParsedRoomState,
-    ParsedSpaceChild,
+    ParsedPollEnd, ParsedPollVote, ParsedReaction, ParsedRoomMessage, ParsedRoomRedaction,
+    ParsedRoomState, ParsedSpaceChild,
 };
 use crate::verification::{verify_delete_proof, verify_visitor_event};
 use anyhow::Result;
@@ -25,8 +25,8 @@ use cumments_core::{
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
-        PollVote, ProjectionRepairInput, Reaction, RoomIdentity, RoomMember, RoomStateEvent,
-        RoomStatus, SiteId, SubmissionCompletion, TextStyle,
+        PollEnd, PollVote, ProjectionRepairInput, Reaction, RoomIdentity, RoomMember,
+        RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion, TextStyle,
     },
     ports::{
         CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore,
@@ -1902,50 +1902,36 @@ impl EventProcessor {
             );
             return Ok(());
         };
-        if event
-            .answer_ids
-            .iter()
-            .any(|answer_id| !poll.options.iter().any(|option| &option.id == answer_id))
-        {
-            let vote = PollVote {
-                event_id: event.event_id.clone(),
-                poll_message_id: event.poll_message_id.clone(),
-                sender_mxid: event.sender.clone(),
-                option_index: None,
-                origin_server_ts: event.origin_server_ts,
-            };
-            self.message_store
-                .save_poll_vote_with_selections(&vote, &[], Some("unknown_answer"))
-                .await?;
-        } else {
-            // MSC3381 requires truncation to the declared limit; duplicates
-            // remaining after truncation contribute only one selection.
-            let mut selections = Vec::with_capacity(event.answer_ids.len());
-            for answer_id in event.answer_ids.iter().take(poll.max_selections as usize) {
-                if !selections.contains(answer_id) {
-                    selections.push(answer_id.clone());
-                }
+        // Selections are an unordered set: duplicates collapse, and the
+        // validated result is derived by the deterministic reducer when the
+        // poll is read. Excess selections are never silently truncated here;
+        // the reducer spoils a response that exceeds the declared limit or
+        // references an unknown answer.
+        let mut selections: Vec<String> = Vec::with_capacity(event.answer_ids.len());
+        for answer_id in &event.answer_ids {
+            if !selections.contains(answer_id) {
+                selections.push(answer_id.clone());
             }
-            let option_index = selections.first().and_then(|answer_id| {
-                poll.options
-                    .iter()
-                    .position(|option| &option.id == answer_id)
-                    .map(|index| index as i64)
-            });
-            self.message_store
-                .save_poll_vote_with_selections(
-                    &PollVote {
-                        event_id: event.event_id,
-                        poll_message_id: event.poll_message_id,
-                        sender_mxid: event.sender,
-                        option_index,
-                        origin_server_ts: event.origin_server_ts,
-                    },
-                    &selections,
-                    None,
-                )
-                .await?;
         }
+        let option_index = selections.first().and_then(|answer_id| {
+            poll.options
+                .iter()
+                .position(|option| &option.id == answer_id)
+                .map(|index| index as i64)
+        });
+        self.message_store
+            .save_poll_vote_with_selections(
+                &PollVote {
+                    event_id: event.event_id,
+                    poll_message_id: event.poll_message_id,
+                    sender_mxid: event.sender,
+                    option_index,
+                    origin_server_ts: event.origin_server_ts,
+                },
+                &selections,
+                None,
+            )
+            .await?;
         if let Some(updated) = self.message_store.get_message(&message.event_id).await? {
             self.emit(ProjectorEvent::MessageAnnotationsChanged {
                 site_id: updated.site_id.clone(),
@@ -1955,6 +1941,117 @@ impl EventProcessor {
             .await;
         }
         Ok(())
+    }
+
+    /// Process a poll end by recording it as an immutable relation fact. The
+    /// effective end is derived by the reducer as the earliest authorized,
+    /// non-redacted end by `(origin_server_ts, event_id)`.
+    #[instrument(skip(self))]
+    pub async fn process_poll_end(&self, event: ParsedPollEnd) -> Result<()> {
+        match self.registry_store.get_room_status(&event.room_id).await? {
+            Some(RoomStatus::Active) => {}
+            Some(_) => {
+                debug!("Ignoring poll end from non-active room {}", event.room_id);
+                return Ok(());
+            }
+            None => {
+                debug!("Ignoring poll end from unregistered room {}", event.room_id);
+                return Ok(());
+            }
+        }
+        // Same tombstone gate as messages, reactions and votes: a redaction
+        // seen before the end must prevent resurrection on re-delivery.
+        if self
+            .message_store
+            .has_backfill_tombstone(&event.event_id, &event.room_id)
+            .await?
+        {
+            debug!("Ignoring tombstoned poll end {}", event.event_id);
+            return Ok(());
+        }
+        // The end must target a projected poll in the same room.
+        let Some(poll_message) = self
+            .message_store
+            .get_message(&event.poll_message_id)
+            .await?
+        else {
+            debug!(
+                "Poll end for unknown poll {}; ignoring",
+                event.poll_message_id
+            );
+            return Ok(());
+        };
+        if !matches!(poll_message.content, Content::Poll(_)) {
+            debug!(
+                "Poll end target {} is not a poll; ignoring",
+                event.poll_message_id
+            );
+            return Ok(());
+        }
+        if poll_message.room_id != event.room_id {
+            warn!(
+                "Ignoring poll end {} for {}: poll lives in {}",
+                event.event_id, event.poll_message_id, poll_message.room_id
+            );
+            return Ok(());
+        }
+        let authorized = self
+            .authorize_poll_end(&event.room_id, &poll_message.sender_mxid, &event.sender)
+            .await;
+        if !authorized {
+            warn!(
+                "Recording unauthorized poll end {} from {} for {}",
+                event.event_id, event.sender, event.poll_message_id
+            );
+        }
+        self.message_store
+            .save_poll_end(&PollEnd {
+                event_id: event.event_id,
+                poll_message_id: event.poll_message_id.clone(),
+                sender_mxid: event.sender,
+                origin_server_ts: event.origin_server_ts,
+                authorized,
+            })
+            .await?;
+        if let Some(updated) = self
+            .message_store
+            .get_message(&event.poll_message_id)
+            .await?
+        {
+            self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                site_id: updated.site_id.clone(),
+                page_slug: updated.page_slug.clone(),
+                message: updated,
+            })
+            .await;
+        }
+        Ok(())
+    }
+
+    /// MSC3381 end authorization: an end is valid when sent by the poll's
+    /// original creator or by a sender that may redact other users' messages.
+    ///
+    /// The Cumments site-moderator to Matrix redact-power mapping is
+    /// intentionally not decided here, so an end whose authorization cannot be
+    /// established (no driver, unknown power levels, or insufficient power) is
+    /// never treated as authorized.
+    async fn authorize_poll_end(&self, room_id: &str, poll_sender: &str, end_sender: &str) -> bool {
+        if end_sender == poll_sender {
+            return true;
+        }
+        let Some(driver) = self.driver.as_ref() else {
+            return false;
+        };
+        match driver.get_room_power_levels(room_id).await {
+            Ok(Some(power_levels)) => cumments_matrix::has_redact_power(&power_levels, end_sender),
+            Ok(None) => false,
+            Err(error) => {
+                warn!(
+                    "Could not resolve room power levels for {room_id} while authorizing poll end: {error:#}"
+                );
+                false
+            }
+        }
     }
 
     /// Process a room state event (system message / room metadata).
@@ -2753,6 +2850,59 @@ impl EventProcessor {
                 if let Some(updated) = self
                     .message_store
                     .get_message(&vote.poll_message_id)
+                    .await?
+                {
+                    self.emit(ProjectorEvent::MessageAnnotationsChanged {
+                        site_id: updated.site_id.clone(),
+                        page_slug: updated.page_slug.clone(),
+                        message: updated,
+                    })
+                    .await;
+                }
+            }
+            return Ok(());
+        }
+
+        // 3b. Poll end targets follow the same relation-fact rules: a redacted
+        // end no longer closes the poll.
+        if let Some(poll_end) = self
+            .message_store
+            .get_poll_end_by_event(&target_event_id)
+            .await?
+        {
+            let Some(target) = self
+                .message_store
+                .get_message(&poll_end.poll_message_id)
+                .await?
+            else {
+                debug!(
+                    "Redaction tombstoned for poll end {}: poll unknown",
+                    target_event_id
+                );
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                return Ok(());
+            };
+            if target.room_id != event.room_id {
+                warn!(
+                    "Ignoring poll end redaction {} in {}: end lives in {}",
+                    target_event_id, event.room_id, target.room_id
+                );
+                return Ok(());
+            }
+            if self
+                .message_store
+                .redact_poll_end(&target_event_id, redacted_at, &redacted_by)
+                .await?
+            {
+                self.message_store
+                    .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
+                    .await?;
+                info!("Successfully redacted poll end {}", target_event_id);
+                if let Some(updated) = self
+                    .message_store
+                    .get_message(&poll_end.poll_message_id)
                     .await?
                 {
                     self.emit(ProjectorEvent::MessageAnnotationsChanged {

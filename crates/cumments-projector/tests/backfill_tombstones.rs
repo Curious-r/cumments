@@ -4,11 +4,12 @@ use cumments_core::models::{
     Content, LocationContent, PageSlug, PollContent, PollOption, RoomIdentity, RoomStatus, SiteId,
     TextContent, TextStyle,
 };
+use cumments_core::poll::PollStatus;
 use cumments_core::ports::{MessageStore, RegistryStore, SubmissionStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
-    ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage, ParsedRoomRedaction,
-    ParsedRoomState,
+    ParsedPollEnd, ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage,
+    ParsedRoomRedaction, ParsedRoomState,
 };
 use cumments_store::DbStore;
 use std::sync::Arc;
@@ -551,6 +552,83 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
         .await
         .expect("re-deliver vote");
     assert_eq!(vote_count().await, 0, "tombstoned vote must not resurrect");
+}
+
+#[tokio::test]
+async fn poll_end_authorization_requires_the_creator_or_redact_power() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("poll-end-auth"))
+            .await
+            .expect("connect db"),
+    );
+    let site = SiteId::from("my-blog");
+    let slug = PageSlug::from("hello");
+    store
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+
+    let processor = processor(store.clone()).await;
+    let mut poll = message("$poll:hs");
+    poll.content = Content::Poll(PollContent {
+        question: "best?".to_string(),
+        options: vec![PollOption {
+            id: "a".to_string(),
+            text: "A".to_string(),
+        }],
+        max_selections: 1,
+        responses: Vec::new(),
+        my_votes: Vec::new(),
+    });
+    processor
+        .process_room_message(poll)
+        .await
+        .expect("process poll");
+
+    let end = |event_id: &str, sender: &str, ts: i64| ParsedPollEnd {
+        room_id: "!room:hs".to_string(),
+        event_id: event_id.to_string(),
+        sender: sender.to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        origin_server_ts: ts,
+        room_identity: Some(identity()),
+    };
+
+    // A non-creator end cannot be authorized without room power levels, so it
+    // is recorded but must not close the poll.
+    processor
+        .process_poll_end(end("$bad:hs", "@mallory:hs", 200))
+        .await
+        .expect("process unauthorized end");
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Open);
+    assert!(projection.end.is_none());
+
+    // The poll creator is always authorized to close it.
+    processor
+        .process_poll_end(end("$good:hs", "@alice:hs", 300))
+        .await
+        .expect("process creator end");
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Ended);
+    assert_eq!(projection.end.unwrap().event_id, "$good:hs");
+
+    // Re-delivering the same end leaves the effective end unchanged.
+    processor
+        .process_poll_end(end("$good:hs", "@alice:hs", 300))
+        .await
+        .expect("redeliver creator end");
+    assert_eq!(
+        store
+            .poll_projection("$poll:hs")
+            .await
+            .unwrap()
+            .unwrap()
+            .end
+            .unwrap()
+            .event_id,
+        "$good:hs"
+    );
 }
 
 #[tokio::test]
