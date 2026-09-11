@@ -93,22 +93,24 @@ impl OperationIdentity {
 }
 
 /// A server-wide operation claim as stored, used by the no-PoW preflight.
+///
+/// It carries only operation identity: the author and semantic fingerprint.
+/// It deliberately holds no durable-submission reference, because an operation
+/// can be claimed without any submission (Vote/End).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationClaim {
     pub author_public_key: String,
     pub fingerprint: String,
-    pub submission_id: i64,
 }
 
-/// Result of an atomic server-wide operation-identity claim.
+/// Result of claiming a server-wide operation identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OperationClaimOutcome {
-    /// This request atomically claimed a new logical operation; the durable
-    /// submission for it is identified by `submission_id`.
-    Accepted { submission_id: i64 },
+    /// The operation was newly claimed by this request.
+    New,
     /// The same author already claimed this `operation_id` with the same
     /// semantic fingerprint: a replay of the prior operation.
-    Replayed { submission_id: i64 },
+    Replay,
     /// The `operation_id` is already claimed by a different author or a
     /// different semantic fingerprint. The request must be rejected with
     /// `409 Conflict`.

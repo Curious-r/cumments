@@ -120,11 +120,20 @@ async fn operation_claims_table_enforces_server_wide_uniqueness() {
     let db = Database::connect(&url).await.expect("connect db");
     Migrator::up(&db, None).await.expect("migrate to latest");
 
+    // An operation claim carries only operation identity — no submission.
+    assert!(
+        !column_names(&db, "operation_claims")
+            .await
+            .iter()
+            .any(|column| column == "submission_id"),
+        "operation claims must not be coupled to durable submissions"
+    );
+
     let now = chrono::Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
         "INSERT INTO operation_claims \
-         (operation_id, author_public_key, fingerprint, submission_id, created_at) \
-         VALUES ('op-1', 'author-a', 'fp-a', 1, '{now}')"
+         (operation_id, author_public_key, fingerprint, created_at) \
+         VALUES ('op-1', 'author-a', 'fp-a', '{now}')"
     ))
     .await
     .expect("first claim");
@@ -134,8 +143,8 @@ async fn operation_claims_table_enforces_server_wide_uniqueness() {
     let duplicate = db
         .execute_unprepared(&format!(
             "INSERT INTO operation_claims \
-             (operation_id, author_public_key, fingerprint, submission_id, created_at) \
-             VALUES ('op-1', 'author-b', 'fp-b', 2, '{now}')"
+             (operation_id, author_public_key, fingerprint, created_at) \
+             VALUES ('op-1', 'author-b', 'fp-b', '{now}')"
         ))
         .await;
     assert!(
@@ -146,11 +155,88 @@ async fn operation_claims_table_enforces_server_wide_uniqueness() {
     // Different operation ids remain independent.
     db.execute_unprepared(&format!(
         "INSERT INTO operation_claims \
-         (operation_id, author_public_key, fingerprint, submission_id, created_at) \
-         VALUES ('op-2', 'author-b', 'fp-b', 2, '{now}')"
+         (operation_id, author_public_key, fingerprint, created_at) \
+         VALUES ('op-2', 'author-b', 'fp-b', '{now}')"
     ))
     .await
     .expect("independent operation id");
+}
+
+#[tokio::test]
+async fn operation_claim_decoupling_preserves_existing_records() {
+    let url = test_db_url("operation-claim-decoupling");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(68))
+        .await
+        .expect("migrate to 000068");
+
+    // Simulate a database that ran the earlier schema, where the claim held the
+    // durable submission id and the submission had no operation reference.
+    db.execute_unprepared("ALTER TABLE operation_claims ADD COLUMN submission_id INTEGER")
+        .await
+        .expect("simulate earlier claim schema");
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO post_submissions \
+         (id, payload, status, retry_count, timeout_confirmations, timeout_check_errors, \
+          created_at, updated_at) \
+         VALUES (7, '{{\"poll\":true}}', 'pending', 0, 0, 0, '{now}', '{now}')"
+    ))
+    .await
+    .expect("legacy submission");
+    db.execute_unprepared(&format!(
+        "INSERT INTO operation_claims \
+         (operation_id, author_public_key, fingerprint, submission_id, created_at) \
+         VALUES ('op-legacy', 'author-a', 'fp-a', 7, '{now}')"
+    ))
+    .await
+    .expect("legacy claim");
+
+    Migrator::up(&db, None).await.expect("apply 000069");
+
+    // The claim survives, the old coupling is gone, and the submission now
+    // carries the operation reference.
+    assert!(
+        !column_names(&db, "operation_claims")
+            .await
+            .iter()
+            .any(|column| column == "submission_id"),
+        "the coupling column must be dropped"
+    );
+    let claims = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT operation_id, author_public_key, fingerprint FROM operation_claims",
+        ))
+        .await
+        .expect("claims");
+    assert_eq!(claims.len(), 1);
+    assert_eq!(
+        claims[0].try_get::<String>("", "operation_id").unwrap(),
+        "op-legacy"
+    );
+    assert_eq!(
+        claims[0]
+            .try_get::<String>("", "author_public_key")
+            .unwrap(),
+        "author-a"
+    );
+
+    let submissions = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT operation_id FROM post_submissions WHERE id = 7",
+        ))
+        .await
+        .expect("submissions");
+    assert_eq!(
+        submissions[0]
+            .try_get::<Option<String>>("", "operation_id")
+            .unwrap()
+            .as_deref(),
+        Some("op-legacy"),
+        "the legacy submission id must be preserved as an operation reference"
+    );
 }
 
 #[tokio::test]

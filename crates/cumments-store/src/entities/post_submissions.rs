@@ -36,6 +36,10 @@ pub struct Model {
     /// means the next attempt allocates a fresh one; a stored value is reused
     /// on retries so homeserver-side transaction idempotency is preserved.
     pub txn_id: Option<String>,
+    /// The server-wide logical operation that produced this submission, when
+    /// it was created through an operation claim (Create Poll). Comment
+    /// submissions leave it `NULL` and use author-scoped idempotency instead.
+    pub operation_id: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

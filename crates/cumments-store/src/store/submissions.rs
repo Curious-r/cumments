@@ -124,90 +124,89 @@ impl SubmissionStore for DbStore {
         Ok(row.map(|row| OperationClaim {
             author_public_key: row.author_public_key,
             fingerprint: row.fingerprint,
-            submission_id: row.submission_id,
         }))
     }
 
-    async fn save_post_submission_claimed(
+    async fn claim_operation(
+        &self,
+        operation: &OperationIdentity,
+    ) -> Result<OperationClaimOutcome> {
+        // A single atomic statement against the unique index; no durable
+        // submission is involved, so Vote/End can use this directly.
+        let txn = self.db.begin().await?;
+        let outcome = match Self::try_claim_operation(&txn, operation).await? {
+            ClaimAttempt::Claimed => OperationClaimOutcome::New,
+            ClaimAttempt::Existing(existing) => Self::resolve_existing(operation, &existing),
+        };
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn claim_post_submission(
         &self,
         command: &PostCommentCommand,
         operation: &OperationIdentity,
-    ) -> Result<OperationClaimOutcome> {
-        // One transaction: create the durable submission, then claim the
-        // server-wide operation id against its unique index. The claim insert
-        // is the atomic gate — a losing racer rolls its submission back and
-        // resolves as replay or conflict, so no second logical operation and
-        // no second submission can exist for one operation id.
+    ) -> Result<IdempotencyOutcome> {
+        // One transaction composes two independent persistence concepts: the
+        // server-wide operation claim and the durable Create Poll submission.
+        // The claim insert is the atomic gate; the submission is created only
+        // for a genuinely new operation, and a losing racer rolls it back.
         let txn = self.db.begin().await?;
-        let payload = serde_json::to_string(command)?;
-        let active_model = post_submissions::ActiveModel {
-            payload: Set(payload),
-            status: Set(SubmissionStatus::Pending),
-            retry_count: Set(0),
-            timeout_confirmations: Set(0),
-            timeout_check_errors: Set(0),
-            last_timeout_confirmation_at: Set(None),
-            txn_id: Set(None),
-            author_public_key: Set(Some(command.author_public_key.clone())),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-            ..Default::default()
-        };
-        let inserted = post_submissions::Entity::insert(active_model)
-            .exec(&txn)
-            .await?;
-        let submission_id = inserted.last_insert_id;
-        if let Some(media) = &command.media {
-            bind_media_submission(&txn, &media.url, submission_id).await?;
+        match Self::try_claim_operation(&txn, operation).await? {
+            ClaimAttempt::Claimed => {
+                let payload = serde_json::to_string(command)?;
+                let active_model = post_submissions::ActiveModel {
+                    payload: Set(payload),
+                    status: Set(SubmissionStatus::Pending),
+                    retry_count: Set(0),
+                    timeout_confirmations: Set(0),
+                    timeout_check_errors: Set(0),
+                    last_timeout_confirmation_at: Set(None),
+                    txn_id: Set(None),
+                    author_public_key: Set(Some(command.author_public_key.clone())),
+                    operation_id: Set(Some(operation.operation_id.clone())),
+                    created_at: Set(chrono::Utc::now()),
+                    updated_at: Set(chrono::Utc::now()),
+                    ..Default::default()
+                };
+                let inserted = post_submissions::Entity::insert(active_model)
+                    .exec(&txn)
+                    .await?;
+                let submission_id = inserted.last_insert_id;
+                if let Some(media) = &command.media {
+                    bind_media_submission(&txn, &media.url, submission_id).await?;
+                }
+                txn.commit().await?;
+                Ok(IdempotencyOutcome::Accepted { submission_id })
+            }
+            ClaimAttempt::Existing(existing) => {
+                // Drop this request's nothing-written transaction and resolve
+                // against the winner's already-committed claim.
+                txn.rollback().await?;
+                if Self::resolve_existing(operation, &existing) == OperationClaimOutcome::Replay {
+                    match self
+                        .find_post_submission_by_operation(&operation.operation_id)
+                        .await?
+                    {
+                        Some(submission_id) => Ok(IdempotencyOutcome::Replayed { submission_id }),
+                        // A matching claim without a submission cannot be
+                        // replayed as a Create Poll result; reject rather than
+                        // fabricate one.
+                        None => Ok(IdempotencyOutcome::Reused),
+                    }
+                } else {
+                    Ok(IdempotencyOutcome::Reused)
+                }
+            }
         }
+    }
 
-        let backend = txn.get_database_backend();
-        let sql = if backend == DatabaseBackend::Sqlite {
-            "INSERT OR IGNORE INTO operation_claims \
-             (operation_id, author_public_key, fingerprint, submission_id, created_at) \
-             VALUES (?, ?, ?, ?, ?)"
-        } else {
-            "INSERT INTO operation_claims \
-             (operation_id, author_public_key, fingerprint, submission_id, created_at) \
-             VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT (operation_id) DO NOTHING"
-        };
-        let claimed = txn
-            .execute_raw(Statement::from_sql_and_values(
-                backend,
-                sql,
-                vec![
-                    Value::from(operation.operation_id.clone()),
-                    Value::from(operation.author_public_key.clone()),
-                    Value::from(operation.fingerprint.clone()),
-                    Value::from(submission_id),
-                    Value::from(chrono::Utc::now()),
-                ],
-            ))
-            .await?;
-        if claimed.rows_affected() > 0 {
-            txn.commit().await?;
-            return Ok(OperationClaimOutcome::Accepted { submission_id });
-        }
-
-        // The operation id is already claimed. Drop this request's duplicate
-        // submission and resolve against the existing claim.
-        txn.rollback().await?;
-        let existing = operation_claims::Entity::find()
-            .filter(operation_claims::Column::OperationId.eq(&operation.operation_id))
+    async fn find_post_submission_by_operation(&self, operation_id: &str) -> Result<Option<i64>> {
+        let row = post_submissions::Entity::find()
+            .filter(post_submissions::Column::OperationId.eq(operation_id))
             .one(&self.db)
             .await?;
-        match existing {
-            Some(row)
-                if row.author_public_key == operation.author_public_key
-                    && row.fingerprint == operation.fingerprint =>
-            {
-                Ok(OperationClaimOutcome::Replayed {
-                    submission_id: row.submission_id,
-                })
-            }
-            _ => Ok(OperationClaimOutcome::Conflict),
-        }
+        Ok(row.map(|row| row.id))
     }
 
     async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64> {
@@ -1284,6 +1283,84 @@ impl SubmissionStore for DbStore {
             },
         )
         .await
+    }
+}
+
+/// The outcome of an atomic `operation_claims` insert attempt.
+enum ClaimAttempt {
+    /// This request inserted the claim (it was absent).
+    Claimed,
+    /// The operation id was already claimed; carries the stored claim.
+    Existing(OperationClaim),
+}
+
+impl DbStore {
+    /// Attempts the atomic server-wide claim inside the caller's connection or
+    /// transaction. `INSERT ... ON CONFLICT DO NOTHING` on the unique
+    /// `operation_id` index is the single gate, so two concurrent claims can
+    /// never both succeed.
+    async fn try_claim_operation<C: ConnectionTrait>(
+        conn: &C,
+        operation: &OperationIdentity,
+    ) -> Result<ClaimAttempt> {
+        let backend = conn.get_database_backend();
+        let sql = if backend == DatabaseBackend::Sqlite {
+            "INSERT OR IGNORE INTO operation_claims \
+             (operation_id, author_public_key, fingerprint, created_at) \
+             VALUES (?, ?, ?, ?)"
+        } else {
+            "INSERT INTO operation_claims \
+             (operation_id, author_public_key, fingerprint, created_at) \
+             VALUES (?, ?, ?, ?) \
+             ON CONFLICT (operation_id) DO NOTHING"
+        };
+        let inserted = conn
+            .execute_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                vec![
+                    Value::from(operation.operation_id.clone()),
+                    Value::from(operation.author_public_key.clone()),
+                    Value::from(operation.fingerprint.clone()),
+                    Value::from(chrono::Utc::now()),
+                ],
+            ))
+            .await?;
+        if inserted.rows_affected() > 0 {
+            return Ok(ClaimAttempt::Claimed);
+        }
+
+        let row = operation_claims::Entity::find()
+            .filter(operation_claims::Column::OperationId.eq(&operation.operation_id))
+            .one(conn)
+            .await?;
+        match row {
+            Some(row) => Ok(ClaimAttempt::Existing(OperationClaim {
+                author_public_key: row.author_public_key,
+                fingerprint: row.fingerprint,
+            })),
+            // The insert was ignored but the row is not visible: treat as an
+            // unverifiable claim so the caller resolves it as a conflict
+            // instead of silently admitting a second operation.
+            None => Ok(ClaimAttempt::Existing(OperationClaim {
+                author_public_key: String::new(),
+                fingerprint: String::new(),
+            })),
+        }
+    }
+
+    /// Classify an existing claim against a request's identity.
+    fn resolve_existing(
+        operation: &OperationIdentity,
+        existing: &OperationClaim,
+    ) -> OperationClaimOutcome {
+        if existing.author_public_key == operation.author_public_key
+            && existing.fingerprint == operation.fingerprint
+        {
+            OperationClaimOutcome::Replay
+        } else {
+            OperationClaimOutcome::Conflict
+        }
     }
 }
 

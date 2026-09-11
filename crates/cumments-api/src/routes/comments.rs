@@ -31,8 +31,7 @@ use cumments_core::{
         validate_poll_semantic_definition, verify_poll_signature,
     },
     submissions::{
-        IdempotencyInput, IdempotencyOutcome, OperationClaimOutcome, OperationIdentity,
-        deterministic_transaction_id,
+        IdempotencyInput, IdempotencyOutcome, OperationIdentity, deterministic_transaction_id,
     },
 };
 use ruma_common::EventId;
@@ -1684,20 +1683,45 @@ pub(crate) async fn poll_handler(
     }
 
     // 5. Server-wide operation preflight. An authenticated replay returns the
-    // original submission and a mismatch is a conflict, both without consuming
-    // PoW. Possessing the key alone never reveals another author's operation.
-    // This is a fast path only: the atomic claim below is what actually
-    // enforces server-wide uniqueness.
+    // original durable submission and a mismatch is a conflict, both without
+    // consuming PoW. Possessing the key alone never reveals another author's
+    // operation. This is a fast path only: the atomic claim below is what
+    // actually enforces server-wide uniqueness.
     match state.store.lookup_operation(&operation_id).await {
         Ok(Some(claim))
             if claim.author_public_key == req.author_public_key
                 && claim.fingerprint == fingerprint =>
         {
-            tracing::info!(
-                "Replayed idempotent POLL with submission_id {}",
-                claim.submission_id
-            );
-            return Ok(accepted_response(claim.submission_id, true));
+            // A Create Poll claim and its submission are created atomically,
+            // so a matching claim always has one.
+            match state
+                .store
+                .find_post_submission_by_operation(&operation_id)
+                .await
+            {
+                Ok(Some(submission_id)) => {
+                    tracing::info!(
+                        "Replayed idempotent POLL with submission_id {}",
+                        submission_id
+                    );
+                    return Ok(accepted_response(submission_id, true));
+                }
+                Ok(None) => {
+                    tracing::error!(
+                        "Operation {} is replayed but has no durable submission",
+                        operation_id
+                    );
+                    return Err(AppError::Internal(
+                        "Failed to resolve the prior operation.".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::error!("Failed to resolve poll replay submission: {:?}", e);
+                    return Err(AppError::Internal(
+                        "Failed to resolve the prior operation.".to_string(),
+                    ));
+                }
+            }
         }
         Ok(Some(_)) => return Err(AppError::IdempotencyReused),
         Ok(None) => {}
@@ -1742,9 +1766,8 @@ pub(crate) async fn poll_handler(
     }
 
     // 8. Atomically claim the server-wide operation id and queue its durable
-    // submission in one transaction. A concurrent racer that loses the claim
-    // is resolved here as replay/conflict even though the preflight above
-    // found no existing claim.
+    // submission. A concurrent racer that loses the claim is resolved here as
+    // replay/conflict even though the preflight above found no existing claim.
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let command = PostCommentCommand {
@@ -1770,25 +1793,25 @@ pub(crate) async fn poll_handler(
 
     match state
         .store
-        .save_post_submission_claimed(
+        .claim_post_submission(
             &command,
             &OperationIdentity::new(&operation_id, &req.author_public_key, &fingerprint),
         )
         .await
     {
-        Ok(OperationClaimOutcome::Accepted { submission_id }) => {
+        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
             tracing::debug!("Successfully saved a new poll submission.");
             state.submission_notify.notify_one();
             Ok(accepted_response(submission_id, false))
         }
-        Ok(OperationClaimOutcome::Replayed { submission_id }) => {
+        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
             tracing::info!(
                 "Replayed idempotent POLL with submission_id {}",
                 submission_id
             );
             Ok(accepted_response(submission_id, true))
         }
-        Ok(OperationClaimOutcome::Conflict) => Err(AppError::IdempotencyReused),
+        Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
         Err(e) => {
             tracing::error!("Failed to save poll submission: {:?}", e);
             Err(AppError::Internal("Failed to queue poll.".to_string()))

@@ -44,24 +44,38 @@ pub trait SubmissionStore: Send + Sync {
     ///
     /// This is a **preflight only**: it lets the API resolve an authenticated
     /// replay or a conflict without consuming PoW. It never establishes
-    /// uniqueness — [`Self::save_post_submission_claimed`] is the atomic gate,
-    /// so a claim that appears after this lookup still resolves safely.
+    /// uniqueness — [`Self::claim_operation`] is the atomic gate, so a claim
+    /// that appears after this lookup still resolves safely.
     async fn lookup_operation(&self, operation_id: &str) -> Result<Option<OperationClaim>>;
 
-    /// Atomically claims a server-wide logical operation and queues its
-    /// durable post submission in one transaction.
+    /// Atomically claims a server-wide logical operation identity.
     ///
-    /// The `operation_id` uniqueness scope is the whole server (frozen Poll
-    /// design §5.1): concurrent claims resolve deterministically to exactly
-    /// one [`OperationClaimOutcome::Accepted`]; matching author+fingerprint
-    /// claims replay, and any other reuse is a conflict. A losing racer's
-    /// submission is rolled back, so one operation id can never produce two
-    /// durable submissions.
-    async fn save_post_submission_claimed(
+    /// `operation_id` uniqueness scope is the whole server (frozen Poll design
+    /// §5.1): concurrent claims resolve deterministically to exactly one
+    /// [`OperationClaimOutcome::New`]; a matching author+fingerprint claim is a
+    /// [`OperationClaimOutcome::Replay`], and any other reuse is a
+    /// [`OperationClaimOutcome::Conflict`]. The claim is independent of any
+    /// durable submission and creates none.
+    async fn claim_operation(&self, operation: &OperationIdentity)
+    -> Result<OperationClaimOutcome>;
+
+    /// Atomically claims the operation and, only when it is genuinely new,
+    /// queues its durable post submission in the same transaction.
+    ///
+    /// This composes [`Self::claim_operation`] with a post-submission insert so
+    /// that a claim and its Create Poll submission are created together or not
+    /// at all. A replay returns the original submission and a conflict queues
+    /// nothing, so one operation id can never produce two durable submissions.
+    async fn claim_post_submission(
         &self,
         command: &PostCommentCommand,
         operation: &OperationIdentity,
-    ) -> Result<OperationClaimOutcome>;
+    ) -> Result<IdempotencyOutcome>;
+
+    /// Finds the durable post submission created for a claimed operation, if
+    /// any. Used to resolve an authenticated Create Poll replay without
+    /// consuming PoW.
+    async fn find_post_submission_by_operation(&self, operation_id: &str) -> Result<Option<i64>>;
 
     /// Persists a new post submission and returns its queue row ID.
     async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64>;
