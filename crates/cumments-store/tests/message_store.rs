@@ -2556,17 +2556,18 @@ fn poll_message(event_id: &str, kind: &str, max_selections: u8) -> Message {
     message
 }
 
-fn poll_end(event_id: &str, ts: i64, authorized: bool) -> PollEnd {
+/// The sender of [`visitor_message`] and therefore the poll creator in these
+/// tests; the reducer authorizes an end only from the poll's own sender.
+const POLL_CREATOR: &str = "@_cumments_my-blog_a1b2c3d4e5f60718a1b2c3d4e5f60718:hs";
+
+/// A poll end fact from `sender`. Authorization is not stored: the reducer
+/// derives it from the poll creator, so only [`POLL_CREATOR`] ends close polls.
+fn poll_end(event_id: &str, sender: &str, ts: i64) -> PollEnd {
     PollEnd {
         event_id: event_id.to_string(),
         poll_message_id: "$poll:hs".to_string(),
-        sender_mxid: if authorized {
-            "@alice:hs".to_string()
-        } else {
-            "@mallory:hs".to_string()
-        },
+        sender_mxid: sender.to_string(),
         origin_server_ts: ts,
-        authorized,
     }
 }
 
@@ -2586,15 +2587,15 @@ async fn poll_ends_reduce_to_the_earliest_authorized_end() {
 
     // An earlier unauthorized end must not preempt the later valid one.
     store
-        .save_poll_end(&poll_end("$bad:hs", 100, false))
+        .save_poll_end(&poll_end("$bad:hs", "@mallory:hs", 100))
         .await
         .expect("save unauthorized end");
     store
-        .save_poll_end(&poll_end("$good:hs", 200, true))
+        .save_poll_end(&poll_end("$good:hs", POLL_CREATOR, 200))
         .await
         .expect("save authorized end");
     store
-        .save_poll_end(&poll_end("$later:hs", 300, true))
+        .save_poll_end(&poll_end("$later:hs", POLL_CREATOR, 300))
         .await
         .expect("save later end");
 
@@ -2623,7 +2624,7 @@ async fn unauthorized_poll_ends_do_not_close_the_poll() {
         .await
         .expect("save poll");
     store
-        .save_poll_end(&poll_end("$bad:hs", 100, false))
+        .save_poll_end(&poll_end("$bad:hs", "@mallory:hs", 100))
         .await
         .expect("save unauthorized end");
 
@@ -2650,11 +2651,11 @@ async fn redacting_the_effective_poll_end_reverts_to_the_next_valid_end() {
         .await
         .expect("save poll");
     store
-        .save_poll_end(&poll_end("$e1:hs", 100, true))
+        .save_poll_end(&poll_end("$e1:hs", POLL_CREATOR, 100))
         .await
         .expect("save e1");
     store
-        .save_poll_end(&poll_end("$e2:hs", 200, true))
+        .save_poll_end(&poll_end("$e2:hs", POLL_CREATOR, 200))
         .await
         .expect("save e2");
 
@@ -2705,7 +2706,7 @@ async fn duplicate_poll_end_delivery_is_idempotent() {
         ))
         .await
         .expect("save poll");
-    let end = poll_end("$e1:hs", 100, true);
+    let end = poll_end("$e1:hs", POLL_CREATOR, 100);
     store.save_poll_end(&end).await.expect("save end");
     store.save_poll_end(&end).await.expect("re-deliver end");
 
@@ -2713,14 +2714,13 @@ async fn duplicate_poll_end_delivery_is_idempotent() {
     assert_eq!(projection.status, PollStatus::Ended);
     assert_eq!(projection.end.unwrap().event_id, "$e1:hs");
     // The event id is unique, so `get_poll_end_by_event` is stable too.
-    assert!(
-        store
-            .get_poll_end_by_event("$e1:hs")
-            .await
-            .unwrap()
-            .unwrap()
-            .authorized
-    );
+    let stored = store
+        .get_poll_end_by_event("$e1:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.sender_mxid, POLL_CREATOR);
+    assert_eq!(stored.origin_server_ts, 100);
 }
 
 #[tokio::test]
@@ -2749,7 +2749,7 @@ async fn responses_after_the_effective_poll_end_are_ignored() {
         .await
         .expect("vote before close");
     store
-        .save_poll_end(&poll_end("$e:hs", 200, true))
+        .save_poll_end(&poll_end("$e:hs", POLL_CREATOR, 200))
         .await
         .expect("close poll");
     store
@@ -2802,4 +2802,242 @@ async fn poll_projection_retains_kind_and_zero_counts() {
             .unwrap()
             .disclosed
     );
+}
+
+/// The production projection is the reducer: given the same persisted facts,
+/// `poll_projection` must agree with `reduce_poll` on every derived field.
+/// This fails if independent vote/end reduction logic is reintroduced.
+#[tokio::test]
+async fn poll_projection_matches_the_canonical_reducer() {
+    use cumments_core::poll::{
+        EndAuthorization, PollAnswerFact, PollEndFact, PollProjection, PollResponseFact,
+        PollStartFact, reduce_poll,
+    };
+
+    let store = DbStore::connect(&test_db_url("poll-reducer-parity"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            2,
+        ))
+        .await
+        .expect("save poll");
+
+    let vote = |event_id: &str, sender: &str, ts: i64| PollVote {
+        event_id: event_id.to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        sender_mxid: sender.to_string(),
+        option_index: None,
+        origin_server_ts: ts,
+    };
+    for (vote, selections) in [
+        (
+            vote("$v1:hs", "@alice:hs", 1),
+            vec!["a".to_string(), "a".to_string(), "b".to_string()],
+        ),
+        (
+            vote("$v2:hs", "@bob:hs", 2),
+            vec!["a".to_string(), "unknown".to_string()],
+        ),
+        (vote("$v3:hs", "@carol:hs", 3), Vec::new()),
+        (vote("$v4:hs", "@dave:hs", 4), vec!["b".to_string()]),
+    ] {
+        store
+            .save_poll_vote_with_selections(&vote, &selections, None)
+            .await
+            .expect("save response");
+    }
+    store
+        .save_poll_end(&poll_end("$e:hs", "@mallory:hs", 5))
+        .await
+        .expect("save unauthorized end");
+
+    let production: PollProjection = store
+        .poll_projection("$poll:hs")
+        .await
+        .expect("derive projection")
+        .expect("poll exists");
+
+    // The same facts, reduced by the canonical reducer directly.
+    let start = PollStartFact {
+        event_id: "$poll:hs".to_string(),
+        sender: POLL_CREATOR.to_string(),
+        origin_server_ts: production.created_at,
+        question: "best?".to_string(),
+        answers: vec![PollAnswerFact::new("a", "A"), PollAnswerFact::new("b", "B")],
+        max_selections: 2,
+        disclosed: true,
+        reply_to: None,
+        thread_root: None,
+    };
+    let responses = vec![
+        PollResponseFact::new(
+            "$v1:hs",
+            "@alice:hs",
+            1,
+            vec!["a".into(), "a".into(), "b".into()],
+        ),
+        PollResponseFact::new("$v2:hs", "@bob:hs", 2, vec!["a".into(), "unknown".into()]),
+        PollResponseFact::new("$v3:hs", "@carol:hs", 3, vec![]),
+        PollResponseFact::new("$v4:hs", "@dave:hs", 4, vec!["b".into()]),
+    ];
+    let ends = vec![PollEndFact {
+        event_id: "$e:hs".to_string(),
+        sender: "@mallory:hs".to_string(),
+        origin_server_ts: 5,
+        authorization: EndAuthorization::from_facts(POLL_CREATOR, "@mallory:hs"),
+        redacted: false,
+    }];
+    let expected = reduce_poll(&start, &responses, &ends).expect("reduce");
+
+    assert_eq!(production.status, expected.status);
+    assert_eq!(production.votes, expected.votes);
+    assert_eq!(production.tallies, expected.tallies);
+    assert_eq!(production.total_votes, expected.total_votes);
+    // Duplicates collapsed, unknown spoiled, unvote ignored, tallies per option.
+    assert_eq!(production.count_for("a"), 1);
+    assert_eq!(production.count_for("b"), 2);
+    assert_eq!(production.total_votes, 2);
+    assert!(production.vote_of("@bob:hs").unwrap().spoiled);
+    assert!(
+        production
+            .vote_of("@carol:hs")
+            .unwrap()
+            .selections
+            .is_empty()
+    );
+}
+
+/// Poll facts are retained independently of the poll start, so processing
+/// order cannot change the final projection: `response → end → start`
+/// converges with `start → response → end`.
+#[tokio::test]
+async fn poll_facts_recorded_before_the_start_converge() {
+    let vote = |event_id: &str, sender: &str, ts: i64| PollVote {
+        event_id: event_id.to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        sender_mxid: sender.to_string(),
+        option_index: None,
+        origin_server_ts: ts,
+    };
+    macro_rules! save_facts {
+        ($store:expr) => {{
+            $store
+                .save_poll_vote_with_selections(
+                    &vote("$v1:hs", "@bob:hs", 100),
+                    &["a".to_string()],
+                    None,
+                )
+                .await
+                .expect("save response");
+            $store
+                .save_poll_end(&poll_end("$e:hs", POLL_CREATOR, 300))
+                .await
+                .expect("save end");
+        }};
+    }
+
+    // Poll-first ordering.
+    let start_first = DbStore::connect(&test_db_url("poll-order-start-first"))
+        .await
+        .expect("connect db");
+    start_first
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+    save_facts!(start_first);
+
+    // Facts-first ordering: the poll start has not been projected yet when the
+    // response and end arrive, so they must be retained until it appears.
+    let facts_first = DbStore::connect(&test_db_url("poll-order-facts-first"))
+        .await
+        .expect("connect db");
+    save_facts!(facts_first);
+    assert!(
+        facts_first
+            .poll_projection("$poll:hs")
+            .await
+            .expect("derive without start")
+            .is_none(),
+        "no projection exists before the poll start is projected"
+    );
+    facts_first
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll after facts");
+
+    let a = start_first
+        .poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    let b = facts_first
+        .poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(a.status, b.status);
+    assert_eq!(a.votes, b.votes);
+    assert_eq!(a.tallies, b.tallies);
+    assert_eq!(a.total_votes, b.total_votes);
+    assert_eq!(a.end, b.end);
+    assert_eq!(b.status, PollStatus::Ended);
+    assert_eq!(b.count_for("a"), 1);
+}
+
+/// End authorization is derived from the facts (the poll creator), never from
+/// a room-power snapshot taken at local processing time. A non-creator end is
+/// retained as a fact but stays ineffective: the Cumments site-moderator to
+/// Matrix redact-power mapping is an explicit unresolved boundary for a later
+/// authorization layer.
+#[tokio::test]
+async fn poll_end_authorization_is_derived_from_facts() {
+    let store = DbStore::connect(&test_db_url("poll-end-facts-auth"))
+        .await
+        .expect("connect db");
+    store
+        .save_message(&poll_message(
+            "$poll:hs",
+            "org.matrix.msc3381.poll.disclosed",
+            1,
+        ))
+        .await
+        .expect("save poll");
+
+    // A redact-power-style end from another user is a fact, but not effective.
+    store
+        .save_poll_end(&poll_end("$other:hs", "@moderator:hs", 100))
+        .await
+        .expect("save non-creator end");
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Open);
+    assert!(projection.end.is_none());
+    // The fact is preserved for the later authorization layer.
+    assert!(
+        store
+            .get_poll_end_by_event("$other:hs")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // A creator end is effective.
+    store
+        .save_poll_end(&poll_end("$creator:hs", POLL_CREATOR, 200))
+        .await
+        .expect("save creator end");
+    let projection = store.poll_projection("$poll:hs").await.unwrap().unwrap();
+    assert_eq!(projection.status, PollStatus::Ended);
+    assert_eq!(projection.end.unwrap().event_id, "$creator:hs");
 }

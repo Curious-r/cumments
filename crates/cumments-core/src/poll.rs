@@ -180,6 +180,28 @@ impl EndAuthorization {
     pub fn is_authorized(&self) -> bool {
         matches!(self, Self::Creator | Self::RedactPower)
     }
+
+    /// Derive end authorization from DAG-consistent Poll facts.
+    ///
+    /// Only the creator check is decidable from the canonical event set: the
+    /// poll start's sender *is* the poll creator, so an end sent by that same
+    /// sender is authorized by the facts themselves.
+    ///
+    /// MSC3381 also accepts senders that may redact other users' messages, but
+    /// that depends on the room state at the event's position in the Matrix
+    /// DAG. Cumments has no historical room-state authorization layer yet, so
+    /// any other sender is treated as [`EndAuthorization::Unauthorized`] rather
+    /// than guessed from currently visible room power levels. This keeps
+    /// projection correctness independent of when local processing happened to
+    /// read room state; the later authorization layer revisits this explicit
+    /// boundary.
+    pub fn from_facts(poll_sender: &str, end_sender: &str) -> Self {
+        if poll_sender == end_sender {
+            Self::Creator
+        } else {
+            Self::Unauthorized
+        }
+    }
 }
 
 /// A poll end fact: one canonical `org.matrix.msc3381.poll.end` event.
@@ -1032,5 +1054,22 @@ mod tests {
         assert_eq!(projection.status, PollStatus::Open);
         assert!(projection.votes.is_empty());
         assert_eq!(projection.total_votes, 0);
+    }
+
+    #[test]
+    fn end_authorization_from_facts_is_creator_only() {
+        // The creator check is decidable from the canonical facts.
+        assert_eq!(
+            EndAuthorization::from_facts("@alice:hs", "@alice:hs"),
+            EndAuthorization::Creator
+        );
+        assert!(EndAuthorization::from_facts("@alice:hs", "@alice:hs").is_authorized());
+        // Any other sender is the explicit unresolved boundary: no current
+        // room-power snapshot may turn it into a permanent fact.
+        assert_eq!(
+            EndAuthorization::from_facts("@alice:hs", "@mod:hs"),
+            EndAuthorization::Unauthorized
+        );
+        assert!(!EndAuthorization::from_facts("@alice:hs", "@mod:hs").is_authorized());
     }
 }

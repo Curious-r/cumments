@@ -104,6 +104,43 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260826_000063_poll_answer_selections".to_string()),
         "000063 must be registered or MSC3381 selections are lossy"
     );
+    assert!(
+        names.contains(&"m20260827_000067_drop_poll_end_authorized".to_string()),
+        "000067 must be registered or the removed end-authorization snapshot survives upgrades"
+    );
+}
+
+#[tokio::test]
+async fn drop_poll_end_authorized_migration_removes_projection_snapshot() {
+    let url = test_db_url("drop-poll-end-authorized");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(66))
+        .await
+        .expect("migrate to 000066");
+
+    // Simulate a database that ran the earlier schema, where a projection-time
+    // authorization snapshot was persisted as a NOT NULL column.
+    db.execute_unprepared(
+        "ALTER TABLE poll_end_events ADD COLUMN authorized BOOLEAN NOT NULL DEFAULT 0",
+    )
+    .await
+    .expect("simulate earlier schema");
+    assert!(
+        column_names(&db, "poll_end_events")
+            .await
+            .iter()
+            .any(|column| column == "authorized")
+    );
+
+    Migrator::up(&db, None).await.expect("apply 000067");
+
+    assert!(
+        !column_names(&db, "poll_end_events")
+            .await
+            .iter()
+            .any(|column| column == "authorized"),
+        "the projection-time authorization snapshot must not survive"
+    );
 }
 
 #[tokio::test]

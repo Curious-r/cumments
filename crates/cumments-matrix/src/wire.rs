@@ -87,7 +87,7 @@ pub(crate) fn is_implicit_creator(
 /// Whether `sender_user_id` meets the room's `redact` threshold. Redactions
 /// of other users' events require this power, so adopted rooms must satisfy
 /// it or every Cumments delete submission will fail.
-pub fn has_redact_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
+pub(crate) fn has_redact_power(power_levels: &serde_json::Value, sender_user_id: &str) -> bool {
     let user_power = power_levels
         .get("users")
         .and_then(|u| u.get(sender_user_id))

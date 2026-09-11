@@ -1803,8 +1803,13 @@ impl EventProcessor {
         Ok(())
     }
 
-    /// Process a poll response by mapping answer IDs to option indexes on the
-    /// stored poll, then recording the vote.
+    /// Record a poll response as an immutable relation fact.
+    ///
+    /// This method performs no Poll reduction of its own: effective selections,
+    /// deduplication, spoiling and latest-per-author ordering are all derived
+    /// by the canonical reducer from the stored facts. The fact is recorded
+    /// even when the referenced poll start has not been projected yet, so
+    /// event processing order cannot determine the final state.
     #[instrument(skip(self))]
     pub async fn process_poll_vote(&self, event: ParsedPollVote) -> Result<()> {
         match self.registry_store.get_room_status(&event.room_id).await? {
@@ -1884,55 +1889,30 @@ impl EventProcessor {
             }
         }
 
-        let Some(message) = self
-            .message_store
-            .get_message(&event.poll_message_id)
-            .await?
-        else {
-            debug!(
-                "Poll vote for unknown poll {}; ignoring",
-                event.poll_message_id
-            );
-            return Ok(());
-        };
-        let Content::Poll(poll) = &message.content else {
-            debug!(
-                "Poll vote target {} is not a poll; ignoring",
-                event.poll_message_id
-            );
-            return Ok(());
-        };
-        // Selections are an unordered set: duplicates collapse, and the
-        // validated result is derived by the deterministic reducer when the
-        // poll is read. Excess selections are never silently truncated here;
-        // the reducer spoils a response that exceeds the declared limit or
-        // references an unknown answer.
-        let mut selections: Vec<String> = Vec::with_capacity(event.answer_ids.len());
-        for answer_id in &event.answer_ids {
-            if !selections.contains(answer_id) {
-                selections.push(answer_id.clone());
-            }
-        }
-        let option_index = selections.first().and_then(|answer_id| {
-            poll.options
-                .iter()
-                .position(|option| &option.id == answer_id)
-                .map(|index| index as i64)
-        });
+        // The raw selections are stored as delivered; the reducer is the sole
+        // authority on their meaning. No option-index mapping, truncation or
+        // spoiling happens here.
         self.message_store
             .save_poll_vote_with_selections(
                 &PollVote {
                     event_id: event.event_id,
-                    poll_message_id: event.poll_message_id,
+                    poll_message_id: event.poll_message_id.clone(),
                     sender_mxid: event.sender,
-                    option_index,
+                    option_index: None,
                     origin_server_ts: event.origin_server_ts,
                 },
-                &selections,
+                &event.answer_ids,
                 None,
             )
             .await?;
-        if let Some(updated) = self.message_store.get_message(&message.event_id).await? {
+        // Annotation snapshots are best-effort: the poll may not be projected
+        // yet. Reads derive the effective state from the stored facts either
+        // way, so a missing snapshot here cannot lose the vote.
+        if let Some(updated) = self
+            .message_store
+            .get_message(&event.poll_message_id)
+            .await?
+        {
             self.emit(ProjectorEvent::MessageAnnotationsChanged {
                 site_id: updated.site_id.clone(),
                 page_slug: updated.page_slug.clone(),
@@ -1943,9 +1923,13 @@ impl EventProcessor {
         Ok(())
     }
 
-    /// Process a poll end by recording it as an immutable relation fact. The
-    /// effective end is derived by the reducer as the earliest authorized,
-    /// non-redacted end by `(origin_server_ts, event_id)`.
+    /// Record a poll end as an immutable relation fact.
+    ///
+    /// The end is recorded even when the referenced poll start has not been
+    /// projected yet, and no authorization decision is stored: the reducer
+    /// derives the effective end from the facts at read time. This keeps the
+    /// projection independent of processing order and of the room power levels
+    /// visible when the event happened to be processed.
     #[instrument(skip(self))]
     pub async fn process_poll_end(&self, event: ParsedPollEnd) -> Result<()> {
         match self.registry_store.get_room_status(&event.room_id).await? {
@@ -1969,48 +1953,12 @@ impl EventProcessor {
             debug!("Ignoring tombstoned poll end {}", event.event_id);
             return Ok(());
         }
-        // The end must target a projected poll in the same room.
-        let Some(poll_message) = self
-            .message_store
-            .get_message(&event.poll_message_id)
-            .await?
-        else {
-            debug!(
-                "Poll end for unknown poll {}; ignoring",
-                event.poll_message_id
-            );
-            return Ok(());
-        };
-        if !matches!(poll_message.content, Content::Poll(_)) {
-            debug!(
-                "Poll end target {} is not a poll; ignoring",
-                event.poll_message_id
-            );
-            return Ok(());
-        }
-        if poll_message.room_id != event.room_id {
-            warn!(
-                "Ignoring poll end {} for {}: poll lives in {}",
-                event.event_id, event.poll_message_id, poll_message.room_id
-            );
-            return Ok(());
-        }
-        let authorized = self
-            .authorize_poll_end(&event.room_id, &poll_message.sender_mxid, &event.sender)
-            .await;
-        if !authorized {
-            warn!(
-                "Recording unauthorized poll end {} from {} for {}",
-                event.event_id, event.sender, event.poll_message_id
-            );
-        }
         self.message_store
             .save_poll_end(&PollEnd {
                 event_id: event.event_id,
                 poll_message_id: event.poll_message_id.clone(),
                 sender_mxid: event.sender,
                 origin_server_ts: event.origin_server_ts,
-                authorized,
             })
             .await?;
         if let Some(updated) = self
@@ -2026,32 +1974,6 @@ impl EventProcessor {
             .await;
         }
         Ok(())
-    }
-
-    /// MSC3381 end authorization: an end is valid when sent by the poll's
-    /// original creator or by a sender that may redact other users' messages.
-    ///
-    /// The Cumments site-moderator to Matrix redact-power mapping is
-    /// intentionally not decided here, so an end whose authorization cannot be
-    /// established (no driver, unknown power levels, or insufficient power) is
-    /// never treated as authorized.
-    async fn authorize_poll_end(&self, room_id: &str, poll_sender: &str, end_sender: &str) -> bool {
-        if end_sender == poll_sender {
-            return true;
-        }
-        let Some(driver) = self.driver.as_ref() else {
-            return false;
-        };
-        match driver.get_room_power_levels(room_id).await {
-            Ok(Some(power_levels)) => cumments_matrix::has_redact_power(&power_levels, end_sender),
-            Ok(None) => false,
-            Err(error) => {
-                warn!(
-                    "Could not resolve room power levels for {room_id} while authorizing poll end: {error:#}"
-                );
-                false
-            }
-        }
     }
 
     /// Process a room state event (system message / room metadata).

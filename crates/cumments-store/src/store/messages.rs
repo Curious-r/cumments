@@ -1073,7 +1073,6 @@ impl MessageStore for DbStore {
             event_id: Set(end.event_id.clone()),
             poll_message_id: Set(end.poll_message_id.clone()),
             sender_mxid: Set(end.sender_mxid.clone()),
-            authorized: Set(end.authorized),
             origin_server_ts: Set(end.origin_server_ts),
             redacted_at: Set(None),
             redacted_by: Set(None),
@@ -1097,7 +1096,6 @@ impl MessageStore for DbStore {
             poll_message_id: m.poll_message_id,
             sender_mxid: m.sender_mxid,
             origin_server_ts: m.origin_server_ts,
-            authorized: m.authorized,
         }))
     }
 
@@ -1877,17 +1875,14 @@ impl DbStore {
             let Some(entry) = facts.get_mut(&row.poll_message_id) else {
                 continue;
             };
+            // Authorization is derived from the canonical facts, never from a
+            // room-power snapshot taken at local processing time.
+            let authorization = EndAuthorization::from_facts(&entry.start.sender, &row.sender_mxid);
             entry.ends.push(PollEndFact {
                 event_id: row.event_id,
                 sender: row.sender_mxid,
                 origin_server_ts: row.origin_server_ts,
-                // Only the stored authorization effect matters to the
-                // reduction; the protocol-level reason is not persisted.
-                authorization: if row.authorized {
-                    EndAuthorization::Creator
-                } else {
-                    EndAuthorization::Unauthorized
-                },
+                authorization,
                 redacted: row.redacted_at.is_some(),
             });
         }

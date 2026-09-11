@@ -555,7 +555,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
 }
 
 #[tokio::test]
-async fn poll_end_authorization_requires_the_creator_or_redact_power() {
+async fn poll_end_authorization_is_derived_from_facts_not_room_power() {
     let store = Arc::new(
         DbStore::connect(&test_db_url("poll-end-auth"))
             .await
@@ -568,6 +568,9 @@ async fn poll_end_authorization_requires_the_creator_or_redact_power() {
         .await
         .expect("register room");
 
+    // This processor has no Matrix driver, so it could not read current room
+    // power levels even if it wanted to: end authorization cannot depend on a
+    // processing-time power snapshot.
     let processor = processor(store.clone()).await;
     let mut poll = message("$poll:hs");
     poll.content = Content::Poll(PollContent {
@@ -594,8 +597,9 @@ async fn poll_end_authorization_requires_the_creator_or_redact_power() {
         room_identity: Some(identity()),
     };
 
-    // A non-creator end cannot be authorized without room power levels, so it
-    // is recorded but must not close the poll.
+    // A non-creator end is retained as a fact but is not effective: MSC3381's
+    // redact-power path depends on DAG-position room state, which is the
+    // explicit unresolved boundary for the later authorization layer.
     processor
         .process_poll_end(end("$bad:hs", "@mallory:hs", 200))
         .await
@@ -604,7 +608,7 @@ async fn poll_end_authorization_requires_the_creator_or_redact_power() {
     assert_eq!(projection.status, PollStatus::Open);
     assert!(projection.end.is_none());
 
-    // The poll creator is always authorized to close it.
+    // The poll creator is authorized by the facts themselves.
     processor
         .process_poll_end(end("$good:hs", "@alice:hs", 300))
         .await
@@ -629,6 +633,117 @@ async fn poll_end_authorization_requires_the_creator_or_redact_power() {
             .event_id,
         "$good:hs"
     );
+}
+
+/// Response and end facts are retained before their poll start is projected,
+/// so `response → end → start` converges with `start → response → end` through
+/// the production projection path.
+#[tokio::test]
+async fn poll_facts_before_start_converge_via_processor() {
+    let site = SiteId::from("my-blog");
+    let slug = PageSlug::from("hello");
+
+    let vote = || ParsedPollVote {
+        room_id: "!room:hs".to_string(),
+        event_id: "$vote:hs".to_string(),
+        sender: "@bob:hs".to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        answer_ids: vec!["a".to_string()],
+        origin_server_ts: 150,
+        is_virtual_user_sender: false,
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
+        room_identity: Some(identity()),
+    };
+    let end = || ParsedPollEnd {
+        room_id: "!room:hs".to_string(),
+        event_id: "$end:hs".to_string(),
+        sender: "@alice:hs".to_string(),
+        poll_message_id: "$poll:hs".to_string(),
+        origin_server_ts: 200,
+        room_identity: Some(identity()),
+    };
+    let start = || {
+        let mut poll = message("$poll:hs");
+        poll.content = Content::Poll(PollContent {
+            question: "best?".to_string(),
+            options: vec![PollOption {
+                id: "a".to_string(),
+                text: "A".to_string(),
+            }],
+            max_selections: 1,
+            responses: Vec::new(),
+            my_votes: Vec::new(),
+        });
+        poll
+    };
+
+    // Poll-first ordering.
+    let start_first = Arc::new(
+        DbStore::connect(&test_db_url("poll-proc-start-first"))
+            .await
+            .expect("connect db"),
+    );
+    start_first
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+    let start_first_processor = processor(start_first.clone()).await;
+    start_first_processor
+        .process_room_message(start())
+        .await
+        .expect("process poll");
+    start_first_processor
+        .process_poll_vote(vote())
+        .await
+        .expect("process vote");
+    start_first_processor
+        .process_poll_end(end())
+        .await
+        .expect("process end");
+
+    // Facts-first ordering: the poll start is not projected when they arrive.
+    let facts_first = Arc::new(
+        DbStore::connect(&test_db_url("poll-proc-facts-first"))
+            .await
+            .expect("connect db"),
+    );
+    facts_first
+        .register_room("!room:hs", &site, &slug)
+        .await
+        .expect("register room");
+    let facts_first_processor = processor(facts_first.clone()).await;
+    facts_first_processor
+        .process_poll_vote(vote())
+        .await
+        .expect("process vote before start");
+    facts_first_processor
+        .process_poll_end(end())
+        .await
+        .expect("process end before start");
+    facts_first_processor
+        .process_room_message(start())
+        .await
+        .expect("process poll after facts");
+
+    let a = start_first
+        .poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    let b = facts_first
+        .poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(a.status, b.status);
+    assert_eq!(a.votes, b.votes);
+    assert_eq!(a.tallies, b.tallies);
+    assert_eq!(a.total_votes, b.total_votes);
+    assert_eq!(a.end, b.end);
+    assert_eq!(b.status, PollStatus::Ended);
+    assert_eq!(b.count_for("a"), 1);
 }
 
 #[tokio::test]

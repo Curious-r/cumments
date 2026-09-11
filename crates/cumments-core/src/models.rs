@@ -511,9 +511,12 @@ pub struct PollVote {
 
 /// A poll end record: one canonical `org.matrix.msc3381.poll.end` event.
 ///
-/// Ends are immutable relation facts; the effective end is derived by the
-/// reducer as the earliest authorized, non-redacted end by
-/// `(origin_server_ts, event_id)`.
+/// Ends are immutable relation facts. Authorization is deliberately **not**
+/// stored: it is derived from DAG-consistent facts at reduction time, because
+/// a room-power snapshot taken when the event happened to be processed locally
+/// is not part of the event. The effective end is derived by the reducer as
+/// the earliest non-redacted end by `(origin_server_ts, event_id)` whose
+/// sender is authorized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PollEnd {
     /// Matrix event ID of the `poll.end` event, used to redact it.
@@ -521,11 +524,6 @@ pub struct PollEnd {
     pub poll_message_id: String,
     pub sender_mxid: String,
     pub origin_server_ts: i64,
-    /// Whether the event was authorized to close the poll (sent by the poll
-    /// creator or by a sender holding redact power). Authorization that could
-    /// not be established is stored as `false`, so an end never closes a poll
-    /// by accident.
-    pub authorized: bool,
 }
 
 /// Media attached to a visitor message (image/voice/file).

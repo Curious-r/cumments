@@ -69,6 +69,7 @@ pub mod m20260826_000063_poll_answer_selections;
 pub mod m20260826_000064_sse_outbox;
 pub mod m20260827_000065_thread_query_index;
 pub mod m20260827_000066_poll_end_events;
+pub mod m20260827_000067_drop_poll_end_authorized;
 
 pub struct Migrator;
 
@@ -198,6 +199,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260826_000064_sse_outbox::Migration),
             Box::new(m20260827_000065_thread_query_index::Migration),
             Box::new(m20260827_000066_poll_end_events::Migration),
+            Box::new(m20260827_000067_drop_poll_end_authorized::Migration),
         ]
     }
 }
