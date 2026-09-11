@@ -28,10 +28,205 @@
 //! anything and is not authoritative state. Durable operation identity,
 //! signatures, proof-of-work and the public HTTP API live in later layers.
 
+use crate::canonical::CanonicalJson;
 use serde::{Deserialize, Serialize};
 
 /// Maximum length of an answer identifier, in characters.
 pub const MAX_ANSWER_ID_LEN: usize = 64;
+
+/// Minimum number of answers a poll must declare.
+pub const MIN_POLL_ANSWERS: usize = 2;
+
+/// Maximum number of answers a poll may declare (MSC3381 truncates to 20).
+pub const MAX_POLL_ANSWERS: usize = 20;
+
+/// Signature protocol domain separator (frozen design §9.1).
+pub const SIGNATURE_DOMAIN: &str = "host.curious.cumments.signature";
+
+/// Signature protocol version (frozen design §9.1).
+pub const SIGNATURE_VERSION: &str = "1";
+
+/// Canonical semantic-operation schema version (frozen design §9.3).
+pub const SEMANTIC_SCHEMA_VERSION: i64 = 1;
+
+/// A poll's kind in the signed semantic operation (frozen design §9.5.1).
+///
+/// Distinct from the Matrix wire `kind` (`org.matrix.msc3381.poll.*`): the
+/// semantic operation binds the bare `"disclosed"` / `"undisclosed"` value,
+/// keeping the client protocol independent of the Matrix wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PollSemanticKind {
+    Disclosed,
+    Undisclosed,
+}
+
+impl PollSemanticKind {
+    /// The value used in the canonical semantic operation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Disclosed => "disclosed",
+            Self::Undisclosed => "undisclosed",
+        }
+    }
+}
+
+/// One caller-authored answer in the signed semantic operation.
+///
+/// `id` is an opaque, case-sensitive, caller-generated token; `text` is its
+/// presentation label. Declared order is preserved exactly and never sorted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PollSemanticAnswer {
+    pub id: String,
+    pub text: String,
+}
+
+impl PollSemanticAnswer {
+    pub fn new(id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            text: text.into(),
+        }
+    }
+}
+
+/// Why a Poll definition is not semantically valid.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PollSemanticError {
+    #[error("question must not be empty")]
+    EmptyQuestion,
+    #[error("a poll must declare between {MIN_POLL_ANSWERS} and {MAX_POLL_ANSWERS} answers")]
+    AnswerCount,
+    #[error("answer id {0:?} is not a valid answer identifier")]
+    InvalidAnswerId(String),
+    #[error("answer id {0:?} is duplicated")]
+    DuplicateAnswerId(String),
+    #[error("answer text must not be empty")]
+    EmptyAnswerText,
+    #[error("max_selections must be between 1 and the number of answers")]
+    MaxSelections,
+}
+
+/// Validate a Poll definition against the frozen semantic rules.
+///
+/// Answer order is preserved and answer ids are compared byte-for-byte.
+pub fn validate_poll_semantic_definition(
+    question: &str,
+    answers: &[PollSemanticAnswer],
+    max_selections: u64,
+) -> Result<(), PollSemanticError> {
+    if question.trim().is_empty() {
+        return Err(PollSemanticError::EmptyQuestion);
+    }
+    if !(MIN_POLL_ANSWERS..=MAX_POLL_ANSWERS).contains(&answers.len()) {
+        return Err(PollSemanticError::AnswerCount);
+    }
+    for (index, answer) in answers.iter().enumerate() {
+        if !is_valid_answer_id(&answer.id) {
+            return Err(PollSemanticError::InvalidAnswerId(answer.id.clone()));
+        }
+        if answers[..index].iter().any(|prior| prior.id == answer.id) {
+            return Err(PollSemanticError::DuplicateAnswerId(answer.id.clone()));
+        }
+        if answer.text.trim().is_empty() {
+            return Err(PollSemanticError::EmptyAnswerText);
+        }
+    }
+    if max_selections < 1 || max_selections > answers.len() as u64 {
+        return Err(PollSemanticError::MaxSelections);
+    }
+    Ok(())
+}
+
+/// Build the canonical `POLL` semantic operation (frozen design §9.5.1):
+///
+/// ```text
+/// ["POLL",
+///  [site_id, page_slug, reply_to, thread_root],
+///  [question, [[answer_id, answer_text], ...], kind, max_selections],
+///  1]
+/// ```
+///
+/// `reply_to` and `thread_root` are independent and encoded as JSON `null`
+/// when absent. This value is the common input to fingerprinting, the
+/// signature envelope and Matrix provenance.
+#[allow(clippy::too_many_arguments)]
+pub fn poll_semantic_operation(
+    site_id: &str,
+    page_slug: &str,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
+    question: &str,
+    answers: &[PollSemanticAnswer],
+    kind: PollSemanticKind,
+    max_selections: u64,
+) -> CanonicalJson {
+    let encoded_answers: Vec<CanonicalJson> = answers
+        .iter()
+        .map(|answer| {
+            CanonicalJson::array(vec![
+                CanonicalJson::string(answer.id.clone()),
+                CanonicalJson::string(answer.text.clone()),
+            ])
+        })
+        .collect();
+    CanonicalJson::array(vec![
+        CanonicalJson::string("POLL"),
+        CanonicalJson::array(vec![
+            CanonicalJson::string(site_id),
+            CanonicalJson::string(page_slug),
+            CanonicalJson::nullable_string(reply_to),
+            CanonicalJson::nullable_string(thread_root),
+        ]),
+        CanonicalJson::array(vec![
+            CanonicalJson::string(question),
+            CanonicalJson::array(encoded_answers),
+            CanonicalJson::string(kind.as_str()),
+            CanonicalJson::int(max_selections as i64),
+        ]),
+        CanonicalJson::int(SEMANTIC_SCHEMA_VERSION),
+    ])
+}
+
+/// The semantic fingerprint: `SHA-256` of the canonical semantic operation's
+/// UTF-8 bytes, hex-encoded. The fingerprint input is exactly the canonical
+/// semantic operation, never transport JSON.
+pub fn poll_semantic_fingerprint(operation: &CanonicalJson) -> String {
+    crate::site_auth::sha256_hex(&operation.to_canonical_bytes())
+}
+
+/// Build the signed envelope (frozen design §9.4):
+///
+/// ```text
+/// ["host.curious.cumments.signature", "1", <operation>, operation_id, challenge]
+/// ```
+///
+/// The author's public key is deliberately not part of the envelope.
+pub fn poll_signature_envelope(
+    operation: &CanonicalJson,
+    operation_id: &str,
+    challenge: &str,
+) -> CanonicalJson {
+    CanonicalJson::array(vec![
+        CanonicalJson::string(SIGNATURE_DOMAIN),
+        CanonicalJson::string(SIGNATURE_VERSION),
+        operation.clone(),
+        CanonicalJson::string(operation_id),
+        CanonicalJson::string(challenge),
+    ])
+}
+
+/// Verify a `POLL` signature over the canonical envelope.
+pub fn verify_poll_signature(
+    public_key_b64: &str,
+    operation: &CanonicalJson,
+    operation_id: &str,
+    challenge: &str,
+    signature_b64: &str,
+) -> bool {
+    let message = poll_signature_envelope(operation, operation_id, challenge).to_canonical_string();
+    crate::identity::verify_signature(public_key_b64, &message, signature_b64)
+}
 
 /// Whether a string is a valid answer identifier.
 ///
@@ -1071,5 +1266,306 @@ mod tests {
             EndAuthorization::Unauthorized
         );
         assert!(!EndAuthorization::from_facts("@alice:hs", "@mod:hs").is_authorized());
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+    use crate::canonical::CanonicalJson;
+
+    fn answers() -> Vec<PollSemanticAnswer> {
+        vec![
+            PollSemanticAnswer::new("slot-10am", "10:00 AM UTC"),
+            PollSemanticAnswer::new("slot-2pm", "2:00 PM UTC"),
+        ]
+    }
+
+    #[test]
+    fn semantic_operation_matches_the_frozen_structure() {
+        let op = poll_semantic_operation(
+            "site-dev",
+            "post-101",
+            None,
+            None,
+            "Which meeting time works best?",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        assert_eq!(
+            op.to_canonical_string(),
+            r#"["POLL",["site-dev","post-101",null,null],["Which meeting time works best?",[["slot-10am","10:00 AM UTC"],["slot-2pm","2:00 PM UTC"]],"disclosed",1],1]"#
+        );
+    }
+
+    #[test]
+    fn semantic_operation_preserves_answer_order_and_relations() {
+        let op = poll_semantic_operation(
+            "site",
+            "page",
+            Some("$parent:hs"),
+            Some("$thread:hs"),
+            "q?",
+            &answers(),
+            PollSemanticKind::Undisclosed,
+            2,
+        );
+        let json = op.to_json_value();
+        assert_eq!(
+            json[1],
+            serde_json::json!(["site", "page", "$parent:hs", "$thread:hs"])
+        );
+        assert_eq!(json[2][1][0][0], "slot-10am");
+        assert_eq!(json[2][1][1][0], "slot-2pm");
+        assert_eq!(json[2][2], "undisclosed");
+        assert_eq!(json[2][3], 2);
+        assert_eq!(json[3], 1);
+
+        // Reordering answers changes the canonical value (never sorted).
+        let mut reordered = answers();
+        reordered.reverse();
+        let swapped = poll_semantic_operation(
+            "site",
+            "page",
+            Some("$parent:hs"),
+            Some("$thread:hs"),
+            "q?",
+            &reordered,
+            PollSemanticKind::Undisclosed,
+            2,
+        );
+        assert_ne!(op, swapped);
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_sensitive_to_semantics() {
+        let op = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            "q?",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        let fp = poll_semantic_fingerprint(&op);
+        assert_eq!(fp, poll_semantic_fingerprint(&op));
+        assert_eq!(fp.len(), 64);
+
+        let changed = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            "q?!",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        assert_ne!(fp, poll_semantic_fingerprint(&changed));
+    }
+
+    #[test]
+    fn envelope_binds_operation_id_and_challenge() {
+        let op = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            "q?",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        let envelope = poll_signature_envelope(&op, "op-create-987", "pow-chal-550e8400");
+        assert_eq!(
+            envelope.to_canonical_string(),
+            format!(
+                r#"["host.curious.cumments.signature","1",{},"op-create-987","pow-chal-550e8400"]"#,
+                op.to_canonical_string()
+            )
+        );
+        // The public key is not part of the envelope.
+        assert!(!envelope.to_canonical_string().contains("public_key"));
+    }
+
+    #[test]
+    fn signature_roundtrips_and_rejects_any_tamper() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let op = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            "q?",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        let envelope = poll_signature_envelope(&op, "op-1", "chal");
+        let signature = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(envelope.to_canonical_bytes().as_slice())
+                .to_bytes(),
+        );
+
+        assert!(verify_poll_signature(
+            &public_key,
+            &op,
+            "op-1",
+            "chal",
+            &signature
+        ));
+
+        // Modified question.
+        let tampered_question = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            "other?",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        assert!(!verify_poll_signature(
+            &public_key,
+            &tampered_question,
+            "op-1",
+            "chal",
+            &signature
+        ));
+
+        // Modified answers.
+        let mut changed_answers = answers();
+        changed_answers[0].text = "10:00".to_string();
+        let tampered_answers = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            "q?",
+            &changed_answers,
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        assert!(!verify_poll_signature(
+            &public_key,
+            &tampered_answers,
+            "op-1",
+            "chal",
+            &signature
+        ));
+
+        // Modified target.
+        let tampered_target = poll_semantic_operation(
+            "site",
+            "other-page",
+            None,
+            None,
+            "q?",
+            &answers(),
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        assert!(!verify_poll_signature(
+            &public_key,
+            &tampered_target,
+            "op-1",
+            "chal",
+            &signature
+        ));
+
+        // Modified operation id and challenge.
+        assert!(!verify_poll_signature(
+            &public_key,
+            &op,
+            "op-2",
+            "chal",
+            &signature
+        ));
+        assert!(!verify_poll_signature(
+            &public_key,
+            &op,
+            "op-1",
+            "chal2",
+            &signature
+        ));
+    }
+
+    #[test]
+    fn definition_validation_enforces_the_frozen_rules() {
+        assert!(validate_poll_semantic_definition("q?", &answers(), 1).is_ok());
+        assert!(validate_poll_semantic_definition("q?", &answers(), 2).is_ok());
+
+        // Empty question.
+        assert_eq!(
+            validate_poll_semantic_definition("  ", &answers(), 1),
+            Err(PollSemanticError::EmptyQuestion)
+        );
+        // Answer count bounds.
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &answers()[..1], 1),
+            Err(PollSemanticError::AnswerCount)
+        );
+        let too_many: Vec<PollSemanticAnswer> = (0..21)
+            .map(|i| PollSemanticAnswer::new(format!("id{i}"), "t"))
+            .collect();
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &too_many, 1),
+            Err(PollSemanticError::AnswerCount)
+        );
+        // Invalid id syntax.
+        let bad_id = vec![
+            PollSemanticAnswer::new("has space", "A"),
+            PollSemanticAnswer::new("b", "B"),
+        ];
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &bad_id, 1),
+            Err(PollSemanticError::InvalidAnswerId("has space".into()))
+        );
+        // Duplicate ids.
+        let dup = vec![
+            PollSemanticAnswer::new("a", "A"),
+            PollSemanticAnswer::new("a", "A again"),
+        ];
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &dup, 1),
+            Err(PollSemanticError::DuplicateAnswerId("a".into()))
+        );
+        // Empty answer text.
+        let empty_text = vec![
+            PollSemanticAnswer::new("a", " "),
+            PollSemanticAnswer::new("b", "B"),
+        ];
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &empty_text, 1),
+            Err(PollSemanticError::EmptyAnswerText)
+        );
+        // max_selections range.
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &answers(), 0),
+            Err(PollSemanticError::MaxSelections)
+        );
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &answers(), 3),
+            Err(PollSemanticError::MaxSelections)
+        );
+    }
+
+    #[test]
+    fn kind_wire_values_are_bare() {
+        assert_eq!(PollSemanticKind::Disclosed.as_str(), "disclosed");
+        assert_eq!(PollSemanticKind::Undisclosed.as_str(), "undisclosed");
+        assert_eq!(
+            serde_json::to_value(PollSemanticKind::Disclosed).unwrap(),
+            CanonicalJson::string("disclosed").to_json_value()
+        );
     }
 }

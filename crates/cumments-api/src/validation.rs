@@ -87,6 +87,11 @@ pub fn validate_poll_question(value: &str) -> Result<(), ValidationError> {
     validate_grapheme_length(value, 1, 500)
 }
 
+/// Poll answer text: 1–200 graphemes, mirroring the previous option bound.
+pub fn validate_poll_answer_text(value: &str) -> Result<(), ValidationError> {
+    validate_grapheme_length(value, 1, 200)
+}
+
 /// Location description (optional): 0–255 graphemes.
 /// Called only when `Some`, so empty string (0 graphemes) is allowed.
 pub fn validate_location_description(value: &str) -> Result<(), ValidationError> {

@@ -3890,3 +3890,712 @@ async fn post_comment_accepts_all_relation_combinations_independently() {
         );
     }
 }
+
+// ── Create Poll (frozen semantic operation) ───────────────────────
+
+/// Build a signed Create Poll HTTP body for the frozen `POLL` operation.
+#[allow(clippy::too_many_arguments)]
+fn signed_poll_body(
+    signing_key: &ed25519_dalek::SigningKey,
+    site: &str,
+    page: &str,
+    operation_id: &str,
+    question: &str,
+    answers: &[(&str, &str)],
+    kind: cumments_core::poll::PollSemanticKind,
+    max_selections: u64,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
+    challenge_prefix: &str,
+    challenge_response: &str,
+) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::poll::{
+        PollSemanticAnswer, poll_semantic_operation, poll_signature_envelope,
+    };
+    use ed25519_dalek::Signer;
+
+    let semantic_answers: Vec<PollSemanticAnswer> = answers
+        .iter()
+        .map(|(id, text)| PollSemanticAnswer::new(*id, *text))
+        .collect();
+    let operation = poll_semantic_operation(
+        site,
+        page,
+        reply_to,
+        thread_root,
+        question,
+        &semantic_answers,
+        kind,
+        max_selections,
+    );
+    let envelope = poll_signature_envelope(&operation, operation_id, challenge_prefix);
+    let signature = URL_SAFE_NO_PAD.encode(
+        signing_key
+            .sign(envelope.to_canonical_bytes().as_slice())
+            .to_bytes(),
+    );
+    assert!(
+        cumments_core::poll::verify_poll_signature(
+            &URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+            &operation,
+            operation_id,
+            challenge_prefix,
+            &signature,
+        ),
+        "test helper self-check: signature must verify"
+    );
+    let wire_answers: Vec<serde_json::Value> = answers
+        .iter()
+        .map(|(id, text)| serde_json::json!({ "id": id, "text": text }))
+        .collect();
+    serde_json::json!({
+        "question": question,
+        "answers": wire_answers,
+        "kind": kind.as_str(),
+        "max_selections": max_selections,
+        "display_name": "Alice",
+        "author_public_key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+        "author_signature": signature,
+        "reply_to": reply_to,
+        "thread_root": thread_root,
+        "challenge_response": challenge_response,
+    })
+    .to_string()
+}
+
+/// The `Idempotency-Key` header value, which is also the signed
+/// `operation_id`.
+const POLL_KEY: &str = "poll-key-123456";
+
+fn poll_key() -> Vec<(&'static str, String)> {
+    vec![("idempotency-key", POLL_KEY.to_string())]
+}
+
+#[tokio::test]
+async fn create_poll_accepts_valid_poll_and_queues_durable_submission() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-create", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[21u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "Which meeting time works best?",
+        &[("slot-10am", "10:00 AM UTC"), ("slot-2pm", "2:00 PM UTC")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+        .await
+        .expect("call router");
+    let status = response.status();
+    let text = body_text(response).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "body: {text}");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert!(json["submission_id"].as_i64().expect("submission id") > 0);
+
+    // The durable submission stores the structured semantic payload, not
+    // Matrix wire JSON, so the reconciler can rebuild the operation.
+    let pending = store
+        .get_pending_post_submissions(10)
+        .await
+        .expect("pending submissions");
+    assert_eq!(pending.len(), 1);
+    let poll = pending[0]
+        .command
+        .poll
+        .as_ref()
+        .expect("poll payload present");
+    assert_eq!(poll.question, "Which meeting time works best?");
+    assert_eq!(poll.answers.len(), 2);
+    assert_eq!(poll.answers[0].id, "slot-10am");
+    assert_eq!(poll.answers[1].id, "slot-2pm");
+    assert_eq!(poll.kind, PollSemanticKind::Disclosed);
+    assert_eq!(poll.max_selections, 1);
+    assert_eq!(poll.operation_id, POLL_KEY);
+}
+
+#[tokio::test]
+async fn create_poll_rejects_invalid_definitions() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-invalid", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[22u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+
+    let post = |body: String| {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+    };
+
+    // Invalid answer-id syntax.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("has space", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Duplicate answer ids.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("a", "A again")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // max_selections of zero is structurally invalid.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        0,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // max_selections greater than the number of answers is semantically invalid.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        3,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // A single answer is below the minimum.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // None of the invalid attempts may queue work or consume the challenge.
+    assert!(
+        store
+            .get_pending_post_submissions(10)
+            .await
+            .expect("pending")
+            .is_empty(),
+        "invalid definitions must not queue submissions"
+    );
+}
+
+#[tokio::test]
+async fn create_poll_replay_returns_original_without_consuming_pow() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-replay", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[23u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Undisclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let post = || {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+    };
+
+    let first = post().await.expect("call router");
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let first_json: serde_json::Value =
+        serde_json::from_str(&body_text(first).await).expect("json");
+    let submission_id = first_json["submission_id"].as_i64().expect("submission id");
+
+    let second = post().await.expect("call router");
+    assert_eq!(second.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        second
+            .headers()
+            .get("idempotent-replayed")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    let second_json: serde_json::Value =
+        serde_json::from_str(&body_text(second).await).expect("json");
+    assert_eq!(second_json["submission_id"].as_i64(), Some(submission_id));
+    assert_eq!(
+        store
+            .get_pending_post_submissions(10)
+            .await
+            .expect("pending")
+            .len(),
+        1,
+        "a replay must not queue a second submission"
+    );
+}
+
+#[tokio::test]
+async fn create_poll_conflicts_on_fingerprint_or_author() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-conflict", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let alice = SigningKey::from_bytes(&[24u8; 32]);
+    let mallory = SigningKey::from_bytes(&[25u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let post = |body: String| {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+    };
+
+    // First, a genuinely new operation.
+    let body = signed_poll_body(
+        &alice,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::ACCEPTED
+    );
+
+    // Same key, same author, different semantic fingerprint -> 409.
+    let body = signed_poll_body(
+        &alice,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "different?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::CONFLICT
+    );
+
+    // Same key, different authenticated author -> 409 (server-wide non-reuse).
+    let body = signed_poll_body(
+        &mallory,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let response = post(body).await.expect("call");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    assert_eq!(
+        store
+            .get_pending_post_submissions(10)
+            .await
+            .expect("pending")
+            .len(),
+        1,
+        "conflicts must not queue additional submissions"
+    );
+}
+
+#[tokio::test]
+async fn create_poll_signature_binds_the_semantic_operation() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-signature", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[26u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+
+    // Sign the correct operation, then send a body whose question differs.
+    let signed = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "original?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let mut value: serde_json::Value = serde_json::from_str(&signed).unwrap();
+    value["question"] = serde_json::json!("tampered?");
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &value.to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        store
+            .get_pending_post_submissions(10)
+            .await
+            .expect("pending")
+            .is_empty(),
+        "an invalid signature must not queue work"
+    );
+
+    // The failed request must not have consumed the challenge: the correctly
+    // signed request can still use it.
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &signed,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(
+        response.status(),
+        StatusCode::ACCEPTED,
+        "signature failure must not consume PoW"
+    );
+}
+
+#[tokio::test]
+async fn create_poll_invalid_pow_is_rejected_for_a_new_operation() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-pow", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[27u8; 32]);
+    let challenge = state.pow.generate_challenge();
+
+    // Correct outer signature (over the real challenge), but no valid PoW.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        "not-a-valid-pow-response",
+    );
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        store
+            .get_pending_post_submissions(10)
+            .await
+            .expect("pending")
+            .is_empty(),
+        "a failed PoW must not queue work"
+    );
+}
+
+#[tokio::test]
+async fn create_poll_transport_formatting_does_not_affect_identity() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-format", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[28u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let first = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+    // Re-order the JSON object keys and add whitespace; semantically identical.
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let reformatted = serde_json::to_string_pretty(&parsed).expect("pretty json");
+    let second = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &reformatted,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(
+        second.status(),
+        StatusCode::ACCEPTED,
+        "formatting differences must not become a conflict"
+    );
+    assert_eq!(
+        second
+            .headers()
+            .get("idempotent-replayed")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+}
+
+#[tokio::test]
+async fn create_poll_accepts_independent_reply_and_thread_relations() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-relations", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[29u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+
+    // Both relations are signed independently and accepted together.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        Some("$parent:hs"),
+        Some("$thread:hs"),
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let pending = store
+        .get_pending_post_submissions(10)
+        .await
+        .expect("pending");
+    assert_eq!(pending[0].command.reply_to.as_deref(), Some("$parent:hs"));
+    assert_eq!(
+        pending[0].command.thread_root.as_deref(),
+        Some("$thread:hs")
+    );
+
+    // A malformed relation is rejected structurally.
+    let mut value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    value["thread_root"] = serde_json::json!("not-an-event-id");
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &value.to_string(),
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

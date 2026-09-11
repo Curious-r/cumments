@@ -157,23 +157,39 @@ impl PostsPass {
                 };
                 let event_id = {
                     let result = if let Some(poll) = &command.poll {
+                        // Rebuild the canonical semantic operation from the
+                        // stored structured payload; the Matrix layer turns it
+                        // into the wire event and provenance.
+                        let semantic_operation = cumments_core::poll::poll_semantic_operation(
+                            command.site_id.as_str(),
+                            command.page_slug.as_str(),
+                            command.reply_to.as_deref(),
+                            command.thread_root.as_deref(),
+                            &poll.question,
+                            &poll.answers,
+                            poll.kind,
+                            poll.max_selections,
+                        );
                         self.deps
                             .driver
-                            .post_poll(
-                                &room_id,
-                                &poll.question,
-                                &poll.options,
-                                poll.max_selections,
-                                &command.display_name,
-                                &command.site_id,
-                                &command.author_public_key,
-                                &command.author_signature,
-                                &command.author_challenge,
-                                Some(id),
-                                command.reply_to.as_deref(),
-                                command.thread_root.as_deref(),
-                                &txn_id,
-                            )
+                            .post_poll(cumments_core::ports::PollStartRequest {
+                                room_id: &room_id,
+                                question: &poll.question,
+                                answers: &poll.answers,
+                                kind: poll.kind,
+                                max_selections: poll.max_selections,
+                                display_name: &command.display_name,
+                                site_id: &command.site_id,
+                                author_public_key: &command.author_public_key,
+                                author_signature: &command.author_signature,
+                                author_challenge: &command.author_challenge,
+                                operation_id: &poll.operation_id,
+                                semantic_operation: &semantic_operation,
+                                submission_id: Some(id),
+                                reply_to: command.reply_to.as_deref(),
+                                thread_root: command.thread_root.as_deref(),
+                                txn_id: &txn_id,
+                            })
                             .await
                     } else if let Some(location) = &command.location {
                         self.deps

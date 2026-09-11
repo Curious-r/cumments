@@ -212,68 +212,45 @@ pub struct VoteRequest {
     pub challenge_response: String,
 }
 
-fn default_poll_max_selections() -> u8 {
-    1
-}
-
-/// Validate poll-specific constraints that `validator` cannot express
-/// (whitespace, control characters, per-option length).
-pub fn validate_poll_details(req: &PollRequest) -> Result<(), String> {
-    if req.question.trim().is_empty() {
-        return Err("question must not be empty or whitespace".to_string());
-    }
-    if req.question.trim() != req.question {
-        return Err("question must not have leading or trailing whitespace".to_string());
-    }
-    if req.question.chars().any(|c| c.is_control()) {
-        return Err("question must not contain control characters".to_string());
-    }
-    for option in &req.options {
-        if option.trim().is_empty() {
-            return Err("poll options must not be empty or whitespace".to_string());
-        }
-        if option.trim() != option {
-            return Err("poll options must not have leading or trailing whitespace".to_string());
-        }
-        if option.chars().any(|c| c.is_control()) {
-            return Err("poll option must not contain control characters".to_string());
-        }
-        if crate::validation::grapheme_len(option) > 200 {
-            return Err("poll option must be at most 200 grapheme clusters".to_string());
-        }
-    }
-    if req.max_selections != 1 {
-        return Err("max_selections must be 1".to_string());
-    }
-    Ok(())
-}
-
-/// Request DTO for creating a poll (MSC3381).
+/// One caller-authored answer in a Create Poll request.
 ///
-/// The single-select restriction is enforced here: `max_selections` must be
-/// exactly `1`. The wire format preserves MSC3381's `max_selections` so the
-/// projector can faithfully store the declared limit, but the authoring API
-/// remains single-select as documented in `docs/data-model.md`.
+/// `id` is an opaque, case-sensitive token validated by the frozen answer-id
+/// syntax at the semantic layer; `text` is its display label.
+#[derive(Debug, Deserialize, Serialize, Validate)]
+pub struct PollAnswerRequest {
+    #[validate(length(min = 1, max = 64))]
+    pub id: String,
+    #[validate(custom(function = "crate::validation::validate_poll_answer_text"))]
+    pub text: String,
+}
+
+/// Request DTO for creating a Poll (`POST .../polls`).
+///
+/// The HTTP body is transport only: the signed semantic operation is built
+/// from these fields and never from the raw JSON. `kind` is the frozen
+/// semantic value (`"disclosed"` / `"undisclosed"`); `max_selections` must be
+/// between 1 and the number of answers.
 #[derive(Debug, Deserialize, Validate)]
-pub struct PollRequest {
+pub struct CreatePollRequest {
     #[validate(custom(function = "crate::validation::validate_poll_question"))]
     pub question: String,
     #[validate(length(min = 2, max = 20))]
-    pub options: Vec<String>,
-    #[serde(default = "default_poll_max_selections")]
-    #[validate(range(min = 1, max = 1))]
-    pub max_selections: u8,
-    /// Display name to write to the virtual user's Matrix profile. It is
-    /// presentation data and is deliberately not covered by the author
-    /// signature; the signed payload covers only the poll payload.
+    pub answers: Vec<PollAnswerRequest>,
+    pub kind: cumments_core::poll::PollSemanticKind,
+    #[validate(range(min = 1, max = 20))]
+    pub max_selections: u64,
+    /// Display name written to the virtual user's Matrix profile. Presentation
+    /// data; deliberately not covered by the signature.
     #[validate(custom(function = "crate::validation::validate_display_name"))]
     pub display_name: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]
     pub author_signature: String,
+    /// Direct parent comment (`$event:hs`). Orthogonal to `thread_root`.
     #[serde(default)]
     pub reply_to: Option<String>,
+    /// Thread root (`$event:hs`). Orthogonal to `reply_to`.
     #[serde(default)]
     pub thread_root: Option<String>,
     #[validate(length(min = 1, max = 1024))]
@@ -310,173 +287,6 @@ pub struct LocationRequest {
 mod tests {
     use super::*;
     use validator::Validate;
-
-    fn valid_poll() -> PollRequest {
-        PollRequest {
-            question: "Best?".to_string(),
-            options: vec!["A".to_string(), "B".to_string()],
-            max_selections: 1,
-            display_name: "Alice".to_string(),
-            author_public_key: "pk".to_string(),
-            author_signature: "sig".to_string(),
-            reply_to: None,
-            thread_root: None,
-            challenge_response: "chal|nonce".to_string(),
-        }
-    }
-
-    #[test]
-    fn poll_request_validates_success() {
-        assert!(valid_poll().validate().is_ok());
-    }
-
-    #[test]
-    fn poll_question_empty_rejected() {
-        let mut req = valid_poll();
-        req.question = "".to_string();
-        assert!(req.validate().is_err());
-        req.question = "  ".to_string();
-        // validator sees length 2, so it passes length check, but handler's manual trim check would reject.
-        // We test that the derived validator alone would pass whitespace-only, so handler must have extra check.
-        // For this test we just ensure empty string is rejected by validator.
-    }
-
-    #[test]
-    fn poll_fewer_than_two_options_rejected() {
-        let mut req = valid_poll();
-        req.options = vec!["only".to_string()];
-        assert!(req.validate().is_err());
-    }
-
-    #[test]
-    fn poll_more_than_twenty_options_rejected() {
-        let mut req = valid_poll();
-        req.options = (0..21).map(|i| format!("opt{i}")).collect();
-        assert!(req.validate().is_err());
-    }
-
-    #[test]
-    fn poll_invalid_max_selections_rejected() {
-        let mut req = valid_poll();
-        req.max_selections = 2;
-        assert!(req.validate().is_err());
-        req.max_selections = 0;
-        assert!(req.validate().is_err());
-    }
-
-    #[test]
-    fn poll_exactly_two_and_twenty_are_allowed() {
-        let mut req = valid_poll();
-        req.options = vec!["a".to_string(), "b".to_string()];
-        assert!(req.validate().is_ok());
-        req.options = (0..20).map(|i| format!("opt{i}")).collect();
-        assert!(req.validate().is_ok());
-    }
-    #[test]
-    fn poll_question_whitespace_and_control_rejected_by_details() {
-        let mut req = valid_poll();
-        req.question = "  Best?".to_string();
-        assert!(validate_poll_details(&req).is_err());
-        req.question = "Best? ".to_string();
-        assert!(validate_poll_details(&req).is_err());
-        req.question = "Best\u{0000}?".to_string();
-        assert!(validate_poll_details(&req).is_err());
-        req.question = "   ".to_string();
-        assert!(validate_poll_details(&req).is_err());
-    }
-
-    #[test]
-    fn poll_option_empty_and_whitespace_rejected() {
-        let mut req = valid_poll();
-        req.options = vec!["A".to_string(), "".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-        req.options = vec!["A".to_string(), "  ".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-        req.options = vec![" A".to_string(), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-        req.options = vec!["A".to_string(), "B ".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-    }
-
-    #[test]
-    fn poll_option_control_and_length_rejected() {
-        let mut req = valid_poll();
-        req.options = vec!["A\u{0007}".to_string(), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-        req.options = vec!["a".repeat(201), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-        req.options = vec!["a".repeat(200), "B".to_string()];
-        assert!(validate_poll_details(&req).is_ok());
-    }
-
-    #[test]
-    fn poll_details_accepts_valid() {
-        assert!(validate_poll_details(&valid_poll()).is_ok());
-    }
-
-    #[test]
-    fn poll_option_grapheme_limits_with_chinese_and_emoji() {
-        // 200 Chinese graphemes should be accepted (600 bytes but 200 graphemes)
-        let mut req = valid_poll();
-        req.options = vec!["中".repeat(200), "B".to_string()];
-        assert!(validate_poll_details(&req).is_ok());
-        // 201 Chinese graphemes should be rejected
-        req.options = vec!["中".repeat(201), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-
-        // Flag emoji: 200 flags = 200 graphemes
-        req.options = vec!["🇩🇪".repeat(200), "B".to_string()];
-        assert!(validate_poll_details(&req).is_ok());
-        req.options = vec!["🇩🇪".repeat(201), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-
-        // ZWJ family: 200 families = 200 graphemes
-        req.options = vec!["👩‍👩‍👧‍👦".repeat(200), "B".to_string()];
-        assert!(validate_poll_details(&req).is_ok());
-        req.options = vec!["👩‍👩‍👧‍👦".repeat(201), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-
-        // Combining sequence: e + combining acute = 1 grapheme
-        req.options = vec!["e\u{301}".repeat(200), "B".to_string()];
-        assert!(validate_poll_details(&req).is_ok());
-        req.options = vec!["e\u{301}".repeat(201), "B".to_string()];
-        assert!(validate_poll_details(&req).is_err());
-    }
-
-    #[test]
-    fn poll_question_grapheme_boundaries() {
-        let mut req = valid_poll();
-        req.question = "a".repeat(499);
-        assert!(req.validate().is_ok());
-        req.question = "a".repeat(500);
-        assert!(req.validate().is_ok());
-        req.question = "a".repeat(501);
-        assert!(req.validate().is_err());
-
-        // Chinese 500
-        req.question = "中".repeat(500);
-        assert!(req.validate().is_ok());
-        req.question = "中".repeat(501);
-        assert!(req.validate().is_err());
-
-        // Flag 500
-        req.question = "🇩🇪".repeat(500);
-        assert!(req.validate().is_ok());
-        req.question = "🇩🇪".repeat(501);
-        assert!(req.validate().is_err());
-
-        // Combining
-        req.question = "e\u{301}".repeat(500);
-        assert!(req.validate().is_ok());
-        req.question = "e\u{301}".repeat(501);
-        assert!(req.validate().is_err());
-
-        // ZWJ
-        req.question = "👩‍👩‍👧‍👦".repeat(500);
-        assert!(req.validate().is_ok());
-        req.question = "👩‍👩‍👧‍👦".repeat(501);
-        assert!(req.validate().is_err());
-    }
 
     #[test]
     fn reaction_key_grapheme_boundaries() {

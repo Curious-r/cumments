@@ -218,3 +218,66 @@ async fn concurrent_identical_submissions_queue_only_one_submission() {
     assert_eq!(pending.len(), 1, "duplicate submissions must not be queued");
     assert_eq!(pending[0].id, accepted[0]);
 }
+
+#[tokio::test]
+async fn operation_author_lookup_is_server_wide() {
+    let store = DbStore::connect(&test_db_url("op-author"))
+        .await
+        .expect("connect db");
+
+    // Unused key.
+    assert_eq!(
+        store
+            .lookup_operation_author("op-key-123456")
+            .await
+            .expect("lookup"),
+        None
+    );
+
+    // Bound by one author.
+    let mut command = post_command();
+    command.author_public_key = "author-a".to_string();
+    store
+        .save_post_submission_idempotent(
+            &command,
+            &IdempotencyInput {
+                author_public_key: "author-a".to_string(),
+                key: "op-key-123456".to_string(),
+                request_fingerprint: "fp-a".to_string(),
+            },
+        )
+        .await
+        .expect("save");
+
+    // The server-wide lookup returns the binding author regardless of who
+    // asks, so a different author reusing the key can be rejected.
+    assert_eq!(
+        store
+            .lookup_operation_author("op-key-123456")
+            .await
+            .expect("lookup"),
+        Some("author-a".to_string())
+    );
+    // A different author binding their own row for the same key does not
+    // shadow the first binding (deterministic by row id).
+    let mut other = post_command();
+    other.author_public_key = "author-b".to_string();
+    store
+        .save_post_submission_idempotent(
+            &other,
+            &IdempotencyInput {
+                author_public_key: "author-b".to_string(),
+                key: "op-key-123456".to_string(),
+                request_fingerprint: "fp-b".to_string(),
+            },
+        )
+        .await
+        .expect("save other");
+    assert_eq!(
+        store
+            .lookup_operation_author("op-key-123456")
+            .await
+            .expect("lookup"),
+        Some("author-a".to_string())
+    );
+}

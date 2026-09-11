@@ -6,7 +6,8 @@
 
 use cumments_core::models::{CommentMedia, MediaKind};
 use cumments_core::protocol::{
-    MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, METADATA_SCHEMA_VERSION,
+    MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, METADATA_SCHEMA_VERSION, PROVENANCE_CONTENT_KEY,
+    PROVENANCE_SCHEMA_VERSION,
 };
 
 /// Preferred alias localpart prefix. The Matrix spec recommends exclusive
@@ -128,13 +129,6 @@ pub(crate) fn reply_fallback_body(
     quoted.push_str("\n\n");
     quoted.push_str(content);
     Some(quoted)
-}
-
-#[derive(serde::Serialize)]
-struct PollPayloadForWire<'a> {
-    question: &'a str,
-    options: &'a [String],
-    max_selections: u8,
 }
 
 /// Build the `m.room.message` content for a new Cumments comment.
@@ -336,64 +330,74 @@ pub(crate) fn build_poll_vote_body(
     })
 }
 
-/// Build the `m.room.message` content for a visitor poll (MSC3381).
-#[allow(clippy::too_many_arguments)]
-pub fn build_poll_body(
+/// Build the content for a direct Cumments `org.matrix.msc3381.poll.start`
+/// event (the pinned MSC3381 revision, not the remote `m.room.message`
+/// wrapper).
+///
+/// The poll block is produced by the typed poll wire layer; the Cumments
+/// provenance block carries the durable `operation_id` and the exact
+/// canonical semantic operation, and the optional thread/reply relation is
+/// encoded like every other Cumments event.
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
+pub fn build_poll_start_body(
     question: &str,
-    options: &[String],
-    max_selections: u8,
+    answers: &[cumments_core::poll::PollSemanticAnswer],
+    kind: cumments_core::poll::PollSemanticKind,
+    max_selections: u64,
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
-    submission_id: Option<i64>,
+    operation_id: &str,
+    semantic_operation: &serde_json::Value,
     reply_to: Option<&str>,
     thread_root: Option<&str>,
 ) -> serde_json::Value {
-    // Fallback body for clients without poll support.
-    let fallback = {
-        let mut out = String::new();
-        out.push_str(question);
-        out.push_str("\n\n");
-        for (idx, option) in options.iter().enumerate() {
-            out.push_str(&format!("{}. {}\n", idx + 1, option));
-        }
-        out.trim_end().to_string()
+    use crate::poll::{PollAnswer, PollKind, PollStartContent};
+
+    // Fallback body for clients without poll support (required by MSC3381 for
+    // poll start events).
+    let mut fallback = String::new();
+    fallback.push_str(question);
+    fallback.push_str("\n\n");
+    for (index, answer) in answers.iter().enumerate() {
+        fallback.push_str(&format!("{}. {}\n", index + 1, answer.text));
+    }
+    let fallback = fallback.trim_end().to_string();
+
+    let poll_kind = match kind {
+        cumments_core::poll::PollSemanticKind::Disclosed => PollKind::Disclosed,
+        cumments_core::poll::PollSemanticKind::Undisclosed => PollKind::Undisclosed,
     };
-    let answers: Vec<serde_json::Value> = options
-        .iter()
-        .enumerate()
-        .map(|(idx, text)| {
-            serde_json::json!({
-                "id": idx.to_string(),
-                "org.matrix.msc3381.poll.answer": { "text": text }
-            })
-        })
-        .collect();
-    // Canonical poll payload — same string that `POLL` signatures cover.
-    let payload = serde_json::to_string(&PollPayloadForWire {
+    let content = PollStartContent::new(
+        fallback,
         question,
-        options,
+        answers
+            .iter()
+            .map(|answer| PollAnswer::new(answer.id.clone(), answer.text.clone()))
+            .collect(),
+        poll_kind,
         max_selections,
-    })
-    .expect("poll payload is valid JSON");
-    let mut body = serde_json::json!({
-        "msgtype": "org.matrix.msc3381.poll.start",
-        "body": fallback,
-        "org.matrix.msc3381.poll.start": {
-            "question": { "text": question },
-            "kind": "org.matrix.msc3381.poll.disclosed",
-            "max_selections": max_selections,
-            "answers": answers,
-        },
-        MESSAGE_CONTENT_KEY: {
-            "schema": MESSAGE_SCHEMA_VERSION,
-            "public_key": author_public_key,
-            "signature": author_signature,
-            "challenge": author_challenge,
-            "content": payload,
-            "submission_id": submission_id,
-        }
+    );
+    let mut body = serde_json::to_value(&content).expect("poll start content serializes");
+
+    body[PROVENANCE_CONTENT_KEY] = serde_json::json!({
+        "schema": PROVENANCE_SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        "content": semantic_operation,
     });
+    apply_relations(&mut body, reply_to, thread_root);
+    body
+}
+
+/// Attach the standard rich-reply / thread relation to an event content.
+fn apply_relations(
+    body: &mut serde_json::Value,
+    reply_to: Option<&str>,
+    thread_root: Option<&str>,
+) {
     match (reply_to, thread_root) {
         (Some(reply), Some(thread)) => {
             body["m.relates_to"] = serde_json::json!({
@@ -415,7 +419,6 @@ pub fn build_poll_body(
         }
         (None, None) => {}
     }
-    body
 }
 
 /// Build the `m.room.message` content for a visitor location (MSC3488).
@@ -726,86 +729,92 @@ mod tests {
     }
 
     #[test]
-    fn poll_body_carries_question_options_and_ids() {
-        let body = build_poll_body(
+    fn poll_start_body_uses_direct_event_type_and_provenance() {
+        use cumments_core::poll::{PollSemanticAnswer, PollSemanticKind};
+        let answers = vec![
+            PollSemanticAnswer::new("slot-10am", "10:00 AM UTC"),
+            PollSemanticAnswer::new("slot-2pm", "2:00 PM UTC"),
+        ];
+        let semantic =
+            serde_json::json!(["POLL", ["s", "p", null, null], ["q", [], "disclosed", 1], 1]);
+        let body = build_poll_start_body(
             "Which?",
-            &["Rust".to_string(), "TS".to_string(), "Py".to_string()],
+            &answers,
+            PollSemanticKind::Disclosed,
             1,
             "pk",
             "sig",
             "chal",
-            Some(42),
+            "op-1",
+            &semantic,
             None,
             None,
         );
-        assert_eq!(body["msgtype"], "org.matrix.msc3381.poll.start");
-        assert!(body["body"].as_str().unwrap().contains("Which?"));
-        assert!(body["body"].as_str().unwrap().contains("1. Rust"));
+        // No `m.room.message` wrapper and no `msgtype`.
+        assert!(body.get("msgtype").is_none());
+        assert!(!body.to_string().contains("m.room.message"));
         assert_eq!(
-            body["org.matrix.msc3381.poll.start"]["question"]["text"],
+            body["org.matrix.msc3381.poll.start"]["question"]["org.matrix.msc1767.text"],
             "Which?"
         );
+        assert_eq!(
+            body["org.matrix.msc3381.poll.start"]["kind"],
+            "org.matrix.msc3381.poll.disclosed"
+        );
         assert_eq!(body["org.matrix.msc3381.poll.start"]["max_selections"], 1);
-        let answers = body["org.matrix.msc3381.poll.start"]["answers"]
+        let wire_answers = body["org.matrix.msc3381.poll.start"]["answers"]
             .as_array()
             .expect("answers");
-        assert_eq!(answers.len(), 3);
-        assert_eq!(answers[0]["id"], "0");
-        assert_eq!(answers[1]["id"], "1");
-        assert_eq!(answers[2]["id"], "2");
-        assert_eq!(answers[0]["org.matrix.msc3381.poll.answer"]["text"], "Rust");
-        assert_eq!(answers[1]["org.matrix.msc3381.poll.answer"]["text"], "TS");
-        // proof block
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["schema"], 1);
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["submission_id"], 42);
-        let payload: serde_json::Value =
-            serde_json::from_str(body[MESSAGE_CONTENT_KEY]["content"].as_str().unwrap()).unwrap();
-        assert_eq!(payload["question"], "Which?");
-        assert_eq!(payload["options"][0], "Rust");
-        assert_eq!(payload["max_selections"], 1);
+        assert_eq!(wire_answers.len(), 2);
+        assert_eq!(wire_answers[0]["id"], "slot-10am");
+        assert_eq!(wire_answers[1]["id"], "slot-2pm");
+        assert_eq!(wire_answers[0]["org.matrix.msc1767.text"], "10:00 AM UTC");
+        // Required single-string fallback.
+        let fallback = body["org.matrix.msc1767.text"].as_str().expect("fallback");
+        assert!(fallback.contains("Which?"));
+        assert!(fallback.contains("1. 10:00 AM UTC"));
+        // Provenance block carries the operation id and canonical operation.
+        let provenance = &body[PROVENANCE_CONTENT_KEY];
+        assert_eq!(provenance["schema"], PROVENANCE_SCHEMA_VERSION);
+        assert_eq!(provenance["operation_id"], "op-1");
+        assert_eq!(provenance["public_key"], "pk");
+        assert_eq!(provenance["signature"], "sig");
+        assert_eq!(provenance["challenge"], "chal");
+        assert_eq!(provenance["content"], semantic);
     }
 
     #[test]
-    fn poll_body_supports_reply_and_thread_relations() {
-        let with_reply = build_poll_body(
-            "q?",
-            &["A".to_string(), "B".to_string()],
-            1,
-            "pk",
-            "sig",
-            "chal",
-            None,
-            Some("$p:hs"),
-            None,
-        );
+    fn poll_start_body_supports_reply_and_thread_relations() {
+        use cumments_core::poll::{PollSemanticAnswer, PollSemanticKind};
+        let answers = vec![
+            PollSemanticAnswer::new("a", "A"),
+            PollSemanticAnswer::new("b", "B"),
+        ];
+        let semantic = serde_json::json!(["POLL"]);
+        let build = |reply_to: Option<&str>, thread_root: Option<&str>| {
+            build_poll_start_body(
+                "q?",
+                &answers,
+                PollSemanticKind::Undisclosed,
+                1,
+                "pk",
+                "sig",
+                "chal",
+                "op",
+                &semantic,
+                reply_to,
+                thread_root,
+            )
+        };
+        let with_reply = build(Some("$p:hs"), None);
         assert_eq!(
             with_reply["m.relates_to"]["m.in_reply_to"]["event_id"],
             "$p:hs"
         );
-        let with_thread = build_poll_body(
-            "q?",
-            &["A".to_string(), "B".to_string()],
-            1,
-            "pk",
-            "sig",
-            "chal",
-            None,
-            None,
-            Some("$t:hs"),
-        );
+        let with_thread = build(None, Some("$t:hs"));
         assert_eq!(with_thread["m.relates_to"]["rel_type"], "m.thread");
         assert_eq!(with_thread["m.relates_to"]["event_id"], "$t:hs");
-        let both = build_poll_body(
-            "q?",
-            &["A".to_string(), "B".to_string()],
-            1,
-            "pk",
-            "sig",
-            "chal",
-            None,
-            Some("$p:hs"),
-            Some("$t:hs"),
-        );
+        let both = build(Some("$p:hs"), Some("$t:hs"));
         assert_eq!(both["m.relates_to"]["rel_type"], "m.thread");
         assert_eq!(both["m.relates_to"]["m.in_reply_to"]["event_id"], "$p:hs");
     }
@@ -1152,18 +1161,26 @@ mod tests {
         assert_eq!(reaction[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         let vote = build_poll_vote_body("$p:hs", "1", "pk", "sig", "chal");
         assert_eq!(vote[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
-        let poll = build_poll_body(
+        // The direct poll start carries the Cumments provenance block instead
+        // of the `m.room.message` block.
+        let poll = build_poll_start_body(
             "q?",
-            &["A".to_string(), "B".to_string()],
+            &[
+                cumments_core::poll::PollSemanticAnswer::new("a", "A"),
+                cumments_core::poll::PollSemanticAnswer::new("b", "B"),
+            ],
+            cumments_core::poll::PollSemanticKind::Disclosed,
             1,
             "pk",
             "sig",
             "chal",
-            None,
+            "op",
+            &json!(["POLL"]),
             None,
             None,
         );
-        assert_eq!(poll[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        assert_eq!(poll[PROVENANCE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        assert!(poll.get(MESSAGE_CONTENT_KEY).is_none());
         let loc = build_location_body("geo:1,2", None, "pk", "sig", "chal", None, None, None);
         assert_eq!(loc[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         let edit = build_edit_body("$o:hs", "new", "pk", "sig", "chal", None);

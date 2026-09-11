@@ -6,12 +6,16 @@ use crate::parsed::{
     ParsedPollEnd, ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage,
     ParsedRoomRedaction, ParsedRoomState, ParsedSpaceChild,
 };
+use cumments_core::canonical::CanonicalJson;
 use cumments_core::models::{
     Content, EncryptedPlaceholder, LocationContent, MediaContent, MediaKind, PollContent,
     PollOption, TextContent, TextStyle, UnknownContent,
 };
-use cumments_core::poll::{PollAnswerFact, PollStartFact};
-use cumments_core::protocol::{MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, REDACTION_PROOF_KEY};
+use cumments_core::poll::{PollAnswerFact, PollStartFact, verify_poll_signature};
+use cumments_core::protocol::{
+    MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, PROVENANCE_CONTENT_KEY, PROVENANCE_SCHEMA_VERSION,
+    REDACTION_PROOF_KEY,
+};
 use cumments_matrix::poll::{
     POLL_END_EVENT_TYPE, POLL_RESPONSE_EVENT_TYPE, POLL_START_EVENT_TYPE, PollEndEvent, PollEvent,
     PollResponseEvent, PollStartEvent,
@@ -31,6 +35,16 @@ fn message_block_schema_is_supported(block: Option<&serde_json::Value>) -> bool 
         Some(v) if v.is_u64() && v.as_u64() == Some(MESSAGE_SCHEMA_VERSION as u64) => true,
         _ => false,
     }
+}
+
+/// Whether a poll event's Cumments provenance block declares the supported
+/// schema. Poll proofs live in `host.curious.cumments`, not the message block.
+fn provenance_schema_is_supported(content: &serde_json::Value) -> bool {
+    content
+        .get(PROVENANCE_CONTENT_KEY)
+        .and_then(|block| block.get("schema"))
+        .and_then(|schema| schema.as_i64())
+        == Some(PROVENANCE_SCHEMA_VERSION)
 }
 
 fn message_schema_is_supported(content: &serde_json::Value) -> bool {
@@ -132,12 +146,17 @@ pub(crate) async fn process_single_event(
 
 // ── Push event helpers ────────────────────────────────────────────
 
-/// Read a string field from the Cumments content block, falling back to the
-/// block inside the standard `m.new_content` replacement payload.
+/// Read a string field from a Cumments content block.
+///
+/// Poll events carry their proof in the provenance block
+/// (`host.curious.cumments`); other events use the message block
+/// (`host.curious.cumments.message`). Provenance is checked first, and the
+/// `m.new_content` replacement payload is checked last.
 fn namespaced_string<'a>(content: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     content
-        .get(MESSAGE_CONTENT_KEY)
+        .get(PROVENANCE_CONTENT_KEY)
         .and_then(|ns| ns.get(key))
+        .or_else(|| content.get(MESSAGE_CONTENT_KEY).and_then(|ns| ns.get(key)))
         .or_else(|| {
             content
                 .get("m.new_content")
@@ -150,8 +169,9 @@ fn namespaced_string<'a>(content: &'a serde_json::Value, key: &str) -> Option<&'
 /// Read an integer field from the same Cumments content block locations.
 fn namespaced_i64(content: &serde_json::Value, key: &str) -> Option<i64> {
     content
-        .get(MESSAGE_CONTENT_KEY)
+        .get(PROVENANCE_CONTENT_KEY)
         .and_then(|ns| ns.get(key))
+        .or_else(|| content.get(MESSAGE_CONTENT_KEY).and_then(|ns| ns.get(key)))
         .or_else(|| {
             content
                 .get("m.new_content")
@@ -800,11 +820,38 @@ fn parse_push_poll_start(event: &PushEvent, start: &PollStartEvent) -> Option<Pa
     let author_public_key = namespaced_string(content, "public_key").map(str::to_owned);
     let author_signature = namespaced_string(content, "signature").map(str::to_owned);
     let author_challenge = namespaced_string(content, "challenge").map(str::to_owned);
-    let trusted_block = is_virtual_sender
-        && author_public_key.is_some()
-        && author_signature.is_some()
-        && author_challenge.is_some()
-        && message_schema_is_supported(content);
+    // Visitor poll starts are authenticated by the frozen semantic-operation
+    // envelope, published in the provenance block. Matrix-native senders carry
+    // no Cumments proof.
+    let trusted_block = if is_virtual_sender {
+        let operation_id = namespaced_string(content, "operation_id");
+        let semantic_operation = content
+            .get(PROVENANCE_CONTENT_KEY)
+            .and_then(|provenance| provenance.get("content"));
+        let valid = matches!(
+            (
+                author_public_key.as_deref(),
+                author_signature.as_deref(),
+                author_challenge.as_deref(),
+                operation_id,
+                semantic_operation,
+            ),
+            (Some(pk), Some(sig), Some(chal), Some(operation_id), Some(op_json))
+                if provenance_schema_is_supported(content)
+                    && CanonicalJson::from_json_value(op_json)
+                        .is_some_and(|op| verify_poll_signature(pk, &op, operation_id, chal, sig))
+        );
+        if !valid {
+            warn!(
+                event_id = ?event.event_id,
+                "Rejecting visitor poll start with invalid provenance proof"
+            );
+            return None;
+        }
+        true
+    } else {
+        false
+    };
     let (reply_to, thread_root) = parse_relations(content);
 
     Some(ParsedRoomMessage {
@@ -1776,6 +1823,114 @@ mod tests {
                 &content,
             )
             .is_err()
+        );
+    }
+
+    /// Build a visitor-authored direct `poll.start` push event with a valid
+    /// frozen provenance proof, returning the event and the signing key used.
+    fn visitor_poll_start_event() -> (PushEvent, ed25519_dalek::SigningKey) {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use cumments_core::poll::{
+            PollSemanticAnswer, PollSemanticKind, poll_semantic_operation, poll_signature_envelope,
+        };
+        use ed25519_dalek::Signer;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[31u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let answers = vec![
+            PollSemanticAnswer::new("a", "A"),
+            PollSemanticAnswer::new("b", "B"),
+        ];
+        let operation = poll_semantic_operation(
+            "my-blog",
+            "hello",
+            None,
+            None,
+            "q?",
+            &answers,
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        let operation_id = "op-projection-1";
+        let challenge = "chal";
+        let envelope = poll_signature_envelope(&operation, operation_id, challenge);
+        let signature = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(envelope.to_canonical_bytes().as_slice())
+                .to_bytes(),
+        );
+
+        let content = serde_json::json!({
+            "org.matrix.msc1767.text": "q?",
+            "org.matrix.msc3381.poll.start": {
+                "kind": "org.matrix.msc3381.poll.disclosed",
+                "max_selections": 1,
+                "question": { "org.matrix.msc1767.text": "q?" },
+                "answers": [
+                    { "id": "a", "org.matrix.msc1767.text": "A" },
+                    { "id": "b", "org.matrix.msc1767.text": "B" },
+                ],
+            },
+            "host.curious.cumments": {
+                "schema": 1,
+                "operation_id": operation_id,
+                "public_key": public_key,
+                "signature": signature,
+                "challenge": challenge,
+                "content": operation.to_json_value(),
+            },
+        });
+        let mut event = direct_event(POLL_START_EVENT_TYPE, content);
+        event.sender = Some(format!("@_cumments_my-blog_{}:hs", "a".repeat(32)));
+        (event, signing_key)
+    }
+
+    #[test]
+    fn visitor_poll_start_with_valid_provenance_is_trusted() {
+        let (event, _key) = visitor_poll_start_event();
+        let PollEvent::Start(start) = PollEvent::parse(
+            POLL_START_EVENT_TYPE,
+            event.event_id.as_deref(),
+            event.sender.as_deref().unwrap(),
+            event.origin_server_ts.unwrap(),
+            event.content.as_ref().unwrap(),
+        )
+        .expect("typed parse")
+        .expect("is a poll") else {
+            panic!("expected start");
+        };
+        let parsed = parse_push_poll_start(&event, &start).expect("project visitor poll");
+        assert!(parsed.is_virtual_user_sender);
+        assert!(parsed.author_public_key.is_some());
+        assert!(parsed.author_signature.is_some());
+        assert!(parsed.author_challenge.is_some());
+        assert!(matches!(parsed.content, Content::Poll(_)));
+    }
+
+    #[test]
+    fn visitor_poll_start_with_tampered_provenance_is_rejected() {
+        let (mut event, _key) = visitor_poll_start_event();
+        // Tamper the semantic operation without re-signing.
+        event.content.as_mut().unwrap()["host.curious.cumments"]["content"] = serde_json::json!([
+            "POLL",
+            ["my-blog", "hello", null, null],
+            ["evil?", [], "disclosed", 1],
+            1
+        ]);
+        let PollEvent::Start(start) = PollEvent::parse(
+            POLL_START_EVENT_TYPE,
+            event.event_id.as_deref(),
+            event.sender.as_deref().unwrap(),
+            event.origin_server_ts.unwrap(),
+            event.content.as_ref().unwrap(),
+        )
+        .unwrap()
+        .unwrap() else {
+            panic!("expected start");
+        };
+        assert!(
+            parse_push_poll_start(&event, &start).is_none(),
+            "a tampered provenance proof must not be projected"
         );
     }
 }

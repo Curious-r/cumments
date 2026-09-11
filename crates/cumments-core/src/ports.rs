@@ -1,4 +1,5 @@
 use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
+use crate::canonical::CanonicalJson;
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry, SiteTransfer};
 use crate::media_upload::{
@@ -11,6 +12,7 @@ use crate::models::{
     RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot, RoomStatus,
     RoomUpgradeIntent, SiteId, SseOutbox, SubmissionCompletion, VisitorProfile,
 };
+use crate::poll::{PollSemanticAnswer, PollSemanticKind};
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
 };
@@ -35,6 +37,16 @@ pub trait SubmissionStore: Send + Sync {
         &self,
         idempotency: &IdempotencyInput,
     ) -> Result<Option<IdempotencyOutcome>>;
+
+    /// Returns the authenticated author that a logical operation key is bound
+    /// to, regardless of author, or `None` when the key is unused.
+    ///
+    /// Implementation note: the existing idempotency rows are scoped to
+    /// `(author, key)`; this lookup answers the frozen Poll design's
+    /// **server-wide** non-reuse question — "has *anyone* already claimed this
+    /// operation id?" — so a key reused by a different author is a conflict
+    /// rather than a new operation.
+    async fn lookup_operation_author(&self, key: &str) -> Result<Option<String>>;
 
     /// Persists a new post submission and returns its queue row ID.
     async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64>;
@@ -905,6 +917,34 @@ pub trait SiteAuthStore: Send + Sync {
     async fn clear_site_secret(&self, site_id: &str) -> Result<bool>;
 }
 
+/// A typed Matrix `org.matrix.msc3381.poll.start` submission.
+///
+/// Carries the structured semantic Poll definition plus the provenance needed
+/// to publish `operation_id` and the canonical semantic operation in the
+/// Cumments content block. The Matrix wire JSON is built by the driver, never
+/// by callers.
+pub struct PollStartRequest<'a> {
+    pub room_id: &'a str,
+    pub question: &'a str,
+    /// Answers in declared order; never sorted.
+    pub answers: &'a [PollSemanticAnswer],
+    pub kind: PollSemanticKind,
+    pub max_selections: u64,
+    pub display_name: &'a str,
+    pub site_id: &'a SiteId,
+    pub author_public_key: &'a str,
+    pub author_signature: &'a str,
+    pub author_challenge: &'a str,
+    /// Durable logical operation identity persisted in provenance.
+    pub operation_id: &'a str,
+    /// The exact canonical semantic operation, embedded in provenance.
+    pub semantic_operation: &'a CanonicalJson,
+    pub submission_id: Option<i64>,
+    pub reply_to: Option<&'a str>,
+    pub thread_root: Option<&'a str>,
+    pub txn_id: &'a str,
+}
+
 /// Defines the atomic actions that can be performed on the Matrix network.
 /// This is the "Hands" of the system.
 ///
@@ -1070,26 +1110,10 @@ pub trait MatrixDriver: Send + Sync {
         txn_id: &str,
     ) -> Result<String>;
 
-    /// Sends a poll (`m.poll.start`, MSC3381) as the visitor's virtual user.
-    /// Returns the Matrix event ID and carries the submission correlation
-    /// hint, like [`Self::post_message`].
-    async fn post_poll(
-        &self,
-        room_id: &str,
-        question: &str,
-        options: &[String],
-        max_selections: u8,
-        display_name: &str,
-        site_id: &SiteId,
-        author_public_key: &str,
-        author_signature: &str,
-        author_challenge: &str,
-        submission_id: Option<i64>,
-        reply_to: Option<&str>,
-        thread_root: Option<&str>,
-        // See [`Self::post_message`].
-        txn_id: &str,
-    ) -> Result<String>;
+    /// Sends a direct `org.matrix.msc3381.poll.start` event as the visitor's
+    /// virtual user. Returns the Matrix event ID and carries the submission
+    /// correlation hint, like [`Self::post_message`].
+    async fn post_poll(&self, request: PollStartRequest<'_>) -> Result<String>;
 
     /// Updates an existing message in a specific room using m.replace.
     async fn update_message(

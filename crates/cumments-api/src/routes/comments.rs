@@ -4,9 +4,10 @@ use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
-    DeleteCommentRequest, IDEMPOTENT_REPLAYED, LocationRequest, PaginatedResponse, PaginationMeta,
-    PaginationQuery, PollRequest, PostCommentRequest, ReactRequest, UnreactRequest,
-    UpdateCommentRequest, VoteRequest, extract_idempotency_key, request_fingerprint,
+    CreatePollRequest, DeleteCommentRequest, IDEMPOTENT_REPLAYED, LocationRequest,
+    PaginatedResponse, PaginationMeta, PaginationQuery, PostCommentRequest, ReactRequest,
+    UnreactRequest, UpdateCommentRequest, VoteRequest, extract_idempotency_key,
+    request_fingerprint,
 };
 use crate::routes::media::media_url_base;
 use axum::{
@@ -21,10 +22,14 @@ use cumments_core::{
         UpdateCommentCommand,
     },
     identity::{
-        derive_visitor_id_from_public_key, poll_signature_message, post_signature_message,
-        signature_message, verify_signature,
+        derive_visitor_id_from_public_key, post_signature_message, signature_message,
+        verify_signature,
     },
     models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
+    poll::{
+        PollSemanticAnswer, poll_semantic_fingerprint, poll_semantic_operation,
+        validate_poll_semantic_definition, verify_poll_signature,
+    },
     submissions::{IdempotencyInput, IdempotencyOutcome, deterministic_transaction_id},
 };
 use ruma_common::EventId;
@@ -1602,29 +1607,13 @@ pub(crate) async fn poll_handler(
     if !state.write_limiter.allow(&key) {
         return Err(comment_write_rate_limited(&state));
     }
-    let idempotency_key = extract_idempotency_key(&headers)?;
-    let req: PollRequest = serde_json::from_str(&body)
+    // The HTTP `Idempotency-Key` is the server-wide logical operation id.
+    let operation_id = extract_idempotency_key(&headers)?;
+    let req: CreatePollRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
-    let fingerprint = request_fingerprint(
-        "POST",
-        &format!("/api/v1/sites/{}/pages/{}/polls", site_id, page_slug),
-        body.as_bytes(),
-    );
+
+    // 1. Structural validation (field lengths/ranges) and relation formats.
     req.validate().map_err(AppError::Validation)?;
-    crate::request::validate_poll_details(&req).map_err(AppError::BadRequest)?;
-    // Idempotency replay short-circuit.
-    if let Some(response) = idempotency_short_circuit(
-        &state,
-        &IdempotencyInput {
-            author_public_key: req.author_public_key.clone(),
-            key: idempotency_key.clone(),
-            request_fingerprint: fingerprint.clone(),
-        },
-    )
-    .await?
-    {
-        return Ok(response);
-    }
     if req
         .reply_to
         .as_deref()
@@ -1653,62 +1642,121 @@ pub(crate) async fn poll_handler(
     {
         return Err(AppError::BadRequest(msg.to_string()));
     }
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
-    let challenge = challenge_prefix(&req.challenge_response);
-    let message = poll_signature_message(
+
+    // 2. Semantic normalization + validation, then the canonical semantic
+    // operation. Semantically invalid requests produce neither.
+    let answers: Vec<PollSemanticAnswer> = req
+        .answers
+        .iter()
+        .map(|answer| PollSemanticAnswer::new(answer.id.clone(), answer.text.clone()))
+        .collect();
+    validate_poll_semantic_definition(&req.question, &answers, req.max_selections)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let operation = poll_semantic_operation(
         &site_id,
         &page_slug,
-        &req.question,
-        &req.options,
-        req.max_selections,
         req.reply_to.as_deref(),
         req.thread_root.as_deref(),
-        challenge,
+        &req.question,
+        &answers,
+        req.kind,
+        req.max_selections,
     );
-    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
+
+    // 3. Semantic fingerprint: H(canonical semantic operation), never the raw
+    // HTTP body.
+    let fingerprint = poll_semantic_fingerprint(&operation);
+
+    // 4. Authenticate the author. The challenge prefix is read from the PoW
+    // response for the signature, but the PoW is not verified/consumed here.
+    let challenge = challenge_prefix(&req.challenge_response);
+    if !verify_poll_signature(
+        &req.author_public_key,
+        &operation,
+        &operation_id,
+        challenge,
+        &req.author_signature,
+    ) {
         return Err(AppError::InvalidSignature);
     }
-    if let Some(reply_to) = req.reply_to.as_deref() {
-        match state.store.get_message(reply_to).await {
-            Ok(Some(parent)) => {
-                active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
-                    AppError::BadRequest(
-                        "reply_to must reference an active comment in the same site and post."
-                            .to_string(),
-                    )
-                })?;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::error!("Failed to validate reply target: {:?}", e);
-                return Err(AppError::Internal(
-                    "Failed to validate reply target.".to_string(),
-                ));
-            }
+
+    // 5. Operation-id lookup. An authenticated replay returns the original
+    // submission without consuming PoW; a mismatch is a conflict. Possessing
+    // the key alone never reveals another author's operation.
+    match state
+        .store
+        .lookup_idempotency(&IdempotencyInput {
+            author_public_key: req.author_public_key.clone(),
+            key: operation_id.clone(),
+            request_fingerprint: fingerprint.clone(),
+        })
+        .await
+    {
+        Ok(Some(IdempotencyOutcome::Replayed { submission_id })) => {
+            tracing::info!(
+                "Replayed idempotent POLL with submission_id {}",
+                submission_id
+            );
+            return Ok(accepted_response(submission_id, true));
+        }
+        Ok(Some(IdempotencyOutcome::Reused)) => return Err(AppError::IdempotencyReused),
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("Failed to look up poll operation: {:?}", e);
+            return Err(AppError::Internal(
+                "Failed to verify idempotency.".to_string(),
+            ));
         }
     }
-    if let Some(thread_root) = req.thread_root.as_deref() {
-        match state.store.get_message(thread_root).await {
+    // Server-wide non-reuse: a key already bound to a different author is a
+    // conflict rather than a new operation.
+    match state.store.lookup_operation_author(&operation_id).await {
+        Ok(Some(author)) if author != req.author_public_key => {
+            return Err(AppError::IdempotencyReused);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("Failed to look up poll operation author: {:?}", e);
+            return Err(AppError::Internal(
+                "Failed to verify idempotency.".to_string(),
+            ));
+        }
+    }
+
+    // 6. Relation targets must be active comments in this page when known.
+    // Unknown targets are accepted so a fast poll does not depend on
+    // projection timing; Matrix relation semantics still apply.
+    for target in [req.reply_to.as_deref(), req.thread_root.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        match state.store.get_message(target).await {
             Ok(Some(parent)) => {
                 active_target_in_page(&parent, &site_id, &page_slug).map_err(|_| {
                     AppError::BadRequest(
-                        "thread_root must reference an active comment in the same site and post."
+                        "reply_to and thread_root must reference active comments in the same \
+                         site and post."
                             .to_string(),
                     )
                 })?;
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::error!("Failed to validate thread root: {:?}", e);
+                tracing::error!("Failed to validate poll relation target: {:?}", e);
                 return Err(AppError::Internal(
-                    "Failed to validate thread root.".to_string(),
+                    "Failed to validate relation target.".to_string(),
                 ));
             }
         }
     }
 
+    // 7. PoW admission control: only for a genuinely new logical operation.
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+
+    // 8. Durable claim of the operation, atomically with its idempotency
+    // record, so retries can never queue duplicate work.
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let command = PostCommentCommand {
@@ -1719,8 +1767,10 @@ pub(crate) async fn poll_handler(
         location: None,
         poll: Some(PollPayload {
             question: req.question,
-            options: req.options,
+            answers,
+            kind: req.kind,
             max_selections: req.max_selections,
+            operation_id: operation_id.clone(),
         }),
         display_name: req.display_name,
         author_public_key: req.author_public_key,
@@ -1736,7 +1786,7 @@ pub(crate) async fn poll_handler(
             &command,
             &IdempotencyInput {
                 author_public_key: command.author_public_key.clone(),
-                key: idempotency_key,
+                key: operation_id,
                 request_fingerprint: fingerprint,
             },
         )

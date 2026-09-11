@@ -29,6 +29,15 @@ pub const METADATA_SCHEMA_VERSION: i64 = 1;
 /// Current schema version for the `host.curious.cumments.message` content block.
 pub const MESSAGE_SCHEMA_VERSION: i64 = 1;
 
+/// Content key of the Cumments provenance block on direct Poll events
+/// (frozen design §5.6). Distinct from [`MESSAGE_CONTENT_KEY`], which lives
+/// under `host.curious.cumments.message`.
+pub const PROVENANCE_CONTENT_KEY: &str = "host.curious.cumments";
+
+/// Schema version of the provenance record (frozen design §5.6). Distinct
+/// from the signature protocol version.
+pub const PROVENANCE_SCHEMA_VERSION: i64 = 1;
+
 /// Returns `true` for a supported metadata schema version.
 /// `None` (absent field) is unsupported under the breaking v1 policy (legacy outside trusted boundary).
 pub fn is_supported_metadata_schema(schema: Option<i64>) -> bool {

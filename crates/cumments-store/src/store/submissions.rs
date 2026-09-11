@@ -115,6 +115,18 @@ impl SubmissionStore for DbStore {
         Ok(outcome)
     }
 
+    async fn lookup_operation_author(&self, key: &str) -> Result<Option<String>> {
+        // Server-wide: the key alone, ignoring which author bound it. Rows are
+        // one-per-(author, key); when several authors somehow bound the same
+        // key the lowest row id wins so the answer stays deterministic.
+        let row = idempotency_keys::Entity::find()
+            .filter(idempotency_keys::Column::IdempotencyKey.eq(key))
+            .order_by_asc(idempotency_keys::Column::Id)
+            .one(&self.db)
+            .await?;
+        Ok(row.map(|row| row.author_public_key))
+    }
+
     async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64> {
         let payload = serde_json::to_string(command)?;
 

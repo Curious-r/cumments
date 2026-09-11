@@ -186,29 +186,24 @@ impl MatrixDriver for LoggingMatrixDriver {
 
     async fn post_poll(
         &self,
-        room_id: &str,
-        question: &str,
-        options: &[String],
-        max_selections: u8,
-        display_name: &str,
-        _site_id: &SiteId,
-        author_public_key: &str,
-        _author_signature: &str,
-        _author_challenge: &str,
-        submission_id: Option<i64>,
-        _reply_to: Option<&str>,
-        _thread_root: Option<&str>,
-        _txn_id: &str,
+        request: cumments_core::ports::PollStartRequest<'_>,
     ) -> Result<String> {
-        let visitor_id = derive_visitor_id_from_public_key(author_public_key)
+        let visitor_id = derive_visitor_id_from_public_key(request.author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Post poll to room={}. Author={} (visitor={}, submission={:?}): {} / {:?} (max {})",
-            room_id, display_name, visitor_id, submission_id, question, options, max_selections
+            "LOGGING: Post poll to room={}. Author={} (visitor={}, submission={:?}, op={}): {} / {} answers (max {})",
+            request.room_id,
+            request.display_name,
+            visitor_id,
+            request.submission_id,
+            request.operation_id,
+            request.question,
+            request.answers.len(),
+            request.max_selections
         );
         Ok(format!(
             "log_poll_{}_{}",
-            submission_id.unwrap_or(0),
+            request.submission_id.unwrap_or(0),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         ))
     }

@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::wire::{
-    build_edit_body, build_location_body, build_media_body, build_message_body, build_poll_body,
-    build_poll_vote_body, build_reaction_body, build_redaction_body, percent_encode,
+    build_edit_body, build_location_body, build_media_body, build_message_body,
+    build_poll_start_body, build_poll_vote_body, build_reaction_body, build_redaction_body,
+    percent_encode,
 };
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
@@ -354,46 +355,40 @@ impl AppServiceMatrixDriver {
         Ok(data.event_id)
     }
 
-    #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
+    #[instrument(skip(self, request))]
     pub(super) async fn post_poll_impl(
         &self,
-        room_id: &str,
-        question: &str,
-        options: &[String],
-        max_selections: u8,
-        display_name: &str,
-        site_id: &SiteId,
-        author_public_key: &str,
-        author_signature: &str,
-        author_challenge: &str,
-        submission_id: Option<i64>,
-        reply_to: Option<&str>,
-        thread_root: Option<&str>,
-        txn_id: &str,
+        request: cumments_core::ports::PollStartRequest<'_>,
     ) -> Result<String> {
         let virtual_user = self
-            .resolve_virtual_user(author_public_key, site_id)
+            .resolve_virtual_user(request.author_public_key, request.site_id)
             .await?;
-        self.ensure_joined(room_id, &virtual_user).await?;
-        if let Err(e) = self.ensure_display_name(&virtual_user, display_name).await {
+        self.ensure_joined(request.room_id, &virtual_user).await?;
+        if let Err(e) = self
+            .ensure_display_name(&virtual_user, request.display_name)
+            .await
+        {
             warn!("Failed to set display name for {}: {:#}", virtual_user, e);
         }
-        let body = build_poll_body(
-            question,
-            options,
-            max_selections,
-            author_public_key,
-            author_signature,
-            author_challenge,
-            submission_id,
-            reply_to,
-            thread_root,
+        let body = build_poll_start_body(
+            request.question,
+            request.answers,
+            request.kind,
+            request.max_selections,
+            request.author_public_key,
+            request.author_signature,
+            request.author_challenge,
+            request.operation_id,
+            &request.semantic_operation.to_json_value(),
+            request.reply_to,
+            request.thread_root,
         );
+        // The pinned MSC3381 revision uses a direct event type, not the
+        // `m.room.message` wrapper.
         let path = format!(
-            "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-            percent_encode(room_id),
-            txn_id
+            "_matrix/client/v3/rooms/{}/send/org.matrix.msc3381.poll.start/{}",
+            percent_encode(request.room_id),
+            request.txn_id
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, Some(&virtual_user))
@@ -812,6 +807,84 @@ mod tests {
             .await
             .expect("upload should succeed");
         assert_eq!(url, "mxc://example.com/abc");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn poll_start_sends_a_direct_event_with_provenance_and_txn() {
+        use cumments_core::poll::{PollSemanticAnswer, PollSemanticKind, poll_semantic_operation};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/_matrix/client/v3/rooms/%21room%3Aexample.com/join"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "room_id": "!room:example.com" })),
+            )
+            .mount(&server)
+            .await;
+        // The direct MSC3381 event type is used (not `m.room.message`), and the
+        // provenance block carries the operation id and canonical operation.
+        Mock::given(method("PUT"))
+            .and(path(
+                "/_matrix/client/v3/rooms/%21room%3Aexample.com/send/\
+                 org.matrix.msc3381.poll.start/txn-poll-1",
+            ))
+            .and(body_partial_json(json!({
+                "org.matrix.msc3381.poll.start": {
+                    "kind": "org.matrix.msc3381.poll.disclosed",
+                    "max_selections": 1,
+                },
+                "host.curious.cumments": {
+                    "schema": 1,
+                    "operation_id": "op-1",
+                    "public_key": "pk",
+                },
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "event_id": "$poll:hs" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let answers = vec![
+            PollSemanticAnswer::new("a", "A"),
+            PollSemanticAnswer::new("b", "B"),
+        ];
+        let operation = poll_semantic_operation(
+            "my-blog",
+            "hello",
+            None,
+            None,
+            "q?",
+            &answers,
+            PollSemanticKind::Disclosed,
+            1,
+        );
+        let site_id = SiteId::from("my-blog");
+        let event_id = driver
+            .post_poll_impl(cumments_core::ports::PollStartRequest {
+                room_id: "!room:example.com",
+                question: "q?",
+                answers: &answers,
+                kind: PollSemanticKind::Disclosed,
+                max_selections: 1,
+                display_name: "Alice",
+                site_id: &site_id,
+                author_public_key: "pk",
+                author_signature: "sig",
+                author_challenge: "chal",
+                operation_id: "op-1",
+                semantic_operation: &operation,
+                submission_id: Some(7),
+                reply_to: None,
+                thread_root: None,
+                txn_id: "txn-poll-1",
+            })
+            .await
+            .expect("post poll");
+        assert_eq!(event_id, "$poll:hs");
         server.verify().await;
     }
 }

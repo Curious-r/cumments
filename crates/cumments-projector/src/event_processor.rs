@@ -1553,7 +1553,13 @@ impl EventProcessor {
         // Visitor posts must carry a valid Cumments identity block and
         // signature. Matrix-native posts skip this path entirely: their
         // identity is the Matrix sender itself.
-        if event.is_virtual_user_sender {
+        //
+        // Visitor poll starts are the exception: their proof is the frozen
+        // semantic-operation envelope, which is verified by the push parser
+        // (it requires the canonical operation that only the provenance block
+        // carries). A poll message reaching here has therefore already been
+        // authenticated, and carries no legacy signable body.
+        if event.is_virtual_user_sender && !matches!(event.content, Content::Poll(_)) {
             let valid = match (
                 &event.author_public_key,
                 &event.author_signature,

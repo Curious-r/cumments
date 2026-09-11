@@ -9,6 +9,20 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
 
 use cumments_core::models::{MatrixEvent, VisitorProfile};
+use cumments_core::poll::{PollSemanticAnswer, PollSemanticKind};
+
+/// A recorded [`cumments_core::ports::MatrixDriver::post_poll`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedPoll {
+    pub room_id: String,
+    pub question: String,
+    pub answers: Vec<PollSemanticAnswer>,
+    pub kind: PollSemanticKind,
+    pub max_selections: u64,
+    pub operation_id: String,
+    pub submission_id: Option<i64>,
+    pub txn_id: String,
+}
 
 /// In-memory [`MatrixDriver`] double that records the calls each test
 /// asserts.
@@ -37,8 +51,9 @@ pub struct TestDriver {
     pub invites: Mutex<Vec<(String, String)>>,
     pub reactions: Mutex<Vec<(String, String, String, String)>>,
     pub poll_votes: Mutex<Vec<(String, String, String, String)>>,
-    #[allow(clippy::type_complexity)]
-    pub polls: Mutex<Vec<(String, String, Vec<String>, u8, Option<i64>, String)>>,
+    /// Recorded `post_poll` calls, richest-first so tests can assert the
+    /// structured semantic payload the reconciler handed the driver.
+    pub polls: Mutex<Vec<RecordedPoll>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
     pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
     pub redactions: Mutex<Vec<(String, String, String)>>,

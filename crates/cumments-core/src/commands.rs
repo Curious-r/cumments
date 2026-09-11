@@ -4,11 +4,8 @@
 //! user's *intent* is a mental concept — commands are its concrete form.
 
 use crate::models::{CommentMedia, PageSlug, SiteId};
+use crate::poll::{PollSemanticAnswer, PollSemanticKind};
 use serde::{Deserialize, Serialize};
-
-fn default_poll_max_selections() -> u8 {
-    1
-}
 
 /// Represents the user's desire to post a comment.
 /// This is a command to be processed asynchronously by the reconciler.
@@ -63,13 +60,22 @@ pub struct LocationPayload {
     pub description: Option<String>,
 }
 
-/// Payload for a visitor poll (`m.poll.start`, MSC3381).
+/// Payload for a visitor poll (`org.matrix.msc3381.poll.start`, MSC3381).
+///
+/// Stores the structured semantic Poll definition, never Matrix wire JSON.
+/// The reconciler rebuilds the canonical semantic operation and the Matrix
+/// event from this payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PollPayload {
     pub question: String,
-    pub options: Vec<String>,
-    #[serde(default = "default_poll_max_selections")]
-    pub max_selections: u8,
+    /// Answers in declared presentation order; never sorted.
+    pub answers: Vec<PollSemanticAnswer>,
+    pub kind: PollSemanticKind,
+    pub max_selections: u64,
+    /// Durable logical operation identity = the HTTP `Idempotency-Key`.
+    /// Persisted into Matrix provenance as
+    /// `host.curious.cumments.operation_id`.
+    pub operation_id: String,
 }
 
 /// Represents the user's desire to delete a comment.
@@ -151,8 +157,13 @@ mod tests {
             location: None,
             poll: Some(PollPayload {
                 question: "Best?".to_string(),
-                options: vec!["A".to_string(), "B".to_string()],
+                answers: vec![
+                    PollSemanticAnswer::new("a", "A"),
+                    PollSemanticAnswer::new("b", "B"),
+                ],
+                kind: PollSemanticKind::Disclosed,
                 max_selections: 1,
+                operation_id: "op-123".to_string(),
             }),
             display_name: "Alice".to_string(),
             author_public_key: "pk".to_string(),
@@ -165,18 +176,10 @@ mod tests {
         let back: PostCommentCommand = serde_json::from_str(&json).unwrap();
         let poll = back.poll.expect("poll must survive round-trip");
         assert_eq!(poll.question, "Best?");
-        assert_eq!(poll.options, vec!["A", "B"]);
+        assert_eq!(poll.answers[0], PollSemanticAnswer::new("a", "A"));
+        assert_eq!(poll.answers[1], PollSemanticAnswer::new("b", "B"));
+        assert_eq!(poll.kind, PollSemanticKind::Disclosed);
         assert_eq!(poll.max_selections, 1);
-    }
-
-    #[test]
-    fn poll_max_selections_defaults_to_one() {
-        let json = r#"{"question":"q","options":["a","b"]}"#;
-        let payload: PollPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.max_selections, 1);
-        let with_explicit: PollPayload =
-            serde_json::from_str(r#"{"question":"q","options":["a","b"],"max_selections":1}"#)
-                .unwrap();
-        assert_eq!(with_explicit.max_selections, 1);
+        assert_eq!(poll.operation_id, "op-123");
     }
 }

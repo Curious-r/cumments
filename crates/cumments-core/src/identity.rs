@@ -93,6 +93,11 @@ struct PollPayloadForSig<'a> {
 
 /// Canonical JSON payload for a poll creation signature.
 ///
+/// Legacy helper for the discarded pre-frozen `POLL` request signature. The
+/// frozen Poll design signs the canonical semantic operation instead (see
+/// [`crate::poll::poll_signature_envelope`]); this remains only for the
+/// historical protocol's tests.
+///
 /// Deterministically serializes `question`, ordered `options`, and
 /// `max_selections` into a single JSON string. The field order is fixed
 /// by the struct definition, so the same poll always yields the same
