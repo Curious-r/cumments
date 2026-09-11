@@ -20,7 +20,7 @@ use cumments_core::models::{
 };
 use cumments_core::ports::{
     GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
-    SiteTransferStore, StickerPackStore,
+    SiteTransferStore, StickerPackStore, SubmissionStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, sha256_hex, site_request_signature, token_hash,
@@ -4598,4 +4598,193 @@ async fn create_poll_accepts_independent_reply_and_thread_relations() {
         .await
         .expect("call router");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_poll_concurrent_same_key_creates_one_operation() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) =
+        test_state("poll-concurrent", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[41u8; 32]);
+
+    // Each concurrent attempt carries its own valid PoW challenge so the
+    // single-use PoW primitive is not the thing under test here.
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let challenge = state.pow.generate_challenge();
+        let challenge_response = solve_pow(&challenge);
+        let body = signed_poll_body(
+            &signing_key,
+            "test-blog",
+            "hello",
+            POLL_KEY,
+            "q?",
+            &[("a", "A"), ("b", "B")],
+            PollSemanticKind::Disclosed,
+            1,
+            None,
+            None,
+            &challenge.prefix,
+            &challenge_response,
+        );
+        let router = router.clone();
+        handles.push(tokio::spawn(async move {
+            router
+                .oneshot(request_with_body(
+                    Method::POST,
+                    "/api/v1/sites/test-blog/pages/hello/polls",
+                    Some("null"),
+                    &poll_key(),
+                    &body,
+                ))
+                .await
+                .expect("call router")
+        }));
+    }
+
+    let mut statuses = Vec::new();
+    let mut submission_ids = std::collections::HashSet::new();
+    let mut replayed = 0;
+    for handle in handles {
+        let response = handle.await.expect("join");
+        statuses.push(response.status());
+        let is_replay = response.headers().get("idempotent-replayed").is_some();
+        if is_replay {
+            replayed += 1;
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&body_text(response).await).expect("json");
+        submission_ids.insert(json["submission_id"].as_i64().expect("submission id"));
+    }
+
+    assert!(
+        statuses
+            .iter()
+            .all(|status| *status == StatusCode::ACCEPTED),
+        "same key/author/fingerprint must converge to 202, got {statuses:?}"
+    );
+    assert_eq!(
+        submission_ids.len(),
+        1,
+        "all concurrent identical attempts must share one logical operation"
+    );
+    assert_eq!(replayed, 7, "exactly one attempt is fresh, the rest replay");
+
+    // Exactly one server-wide operation and one durable submission.
+    assert!(store.lookup_operation(POLL_KEY).await.unwrap().is_some());
+    assert_eq!(
+        store
+            .get_pending_post_submissions(100)
+            .await
+            .expect("pending")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn create_poll_failures_do_not_create_an_operation_claim() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) = test_state("poll-no-claim", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let post = |body: String| {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &poll_key(),
+            &body,
+        ))
+    };
+
+    // Semantically invalid definition.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("a", "dup")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Invalid signature.
+    let signed = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let mut value: serde_json::Value = serde_json::from_str(&signed).unwrap();
+    value["question"] = serde_json::json!("tampered?");
+    assert_eq!(
+        post(value.to_string()).await.expect("call").status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // Invalid PoW.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "q?",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        "not-a-pow",
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // None of the failed attempts may have claimed the operation.
+    assert!(
+        store.lookup_operation(POLL_KEY).await.unwrap().is_none(),
+        "failed requests must not create an operation claim"
+    );
+    assert!(
+        store
+            .get_pending_post_submissions(100)
+            .await
+            .expect("pending")
+            .is_empty()
+    );
 }

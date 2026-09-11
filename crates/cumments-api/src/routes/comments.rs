@@ -30,7 +30,10 @@ use cumments_core::{
         PollSemanticAnswer, poll_semantic_fingerprint, poll_semantic_operation,
         validate_poll_semantic_definition, verify_poll_signature,
     },
-    submissions::{IdempotencyInput, IdempotencyOutcome, deterministic_transaction_id},
+    submissions::{
+        IdempotencyInput, IdempotencyOutcome, OperationClaimOutcome, OperationIdentity,
+        deterministic_transaction_id,
+    },
 };
 use ruma_common::EventId;
 use std::net::SocketAddr;
@@ -1680,43 +1683,26 @@ pub(crate) async fn poll_handler(
         return Err(AppError::InvalidSignature);
     }
 
-    // 5. Operation-id lookup. An authenticated replay returns the original
-    // submission without consuming PoW; a mismatch is a conflict. Possessing
-    // the key alone never reveals another author's operation.
-    match state
-        .store
-        .lookup_idempotency(&IdempotencyInput {
-            author_public_key: req.author_public_key.clone(),
-            key: operation_id.clone(),
-            request_fingerprint: fingerprint.clone(),
-        })
-        .await
-    {
-        Ok(Some(IdempotencyOutcome::Replayed { submission_id })) => {
+    // 5. Server-wide operation preflight. An authenticated replay returns the
+    // original submission and a mismatch is a conflict, both without consuming
+    // PoW. Possessing the key alone never reveals another author's operation.
+    // This is a fast path only: the atomic claim below is what actually
+    // enforces server-wide uniqueness.
+    match state.store.lookup_operation(&operation_id).await {
+        Ok(Some(claim))
+            if claim.author_public_key == req.author_public_key
+                && claim.fingerprint == fingerprint =>
+        {
             tracing::info!(
                 "Replayed idempotent POLL with submission_id {}",
-                submission_id
+                claim.submission_id
             );
-            return Ok(accepted_response(submission_id, true));
+            return Ok(accepted_response(claim.submission_id, true));
         }
-        Ok(Some(IdempotencyOutcome::Reused)) => return Err(AppError::IdempotencyReused),
-        Ok(_) => {}
+        Ok(Some(_)) => return Err(AppError::IdempotencyReused),
+        Ok(None) => {}
         Err(e) => {
             tracing::error!("Failed to look up poll operation: {:?}", e);
-            return Err(AppError::Internal(
-                "Failed to verify idempotency.".to_string(),
-            ));
-        }
-    }
-    // Server-wide non-reuse: a key already bound to a different author is a
-    // conflict rather than a new operation.
-    match state.store.lookup_operation_author(&operation_id).await {
-        Ok(Some(author)) if author != req.author_public_key => {
-            return Err(AppError::IdempotencyReused);
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::error!("Failed to look up poll operation author: {:?}", e);
             return Err(AppError::Internal(
                 "Failed to verify idempotency.".to_string(),
             ));
@@ -1755,8 +1741,10 @@ pub(crate) async fn poll_handler(
         return Err(AppError::InvalidPoW);
     }
 
-    // 8. Durable claim of the operation, atomically with its idempotency
-    // record, so retries can never queue duplicate work.
+    // 8. Atomically claim the server-wide operation id and queue its durable
+    // submission in one transaction. A concurrent racer that loses the claim
+    // is resolved here as replay/conflict even though the preflight above
+    // found no existing claim.
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
     let command = PostCommentCommand {
@@ -1773,7 +1761,7 @@ pub(crate) async fn poll_handler(
             operation_id: operation_id.clone(),
         }),
         display_name: req.display_name,
-        author_public_key: req.author_public_key,
+        author_public_key: req.author_public_key.clone(),
         author_signature: req.author_signature,
         author_challenge: challenge.to_string(),
         reply_to: req.reply_to,
@@ -1782,29 +1770,25 @@ pub(crate) async fn poll_handler(
 
     match state
         .store
-        .save_post_submission_idempotent(
+        .save_post_submission_claimed(
             &command,
-            &IdempotencyInput {
-                author_public_key: command.author_public_key.clone(),
-                key: operation_id,
-                request_fingerprint: fingerprint,
-            },
+            &OperationIdentity::new(&operation_id, &req.author_public_key, &fingerprint),
         )
         .await
     {
-        Ok(IdempotencyOutcome::Accepted { submission_id }) => {
+        Ok(OperationClaimOutcome::Accepted { submission_id }) => {
             tracing::debug!("Successfully saved a new poll submission.");
             state.submission_notify.notify_one();
             Ok(accepted_response(submission_id, false))
         }
-        Ok(IdempotencyOutcome::Replayed { submission_id }) => {
+        Ok(OperationClaimOutcome::Replayed { submission_id }) => {
             tracing::info!(
                 "Replayed idempotent POLL with submission_id {}",
                 submission_id
             );
             Ok(accepted_response(submission_id, true))
         }
-        Ok(IdempotencyOutcome::Reused) => Err(AppError::IdempotencyReused),
+        Ok(OperationClaimOutcome::Conflict) => Err(AppError::IdempotencyReused),
         Err(e) => {
             tracing::error!("Failed to save poll submission: {:?}", e);
             Err(AppError::Internal("Failed to queue poll.".to_string()))

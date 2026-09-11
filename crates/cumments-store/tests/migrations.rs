@@ -108,6 +108,49 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260827_000067_drop_poll_end_authorized".to_string()),
         "000067 must be registered or the removed end-authorization snapshot survives upgrades"
     );
+    assert!(
+        names.contains(&"m20260827_000068_operation_claims".to_string()),
+        "000068 must be registered or operation identity is not server-wide unique"
+    );
+}
+
+#[tokio::test]
+async fn operation_claims_table_enforces_server_wide_uniqueness() {
+    let url = test_db_url("operation-claims");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO operation_claims \
+         (operation_id, author_public_key, fingerprint, submission_id, created_at) \
+         VALUES ('op-1', 'author-a', 'fp-a', 1, '{now}')"
+    ))
+    .await
+    .expect("first claim");
+
+    // The unique index on operation_id must reject a second, different claim
+    // for the same server-wide operation id.
+    let duplicate = db
+        .execute_unprepared(&format!(
+            "INSERT INTO operation_claims \
+             (operation_id, author_public_key, fingerprint, submission_id, created_at) \
+             VALUES ('op-1', 'author-b', 'fp-b', 2, '{now}')"
+        ))
+        .await;
+    assert!(
+        duplicate.is_err(),
+        "a second claim for the same operation_id must be rejected by the database"
+    );
+
+    // Different operation ids remain independent.
+    db.execute_unprepared(&format!(
+        "INSERT INTO operation_claims \
+         (operation_id, author_public_key, fingerprint, submission_id, created_at) \
+         VALUES ('op-2', 'author-b', 'fp-b', 2, '{now}')"
+    ))
+    .await
+    .expect("independent operation id");
 }
 
 #[tokio::test]

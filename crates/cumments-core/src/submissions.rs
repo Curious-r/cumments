@@ -63,6 +63,58 @@ pub enum IdempotencyOutcome {
     Reused,
 }
 
+/// The server-wide identity of one logical mutation operation.
+///
+/// `operation_id` is the HTTP `Idempotency-Key`. Its uniqueness scope is the
+/// whole server, not `(author, key)`: one `operation_id` denotes exactly one
+/// logical operation for its entire retained lifetime, regardless of endpoint
+/// or author (frozen Poll design §5.1). `author_public_key` is the
+/// authenticated author and `fingerprint` is the digest of the canonical
+/// semantic operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperationIdentity {
+    pub operation_id: String,
+    pub author_public_key: String,
+    pub fingerprint: String,
+}
+
+impl OperationIdentity {
+    pub fn new(
+        operation_id: impl Into<String>,
+        author_public_key: impl Into<String>,
+        fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            author_public_key: author_public_key.into(),
+            fingerprint: fingerprint.into(),
+        }
+    }
+}
+
+/// A server-wide operation claim as stored, used by the no-PoW preflight.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperationClaim {
+    pub author_public_key: String,
+    pub fingerprint: String,
+    pub submission_id: i64,
+}
+
+/// Result of an atomic server-wide operation-identity claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OperationClaimOutcome {
+    /// This request atomically claimed a new logical operation; the durable
+    /// submission for it is identified by `submission_id`.
+    Accepted { submission_id: i64 },
+    /// The same author already claimed this `operation_id` with the same
+    /// semantic fingerprint: a replay of the prior operation.
+    Replayed { submission_id: i64 },
+    /// The `operation_id` is already claimed by a different author or a
+    /// different semantic fingerprint. The request must be rejected with
+    /// `409 Conflict`.
+    Conflict,
+}
+
 /// A post submission together with its queue row id.
 #[derive(Debug, Clone)]
 pub struct PendingPostSubmission {

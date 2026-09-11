@@ -18,8 +18,9 @@ use crate::site_auth::{
 };
 use crate::sticker_packs::StickerPackProjection;
 use crate::submissions::{
-    IdempotencyInput, IdempotencyOutcome, PendingDeleteSubmission, PendingPostSubmission,
-    PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission, StuckUpdateSubmission,
+    IdempotencyInput, IdempotencyOutcome, OperationClaim, OperationClaimOutcome, OperationIdentity,
+    PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission, StuckDeleteSubmission,
+    StuckPostSubmission, StuckUpdateSubmission,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -38,15 +39,29 @@ pub trait SubmissionStore: Send + Sync {
         idempotency: &IdempotencyInput,
     ) -> Result<Option<IdempotencyOutcome>>;
 
-    /// Returns the authenticated author that a logical operation key is bound
-    /// to, regardless of author, or `None` when the key is unused.
+    /// Looks up a server-wide operation claim by its `operation_id`, or `None`
+    /// when it is unused.
     ///
-    /// Implementation note: the existing idempotency rows are scoped to
-    /// `(author, key)`; this lookup answers the frozen Poll design's
-    /// **server-wide** non-reuse question — "has *anyone* already claimed this
-    /// operation id?" — so a key reused by a different author is a conflict
-    /// rather than a new operation.
-    async fn lookup_operation_author(&self, key: &str) -> Result<Option<String>>;
+    /// This is a **preflight only**: it lets the API resolve an authenticated
+    /// replay or a conflict without consuming PoW. It never establishes
+    /// uniqueness — [`Self::save_post_submission_claimed`] is the atomic gate,
+    /// so a claim that appears after this lookup still resolves safely.
+    async fn lookup_operation(&self, operation_id: &str) -> Result<Option<OperationClaim>>;
+
+    /// Atomically claims a server-wide logical operation and queues its
+    /// durable post submission in one transaction.
+    ///
+    /// The `operation_id` uniqueness scope is the whole server (frozen Poll
+    /// design §5.1): concurrent claims resolve deterministically to exactly
+    /// one [`OperationClaimOutcome::Accepted`]; matching author+fingerprint
+    /// claims replay, and any other reuse is a conflict. A losing racer's
+    /// submission is rolled back, so one operation id can never produce two
+    /// durable submissions.
+    async fn save_post_submission_claimed(
+        &self,
+        command: &PostCommentCommand,
+        operation: &OperationIdentity,
+    ) -> Result<OperationClaimOutcome>;
 
     /// Persists a new post submission and returns its queue row ID.
     async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64>;

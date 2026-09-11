@@ -1,15 +1,16 @@
 use super::DbStore;
 use crate::entities::{
     active_enums::SubmissionStatus, delete_submissions, idempotency_keys, media_uploads,
-    post_submissions, update_submissions,
+    operation_claims, post_submissions, update_submissions,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use cumments_core::ports::SubmissionStore;
 use cumments_core::submissions::{
-    IdempotencyInput, IdempotencyOutcome, PendingDeleteSubmission, PendingPostSubmission,
-    PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission, StuckUpdateSubmission,
+    IdempotencyInput, IdempotencyOutcome, OperationClaim, OperationClaimOutcome, OperationIdentity,
+    PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission, StuckDeleteSubmission,
+    StuckPostSubmission, StuckUpdateSubmission,
 };
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
@@ -115,16 +116,98 @@ impl SubmissionStore for DbStore {
         Ok(outcome)
     }
 
-    async fn lookup_operation_author(&self, key: &str) -> Result<Option<String>> {
-        // Server-wide: the key alone, ignoring which author bound it. Rows are
-        // one-per-(author, key); when several authors somehow bound the same
-        // key the lowest row id wins so the answer stays deterministic.
-        let row = idempotency_keys::Entity::find()
-            .filter(idempotency_keys::Column::IdempotencyKey.eq(key))
-            .order_by_asc(idempotency_keys::Column::Id)
+    async fn lookup_operation(&self, operation_id: &str) -> Result<Option<OperationClaim>> {
+        let row = operation_claims::Entity::find()
+            .filter(operation_claims::Column::OperationId.eq(operation_id))
             .one(&self.db)
             .await?;
-        Ok(row.map(|row| row.author_public_key))
+        Ok(row.map(|row| OperationClaim {
+            author_public_key: row.author_public_key,
+            fingerprint: row.fingerprint,
+            submission_id: row.submission_id,
+        }))
+    }
+
+    async fn save_post_submission_claimed(
+        &self,
+        command: &PostCommentCommand,
+        operation: &OperationIdentity,
+    ) -> Result<OperationClaimOutcome> {
+        // One transaction: create the durable submission, then claim the
+        // server-wide operation id against its unique index. The claim insert
+        // is the atomic gate — a losing racer rolls its submission back and
+        // resolves as replay or conflict, so no second logical operation and
+        // no second submission can exist for one operation id.
+        let txn = self.db.begin().await?;
+        let payload = serde_json::to_string(command)?;
+        let active_model = post_submissions::ActiveModel {
+            payload: Set(payload),
+            status: Set(SubmissionStatus::Pending),
+            retry_count: Set(0),
+            timeout_confirmations: Set(0),
+            timeout_check_errors: Set(0),
+            last_timeout_confirmation_at: Set(None),
+            txn_id: Set(None),
+            author_public_key: Set(Some(command.author_public_key.clone())),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        };
+        let inserted = post_submissions::Entity::insert(active_model)
+            .exec(&txn)
+            .await?;
+        let submission_id = inserted.last_insert_id;
+        if let Some(media) = &command.media {
+            bind_media_submission(&txn, &media.url, submission_id).await?;
+        }
+
+        let backend = txn.get_database_backend();
+        let sql = if backend == DatabaseBackend::Sqlite {
+            "INSERT OR IGNORE INTO operation_claims \
+             (operation_id, author_public_key, fingerprint, submission_id, created_at) \
+             VALUES (?, ?, ?, ?, ?)"
+        } else {
+            "INSERT INTO operation_claims \
+             (operation_id, author_public_key, fingerprint, submission_id, created_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT (operation_id) DO NOTHING"
+        };
+        let claimed = txn
+            .execute_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                vec![
+                    Value::from(operation.operation_id.clone()),
+                    Value::from(operation.author_public_key.clone()),
+                    Value::from(operation.fingerprint.clone()),
+                    Value::from(submission_id),
+                    Value::from(chrono::Utc::now()),
+                ],
+            ))
+            .await?;
+        if claimed.rows_affected() > 0 {
+            txn.commit().await?;
+            return Ok(OperationClaimOutcome::Accepted { submission_id });
+        }
+
+        // The operation id is already claimed. Drop this request's duplicate
+        // submission and resolve against the existing claim.
+        txn.rollback().await?;
+        let existing = operation_claims::Entity::find()
+            .filter(operation_claims::Column::OperationId.eq(&operation.operation_id))
+            .one(&self.db)
+            .await?;
+        match existing {
+            Some(row)
+                if row.author_public_key == operation.author_public_key
+                    && row.fingerprint == operation.fingerprint =>
+            {
+                Ok(OperationClaimOutcome::Replayed {
+                    submission_id: row.submission_id,
+                })
+            }
+            _ => Ok(OperationClaimOutcome::Conflict),
+        }
     }
 
     async fn save_post_submission(&self, command: &PostCommentCommand) -> Result<i64> {
