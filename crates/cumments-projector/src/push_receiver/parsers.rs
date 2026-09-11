@@ -9,16 +9,19 @@ use crate::parsed::{
 use cumments_core::canonical::CanonicalJson;
 use cumments_core::models::{
     Content, EncryptedPlaceholder, LocationContent, MediaContent, MediaKind, PollContent,
-    PollOption, TextContent, TextStyle, UnknownContent,
+    PollOption, RoomIdentity, TextContent, TextStyle, UnknownContent,
 };
-use cumments_core::poll::{PollAnswerFact, PollStartFact, verify_poll_signature};
+use cumments_core::poll::{
+    PollAnswerFact, PollSemanticAnswer, PollSemanticKind, PollStartFact, PollWireSemantics,
+    verify_poll_start_proof,
+};
 use cumments_core::protocol::{
     MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, PROVENANCE_CONTENT_KEY, PROVENANCE_SCHEMA_VERSION,
     REDACTION_PROOF_KEY,
 };
 use cumments_matrix::poll::{
     POLL_END_EVENT_TYPE, POLL_RESPONSE_EVENT_TYPE, POLL_START_EVENT_TYPE, PollEndEvent, PollEvent,
-    PollResponseEvent, PollStartEvent,
+    PollKind, PollResponseEvent, PollStartEvent,
 };
 use tracing::warn;
 
@@ -34,6 +37,18 @@ fn message_block_schema_is_supported(block: Option<&serde_json::Value>) -> bool 
         Some(v) if v.is_i64() && v.as_i64() == Some(MESSAGE_SCHEMA_VERSION) => true,
         Some(v) if v.is_u64() && v.as_u64() == Some(MESSAGE_SCHEMA_VERSION as u64) => true,
         _ => false,
+    }
+}
+
+/// Map a Matrix wire poll `kind` to its frozen semantic value.
+///
+/// Custom/unknown wire kinds have no semantic equivalent, so a signed
+/// operation can never be proven to match them.
+fn semantic_kind_for(kind: &PollKind) -> Option<PollSemanticKind> {
+    match kind {
+        PollKind::Disclosed => Some(PollSemanticKind::Disclosed),
+        PollKind::Undisclosed => Some(PollSemanticKind::Undisclosed),
+        PollKind::Other(_) => None,
     }
 }
 
@@ -752,10 +767,18 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
 
     match parsed {
         PollEvent::Start(start) => {
-            let Some(mut message) = parse_push_poll_start(event, &start) else {
+            // Room identity is the target's `site_id` / `page_slug`; it is
+            // needed to verify that the signed operation matches the wire
+            // event, so resolve it before trusting the start.
+            let Some(room_id) = event.room_id.as_deref() else {
                 return Ok(());
             };
-            message.room_identity = processor.resolve_room_identity(&message.room_id).await?;
+            let room_identity = processor.resolve_room_identity(room_id).await?;
+            let Some(mut message) = parse_push_poll_start(event, &start, room_identity.as_ref())
+            else {
+                return Ok(());
+            };
+            message.room_identity = room_identity;
             processor.process_room_message(message).await?;
         }
         PollEvent::Response(response) => {
@@ -779,7 +802,15 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
 /// Project a direct `poll.start` event as a Poll-backed comment. The same
 /// definition rules the reducer applies decide whether the start is valid;
 /// an invalid definition never becomes a projected poll.
-fn parse_push_poll_start(event: &PushEvent, start: &PollStartEvent) -> Option<ParsedRoomMessage> {
+///
+/// `room_identity` supplies the target's `site_id` / `page_slug`, which the
+/// wire event does not carry; it is required to prove that a visitor's signed
+/// semantic operation is the Poll the event actually encodes.
+fn parse_push_poll_start(
+    event: &PushEvent,
+    start: &PollStartEvent,
+    room_identity: Option<&RoomIdentity>,
+) -> Option<ParsedRoomMessage> {
     let room_id = event.room_id.as_ref()?;
     let content = event.content.as_ref()?;
     let poll = &start.content.poll;
@@ -820,31 +851,73 @@ fn parse_push_poll_start(event: &PushEvent, start: &PollStartEvent) -> Option<Pa
     let author_public_key = namespaced_string(content, "public_key").map(str::to_owned);
     let author_signature = namespaced_string(content, "signature").map(str::to_owned);
     let author_challenge = namespaced_string(content, "challenge").map(str::to_owned);
+    let (reply_to, thread_root) = parse_relations(content);
+
     // Visitor poll starts are authenticated by the frozen semantic-operation
-    // envelope, published in the provenance block. Matrix-native senders carry
-    // no Cumments proof.
+    // envelope in the provenance block, and the signed operation must denote
+    // exactly the Poll this wire event encodes. Matrix-native senders carry no
+    // Cumments proof.
     let trusted_block = if is_virtual_sender {
+        let Some(semantic_kind) = semantic_kind_for(&poll.kind) else {
+            warn!(
+                event_id = ?event.event_id,
+                "Rejecting visitor poll start with a wire kind having no semantic equivalent"
+            );
+            return None;
+        };
+        let Some(identity) = room_identity else {
+            warn!(
+                event_id = ?event.event_id,
+                "Rejecting visitor poll start whose target identity cannot be resolved"
+            );
+            return None;
+        };
+        // The semantic meaning the wire event actually carries.
+        let wire_semantics = PollWireSemantics {
+            site_id: identity.site_id.clone(),
+            page_slug: identity.page_slug.clone(),
+            reply_to: reply_to.clone(),
+            thread_root: thread_root.clone(),
+            question: poll.question.text.clone(),
+            answers: poll
+                .answers
+                .iter()
+                .map(|answer| PollSemanticAnswer::new(answer.id.clone(), answer.text.clone()))
+                .collect(),
+            kind: semantic_kind,
+            max_selections: poll.max_selections,
+        };
         let operation_id = namespaced_string(content, "operation_id");
-        let semantic_operation = content
+        let signed_operation = content
             .get(PROVENANCE_CONTENT_KEY)
             .and_then(|provenance| provenance.get("content"));
-        let valid = matches!(
-            (
-                author_public_key.as_deref(),
-                author_signature.as_deref(),
-                author_challenge.as_deref(),
-                operation_id,
-                semantic_operation,
-            ),
+        let valid = match (
+            author_public_key.as_deref(),
+            author_signature.as_deref(),
+            author_challenge.as_deref(),
+            operation_id,
+            signed_operation,
+        ) {
             (Some(pk), Some(sig), Some(chal), Some(operation_id), Some(op_json))
-                if provenance_schema_is_supported(content)
-                    && CanonicalJson::from_json_value(op_json)
-                        .is_some_and(|op| verify_poll_signature(pk, &op, operation_id, chal, sig))
-        );
+                if provenance_schema_is_supported(content) =>
+            {
+                CanonicalJson::from_json_value(op_json).is_some_and(|operation| {
+                    verify_poll_start_proof(
+                        pk,
+                        &operation,
+                        operation_id,
+                        chal,
+                        sig,
+                        &wire_semantics,
+                    )
+                })
+            }
+            _ => false,
+        };
         if !valid {
             warn!(
                 event_id = ?event.event_id,
-                "Rejecting visitor poll start with invalid provenance proof"
+                "Rejecting visitor poll start whose signed operation does not match its wire content"
             );
             return None;
         }
@@ -852,7 +925,6 @@ fn parse_push_poll_start(event: &PushEvent, start: &PollStartEvent) -> Option<Pa
     } else {
         false
     };
-    let (reply_to, thread_root) = parse_relations(content);
 
     Some(ParsedRoomMessage {
         room_id: room_id.clone(),
@@ -1686,7 +1758,8 @@ mod tests {
         let PollEvent::Start(start) = parsed else {
             panic!("expected start");
         };
-        let message = parse_push_poll_start(&event, &start).expect("project start");
+        let message =
+            parse_push_poll_start(&event, &start, Some(&poll_identity())).expect("project start");
         match message.content {
             Content::Poll(poll) => {
                 assert_eq!(poll.question, "best?");
@@ -1720,7 +1793,8 @@ mod tests {
         .unwrap() else {
             panic!("expected start");
         };
-        let message = parse_push_poll_start(&event, &start).expect("project start");
+        let message =
+            parse_push_poll_start(&event, &start, Some(&poll_identity())).expect("project start");
         assert_eq!(message.thread_root.as_deref(), Some("$thread:hs"));
         assert!(message.reply_to.is_none());
     }
@@ -1750,7 +1824,7 @@ mod tests {
         .unwrap() else {
             panic!("expected start");
         };
-        assert!(parse_push_poll_start(&event, &start).is_none());
+        assert!(parse_push_poll_start(&event, &start, Some(&poll_identity())).is_none());
     }
 
     #[test]
@@ -1826,9 +1900,17 @@ mod tests {
         );
     }
 
-    /// Build a visitor-authored direct `poll.start` push event with a valid
-    /// frozen provenance proof, returning the event and the signing key used.
-    fn visitor_poll_start_event() -> (PushEvent, ed25519_dalek::SigningKey) {
+    /// The room identity the visitor poll start is authored under.
+    fn poll_identity() -> RoomIdentity {
+        RoomIdentity {
+            site_id: "my-blog".to_string(),
+            page_slug: "hello".to_string(),
+        }
+    }
+
+    /// Build a visitor-authored direct `poll.start` push event whose signed
+    /// provenance and wire content agree.
+    fn visitor_poll_start_event() -> PushEvent {
         use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
         use cumments_core::poll::{
             PollSemanticAnswer, PollSemanticKind, poll_semantic_operation, poll_signature_envelope,
@@ -1882,12 +1964,11 @@ mod tests {
         });
         let mut event = direct_event(POLL_START_EVENT_TYPE, content);
         event.sender = Some(format!("@_cumments_my-blog_{}:hs", "a".repeat(32)));
-        (event, signing_key)
+        event
     }
 
-    #[test]
-    fn visitor_poll_start_with_valid_provenance_is_trusted() {
-        let (event, _key) = visitor_poll_start_event();
+    /// Run the start projection with the authored room identity.
+    fn project(event: &PushEvent, identity: Option<&RoomIdentity>) -> Option<ParsedRoomMessage> {
         let PollEvent::Start(start) = PollEvent::parse(
             POLL_START_EVENT_TYPE,
             event.event_id.as_deref(),
@@ -1899,7 +1980,84 @@ mod tests {
         .expect("is a poll") else {
             panic!("expected start");
         };
-        let parsed = parse_push_poll_start(&event, &start).expect("project visitor poll");
+        parse_push_poll_start(event, &start, identity)
+    }
+
+    /// Mutable access to the wire `poll.start` block.
+    fn wire_poll(event: &mut PushEvent) -> &mut serde_json::Value {
+        &mut event.content.as_mut().unwrap()["org.matrix.msc3381.poll.start"]
+    }
+
+    /// Mutable access to the signed Cumments provenance block.
+    fn wire_provenance(event: &mut PushEvent) -> &mut serde_json::Value {
+        &mut event.content.as_mut().unwrap()["host.curious.cumments"]
+    }
+
+    type Tamper = fn(&mut PushEvent);
+
+    fn tamper_question(event: &mut PushEvent) {
+        wire_poll(event)["question"]["org.matrix.msc1767.text"] = serde_json::json!("evil?");
+    }
+
+    fn tamper_answer_id(event: &mut PushEvent) {
+        wire_poll(event)["answers"][0]["id"] = serde_json::json!("z");
+    }
+
+    fn tamper_answer_text(event: &mut PushEvent) {
+        wire_poll(event)["answers"][0]["org.matrix.msc1767.text"] = serde_json::json!("Z");
+    }
+
+    fn tamper_answer_order(event: &mut PushEvent) {
+        wire_poll(event)["answers"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+    }
+
+    fn tamper_kind(event: &mut PushEvent) {
+        wire_poll(event)["kind"] = serde_json::json!("org.matrix.msc3381.poll.undisclosed");
+    }
+
+    fn tamper_custom_kind(event: &mut PushEvent) {
+        wire_poll(event)["kind"] = serde_json::json!("com.example.poll.secret");
+    }
+
+    fn tamper_max_selections(event: &mut PushEvent) {
+        wire_poll(event)["max_selections"] = serde_json::json!(2);
+    }
+
+    fn tamper_thread_relation(event: &mut PushEvent) {
+        event.content.as_mut().unwrap()["m.relates_to"] = serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$thread:hs",
+        });
+    }
+
+    fn tamper_provenance_content(event: &mut PushEvent) {
+        wire_provenance(event)["content"] = serde_json::json!([
+            "POLL",
+            ["my-blog", "hello", null, null],
+            ["evil?", [["a", "A"], ["b", "B"]], "disclosed", 1],
+            1
+        ]);
+    }
+
+    fn tamper_operation_id(event: &mut PushEvent) {
+        wire_provenance(event)["operation_id"] = serde_json::json!("op-other");
+    }
+
+    fn tamper_challenge(event: &mut PushEvent) {
+        wire_provenance(event)["challenge"] = serde_json::json!("other-chal");
+    }
+
+    fn tamper_signature(event: &mut PushEvent) {
+        wire_provenance(event)["signature"] = serde_json::json!("AAAA");
+    }
+
+    #[test]
+    fn visitor_poll_start_with_consistent_provenance_is_trusted() {
+        let event = visitor_poll_start_event();
+        let parsed = project(&event, Some(&poll_identity())).expect("project visitor poll");
         assert!(parsed.is_virtual_user_sender);
         assert!(parsed.author_public_key.is_some());
         assert!(parsed.author_signature.is_some());
@@ -1908,29 +2066,85 @@ mod tests {
     }
 
     #[test]
-    fn visitor_poll_start_with_tampered_provenance_is_rejected() {
-        let (mut event, _key) = visitor_poll_start_event();
-        // Tamper the semantic operation without re-signing.
-        event.content.as_mut().unwrap()["host.curious.cumments"]["content"] = serde_json::json!([
-            "POLL",
-            ["my-blog", "hello", null, null],
-            ["evil?", [], "disclosed", 1],
-            1
-        ]);
-        let PollEvent::Start(start) = PollEvent::parse(
-            POLL_START_EVENT_TYPE,
-            event.event_id.as_deref(),
-            event.sender.as_deref().unwrap(),
-            event.origin_server_ts.unwrap(),
-            event.content.as_ref().unwrap(),
-        )
-        .unwrap()
-        .unwrap() else {
-            panic!("expected start");
+    fn visitor_poll_start_with_unknown_identity_is_rejected() {
+        let event = visitor_poll_start_event();
+        assert!(
+            project(&event, None).is_none(),
+            "a visitor poll cannot be verified without its target identity"
+        );
+    }
+
+    #[test]
+    fn visitor_poll_start_with_mismatched_target_is_rejected() {
+        let event = visitor_poll_start_event();
+        // The signed operation names a different page than the room resolves to.
+        let other = RoomIdentity {
+            site_id: "my-blog".to_string(),
+            page_slug: "other".to_string(),
         };
         assert!(
-            parse_push_poll_start(&event, &start).is_none(),
-            "a tampered provenance proof must not be projected"
+            project(&event, Some(&other)).is_none(),
+            "a signed target that differs from the event's room must be rejected"
         );
+    }
+
+    #[test]
+    fn wire_tampering_with_unchanged_provenance_is_rejected() {
+        // Each mutation changes the actual Poll wire content while leaving the
+        // signed provenance untouched; trust must fail.
+        let cases: [(&str, Tamper); 8] = [
+            ("question", tamper_question),
+            ("answer id", tamper_answer_id),
+            ("answer text", tamper_answer_text),
+            ("answer order", tamper_answer_order),
+            ("kind", tamper_kind),
+            ("custom kind", tamper_custom_kind),
+            ("max_selections", tamper_max_selections),
+            ("thread relation", tamper_thread_relation),
+        ];
+
+        for (name, mutate) in cases {
+            let mut event = visitor_poll_start_event();
+            mutate(&mut event);
+            assert!(
+                project(&event, Some(&poll_identity())).is_none(),
+                "tampered wire {name} must not be trusted"
+            );
+        }
+    }
+
+    #[test]
+    fn provenance_tampering_with_unchanged_wire_is_rejected() {
+        // Each mutation changes the signed provenance while leaving the wire
+        // Poll untouched; trust must fail on the signature or consistency.
+        let cases: [(&str, Tamper); 4] = [
+            ("content", tamper_provenance_content),
+            ("operation_id", tamper_operation_id),
+            ("challenge", tamper_challenge),
+            ("signature", tamper_signature),
+        ];
+
+        for (name, mutate) in cases {
+            let mut event = visitor_poll_start_event();
+            mutate(&mut event);
+            assert!(
+                project(&event, Some(&poll_identity())).is_none(),
+                "tampered provenance {name} must not be trusted"
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_native_poll_start_needs_no_cumments_proof() {
+        // A non-virtual sender is governed by its Matrix identity, not the
+        // frozen Cumments signature, so it projects without provenance.
+        let mut source = visitor_poll_start_event();
+        let content = source.content.take().unwrap();
+        let mut event = direct_event(POLL_START_EVENT_TYPE, content);
+        event.sender = Some("@alice:hs".to_string());
+        event.content.as_mut().unwrap()["host.curious.cumments"] = serde_json::json!({});
+        let parsed = project(&event, Some(&poll_identity())).expect("native poll projects");
+        assert!(!parsed.is_virtual_user_sender);
+        assert!(parsed.author_public_key.is_none());
     }
 }

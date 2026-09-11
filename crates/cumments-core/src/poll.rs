@@ -228,6 +228,73 @@ pub fn verify_poll_signature(
     crate::identity::verify_signature(public_key_b64, &message, signature_b64)
 }
 
+/// The semantic Poll meaning actually encoded by a `poll.start` wire event.
+///
+/// A visitor Poll event carries two independent things: the signed canonical
+/// operation in its provenance block, and the Matrix wire content. Trusting the
+/// event requires establishing that they denote the same Poll, per the frozen
+/// design's invariant:
+///
+/// ```text
+/// provenance.content == canonical semantic operation
+///                    == fingerprint input
+///                    == signed semantic value
+///                    == semantic meaning encoded by poll.start
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollWireSemantics {
+    pub site_id: String,
+    pub page_slug: String,
+    pub reply_to: Option<String>,
+    pub thread_root: Option<String>,
+    pub question: String,
+    /// Answers in declared wire order; never sorted.
+    pub answers: Vec<PollSemanticAnswer>,
+    pub kind: PollSemanticKind,
+    pub max_selections: u64,
+}
+
+impl PollWireSemantics {
+    /// The canonical semantic operation this wire content denotes.
+    pub fn to_semantic_operation(&self) -> CanonicalJson {
+        poll_semantic_operation(
+            &self.site_id,
+            &self.page_slug,
+            self.reply_to.as_deref(),
+            self.thread_root.as_deref(),
+            &self.question,
+            &self.answers,
+            self.kind,
+            self.max_selections,
+        )
+    }
+}
+
+/// Verify a visitor `poll.start` proof against the actual Poll wire content.
+///
+/// Succeeds only when the signature verifies over `signed_operation` **and**
+/// that signed operation is byte-for-byte the canonical operation the wire
+/// content denotes. The provenance block is never trusted as an independent
+/// declaration of the Poll's meaning.
+#[allow(clippy::too_many_arguments)] // mirrors the wire facts and proof
+pub fn verify_poll_start_proof(
+    public_key_b64: &str,
+    signed_operation: &CanonicalJson,
+    operation_id: &str,
+    challenge: &str,
+    signature_b64: &str,
+    wire: &PollWireSemantics,
+) -> bool {
+    wire.to_semantic_operation() == *signed_operation
+        && verify_poll_signature(
+            public_key_b64,
+            signed_operation,
+            operation_id,
+            challenge,
+            signature_b64,
+        )
+}
+
 /// Whether a string is a valid answer identifier.
 ///
 /// Answer identifiers are opaque, case-sensitive tokens of 1 to 64 visible
@@ -1567,5 +1634,93 @@ mod semantic_tests {
             serde_json::to_value(PollSemanticKind::Disclosed).unwrap(),
             CanonicalJson::string("disclosed").to_json_value()
         );
+    }
+
+    #[test]
+    fn poll_start_proof_requires_signed_operation_to_match_wire_content() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[41u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let wire = PollWireSemantics {
+            site_id: "my-blog".to_string(),
+            page_slug: "hello".to_string(),
+            reply_to: None,
+            thread_root: None,
+            question: "q?".to_string(),
+            answers: vec![
+                PollSemanticAnswer::new("a", "A"),
+                PollSemanticAnswer::new("b", "B"),
+            ],
+            kind: PollSemanticKind::Disclosed,
+            max_selections: 1,
+        };
+        // Sign exactly the operation the wire content denotes.
+        let signed = wire.to_semantic_operation();
+        let envelope = poll_signature_envelope(&signed, "op-1", "chal");
+        let signature = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(envelope.to_canonical_bytes().as_slice())
+                .to_bytes(),
+        );
+
+        assert!(verify_poll_start_proof(
+            &public_key,
+            &signed,
+            "op-1",
+            "chal",
+            &signature,
+            &wire
+        ));
+
+        // A different wire Poll (same valid signature) must not verify.
+        let tampered = PollWireSemantics {
+            question: "evil?".to_string(),
+            ..wire.clone()
+        };
+        assert!(
+            !verify_poll_start_proof(&public_key, &signed, "op-1", "chal", &signature, &tampered),
+            "signed operation must match the actual wire Poll"
+        );
+
+        // Answer order is semantic: swapping the wire answers must not verify.
+        let reordered = PollWireSemantics {
+            answers: vec![
+                PollSemanticAnswer::new("b", "B"),
+                PollSemanticAnswer::new("a", "A"),
+            ],
+            ..wire.clone()
+        };
+        assert!(!verify_poll_start_proof(
+            &public_key,
+            &signed,
+            "op-1",
+            "chal",
+            &signature,
+            &reordered
+        ));
+
+        // A signed operation that does not match the wire is rejected even when
+        // it is otherwise internally consistent and correctly signed.
+        let other = PollWireSemantics {
+            kind: PollSemanticKind::Undisclosed,
+            ..wire.clone()
+        };
+        let other_op = other.to_semantic_operation();
+        let other_envelope = poll_signature_envelope(&other_op, "op-1", "chal");
+        let other_sig = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(other_envelope.to_canonical_bytes().as_slice())
+                .to_bytes(),
+        );
+        assert!(!verify_poll_start_proof(
+            &public_key,
+            &other_op,
+            "op-1",
+            "chal",
+            &other_sig,
+            &wire
+        ));
     }
 }
