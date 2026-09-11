@@ -2,6 +2,7 @@ mod wire;
 
 pub mod appservice;
 pub mod logging;
+pub mod poll;
 
 pub use appservice::AppServiceMatrixDriver;
 pub use logging::LoggingMatrixDriver;
