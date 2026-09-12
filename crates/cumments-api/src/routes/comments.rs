@@ -1386,9 +1386,6 @@ pub(crate) async fn vote_handler(
     else {
         return Err(AppError::NotFound("Poll not found.".to_string()));
     };
-    if projection.status != PollStatus::Open {
-        return Err(AppError::Conflict("The poll has ended.".to_string()));
-    }
     // Resolve the Matrix room now so an unroutable target cannot consume PoW
     // or claim the operation.
     let Some(room_id) = state
@@ -1451,7 +1448,11 @@ pub(crate) async fn vote_handler(
                 return Ok(StatusCode::NO_CONTENT);
             }
         }
-        Ok(None) => {}
+        Ok(None) => {
+            if projection.status != PollStatus::Open {
+                return Err(AppError::Conflict("The poll has ended.".to_string()));
+            }
+        }
         Err(e) => {
             tracing::error!("Failed to look up vote operation: {:?}", e);
             return Err(AppError::Internal(
@@ -1513,6 +1514,17 @@ pub(crate) async fn vote_handler(
             }
         }
         Ok(None) => {
+            // Re-check poll status under lock before admitting a new operation
+            if let Some(proj) = state
+                .store
+                .get_poll_projection(&poll_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to derive poll state: {e}")))?
+                && proj.status != PollStatus::Open
+            {
+                return Err(AppError::Conflict("The poll has ended.".to_string()));
+            }
+
             // Genuinely new operation: verify PoW admission control under lock.
             // Losers of the lock race will never reach this branch because the
             // winner has already inserted the claim.

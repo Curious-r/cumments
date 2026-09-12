@@ -1522,6 +1522,62 @@ mod tests {
         );
         assert!(!EndAuthorization::from_facts("@alice:hs", "@mod:hs").is_authorized());
     }
+
+    #[test]
+    fn reduce_poll_is_deterministic_across_fact_orderings() {
+        let poll_start = start(2, true);
+        let responses = vec![
+            PollResponseFact::new("$r1:hs", "@alice:hs", 110, vec!["slot-10am".to_string()]),
+            PollResponseFact::new("$r2:hs", "@alice:hs", 120, vec!["slot-2pm".to_string()]),
+            PollResponseFact::new(
+                "$r3:hs",
+                "@bob:hs",
+                115,
+                vec!["slot-10am".to_string(), "slot-2pm".to_string()],
+            ),
+            PollResponseFact::new("$r4:hs", "@charlie:hs", 130, vec!["slot-6pm".to_string()]),
+        ];
+        let ends = vec![
+            PollEndFact {
+                event_id: "$end2:hs".to_string(),
+                sender: "@alice:hs".to_string(),
+                origin_server_ts: 150,
+                authorization: EndAuthorization::Creator,
+                redacted: false,
+            },
+            PollEndFact {
+                event_id: "$end1:hs".to_string(),
+                sender: "@alice:hs".to_string(),
+                origin_server_ts: 140,
+                authorization: EndAuthorization::Creator,
+                redacted: false,
+            },
+        ];
+
+        let baseline = reduce_poll(&poll_start, &responses, &ends).expect("reduce baseline");
+
+        // Reversed responses and ends
+        let mut rev_responses = responses.clone();
+        rev_responses.reverse();
+        let mut rev_ends = ends.clone();
+        rev_ends.reverse();
+        let from_rev = reduce_poll(&poll_start, &rev_responses, &rev_ends).expect("reduce rev");
+        assert_eq!(
+            baseline, from_rev,
+            "reversed fact order produces identical projection"
+        );
+
+        // Responses with duplicated delivery
+        let mut dup_responses = responses.clone();
+        dup_responses.extend(responses.clone());
+        let mut dup_ends = ends.clone();
+        dup_ends.extend(ends.clone());
+        let from_dup = reduce_poll(&poll_start, &dup_responses, &dup_ends).expect("reduce dup");
+        assert_eq!(
+            baseline, from_dup,
+            "duplicated fact delivery produces identical projection"
+        );
+    }
 }
 
 #[cfg(test)]

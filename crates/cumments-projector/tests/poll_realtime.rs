@@ -164,6 +164,10 @@ fn poll_end(event_id: &str, poll_id: &str, sender: &str, ts: i64) -> ParsedPollE
         poll_message_id: poll_id.to_string(),
         sender: sender.to_string(),
         origin_server_ts: ts,
+        is_virtual_user_sender: false,
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
         room_identity: Some(identity()),
     }
 }

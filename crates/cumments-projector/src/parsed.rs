@@ -114,6 +114,10 @@ pub struct ParsedPollEnd {
     /// Matrix event ID of the referenced poll start event.
     pub poll_message_id: String,
     pub origin_server_ts: i64,
+    pub is_virtual_user_sender: bool,
+    pub author_public_key: Option<String>,
+    pub author_signature: Option<String>,
+    pub author_challenge: Option<String>,
     /// The room's Cumments identity, if available.
     pub room_identity: Option<RoomIdentity>,
 }

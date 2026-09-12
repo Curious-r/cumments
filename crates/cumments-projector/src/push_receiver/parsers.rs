@@ -12,8 +12,9 @@ use cumments_core::models::{
     PollOption, RoomIdentity, TextContent, TextStyle, UnknownContent,
 };
 use cumments_core::poll::{
-    PollAnswerFact, PollSemanticAnswer, PollSemanticKind, PollStartFact, PollStatus,
-    PollWireSemantics, VoteWireSemantics, verify_poll_start_proof, verify_vote_proof,
+    EndPollWireSemantics, PollAnswerFact, PollSemanticAnswer, PollSemanticKind, PollStartFact,
+    PollStatus, PollWireSemantics, VoteWireSemantics, verify_end_poll_proof,
+    verify_poll_start_proof, verify_vote_proof,
 };
 use cumments_core::protocol::{
     MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, PROVENANCE_CONTENT_KEY, PROVENANCE_SCHEMA_VERSION,
@@ -747,10 +748,15 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
             processor.process_poll_vote(vote).await?;
         }
         PollEvent::End(end) => {
-            let Some(mut parsed_end) = parse_push_poll_end(event, &end) else {
+            let Some(room_id) = event.room_id.as_deref() else {
                 return Ok(());
             };
-            parsed_end.room_identity = processor.resolve_room_identity(&parsed_end.room_id).await?;
+            let room_identity = processor.resolve_room_identity(room_id).await?;
+            let Some(mut parsed_end) = parse_push_poll_end(event, &end, room_identity.as_ref())
+            else {
+                return Ok(());
+            };
+            parsed_end.room_identity = room_identity;
             processor.process_poll_end(parsed_end).await?;
         }
     }
@@ -1017,14 +1023,73 @@ fn parse_push_poll_response(
 }
 
 /// Parse a direct `poll.end` event into a [`ParsedPollEnd`].
-fn parse_push_poll_end(event: &PushEvent, end: &PollEndEvent) -> Option<ParsedPollEnd> {
+///
+/// `room_identity` supplies the target's `site_id` / `page_slug`, which the
+/// wire event does not carry; it is required to prove that a visitor's signed
+/// END_POLL operation is the target this wire event encodes.
+fn parse_push_poll_end(
+    event: &PushEvent,
+    end: &PollEndEvent,
+    room_identity: Option<&RoomIdentity>,
+) -> Option<ParsedPollEnd> {
     let room_id = event.room_id.as_ref()?;
+    let content = event.content.as_ref()?;
+    let is_virtual_sender = is_virtual_user_sender(&end.sender);
+
+    // Visitor ends are authenticated by the frozen END_POLL envelope in the
+    // provenance block, and the signed operation must denote exactly the
+    // target this wire event carries. Matrix-native senders carry no
+    // Cumments proof.
+    let (author_public_key, author_signature, author_challenge, trusted) = if is_virtual_sender {
+        let pk = namespaced_string(content, "public_key").map(str::to_owned);
+        let sig = namespaced_string(content, "signature").map(str::to_owned);
+        let chal = namespaced_string(content, "challenge").map(str::to_owned);
+        let operation_id = namespaced_string(content, "operation_id");
+        let signed = content
+            .get(PROVENANCE_CONTENT_KEY)
+            .and_then(|provenance| provenance.get("content"));
+        let valid = match (&pk, &sig, &chal, operation_id, signed, room_identity) {
+            (
+                Some(pk),
+                Some(sig),
+                Some(chal),
+                Some(operation_id),
+                Some(op_json),
+                Some(identity),
+            ) if provenance_schema_is_supported(content) => {
+                let wire = EndPollWireSemantics {
+                    site_id: identity.site_id.clone(),
+                    page_slug: identity.page_slug.clone(),
+                    poll_event_id: end.content.relates_to.event_id.clone(),
+                };
+                CanonicalJson::from_json_value(op_json).is_some_and(|op| {
+                    verify_end_poll_proof(pk, &op, operation_id, chal, sig, &wire)
+                })
+            }
+            _ => false,
+        };
+        if !valid {
+            warn!(
+                event_id = ?event.event_id,
+                "Rejecting visitor poll end whose signed operation does not match its wire content"
+            );
+            return None;
+        }
+        (pk, sig, chal, true)
+    } else {
+        (None, None, None, false)
+    };
+
     Some(ParsedPollEnd {
         room_id: room_id.clone(),
         event_id: end.event_id.clone().unwrap_or_default(),
         sender: end.sender.clone(),
         poll_message_id: end.content.relates_to.event_id.clone(),
         origin_server_ts: end.origin_server_ts,
+        is_virtual_user_sender: is_virtual_sender,
+        author_public_key: if trusted { author_public_key } else { None },
+        author_signature: if trusted { author_signature } else { None },
+        author_challenge: if trusted { author_challenge } else { None },
         room_identity: None,
     })
 }
@@ -1951,10 +2016,84 @@ mod tests {
         .unwrap() else {
             panic!("expected end");
         };
-        let parsed = parse_push_poll_end(&event, &end).expect("project end");
+        let parsed = parse_push_poll_end(&event, &end, None).expect("project end");
         assert_eq!(parsed.poll_message_id, "$poll:hs");
         assert_eq!(parsed.sender, "@alice:hs");
         assert_eq!(parsed.origin_server_ts, 100);
+        assert!(!parsed.is_virtual_user_sender);
+    }
+
+    #[test]
+    fn visitor_poll_end_requires_matching_signed_operation() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use cumments_core::poll::{end_poll_semantic_operation, poll_signature_envelope};
+        use ed25519_dalek::Signer;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[33u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let identity = poll_identity();
+
+        let build = |poll_event_id: &str, signed_poll_event_id: &str| -> PushEvent {
+            let op = end_poll_semantic_operation(
+                &identity.site_id,
+                &identity.page_slug,
+                signed_poll_event_id,
+            );
+            let envelope = poll_signature_envelope(&op, "end-op", "chal");
+            let signature = URL_SAFE_NO_PAD.encode(
+                signing_key
+                    .sign(envelope.to_canonical_bytes().as_slice())
+                    .to_bytes(),
+            );
+            let mut event = direct_event(
+                POLL_END_EVENT_TYPE,
+                serde_json::json!({
+                    "m.relates_to": { "rel_type": "m.reference", "event_id": poll_event_id },
+                    "org.matrix.msc1767.text": "The poll has closed.",
+                    "org.matrix.msc3381.poll.end": {},
+                    PROVENANCE_CONTENT_KEY: {
+                        "schema": PROVENANCE_SCHEMA_VERSION,
+                        "operation_id": "end-op",
+                        "public_key": public_key,
+                        "signature": signature,
+                        "challenge": "chal",
+                        "content": op.to_json_value(),
+                    },
+                }),
+            );
+            event.sender =
+                Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
+            event
+        };
+
+        let parse = |event: &PushEvent, identity: Option<&RoomIdentity>| -> Option<ParsedPollEnd> {
+            let content = event.content.as_ref().expect("content");
+            let PollEvent::End(end) = PollEvent::parse(
+                POLL_END_EVENT_TYPE,
+                Some("$e:hs"),
+                event.sender.as_deref().unwrap(),
+                100,
+                content,
+            )
+            .unwrap()
+            .unwrap() else {
+                panic!("expected end");
+            };
+            parse_push_poll_end(event, &end, identity)
+        };
+
+        // Valid: wire target matches signed target.
+        let valid =
+            parse(&build("$poll:hs", "$poll:hs"), Some(&identity)).expect("valid visitor poll end");
+        assert!(valid.is_virtual_user_sender);
+        assert_eq!(valid.poll_message_id, "$poll:hs");
+        assert!(valid.author_public_key.is_some());
+
+        // Forged target: signature is for $poll:hs but wire event targets $other:hs.
+        assert!(parse(&build("$other:hs", "$poll:hs"), Some(&identity)).is_none());
+
+        // Without room identity, visitor poll end cannot be authenticated.
+        assert!(parse(&build("$poll:hs", "$poll:hs"), None).is_none());
     }
 
     #[test]

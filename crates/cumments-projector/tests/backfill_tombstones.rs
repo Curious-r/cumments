@@ -597,6 +597,10 @@ async fn poll_end_authorization_is_derived_from_facts_not_room_power() {
         sender: sender.to_string(),
         poll_message_id: "$poll:hs".to_string(),
         origin_server_ts: ts,
+        is_virtual_user_sender: false,
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
         room_identity: Some(identity()),
     };
 
@@ -665,6 +669,10 @@ async fn poll_facts_before_start_converge_via_processor() {
         sender: "@alice:hs".to_string(),
         poll_message_id: "$poll:hs".to_string(),
         origin_server_ts: 200,
+        is_virtual_user_sender: false,
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
         room_identity: Some(identity()),
     };
     let start = || {

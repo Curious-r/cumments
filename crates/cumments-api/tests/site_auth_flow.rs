@@ -5421,6 +5421,106 @@ async fn vote_against_ended_poll_is_rejected() {
 }
 
 #[tokio::test]
+async fn vote_replay_after_poll_ended_succeeds_with_no_content() {
+    use cumments_core::models::PollEnd;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-replay-ended",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[71u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "vote-op-replay-ended",
+        &["a"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let post = || {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", "vote-op-replay-ended".to_string())],
+            &body,
+        ))
+    };
+
+    // 1. Initial vote while poll is open succeeds.
+    let response = post().await.expect("first vote");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(driver.poll_responses.lock().await.len(), 1);
+
+    // 2. Poll is ended by its creator.
+    store
+        .save_poll_end(&PollEnd {
+            event_id: "$end:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@_cumments_test-blog_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:hs".to_string(),
+            origin_server_ts: 200,
+        })
+        .await
+        .expect("save end");
+
+    let proj = store
+        .get_poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(proj.status, cumments_core::poll::PollStatus::Ended);
+
+    // 3. Replay of the completed vote returns 204 No Content and emits no duplicate Matrix response.
+    let replay_response = post().await.expect("replay vote");
+    assert_eq!(replay_response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        driver.poll_responses.lock().await.len(),
+        1,
+        "replay must not emit a second Matrix response"
+    );
+
+    // 4. A new vote from a different author or key is rejected with 409 Conflict.
+    let bob_key = SigningKey::from_bytes(&[72u8; 32]);
+    let bob_challenge = state.pow.generate_challenge();
+    let bob_challenge_response = solve_pow(&bob_challenge);
+    let bob_body = signed_vote_body(
+        &bob_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "vote-op-bob-ended",
+        &["b"],
+        &bob_challenge.prefix,
+        &bob_challenge_response,
+    );
+    let bob_response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", "vote-op-bob-ended".to_string())],
+            &bob_body,
+        ))
+        .await
+        .expect("bob vote");
+    assert_eq!(bob_response.status(), StatusCode::CONFLICT);
+    assert_eq!(driver.poll_responses.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn vote_invalid_pow_does_not_claim_the_operation() {
     use cumments_test_utils::TestDriver;
     use ed25519_dalek::SigningKey;
