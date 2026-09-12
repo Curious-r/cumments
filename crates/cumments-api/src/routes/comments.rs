@@ -33,8 +33,8 @@ use cumments_core::{
     },
     ports::PollResponseRequest,
     submissions::{
-        IdempotencyInput, IdempotencyOutcome, OperationClaimOutcome, OperationIdentity,
-        deterministic_transaction_id, fresh_transaction_id,
+        IdempotencyInput, IdempotencyOutcome, OperationClaimOutcome, OperationExecutionStatus,
+        OperationIdentity, deterministic_transaction_id, fresh_transaction_id,
     },
 };
 use ruma_common::EventId;
@@ -1433,18 +1433,24 @@ pub(crate) async fn vote_handler(
         return Err(AppError::InvalidSignature);
     }
 
-    // 6. Operation preflight: an authenticated replay is a success without
-    // consuming PoW; a mismatch is a conflict. No Matrix event is sent for a
-    // replay. Possessing the key alone never reveals another author's vote.
+    // 6. Operation preflight:
+    // If an operation claim already exists:
+    // - A mismatch in author or fingerprint is a conflict (409) without consuming PoW.
+    // - If author and fingerprint match and execution is already confirmed successful,
+    //   replay returns 204 immediately without PoW or lock contention.
     match state.store.lookup_operation(&operation_id).await {
-        Ok(Some(claim))
-            if claim.author_public_key == req.author_public_key
-                && claim.fingerprint == fingerprint =>
-        {
-            tracing::info!("Replayed idempotent VOTE operation {}", operation_id);
-            return Ok(StatusCode::NO_CONTENT);
+        Ok(Some(claim)) => {
+            if claim.author_public_key != req.author_public_key || claim.fingerprint != fingerprint
+            {
+                return Err(AppError::IdempotencyReused);
+            }
+            if let Ok(Some(execution)) = state.store.get_operation_execution(&operation_id).await
+                && execution.status == OperationExecutionStatus::Success
+            {
+                tracing::info!("Replayed idempotent VOTE operation {}", operation_id);
+                return Ok(StatusCode::NO_CONTENT);
+            }
         }
-        Ok(Some(_)) => return Err(AppError::IdempotencyReused),
         Ok(None) => {}
         Err(e) => {
             tracing::error!("Failed to look up vote operation: {:?}", e);
@@ -1454,28 +1460,131 @@ pub(crate) async fn vote_handler(
         }
     }
 
-    // 7. PoW admission control: only for a genuinely new operation.
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
+    // 7. Acquire per-operation lock so concurrent identical requests serialize:
+    // exactly one request claims the operation and creates the fresh txnId;
+    // concurrent waiters observe the winner's claim/execution without burning fresh PoW.
+    let op_lock = state.operation_locks.lock_operation(&operation_id).await;
+    let _guard = op_lock.lock().await;
 
-    // 8. Atomically claim the operation, then emit exactly one Matrix response.
-    let identity = OperationIdentity::new(&operation_id, &req.author_public_key, &fingerprint);
-    match state.store.claim_operation(&identity).await {
-        Ok(OperationClaimOutcome::New) => {}
-        // A concurrent identical request already claimed and is sending; this
-        // request is a replay and must not emit a second event.
-        Ok(OperationClaimOutcome::Replay) => return Ok(StatusCode::NO_CONTENT),
-        Ok(OperationClaimOutcome::Conflict) => return Err(AppError::IdempotencyReused),
+    // 8. Under lock: re-check database state.
+    let txn_id = match state.store.lookup_operation(&operation_id).await {
+        Ok(Some(claim)) => {
+            if claim.author_public_key != req.author_public_key || claim.fingerprint != fingerprint
+            {
+                return Err(AppError::IdempotencyReused);
+            }
+            if let Some(execution) = state
+                .store
+                .get_operation_execution(&operation_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to get operation execution under lock: {:?}", e);
+                    AppError::Internal("Failed to admit vote.".to_string())
+                })?
+            {
+                if execution.status == OperationExecutionStatus::Success {
+                    return Ok(StatusCode::NO_CONTENT);
+                }
+                if execution.status != OperationExecutionStatus::InFlight {
+                    let _ = state
+                        .store
+                        .update_operation_execution_status(
+                            &operation_id,
+                            OperationExecutionStatus::InFlight,
+                        )
+                        .await;
+                }
+                execution.txn_id
+            } else {
+                // Claim exists but execution record not yet established (crash recovery)
+                let fresh_txn = fresh_transaction_id("vote");
+                let execution = state
+                    .store
+                    .establish_operation_execution(&operation_id, &fresh_txn)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(
+                            "Failed to establish operation execution under lock: {:?}",
+                            e
+                        );
+                        AppError::Internal("Failed to admit vote.".to_string())
+                    })?;
+                execution.txn_id
+            }
+        }
+        Ok(None) => {
+            // Genuinely new operation: verify PoW admission control under lock.
+            // Losers of the lock race will never reach this branch because the
+            // winner has already inserted the claim.
+            if !state.pow.verify(&req.challenge_response) {
+                return Err(AppError::InvalidPoW);
+            }
+
+            let identity =
+                OperationIdentity::new(&operation_id, &req.author_public_key, &fingerprint);
+            match state.store.claim_operation(&identity).await {
+                Ok(OperationClaimOutcome::New) => {
+                    let fresh_txn = fresh_transaction_id("vote");
+                    let execution = state
+                        .store
+                        .establish_operation_execution(&operation_id, &fresh_txn)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to establish operation execution: {:?}", e);
+                            AppError::Internal("Failed to admit vote.".to_string())
+                        })?;
+                    execution.txn_id
+                }
+                Ok(OperationClaimOutcome::Replay) => {
+                    if let Some(execution) = state
+                        .store
+                        .get_operation_execution(&operation_id)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to get operation execution: {:?}", e);
+                            AppError::Internal("Failed to admit vote.".to_string())
+                        })?
+                    {
+                        if execution.status == OperationExecutionStatus::Success {
+                            return Ok(StatusCode::NO_CONTENT);
+                        }
+                        if execution.status != OperationExecutionStatus::InFlight {
+                            let _ = state
+                                .store
+                                .update_operation_execution_status(
+                                    &operation_id,
+                                    OperationExecutionStatus::InFlight,
+                                )
+                                .await;
+                        }
+                        execution.txn_id
+                    } else {
+                        let fresh_txn = fresh_transaction_id("vote");
+                        let execution = state
+                            .store
+                            .establish_operation_execution(&operation_id, &fresh_txn)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("Failed to establish operation execution: {:?}", e);
+                                AppError::Internal("Failed to admit vote.".to_string())
+                            })?;
+                        execution.txn_id
+                    }
+                }
+                Ok(OperationClaimOutcome::Conflict) => return Err(AppError::IdempotencyReused),
+                Err(e) => {
+                    tracing::error!("Failed to claim vote operation: {:?}", e);
+                    return Err(AppError::Internal("Failed to admit vote.".to_string()));
+                }
+            }
+        }
         Err(e) => {
-            tracing::error!("Failed to claim vote operation: {:?}", e);
+            tracing::error!("Failed to look up vote operation under lock: {:?}", e);
             return Err(AppError::Internal("Failed to admit vote.".to_string()));
         }
-    }
+    };
 
-    // A fresh Matrix txnId per new logical operation; it is transport-level
-    // only and never enters the signature or the semantic fingerprint.
-    let txn_id = fresh_transaction_id("vote");
+    // 9. Send downstream Matrix response using the persisted txn_id.
     let result = state
         .driver
         .post_poll_response(PollResponseRequest {
@@ -1491,21 +1600,35 @@ pub(crate) async fn vote_handler(
             txn_id: &txn_id,
         })
         .await;
-    if let Err(e) = result {
-        // Nothing was emitted; release the claim so a retry can re-attempt the
-        // send instead of replaying a false success. An identical re-sent
-        // response is semantically idempotent under the poll reducer.
-        tracing::error!("Failed to send poll vote response: {e}");
-        if let Err(release_err) = state.store.release_operation(&identity).await {
-            tracing::error!(
-                "Failed to release vote operation {} after send failure: {:?}",
-                operation_id,
-                release_err
-            );
+
+    match result {
+        Ok(()) => {
+            if let Err(e) = state
+                .store
+                .update_operation_execution_status(&operation_id, OperationExecutionStatus::Success)
+                .await
+            {
+                tracing::error!("Failed to mark operation execution as success: {:?}", e);
+            }
+            Ok(StatusCode::NO_CONTENT)
         }
-        return Err(AppError::Internal("Failed to send vote.".to_string()));
+        Err(e) => {
+            tracing::error!("Failed to send poll vote response: {e}");
+            if let Err(update_err) = state
+                .store
+                .update_operation_execution_status(&operation_id, OperationExecutionStatus::Failed)
+                .await
+            {
+                tracing::error!(
+                    "Failed to mark operation execution as failed: {:?}",
+                    update_err
+                );
+            }
+            // NOTE: Do NOT release operation claim! The claim and persisted txn_id
+            // remain so retries reuse the exact same txn_id.
+            Err(AppError::Internal("Failed to send vote.".to_string()))
+        }
     }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /api/v1/sites/{site}/pages/{post}/location`

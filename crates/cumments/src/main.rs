@@ -596,6 +596,7 @@ async fn run() -> Result<(), CliError> {
         )),
         ephemeral_bus: ephemeral_bus.clone(),
         ephemeral_state: Some(ephemeral_state),
+        operation_locks: cumments_api::OperationLocks::new(),
     };
     let api_router = cumments_api::build_router(api_state);
 

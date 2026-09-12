@@ -673,3 +673,72 @@ async fn concurrent_create_poll_claims_queue_one_submission() {
         "concurrent identical claims must queue one submission"
     );
 }
+
+#[tokio::test]
+async fn operation_execution_lifecycle_and_txn_id_persistence() {
+    use cumments_core::submissions::OperationExecutionStatus;
+
+    let url = test_db_url("op-exec-lifecycle");
+    let store = DbStore::connect(&url).await.expect("connect db");
+
+    let op_id = "op-exec-test-1";
+
+    // Initially absent
+    assert_eq!(store.get_operation_execution(op_id).await.unwrap(), None);
+
+    // Establish execution with initial txn_id
+    let exec1 = store
+        .establish_operation_execution(op_id, "txn-1")
+        .await
+        .expect("establish");
+    assert_eq!(exec1.operation_id, op_id);
+    assert_eq!(exec1.txn_id, "txn-1");
+    assert_eq!(exec1.status, OperationExecutionStatus::InFlight);
+
+    // Re-establishing with a different initial_txn_id must NOT overwrite; it must return the existing one!
+    let exec2 = store
+        .establish_operation_execution(op_id, "txn-2-different")
+        .await
+        .expect("re-establish");
+    assert_eq!(exec2.operation_id, op_id);
+    assert_eq!(exec2.txn_id, "txn-1", "must preserve original txn_id");
+    assert_eq!(exec2.status, OperationExecutionStatus::InFlight);
+
+    // Update status to Failed
+    store
+        .update_operation_execution_status(op_id, OperationExecutionStatus::Failed)
+        .await
+        .expect("mark failed");
+    let exec_failed = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(exec_failed.status, OperationExecutionStatus::Failed);
+    assert_eq!(exec_failed.txn_id, "txn-1");
+
+    // Update status to InFlight (retry attempt)
+    store
+        .update_operation_execution_status(op_id, OperationExecutionStatus::InFlight)
+        .await
+        .expect("mark in_flight");
+    let exec_inflight = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(exec_inflight.status, OperationExecutionStatus::InFlight);
+
+    // Update status to Success
+    store
+        .update_operation_execution_status(op_id, OperationExecutionStatus::Success)
+        .await
+        .expect("mark success");
+    let exec_success = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(exec_success.status, OperationExecutionStatus::Success);
+    assert_eq!(exec_success.txn_id, "txn-1");
+}

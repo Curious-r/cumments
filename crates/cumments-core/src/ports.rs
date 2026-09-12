@@ -18,9 +18,10 @@ use crate::site_auth::{
 };
 use crate::sticker_packs::StickerPackProjection;
 use crate::submissions::{
-    IdempotencyInput, IdempotencyOutcome, OperationClaim, OperationClaimOutcome, OperationIdentity,
-    PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission, StuckDeleteSubmission,
-    StuckPostSubmission, StuckUpdateSubmission,
+    IdempotencyInput, IdempotencyOutcome, OperationClaim, OperationClaimOutcome,
+    OperationExecution, OperationExecutionStatus, OperationIdentity, PendingDeleteSubmission,
+    PendingPostSubmission, PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission,
+    StuckUpdateSubmission,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -80,6 +81,31 @@ pub trait SubmissionStore: Send + Sync {
     /// identity, so it can never release another author's or another
     /// fingerprint's operation.
     async fn release_operation(&self, operation: &OperationIdentity) -> Result<()>;
+
+    /// Looks up the transport execution state of an operation by its `operation_id`.
+    async fn get_operation_execution(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<OperationExecution>>;
+
+    /// Atomically establishes an execution record for the given operation.
+    ///
+    /// If an execution record already exists for `operation_id`, it is not
+    /// overwritten; the existing record is returned. This guarantees that
+    /// exactly one Matrix `txn_id` is ever associated with an operation, even
+    /// across crashes or concurrent attempts.
+    async fn establish_operation_execution(
+        &self,
+        operation_id: &str,
+        initial_txn_id: &str,
+    ) -> Result<OperationExecution>;
+
+    /// Updates the execution status of an operation.
+    async fn update_operation_execution_status(
+        &self,
+        operation_id: &str,
+        status: OperationExecutionStatus,
+    ) -> Result<()>;
 
     /// Finds the durable post submission created for a claimed operation, if
     /// any. Used to resolve an authenticated Create Poll replay without

@@ -1,16 +1,17 @@
 use super::DbStore;
 use crate::entities::{
     active_enums::SubmissionStatus, delete_submissions, idempotency_keys, media_uploads,
-    operation_claims, post_submissions, update_submissions,
+    operation_claims, operation_executions, post_submissions, update_submissions,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use cumments_core::ports::SubmissionStore;
 use cumments_core::submissions::{
-    IdempotencyInput, IdempotencyOutcome, OperationClaim, OperationClaimOutcome, OperationIdentity,
-    PendingDeleteSubmission, PendingPostSubmission, PendingUpdateSubmission, StuckDeleteSubmission,
-    StuckPostSubmission, StuckUpdateSubmission,
+    IdempotencyInput, IdempotencyOutcome, OperationClaim, OperationClaimOutcome,
+    OperationExecution, OperationExecutionStatus, OperationIdentity, PendingDeleteSubmission,
+    PendingPostSubmission, PendingUpdateSubmission, StuckDeleteSubmission, StuckPostSubmission,
+    StuckUpdateSubmission,
 };
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
@@ -206,6 +207,88 @@ impl SubmissionStore for DbStore {
             .filter(operation_claims::Column::OperationId.eq(&operation.operation_id))
             .filter(operation_claims::Column::AuthorPublicKey.eq(&operation.author_public_key))
             .filter(operation_claims::Column::Fingerprint.eq(&operation.fingerprint))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_operation_execution(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<OperationExecution>> {
+        let row = operation_executions::Entity::find()
+            .filter(operation_executions::Column::OperationId.eq(operation_id))
+            .one(&self.db)
+            .await?;
+        Ok(row.map(|row| OperationExecution {
+            operation_id: row.operation_id,
+            txn_id: row.txn_id,
+            status: row.status.into(),
+        }))
+    }
+
+    async fn establish_operation_execution(
+        &self,
+        operation_id: &str,
+        initial_txn_id: &str,
+    ) -> Result<OperationExecution> {
+        let backend = self.db.get_database_backend();
+        let now = chrono::Utc::now();
+        let sql = if backend == DatabaseBackend::Sqlite {
+            "INSERT OR IGNORE INTO operation_executions \
+             (operation_id, txn_id, status, created_at, updated_at) \
+             VALUES (?, ?, 'in_flight', ?, ?)"
+        } else {
+            "INSERT INTO operation_executions \
+             (operation_id, txn_id, status, created_at, updated_at) \
+             VALUES (?, ?, 'in_flight', ?, ?) \
+             ON CONFLICT (operation_id) DO NOTHING"
+        };
+        self.db
+            .execute_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                vec![
+                    Value::from(operation_id.to_string()),
+                    Value::from(initial_txn_id.to_string()),
+                    Value::from(now),
+                    Value::from(now),
+                ],
+            ))
+            .await?;
+
+        let row = operation_executions::Entity::find()
+            .filter(operation_executions::Column::OperationId.eq(operation_id))
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("Failed to find operation execution for {}", operation_id)
+            })?;
+
+        Ok(OperationExecution {
+            operation_id: row.operation_id,
+            txn_id: row.txn_id,
+            status: row.status.into(),
+        })
+    }
+
+    async fn update_operation_execution_status(
+        &self,
+        operation_id: &str,
+        status: OperationExecutionStatus,
+    ) -> Result<()> {
+        let db_status: crate::entities::active_enums::OperationExecutionStatus = status.into();
+        let now = chrono::Utc::now();
+        operation_executions::Entity::update_many()
+            .col_expr(
+                operation_executions::Column::Status,
+                sea_orm::sea_query::Expr::value(db_status),
+            )
+            .col_expr(
+                operation_executions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(operation_executions::Column::OperationId.eq(operation_id))
             .exec(&self.db)
             .await?;
         Ok(())

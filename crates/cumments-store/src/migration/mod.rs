@@ -72,6 +72,7 @@ pub mod m20260827_000066_poll_end_events;
 pub mod m20260827_000067_drop_poll_end_authorized;
 pub mod m20260827_000068_operation_claims;
 pub mod m20260827_000069_operation_claim_decoupling;
+pub mod m20260827_000070_operation_executions;
 
 pub struct Migrator;
 
@@ -204,6 +205,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260827_000067_drop_poll_end_authorized::Migration),
             Box::new(m20260827_000068_operation_claims::Migration),
             Box::new(m20260827_000069_operation_claim_decoupling::Migration),
+            Box::new(m20260827_000070_operation_executions::Migration),
         ]
     }
 }

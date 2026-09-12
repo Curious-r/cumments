@@ -13,6 +13,7 @@ pub mod media_uploads;
 pub mod message_revisions;
 pub mod messages;
 pub mod operation_claims;
+pub mod operation_executions;
 pub mod poll_end_events;
 pub mod poll_response_events;
 pub mod poll_responses;

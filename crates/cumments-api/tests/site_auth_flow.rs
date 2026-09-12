@@ -118,6 +118,7 @@ async fn test_state_with_driver_and_claim_limit(
         governance_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
+        operation_locks: cumments_api::OperationLocks::new(),
     };
     (state, store)
 }
@@ -5506,4 +5507,447 @@ async fn vote_multiple_users_are_independent() {
     }
 
     assert_eq!(driver.poll_responses.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn vote_persists_txn_id_and_reuses_on_retry() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::submissions::OperationExecutionStatus;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-persist-txnid",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[80u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "vote-op-persist-1";
+    let body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &["a"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let post = || {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+    };
+
+    // First Vote succeeds
+    let resp1 = post().await.expect("call router");
+    assert_eq!(resp1.status(), StatusCode::NO_CONTENT);
+
+    // Verify claim exists and execution is Success
+    let claim = store
+        .lookup_operation(op_id)
+        .await
+        .unwrap()
+        .expect("claim exists");
+    assert_eq!(
+        claim.author_public_key,
+        URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
+    );
+    let execution = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution.status, OperationExecutionStatus::Success);
+    assert!(!execution.txn_id.is_empty());
+
+    let recorded1 = driver.poll_responses.lock().await.clone();
+    assert_eq!(recorded1.len(), 1);
+    assert_eq!(recorded1[0].txn_id, execution.txn_id);
+
+    // Retry the same Vote
+    let resp2 = post().await.expect("call router");
+    assert_eq!(resp2.status(), StatusCode::NO_CONTENT);
+
+    // Verify txn_id is unchanged and no second Matrix send occurred
+    let execution2 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution2.txn_id, execution.txn_id);
+    assert_eq!(execution2.status, OperationExecutionStatus::Success);
+    let recorded2 = driver.poll_responses.lock().await;
+    assert_eq!(recorded2.len(), 1, "no second Matrix send on replay");
+}
+
+#[tokio::test]
+async fn vote_transport_failure_retains_claim_and_reuses_txn_id() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::submissions::OperationExecutionStatus;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-transport-fail",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[81u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "vote-op-transport-fail-1";
+    let body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &["b"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    // Simulate transport error on the first attempt
+    *driver.fail_poll_response_count.lock().await = 1;
+
+    let post = || {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+    };
+
+    let resp1 = post().await.expect("call router");
+    assert_eq!(resp1.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Verify: claim is NOT released! Execution state is Failed and txn_id is persisted
+    let claim = store
+        .lookup_operation(op_id)
+        .await
+        .unwrap()
+        .expect("claim retained");
+    assert_eq!(
+        claim.author_public_key,
+        URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
+    );
+    let execution1 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution1.status, OperationExecutionStatus::Failed);
+    let original_txn_id = execution1.txn_id.clone();
+    assert!(!original_txn_id.is_empty());
+    assert!(
+        driver.poll_responses.lock().await.is_empty(),
+        "first attempt failed before acceptance"
+    );
+
+    // Retry the exact same Vote
+    let resp2 = post().await.expect("call router");
+    assert_eq!(resp2.status(), StatusCode::NO_CONTENT);
+
+    // Verify: execution is now Success, using the EXACT same txn_id, no second txn_id allocated
+    let execution2 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution2.status, OperationExecutionStatus::Success);
+    assert_eq!(
+        execution2.txn_id, original_txn_id,
+        "retry must reuse the persisted txn_id"
+    );
+
+    let recorded = driver.poll_responses.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].txn_id, original_txn_id);
+}
+
+#[tokio::test]
+async fn vote_ambiguous_lost_response_deduplicates_on_retry() {
+    use cumments_core::submissions::OperationExecutionStatus;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-ambiguous-response",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[82u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "vote-op-ambiguous-1";
+    let body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &["a"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    // Simulate: Matrix homeserver accepts the event, but the HTTP response to the caller is lost
+    *driver.ambiguous_poll_response_count.lock().await = 1;
+
+    let post = || {
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+    };
+
+    let resp1 = post().await.expect("call router");
+    assert_eq!(resp1.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Homeserver received the event with the persisted txn_id
+    let recorded_after_first = driver.poll_responses.lock().await.clone();
+    assert_eq!(recorded_after_first.len(), 1);
+    let original_txn_id = recorded_after_first[0].txn_id.clone();
+
+    let execution1 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution1.status, OperationExecutionStatus::Failed);
+    assert_eq!(execution1.txn_id, original_txn_id);
+
+    // Retry the Vote
+    let resp2 = post().await.expect("call router");
+    assert_eq!(resp2.status(), StatusCode::NO_CONTENT);
+
+    // Matrix deduplicated by txn_id: still exactly 1 event recorded
+    let recorded_after_retry = driver.poll_responses.lock().await;
+    assert_eq!(
+        recorded_after_retry.len(),
+        1,
+        "Matrix deduplication prevents duplicate event"
+    );
+    assert_eq!(recorded_after_retry[0].txn_id, original_txn_id);
+
+    let execution2 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution2.status, OperationExecutionStatus::Success);
+    assert_eq!(execution2.txn_id, original_txn_id);
+}
+
+#[tokio::test]
+async fn vote_concurrent_identical_requests_single_txn_id_and_single_event() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::submissions::OperationExecutionStatus;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-concurrent-identical",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[83u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "vote-op-concurrent-1";
+    let body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &["a"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let r1 = router.clone();
+    let r2 = router.clone();
+    let b1 = body.clone();
+    let b2 = body.clone();
+
+    let task1 = tokio::spawn(async move {
+        r1.oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &b1,
+        ))
+        .await
+        .expect("task 1")
+    });
+
+    let task2 = tokio::spawn(async move {
+        r2.oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &b2,
+        ))
+        .await
+        .expect("task 2")
+    });
+
+    let (resp1, resp2) = tokio::join!(task1, task2);
+    assert_eq!(resp1.unwrap().status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp2.unwrap().status(), StatusCode::NO_CONTENT);
+
+    // Verify: exactly ONE operation identity claimed
+    let claim = store
+        .lookup_operation(op_id)
+        .await
+        .unwrap()
+        .expect("claim exists");
+    assert_eq!(
+        claim.author_public_key,
+        URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
+    );
+
+    // Verify: exactly ONE execution record exists with status Success
+    let execution = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution.status, OperationExecutionStatus::Success);
+
+    // Verify: exactly ONE Matrix event was emitted with that exact txn_id
+    let recorded = driver.poll_responses.lock().await;
+    assert_eq!(recorded.len(), 1, "exactly one Matrix send occurred");
+    assert_eq!(recorded[0].txn_id, execution.txn_id);
+}
+
+#[tokio::test]
+async fn vote_retry_does_not_consume_or_require_fresh_pow() {
+    use cumments_core::submissions::OperationExecutionStatus;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-retry-no-pow",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+
+    let signing_key = SigningKey::from_bytes(&[84u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "vote-op-retry-pow-1";
+
+    let body_valid_pow = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &["a"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    // Fail first attempt with transport failure
+    *driver.fail_poll_response_count.lock().await = 1;
+
+    let resp1 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body_valid_pow,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(resp1.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Verify claim exists
+    assert!(store.lookup_operation(op_id).await.unwrap().is_some());
+
+    // On retry, provide an invalid PoW nonce; since the operation was already
+    // claimed, PoW validation must be skipped entirely.
+    let body_stale_pow = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &["a"],
+        &challenge.prefix,
+        &format!("{}|invalid_nonce", challenge.prefix),
+    );
+
+    let resp2 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body_stale_pow,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(
+        resp2.status(),
+        StatusCode::NO_CONTENT,
+        "retry of already-claimed operation must not reject due to PoW"
+    );
+
+    let execution = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution.status, OperationExecutionStatus::Success);
+    assert_eq!(driver.poll_responses.lock().await.len(), 1);
 }

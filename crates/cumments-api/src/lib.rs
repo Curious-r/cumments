@@ -158,6 +158,36 @@ pub struct ApiState {
     pub ephemeral_bus: broadcast::Sender<EphemeralEvent>,
     /// Shared typing state for SSE snapshots, when ephemeral sync is enabled.
     pub ephemeral_state: Option<Arc<EphemeralState>>,
+    /// Coordinator for in-flight synchronous operations (such as Poll Vote).
+    pub operation_locks: OperationLocks,
+}
+
+/// Coordinator for in-flight synchronous operations.
+///
+/// Ensures concurrent identical requests serialize on the operation identity
+/// so that only one Matrix event is sent and only one Matrix txnId is allocated.
+#[derive(Clone, Default)]
+pub struct OperationLocks {
+    locks: Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+}
+
+impl OperationLocks {
+    pub fn new() -> Self {
+        Self {
+            locks: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    pub async fn lock_operation(&self, operation_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.locks.lock().await;
+        if locks.len() > 10_000 {
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        }
+        locks
+            .entry(operation_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
 }
 
 /// Builds the Axum router for the API.

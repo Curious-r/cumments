@@ -507,6 +507,7 @@ fn api_state(driver: TestDriver, store: DbStore) -> ApiState {
         governance_limiter: Arc::new(RateLimiter::new(1000, Duration::from_secs(3600))),
         ephemeral_bus: tokio::sync::broadcast::channel(16).0,
         ephemeral_state: None,
+        operation_locks: cumments_api::OperationLocks::new(),
     }
 }
 

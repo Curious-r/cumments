@@ -70,6 +70,12 @@ pub struct TestDriver {
     pub redactions: Mutex<Vec<(String, String, String)>>,
     /// Rooms for which `join_room` should fail (test-only injection).
     pub fail_join_rooms: Mutex<HashSet<String>>,
+    /// Fail the next N `post_poll_response` calls with a simulated transport error
+    /// before Matrix accepts the event.
+    pub fail_poll_response_count: Mutex<usize>,
+    /// Record the next N `post_poll_response` calls into `poll_responses` (homeserver
+    /// accepted) but return an error (client response lost).
+    pub ambiguous_poll_response_count: Mutex<usize>,
 }
 
 impl TestDriver {
@@ -100,6 +106,8 @@ impl TestDriver {
             visitor_profiles: Mutex::new(HashMap::new()),
             redactions: Mutex::new(Vec::new()),
             fail_join_rooms: Mutex::new(HashSet::new()),
+            fail_poll_response_count: Mutex::new(0),
+            ambiguous_poll_response_count: Mutex::new(0),
         }
     }
 

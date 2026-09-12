@@ -117,6 +117,30 @@ pub enum OperationClaimOutcome {
     Conflict,
 }
 
+/// Lifecycle status of an operation's transport execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationExecutionStatus {
+    /// The operation is currently being executed or waiting for initial send.
+    InFlight,
+    /// The downstream Matrix event was confirmed accepted.
+    Success,
+    /// The send attempt failed or had an ambiguous transport outcome.
+    /// The operation remains claimed and can be retried using the same `txn_id`.
+    Failed,
+}
+
+/// Transport execution metadata for a claimed operation.
+///
+/// Distinct from [`OperationClaim`], which records *identity* (who and what).
+/// This records *transport execution*: the downstream Matrix transaction ID
+/// and whether the homeserver has confirmed the event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationExecution {
+    pub operation_id: String,
+    pub txn_id: String,
+    pub status: OperationExecutionStatus,
+}
+
 /// A post submission together with its queue row id.
 #[derive(Debug, Clone)]
 pub struct PendingPostSubmission {
