@@ -432,6 +432,13 @@ pub trait MessageStore: ProjectionSink {
         poll_message_id: &str,
     ) -> Result<Option<crate::poll::PollProjection>>;
 
+    /// Batch variant of [`Self::get_poll_projection`]: derives the effective
+    /// Poll projections for multiple polls in a single batch of queries.
+    async fn get_poll_projections(
+        &self,
+        poll_message_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, crate::poll::PollProjection>>;
+
     /// Records an immutable `org.matrix.msc3381.poll.end` relation fact.
     async fn save_poll_end(&self, end: &PollEnd) -> Result<()>;
 

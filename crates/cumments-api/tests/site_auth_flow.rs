@@ -4819,16 +4819,21 @@ async fn seed_poll(store: &DbStore, poll_id: &str, options: &[(&str, &str)], max
             },
             content: Content::Poll(PollContent {
                 question: "q?".to_string(),
-                options: options
+                answers: options
                     .iter()
                     .map(|(id, text)| PollOption {
                         id: id.to_string(),
                         text: text.to_string(),
                     })
                     .collect(),
-                max_selections,
+                kind: cumments_core::poll::PollSemanticKind::Disclosed,
+                max_selections: u64::from(max_selections),
+                status: cumments_core::poll::PollStatus::Open,
+                end_time: None,
+                results: None,
+                total_votes: 0,
                 responses: Vec::new(),
-                my_votes: Vec::new(),
+                my_votes: None,
             }),
             matrix_event_type: "org.matrix.msc3381.poll.start".to_string(),
             timestamp: chrono::Utc::now(),
@@ -5984,16 +5989,21 @@ async fn seed_poll_with_creator(
             },
             content: Content::Poll(PollContent {
                 question: "q?".to_string(),
-                options: options
+                answers: options
                     .iter()
                     .map(|(id, text)| PollOption {
                         id: id.to_string(),
                         text: text.to_string(),
                     })
                     .collect(),
-                max_selections,
+                kind: cumments_core::poll::PollSemanticKind::Disclosed,
+                max_selections: u64::from(max_selections),
+                status: cumments_core::poll::PollStatus::Open,
+                end_time: None,
+                results: None,
+                total_votes: 0,
                 responses: Vec::new(),
-                my_votes: Vec::new(),
+                my_votes: None,
             }),
             matrix_event_type: "org.matrix.msc3381.poll.start".to_string(),
             timestamp: chrono::Utc::now(),
@@ -6985,5 +6995,459 @@ async fn end_poll_reducer_first_valid_end_wins() {
     assert_eq!(
         p2.end.as_ref().map(|e| e.event_id.as_str()),
         Some("$end-first:hs")
+    );
+}
+
+// ── Poll Read-Side Integration & Realtime Tests ───────────────────
+
+fn sign_query_comments(
+    signing_key: &ed25519_dalek::SigningKey,
+    site: &str,
+    page: &str,
+) -> (String, String) {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::identity::signature_message;
+    use ed25519_dalek::Signer;
+
+    let pk = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+    let msg = signature_message(&[Some("QUERY_COMMENTS"), Some(site), Some(page)]);
+    let sig = URL_SAFE_NO_PAD.encode(signing_key.sign(msg.as_bytes()).to_bytes());
+    (pk, sig)
+}
+
+#[tokio::test]
+async fn poll_read_disclosed_open_undisclosed_open_and_ended_visibility() {
+    use cumments_core::models::{PollContent, PollEnd, PollOption, PollVote};
+    use cumments_core::poll::{PollSemanticKind, PollStatus};
+    let (state, store) = test_state(
+        "poll-read-visibility",
+        SiteVerificationPolicy::Disabled,
+        None,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    // 1. Seed disclosed poll ($poll-disc:hs) with options "opt-a" and "opt-b"
+    seed_poll(
+        &store,
+        "$poll-disc:hs",
+        &[("opt-a", "Option A"), ("opt-b", "Option B")],
+        1,
+    )
+    .await;
+
+    // 2. Seed undisclosed poll ($poll-undisc:hs) with options "opt-x" and "opt-y"
+    store
+        .save_message(&Message {
+            event_id: "$poll-undisc:hs".to_string(),
+            site_id: "test-blog".to_string(),
+            page_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Visitor,
+                display_name: Some("Alice".to_string()),
+                avatar_url: None,
+                public_key: Some("creator-key".to_string()),
+                mxid: None,
+            },
+            content: Content::Poll(PollContent {
+                question: "Secret question?".to_string(),
+                answers: vec![
+                    PollOption {
+                        id: "opt-x".to_string(),
+                        text: "Option X".to_string(),
+                    },
+                    PollOption {
+                        id: "opt-y".to_string(),
+                        text: "Option Y".to_string(),
+                    },
+                ],
+                kind: PollSemanticKind::Undisclosed,
+                max_selections: 1,
+                status: PollStatus::Open,
+                end_time: None,
+                results: None,
+                total_votes: 0,
+                responses: Vec::new(),
+                my_votes: None,
+            }),
+            matrix_event_type: "org.matrix.msc3381.poll.start".to_string(),
+            timestamp: chrono::Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            submission_id: None,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            thread_summary: None,
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@_cumments_test-blog_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:hs".to_string(),
+            raw_content: serde_json::Value::Null,
+        })
+        .await
+        .unwrap();
+
+    // Alice votes for "opt-a" on disclosed poll
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$v1:hs".to_string(),
+                poll_message_id: "$poll-disc:hs".to_string(),
+                sender_mxid: "@alice:hs".to_string(),
+                option_index: None,
+                origin_server_ts: 100,
+            },
+            &["opt-a".to_string()],
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Bob votes for "opt-x" on undisclosed poll
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$v2:hs".to_string(),
+                poll_message_id: "$poll-undisc:hs".to_string(),
+                sender_mxid: "@bob:hs".to_string(),
+                option_index: None,
+                origin_server_ts: 100,
+            },
+            &["opt-x".to_string()],
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Query comments collection
+    let res = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let comments: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let items = comments["data"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+
+    let disc_item = items
+        .iter()
+        .find(|i| i["event_id"] == "$poll-disc:hs")
+        .unwrap();
+    let disc_poll = &disc_item["content"];
+    assert_eq!(disc_poll["kind"], "disclosed");
+    assert_eq!(disc_poll["status"], "open");
+    assert!(disc_poll["end_time"].is_null());
+    assert_eq!(disc_poll["total_votes"], 1);
+    // Declared answers order preserved
+    assert_eq!(disc_poll["answers"][0]["id"], "opt-a");
+    assert_eq!(disc_poll["answers"][1]["id"], "opt-b");
+    // Results exposed, all declared answers mapped to integer counts, 0 included
+    assert_eq!(disc_poll["results"]["opt-a"], 1);
+    assert_eq!(disc_poll["results"]["opt-b"], 0);
+
+    let undisc_item = items
+        .iter()
+        .find(|i| i["event_id"] == "$poll-undisc:hs")
+        .unwrap();
+    let undisc_poll = &undisc_item["content"];
+    assert_eq!(undisc_poll["kind"], "undisclosed");
+    assert_eq!(undisc_poll["status"], "open");
+    assert!(undisc_poll["end_time"].is_null());
+    assert_eq!(undisc_poll["total_votes"], 1);
+    // Undisclosed while open: results MUST be null
+    assert!(
+        undisc_poll["results"].is_null(),
+        "undisclosed open poll results must be null"
+    );
+
+    // Now end the undisclosed poll
+    store
+        .save_poll_end(&PollEnd {
+            event_id: "$end-undisc:hs".to_string(),
+            poll_message_id: "$poll-undisc:hs".to_string(),
+            sender_mxid: "@_cumments_test-blog_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:hs".to_string(),
+            origin_server_ts: 500,
+        })
+        .await
+        .unwrap();
+
+    // Query comments collection again
+    let res2 = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+    let body_bytes2 = axum::body::to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let comments2: serde_json::Value = serde_json::from_slice(&body_bytes2).unwrap();
+    let items2 = comments2["data"].as_array().unwrap();
+    let undisc_ended = items2
+        .iter()
+        .find(|i| i["event_id"] == "$poll-undisc:hs")
+        .unwrap();
+    let ended_poll = &undisc_ended["content"];
+    assert_eq!(ended_poll["kind"], "undisclosed");
+    assert_eq!(ended_poll["status"], "ended");
+    assert_eq!(ended_poll["end_time"], 500);
+    assert_eq!(ended_poll["total_votes"], 1);
+    // Undisclosed ended poll: results MUST now be exposed and unmasked
+    assert_eq!(ended_poll["results"]["opt-x"], 1);
+    assert_eq!(ended_poll["results"]["opt-y"], 0);
+}
+
+#[tokio::test]
+async fn poll_read_single_comment_lookup_and_my_votes_personalization() {
+    use cumments_core::models::PollVote;
+    use ed25519_dalek::SigningKey;
+    let (state, store) =
+        test_state("poll-my-votes-read", SiteVerificationPolicy::Disabled, None).await;
+    let router = cumments_api::build_router(state.clone());
+
+    seed_poll(&store, "$poll:hs", &[("opt0", "Zero"), ("opt1", "One")], 1).await;
+
+    let alice_key = SigningKey::from_bytes(&[81u8; 32]);
+    let bob_key = SigningKey::from_bytes(&[82u8; 32]);
+    let (alice_pk, alice_sig) = sign_query_comments(&alice_key, "test-blog", "hello");
+    let (bob_pk, bob_sig) = sign_query_comments(&bob_key, "test-blog", "hello");
+
+    // Alice voter mxid derived from public key
+    let alice_visitor_id = derive_visitor_id_from_public_key(&alice_pk).unwrap();
+    let alice_mxid = format!("@_cumments_test-blog_{}:hs", alice_visitor_id);
+
+    // Alice votes for "opt0"
+    store
+        .save_poll_vote_with_selections(
+            &PollVote {
+                event_id: "$v-alice:hs".to_string(),
+                poll_message_id: "$poll:hs".to_string(),
+                sender_mxid: alice_mxid,
+                option_index: None,
+                origin_server_ts: 100,
+            },
+            &["opt0".to_string()],
+            None,
+        )
+        .await
+        .unwrap();
+
+    // 1. Single comment lookup (GET .../comments/{comment_id})
+    // Unauthenticated GET: my_votes is null
+    let res_single = router
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/sites/test-blog/pages/hello/comments/$poll%3Ahs",
+            Some("null"),
+            &[],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_single.status(), StatusCode::OK);
+    let single_bytes = axum::body::to_bytes(res_single.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let single_json: serde_json::Value = serde_json::from_slice(&single_bytes).unwrap();
+    assert_eq!(single_json["event_id"], "$poll:hs");
+    assert!(
+        single_json["content"]["my_votes"].is_null(),
+        "unauthenticated single lookup has my_votes: null"
+    );
+    assert_eq!(single_json["content"]["results"]["opt0"], 1);
+    assert_eq!(single_json["content"]["results"]["opt1"], 0);
+
+    // 2. Collection query: Unauthenticated (empty query body)
+    let res_anon = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_anon.status(), StatusCode::OK);
+    let anon_bytes = axum::body::to_bytes(res_anon.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let anon_json: serde_json::Value = serde_json::from_slice(&anon_bytes).unwrap();
+    let anon_poll = &anon_json["data"][0]["content"];
+    assert!(
+        anon_poll["my_votes"].is_null(),
+        "unauthenticated collection query has my_votes: null"
+    );
+
+    // 3. Collection query: Authenticated as Alice (voted for "opt0")
+    let alice_body = serde_json::json!({
+        "author_public_key": alice_pk,
+        "author_signature": alice_sig,
+    })
+    .to_string();
+    let res_alice = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            &alice_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_alice.status(), StatusCode::OK);
+    let alice_bytes = axum::body::to_bytes(res_alice.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let alice_json: serde_json::Value = serde_json::from_slice(&alice_bytes).unwrap();
+    let alice_poll = &alice_json["data"][0]["content"];
+    assert_eq!(
+        alice_poll["my_votes"],
+        serde_json::json!(["opt0"]),
+        "Alice receives her vote selection"
+    );
+
+    // 4. Collection query: Authenticated as Bob (has not voted)
+    let bob_body = serde_json::json!({
+        "author_public_key": bob_pk,
+        "author_signature": bob_sig,
+    })
+    .to_string();
+    let res_bob = router
+        .clone()
+        .oneshot(request_with_body(
+            query_method(),
+            "/api/v1/sites/test-blog/pages/hello/comments",
+            Some("null"),
+            &[],
+            &bob_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_bob.status(), StatusCode::OK);
+    let bob_bytes = axum::body::to_bytes(res_bob.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let bob_json: serde_json::Value = serde_json::from_slice(&bob_bytes).unwrap();
+    let bob_poll = &bob_json["data"][0]["content"];
+    assert_eq!(
+        bob_poll["my_votes"],
+        serde_json::json!([]),
+        "Authenticated non-voter receives empty array"
+    );
+}
+
+#[tokio::test]
+async fn poll_mutations_do_not_emit_sse_directly() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "poll-mutation-no-sse",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(&store, "$poll:hs", &[("a", "A"), ("b", "B")], 1).await;
+    let router = cumments_api::build_router(state.clone());
+
+    // Subscribe to event_bus before any HTTP requests
+    let mut rx = state.event_bus.subscribe();
+
+    // 1. Post a vote via HTTP API
+    let signing_key = SigningKey::from_bytes(&[61u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let vote_body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "vote-op-no-sse",
+        &["a"],
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let res_vote = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &[("idempotency-key", "vote-op-no-sse".to_string())],
+            &vote_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_vote.status(), StatusCode::NO_CONTENT);
+
+    // Event bus MUST NOT have received any SSE event from HTTP vote handler
+    assert!(
+        rx.try_recv().is_err(),
+        "HTTP vote mutation handler must not emit SSE directly"
+    );
+
+    // 2. End poll via HTTP API
+    let creator_key = SigningKey::from_bytes(&[88u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll2:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let end_challenge = state.pow.generate_challenge();
+    let end_challenge_response = solve_pow(&end_challenge);
+    let end_body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll2:hs",
+        "end-op-no-sse",
+        &end_challenge.prefix,
+        &end_challenge_response,
+    );
+
+    let res_end = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls/$poll2:hs/end",
+            Some("null"),
+            &[("idempotency-key", "end-op-no-sse".to_string())],
+            &end_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_end.status(), StatusCode::NO_CONTENT);
+
+    // Event bus MUST NOT have received any SSE event from HTTP end handler
+    assert!(
+        rx.try_recv().is_err(),
+        "HTTP end mutation handler must not emit SSE directly"
     );
 }

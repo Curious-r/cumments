@@ -4,7 +4,7 @@ use cumments_core::models::{
     Content, LocationContent, PageSlug, PollContent, PollOption, RoomIdentity, RoomStatus, SiteId,
     TextContent, TextStyle,
 };
-use cumments_core::poll::PollStatus;
+use cumments_core::poll::{PollSemanticKind, PollStatus};
 use cumments_core::ports::{MessageStore, RegistryStore, SubmissionStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
@@ -14,6 +14,27 @@ use cumments_projector::parsed::{
 use cumments_store::DbStore;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+
+fn make_test_poll(question: &str, answers: Vec<(&str, &str)>) -> PollContent {
+    PollContent {
+        question: question.to_string(),
+        answers: answers
+            .into_iter()
+            .map(|(id, text)| PollOption {
+                id: id.to_string(),
+                text: text.to_string(),
+            })
+            .collect(),
+        kind: PollSemanticKind::Disclosed,
+        max_selections: 1,
+        status: PollStatus::Open,
+        end_time: None,
+        results: None,
+        total_votes: 0,
+        responses: Vec::new(),
+        my_votes: None,
+    }
+}
 
 fn test_db_url(name: &str) -> String {
     let path = std::path::Path::new("/tmp").join(format!(
@@ -470,16 +491,7 @@ async fn poll_vote_redaction_removes_it_and_prevents_resurrection() {
 
     let processor = processor(store.clone()).await;
     let mut poll = message("$poll:hs");
-    poll.content = Content::Poll(PollContent {
-        question: "best? ".to_string(),
-        options: vec![PollOption {
-            id: "a".to_string(),
-            text: "A".to_string(),
-        }],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    poll.content = Content::Poll(make_test_poll("best? ", vec![("a", "A")]));
     processor
         .process_room_message(poll)
         .await
@@ -573,16 +585,7 @@ async fn poll_end_authorization_is_derived_from_facts_not_room_power() {
     // processing-time power snapshot.
     let processor = processor(store.clone()).await;
     let mut poll = message("$poll:hs");
-    poll.content = Content::Poll(PollContent {
-        question: "best?".to_string(),
-        options: vec![PollOption {
-            id: "a".to_string(),
-            text: "A".to_string(),
-        }],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    poll.content = Content::Poll(make_test_poll("best?", vec![("a", "A")]));
     processor
         .process_room_message(poll)
         .await
@@ -666,16 +669,7 @@ async fn poll_facts_before_start_converge_via_processor() {
     };
     let start = || {
         let mut poll = message("$poll:hs");
-        poll.content = Content::Poll(PollContent {
-            question: "best?".to_string(),
-            options: vec![PollOption {
-                id: "a".to_string(),
-                text: "A".to_string(),
-            }],
-            max_selections: 1,
-            responses: Vec::new(),
-            my_votes: Vec::new(),
-        });
+        poll.content = Content::Poll(make_test_poll("best?", vec![("a", "A")]));
         poll
     };
 

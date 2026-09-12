@@ -406,9 +406,9 @@ pub(crate) async fn query_comments_handler(
                             for msg in &mut page_data.items {
                                 if let Content::Poll(poll) = &mut msg.content {
                                     if let Some(votes) = my_votes_map.get(&msg.event_id) {
-                                        poll.my_votes = votes.clone();
+                                        poll.my_votes = Some(votes.clone());
                                     } else {
-                                        poll.my_votes = Vec::new();
+                                        poll.my_votes = Some(Vec::new());
                                     }
                                 }
                             }
@@ -2433,37 +2433,47 @@ mod tests {
         use cumments_core::models::{PollContent, PollOption};
         let poll = PollContent {
             question: "q".to_string(),
-            options: vec![PollOption {
+            answers: vec![PollOption {
                 id: "0".to_string(),
                 text: "A".to_string(),
             }],
+            kind: cumments_core::poll::PollSemanticKind::Disclosed,
             max_selections: 1,
+            status: cumments_core::poll::PollStatus::Open,
+            end_time: None,
+            results: None,
+            total_votes: 0,
             responses: Vec::new(),
-            my_votes: vec!["0".to_string()],
+            my_votes: Some(vec!["0".to_string()]),
         };
         let v = serde_json::to_value(&poll).unwrap();
         assert_eq!(v["my_votes"], serde_json::json!(["0"]));
         let de: PollContent = serde_json::from_value(v).unwrap();
-        assert_eq!(de.my_votes, vec!["0".to_string()]);
-        // Old data without my_votes should default to []
+        assert_eq!(de.my_votes, Some(vec!["0".to_string()]));
+        // Old data or unauthenticated without my_votes should default to None
         let json2 = serde_json::json!({
             "question": "q",
-            "options": [{"id": "0", "text": "A"}],
+            "answers": [{"id": "0", "text": "A"}],
             "max_selections": 1,
             "responses": []
         });
         let de2: PollContent = serde_json::from_value(json2).unwrap();
-        assert_eq!(de2.my_votes, Vec::<String>::new());
-        // Empty my_votes serializes as []
+        assert_eq!(de2.my_votes, None);
+        // Empty my_votes for authenticated voter with no vote cast serializes as []
         let poll_empty = PollContent {
             question: "q".to_string(),
-            options: vec![PollOption {
+            answers: vec![PollOption {
                 id: "0".to_string(),
                 text: "A".to_string(),
             }],
+            kind: cumments_core::poll::PollSemanticKind::Disclosed,
             max_selections: 1,
+            status: cumments_core::poll::PollStatus::Open,
+            end_time: None,
+            results: None,
+            total_votes: 0,
             responses: Vec::new(),
-            my_votes: Vec::new(),
+            my_votes: Some(Vec::new()),
         };
         let v2 = serde_json::to_value(&poll_empty).unwrap();
         assert_eq!(v2["my_votes"], serde_json::json!([]));

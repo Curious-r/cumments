@@ -19,8 +19,8 @@ use cumments_core::models::{
     SubmissionCompletion, ThreadSummary, UnknownContent,
 };
 use cumments_core::poll::{
-    EndAuthorization, PollAnswerFact, PollEndFact, PollProjection, PollResponseFact, PollStartFact,
-    reduce_poll,
+    EndAuthorization, PollAnswerFact, PollEndFact, PollProjection, PollResponseFact,
+    PollSemanticKind, PollStartFact, PollStatus, reduce_poll,
 };
 use cumments_core::ports::{AppServiceTxnStore, MessageStore, ProjectionSink};
 use sea_orm::{
@@ -1124,6 +1124,13 @@ impl MessageStore for DbStore {
         self.poll_projection(poll_message_id).await
     }
 
+    async fn get_poll_projections(
+        &self,
+        poll_message_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, PollProjection>> {
+        self.poll_projections(poll_message_ids).await
+    }
+
     async fn record_backfill_tombstone(
         &self,
         event_id: &str,
@@ -1408,11 +1415,10 @@ impl DbStore {
             .reaction_summary_map(std::slice::from_ref(&message.event_id))
             .await?;
         message.reactions = reactions.remove(&message.event_id).unwrap_or_default();
-        if let Content::Poll(poll) = &mut message.content {
-            let mut responses = self
-                .poll_response_summary_map(std::slice::from_ref(&message.event_id))
-                .await?;
-            poll.responses = responses.remove(&message.event_id).unwrap_or_default();
+        if let Content::Poll(poll) = &mut message.content
+            && let Some(projection) = self.poll_projection(&message.event_id).await?
+        {
+            populate_poll_from_projection(poll, &projection);
         }
         self.attach_thread_summaries(std::slice::from_mut(&mut message))
             .await?;
@@ -1427,11 +1433,13 @@ impl DbStore {
     /// a whole page instead of two queries per message.
     async fn hydrate_batch(&self, messages: &mut [Message], event_ids: &[String]) -> Result<()> {
         let mut reactions = self.reaction_summary_map(event_ids).await?;
-        let mut responses = self.poll_response_summary_map(event_ids).await?;
+        let mut poll_projections = self.poll_projections(event_ids).await?;
         for message in messages.iter_mut() {
             message.reactions = reactions.remove(&message.event_id).unwrap_or_default();
-            if let Content::Poll(poll) = &mut message.content {
-                poll.responses = responses.remove(&message.event_id).unwrap_or_default();
+            if let Content::Poll(poll) = &mut message.content
+                && let Some(projection) = poll_projections.remove(&message.event_id)
+            {
+                populate_poll_from_projection(poll, &projection);
             }
         }
         self.attach_thread_summaries(messages).await?;
@@ -1781,6 +1789,22 @@ impl DbStore {
         }
     }
 
+    /// Batch variant of [`Self::poll_projection`]: derives the effective
+    /// Poll projections for multiple polls in a single batch of queries.
+    pub async fn poll_projections(
+        &self,
+        poll_message_ids: &[String],
+    ) -> Result<HashMap<String, PollProjection>> {
+        let facts = self.load_poll_facts(poll_message_ids).await?;
+        let mut out = HashMap::new();
+        for (poll_id, facts) in facts {
+            if let Ok(projection) = reduce_poll(&facts.start, &facts.responses, &facts.ends) {
+                out.insert(poll_id, projection);
+            }
+        }
+        Ok(out)
+    }
+
     /// Load the canonical facts the deterministic reducer needs for a set of
     /// polls in three queries: the active poll start messages (with their
     /// declared answers) plus their response and end relation facts. Inactive,
@@ -1806,6 +1830,8 @@ impl DbStore {
             let Content::Poll(poll) = content else {
                 continue;
             };
+            let answers: Vec<PollAnswerFact> =
+                poll.answer_list().iter().cloned().map(Into::into).collect();
             facts.insert(
                 row.event_id.clone(),
                 PollFacts {
@@ -1814,16 +1840,10 @@ impl DbStore {
                         sender: row.sender_mxid.clone(),
                         origin_server_ts: row.timestamp.timestamp_millis(),
                         question: poll.question,
-                        answers: poll
-                            .options
-                            .into_iter()
-                            .map(|option| PollAnswerFact::new(option.id, option.text))
-                            .collect(),
-                        max_selections: u64::from(poll.max_selections),
-                        // The read-model `PollContent` has no kind field, so the
-                        // wire kind is recovered from the retained raw Matrix
-                        // content until the read model carries it directly.
-                        disclosed: raw_poll_disclosed(&row.raw_content_json),
+                        answers,
+                        max_selections: poll.max_selections,
+                        disclosed: poll.kind == PollSemanticKind::Disclosed
+                            || raw_poll_disclosed(&row.raw_content_json),
                         reply_to: row.reply_to.clone(),
                         thread_root: row.thread_root.clone(),
                     },
@@ -1892,37 +1912,6 @@ impl DbStore {
         }
         Ok(facts)
     }
-
-    /// Aggregated poll response summaries keyed by poll message ID. Redacted
-    /// votes are excluded.
-    async fn poll_response_summary_map(
-        &self,
-        poll_message_ids: &[String],
-    ) -> Result<HashMap<String, Vec<PollResponseSummary>>> {
-        let facts = self.load_poll_facts(poll_message_ids).await?;
-        let mut out: HashMap<String, Vec<PollResponseSummary>> = HashMap::new();
-        for (poll_id, facts) in facts {
-            let Ok(projection) = reduce_poll(&facts.start, &facts.responses, &facts.ends) else {
-                continue;
-            };
-            // Responses are ordered by declared answer index; only answers with
-            // at least one vote are reported, matching the read-model contract.
-            let summaries: Vec<PollResponseSummary> = projection
-                .tallies
-                .iter()
-                .enumerate()
-                .filter(|(_, tally)| tally.count > 0)
-                .map(|(index, tally)| PollResponseSummary {
-                    option_index: index as i64,
-                    count: tally.count as i64,
-                })
-                .collect();
-            if !summaries.is_empty() {
-                out.insert(poll_id, summaries);
-            }
-        }
-        Ok(out)
-    }
 }
 
 /// Canonical poll facts loaded from the derived read model, ready for the
@@ -1949,6 +1938,53 @@ fn raw_poll_disclosed(raw_content_json: &str) -> bool {
             .as_deref(),
         Some("org.matrix.msc3381.poll.disclosed")
     )
+}
+
+/// Populates a `PollContent` DTO with derived state from its deterministic `PollProjection`.
+fn populate_poll_from_projection(
+    poll: &mut cumments_core::models::PollContent,
+    projection: &PollProjection,
+) {
+    poll.question = projection.question.clone();
+    poll.answers = projection.answers.iter().cloned().map(Into::into).collect();
+    poll.kind = if projection.disclosed {
+        PollSemanticKind::Disclosed
+    } else {
+        PollSemanticKind::Undisclosed
+    };
+    poll.max_selections = projection.max_selections;
+    poll.status = projection.status;
+    poll.end_time = projection.end.as_ref().map(|e| e.origin_server_ts);
+    poll.total_votes = projection.total_votes;
+
+    let show_results = poll.kind == PollSemanticKind::Disclosed || poll.status == PollStatus::Ended;
+
+    if show_results {
+        let mut map = serde_json::Map::new();
+        let tally_map: HashMap<&str, u64> = projection
+            .tallies
+            .iter()
+            .map(|t| (t.answer_id.as_str(), t.count))
+            .collect();
+        for answer in &poll.answers {
+            let count = tally_map.get(answer.id.as_str()).copied().unwrap_or(0);
+            map.insert(answer.id.clone(), serde_json::Value::from(count));
+        }
+        poll.results = Some(map);
+        poll.responses = projection
+            .tallies
+            .iter()
+            .enumerate()
+            .filter(|(_, tally)| tally.count > 0)
+            .map(|(index, tally)| PollResponseSummary {
+                option_index: index as i64,
+                count: tally.count as i64,
+            })
+            .collect();
+    } else {
+        poll.results = None;
+        poll.responses = Vec::new();
+    }
 }
 
 /// Annotation aggregates are part of a live comment's public view; suppress

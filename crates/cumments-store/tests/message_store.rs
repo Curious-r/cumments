@@ -8,13 +8,34 @@ use cumments_core::models::{
     Reaction, RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, ThreadSummary,
     UnknownContent,
 };
-use cumments_core::poll::PollStatus;
+use cumments_core::poll::{PollSemanticKind, PollStatus};
 use cumments_core::ports::{
     AppServiceTxnStore, MessageStore, ProjectionSink, RoomStore, SubmissionStore, VirtualUserStore,
 };
 use cumments_store::DbStore;
 use cumments_store::entities::{message_revisions, messages, poll_response_events};
 use sea_orm::{Database, EntityTrait, QueryFilter};
+
+fn make_test_poll(question: &str, answers: Vec<(&str, &str)>, max_selections: u64) -> PollContent {
+    PollContent {
+        question: question.to_string(),
+        answers: answers
+            .into_iter()
+            .map(|(id, text)| PollOption {
+                id: id.to_string(),
+                text: text.to_string(),
+            })
+            .collect(),
+        kind: PollSemanticKind::Disclosed,
+        max_selections,
+        status: PollStatus::Open,
+        end_time: None,
+        results: None,
+        total_votes: 0,
+        responses: Vec::new(),
+        my_votes: None,
+    }
+}
 
 /// Unique SQLite file per test to avoid shared in-memory state.
 fn test_db_url(name: &str) -> String {
@@ -833,22 +854,7 @@ async fn poll_votes_aggregate_and_latest_vote_wins() {
         .await
         .expect("connect db");
     let mut message = visitor_message("$poll:hs", "poll placeholder");
-    message.content = Content::Poll(PollContent {
-        question: "best? ".to_string(),
-        options: vec![
-            PollOption {
-                id: "a".to_string(),
-                text: "A".to_string(),
-            },
-            PollOption {
-                id: "b".to_string(),
-                text: "B".to_string(),
-            },
-        ],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    message.content = Content::Poll(make_test_poll("best? ", vec![("a", "A"), ("b", "B")], 1));
     store
         .save_message(&message)
         .await
@@ -907,22 +913,7 @@ async fn redacting_the_latest_poll_response_restores_the_previous_vote() {
         .await
         .expect("connect db");
     let mut message = visitor_message("$poll:hs", "poll placeholder");
-    message.content = Content::Poll(PollContent {
-        question: "best?".to_string(),
-        options: vec![
-            PollOption {
-                id: "a".to_string(),
-                text: "A".to_string(),
-            },
-            PollOption {
-                id: "b".to_string(),
-                text: "B".to_string(),
-            },
-        ],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    message.content = Content::Poll(make_test_poll("best?", vec![("a", "A"), ("b", "B")], 1));
     store.save_message(&message).await.expect("save poll");
 
     for (event_id, option_index, timestamp) in
@@ -980,22 +971,7 @@ async fn poll_selections_aggregate_per_option() {
         .await
         .expect("connect db");
     let mut message = visitor_message("$poll:hs", "poll placeholder");
-    message.content = Content::Poll(PollContent {
-        question: "best?".to_string(),
-        options: vec![
-            PollOption {
-                id: "a".to_string(),
-                text: "A".to_string(),
-            },
-            PollOption {
-                id: "b".to_string(),
-                text: "B".to_string(),
-            },
-        ],
-        max_selections: 2,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    message.content = Content::Poll(make_test_poll("best?", vec![("a", "A"), ("b", "B")], 2));
     store.save_message(&message).await.expect("save poll");
 
     let vote = |event_id: &str, sender: &str| PollVote {
@@ -1044,16 +1020,7 @@ async fn redacted_poll_votes_leave_the_aggregate_and_do_not_resurrect() {
     let url = test_db_url("message-poll-redact");
     let store = DbStore::connect(&url).await.expect("connect db");
     let mut message = visitor_message("$poll:hs", "poll placeholder");
-    message.content = Content::Poll(PollContent {
-        question: "best? ".to_string(),
-        options: vec![PollOption {
-            id: "a".to_string(),
-            text: "A".to_string(),
-        }],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    message.content = Content::Poll(make_test_poll("best? ", vec![("a", "A")], 1));
     store
         .save_message(&message)
         .await
@@ -1136,22 +1103,7 @@ async fn stale_poll_vote_redelivery_does_not_overwrite_a_newer_vote() {
         .await
         .expect("connect db");
     let mut message = visitor_message("$poll:hs", "poll placeholder");
-    message.content = Content::Poll(PollContent {
-        question: "best? ".to_string(),
-        options: vec![
-            PollOption {
-                id: "a".to_string(),
-                text: "A".to_string(),
-            },
-            PollOption {
-                id: "b".to_string(),
-                text: "B".to_string(),
-            },
-        ],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    message.content = Content::Poll(make_test_poll("best? ", vec![("a", "A"), ("b", "B")], 1));
     store
         .save_message(&message)
         .await
@@ -1771,39 +1723,9 @@ async fn poll_my_votes_batch_personalization_and_latest_wins() {
 
     // Two polls on same page, to test batch query (N+1 check)
     let mut poll1 = visitor_message("$poll1:hs", "poll1");
-    poll1.content = Content::Poll(PollContent {
-        question: "best?".to_string(),
-        options: vec![
-            PollOption {
-                id: "0".to_string(),
-                text: "A".to_string(),
-            },
-            PollOption {
-                id: "1".to_string(),
-                text: "B".to_string(),
-            },
-        ],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    poll1.content = Content::Poll(make_test_poll("best?", vec![("0", "A"), ("1", "B")], 1));
     let mut poll2 = visitor_message("$poll2:hs", "poll2");
-    poll2.content = Content::Poll(PollContent {
-        question: "other?".to_string(),
-        options: vec![
-            PollOption {
-                id: "0".to_string(),
-                text: "X".to_string(),
-            },
-            PollOption {
-                id: "1".to_string(),
-                text: "Y".to_string(),
-            },
-        ],
-        max_selections: 1,
-        responses: Vec::new(),
-        my_votes: Vec::new(),
-    });
+    poll2.content = Content::Poll(make_test_poll("other?", vec![("0", "X"), ("1", "Y")], 1));
     store.save_message(&poll1).await.expect("save poll1");
     store.save_message(&poll2).await.expect("save poll2");
     // Register rooms for active check (messages are already active)
@@ -2527,9 +2449,13 @@ fn poll_message(event_id: &str, kind: &str, max_selections: u8) -> Message {
     let mut message = visitor_message(event_id, "poll placeholder");
     message.reply_to = None;
     message.thread_root = None;
+    let semantic_kind = match kind {
+        "org.matrix.msc3381.poll.disclosed" => PollSemanticKind::Disclosed,
+        _ => PollSemanticKind::Undisclosed,
+    };
     message.content = Content::Poll(PollContent {
         question: "best?".to_string(),
-        options: vec![
+        answers: vec![
             PollOption {
                 id: "a".to_string(),
                 text: "A".to_string(),
@@ -2539,9 +2465,14 @@ fn poll_message(event_id: &str, kind: &str, max_selections: u8) -> Message {
                 text: "B".to_string(),
             },
         ],
-        max_selections,
+        kind: semantic_kind,
+        max_selections: u64::from(max_selections),
+        status: PollStatus::Open,
+        end_time: None,
+        results: None,
+        total_votes: 0,
         responses: Vec::new(),
-        my_votes: Vec::new(),
+        my_votes: None,
     });
     message.raw_content = serde_json::json!({
         "org.matrix.msc3381.poll.start": {

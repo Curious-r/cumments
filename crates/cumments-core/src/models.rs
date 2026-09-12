@@ -347,35 +347,85 @@ pub struct LocationContent {
     pub thumbnail_url: Option<String>,
 }
 
-/// A poll (MSC3381). `responses` are hydrated from the poll-responses table
-/// when reading.
+/// A poll (MSC3381). `results` and status are hydrated from the poll facts
+/// and deterministic reduction when reading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollContent {
     pub question: String,
-    pub options: Vec<PollOption>,
-    /// MSC3381 allows multi-select; Cumments' authoring API remains
-    /// single-select but projections preserve the protocol's declared limit.
+    /// Answers in declared presentation order.
+    #[serde(default, alias = "options")]
+    pub answers: Vec<PollOption>,
+    /// Poll disclosure kind: `disclosed` or `undisclosed`.
+    #[serde(default = "default_poll_kind")]
+    pub kind: crate::poll::PollSemanticKind,
+    /// Declared maximum selections allowed per voter.
     #[serde(default = "default_poll_max_selections")]
-    pub max_selections: u8,
+    pub max_selections: u64,
+    /// Current effective status: `open` or `ended`.
+    #[serde(default = "default_poll_status")]
+    pub status: crate::poll::PollStatus,
+    /// Origin server timestamp in milliseconds of the effective end, or null when open.
     #[serde(default)]
+    pub end_time: Option<i64>,
+    /// Mapping of declared answer IDs to integer vote counts.
+    /// `None` (`null` in JSON) when undisclosed while open.
+    #[serde(default)]
+    pub results: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Total number of voters with at least one effective vote.
+    #[serde(default)]
+    pub total_votes: u64,
+    /// Legacy index-based vote summaries. Kept empty when results are hidden.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub responses: Vec<PollResponseSummary>,
-    /// The current viewer's vote, as option IDs. Empty when the viewer has no
-    /// valid vote. Derived per-request from `author_public_key` proof and never
-    /// stored, mirroring `ReactionSummary.mine`.
+    /// The current viewer's vote, as option IDs.
+    /// `None` (`null` in JSON) for unauthenticated / anonymous readers.
+    /// `Some(vec![...])` for authenticated readers (empty if no vote cast).
     #[serde(default)]
-    pub my_votes: Vec<String>,
+    pub my_votes: Option<Vec<String>>,
 }
 
-fn default_poll_max_selections() -> u8 {
+fn default_poll_max_selections() -> u64 {
     1
 }
 
-/// One selectable poll option. The `id` matches Matrix's answer ID so votes
-/// can be mapped back to an option index.
+fn default_poll_kind() -> crate::poll::PollSemanticKind {
+    crate::poll::PollSemanticKind::Disclosed
+}
+
+fn default_poll_status() -> crate::poll::PollStatus {
+    crate::poll::PollStatus::Open
+}
+
+impl PollContent {
+    /// Returns the declared answers.
+    pub fn answer_list(&self) -> &[PollOption] {
+        &self.answers
+    }
+}
+
+/// One selectable poll option / answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollOption {
     pub id: String,
     pub text: String,
+}
+
+impl From<crate::poll::PollAnswerFact> for PollOption {
+    fn from(fact: crate::poll::PollAnswerFact) -> Self {
+        Self {
+            id: fact.id,
+            text: fact.text,
+        }
+    }
+}
+
+impl From<PollOption> for crate::poll::PollAnswerFact {
+    fn from(opt: PollOption) -> Self {
+        Self {
+            id: opt.id,
+            text: opt.text,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

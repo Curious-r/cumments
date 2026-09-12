@@ -2462,10 +2462,11 @@ components:
         style:
           type: string
           enum: [normal, emote, notice]
-        # media
+        # media / poll
         kind:
           type: string
-          enum: [image, video, audio, file, sticker]
+          enum: [image, video, audio, file, sticker, disclosed, undisclosed]
+          description: Media kind (for type=media) or results disclosure policy (for type=poll)
         url:
           type: string
           description: MXC URI or signed media-proxy URL after proxying
@@ -2495,25 +2496,45 @@ components:
         # poll
         question:
           type: string
+        answers:
+          type: array
+          items:
+            $ref: "#/components/schemas/PollOption"
+          description: Declared poll answers in presentation order
         options:
           type: array
           items:
             $ref: "#/components/schemas/PollOption"
+          description: Legacy alias for answers
         max_selections:
           type: integer
           minimum: 1
-          maximum: 20
           default: 1
           description: MSC3381 declared selection limit
+        status:
+          type: string
+          enum: [open, ended]
+          description: Effective poll status
+        end_time:
+          type: [integer, "null"]
+          description: Origin server timestamp in milliseconds when poll ended, or null if open
+        results:
+          type: [object, "null"]
+          additionalProperties:
+            type: integer
+          description: Mapping of answer ID to vote count, including 0 counts. Null when undisclosed and open.
+        total_votes:
+          type: integer
+          description: Total number of unique voters with at least one effective vote
         responses:
           type: array
           items:
             $ref: "#/components/schemas/PollResponseSummary"
         my_votes:
-          type: array
+          type: [array, "null"]
           items:
             type: string
-          description: Current viewer's vote selections as option IDs (derived per-request from QUERY_COMMENTS viewer proof via author_public_key/signature). Empty array when viewer has no valid vote or viewer proof not provided.
+          description: Current authenticated viewer's vote selections as answer IDs. Empty array when viewer has not voted. Null when unauthenticated or viewer proof not provided.
         # redacted tombstone; no original fields are retained
         # encrypted
         algorithm:
@@ -3318,6 +3339,9 @@ components:
             - message_annotations_changed
             - message_deleted
             - ephemeral
+            - poll_created
+            - poll_voted
+            - poll_ended
         data:
           type: string
           contentMediaType: application/json
@@ -3344,6 +3368,9 @@ components:
         - $ref: "#/components/schemas/MessageUpdatedEvent"
         - $ref: "#/components/schemas/MessageAnnotationsChangedEvent"
         - $ref: "#/components/schemas/MessageDeletedEvent"
+        - $ref: "#/components/schemas/PollCreatedEvent"
+        - $ref: "#/components/schemas/PollVotedEvent"
+        - $ref: "#/components/schemas/PollEndedEvent"
       discriminator:
         propertyName: type
         mapping:
@@ -3351,6 +3378,9 @@ components:
           message_updated: "#/components/schemas/MessageUpdatedEvent"
           message_annotations_changed: "#/components/schemas/MessageAnnotationsChangedEvent"
           message_deleted: "#/components/schemas/MessageDeletedEvent"
+          poll_created: "#/components/schemas/PollCreatedEvent"
+          poll_voted: "#/components/schemas/PollVotedEvent"
+          poll_ended: "#/components/schemas/PollEndedEvent"
     MessageCreatedEvent:
       type: object
       required: [type, payload]
@@ -3406,6 +3436,76 @@ components:
             event_id:
               type: string
             submission_id:
+              type: integer
+              format: int64
+    PollCreatedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [poll_created]
+        payload:
+          type: object
+          required: [site_id, page_slug, poll_id, message]
+          properties:
+            site_id:
+              type: string
+            page_slug:
+              type: string
+            poll_id:
+              type: string
+            message:
+              $ref: "#/components/schemas/Message"
+    PollVotedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [poll_voted]
+        payload:
+          type: object
+          required: [site_id, page_slug, poll_id, total_votes]
+          properties:
+            site_id:
+              type: string
+            page_slug:
+              type: string
+            poll_id:
+              type: string
+            results:
+              type: [object, "null"]
+              additionalProperties:
+                type: integer
+              description: Mapping of answer ID to vote count, or null when undisclosed and open
+            total_votes:
+              type: integer
+    PollEndedEvent:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [poll_ended]
+        payload:
+          type: object
+          required: [site_id, page_slug, poll_id, results, total_votes, end_time]
+          properties:
+            site_id:
+              type: string
+            page_slug:
+              type: string
+            poll_id:
+              type: string
+            results:
+              type: object
+              additionalProperties:
+                type: integer
+              description: Final unmasked mapping of answer ID to vote count
+            total_votes:
+              type: integer
+            end_time:
               type: integer
               format: int64
     EphemeralEvent:

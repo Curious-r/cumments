@@ -12,8 +12,8 @@ use cumments_core::models::{
     PollOption, RoomIdentity, TextContent, TextStyle, UnknownContent,
 };
 use cumments_core::poll::{
-    PollAnswerFact, PollSemanticAnswer, PollSemanticKind, PollStartFact, PollWireSemantics,
-    VoteWireSemantics, verify_poll_start_proof, verify_vote_proof,
+    PollAnswerFact, PollSemanticAnswer, PollSemanticKind, PollStartFact, PollStatus,
+    PollWireSemantics, VoteWireSemantics, verify_poll_start_proof, verify_vote_proof,
 };
 use cumments_core::protocol::{
     MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, PROVENANCE_CONTENT_KEY, PROVENANCE_SCHEMA_VERSION,
@@ -473,7 +473,7 @@ fn poll_content(content: &serde_json::Value, body: &str) -> Content {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let options = poll
+    let answers: Vec<PollOption> = poll
         .get("answers")
         .and_then(|a| a.as_array())
         .into_iter()
@@ -495,14 +495,22 @@ fn poll_content(content: &serde_json::Value, body: &str) -> Content {
         .get("max_selections")
         .and_then(|v| v.as_u64())
         .filter(|value| *value >= 1)
-        .and_then(|value| u8::try_from(value).ok())
         .unwrap_or(1);
+    let kind = match poll.get("kind").and_then(|k| k.as_str()) {
+        Some("org.matrix.msc3381.poll.disclosed") => PollSemanticKind::Disclosed,
+        _ => PollSemanticKind::Undisclosed,
+    };
     Content::Poll(PollContent {
         question,
-        options,
+        answers,
+        kind,
         max_selections,
+        status: PollStatus::Open,
+        end_time: None,
+        results: None,
+        total_votes: 0,
         responses: Vec::new(),
-        my_votes: Vec::new(),
+        my_votes: None,
     })
 }
 
@@ -883,7 +891,7 @@ fn parse_push_poll_start(
         sender: start.sender.clone(),
         content: Content::Poll(PollContent {
             question: poll.question.text.clone(),
-            options: poll
+            answers: poll
                 .answers
                 .iter()
                 .map(|answer| PollOption {
@@ -891,9 +899,14 @@ fn parse_push_poll_start(
                     text: answer.text.clone(),
                 })
                 .collect(),
-            max_selections,
+            kind: semantic_kind_for(&poll.kind).unwrap_or(PollSemanticKind::Undisclosed),
+            max_selections: u64::from(max_selections),
+            status: PollStatus::Open,
+            end_time: None,
+            results: None,
+            total_votes: 0,
             responses: Vec::new(),
-            my_votes: Vec::new(),
+            my_votes: None,
         }),
         author_public_key: if trusted_block {
             author_public_key
@@ -1384,10 +1397,10 @@ mod tests {
         match parsed.content {
             Content::Poll(poll) => {
                 assert_eq!(poll.question, "best?");
-                assert_eq!(poll.options.len(), 2);
+                assert_eq!(poll.answers.len(), 2);
                 assert_eq!(poll.max_selections, 1);
-                assert_eq!(poll.options[1].id, "2");
-                assert_eq!(poll.options[1].text, "B");
+                assert_eq!(poll.answers[1].id, "2");
+                assert_eq!(poll.answers[1].text, "B");
             }
             other => panic!("expected poll content, got {other:?}"),
         }
@@ -1753,9 +1766,9 @@ mod tests {
             Content::Poll(poll) => {
                 assert_eq!(poll.question, "best?");
                 assert_eq!(poll.max_selections, 2);
-                assert_eq!(poll.options.len(), 2);
-                assert_eq!(poll.options[0].id, "a");
-                assert_eq!(poll.options[1].id, "b");
+                assert_eq!(poll.answers.len(), 2);
+                assert_eq!(poll.answers[0].id, "a");
+                assert_eq!(poll.answers[1].id, "b");
             }
             other => panic!("expected poll content, got {other:?}"),
         }

@@ -28,6 +28,7 @@ use cumments_core::{
         PollEnd, PollVote, ProjectionRepairInput, Reaction, RoomIdentity, RoomMember,
         RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion, TextStyle,
     },
+    poll::PollStatus,
     ports::{
         CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore,
         RegistryStore, RoleClaimStore, RoomStore, SiteStore, StickerPackStore, SubmissionStore,
@@ -1671,12 +1672,27 @@ impl EventProcessor {
             event_id = %event.event_id,
             "Observed projected message event"
         );
-        self.emit(ProjectorEvent::MessageCreated {
-            site_id,
-            page_slug,
-            message: message.clone(),
-        })
-        .await;
+        if matches!(message.content, Content::Poll(_)) {
+            let hydrated = self
+                .message_store
+                .get_message(&message.event_id)
+                .await?
+                .unwrap_or_else(|| message.clone());
+            self.emit(ProjectorEvent::PollCreated {
+                site_id,
+                page_slug,
+                poll_id: message.event_id.clone(),
+                message: hydrated,
+            })
+            .await;
+        } else {
+            self.emit(ProjectorEvent::MessageCreated {
+                site_id,
+                page_slug,
+                message: message.clone(),
+            })
+            .await;
+        }
         // A new Thread member changes the root's derived summary. The root
         // annotation re-reads committed state, so the payload is an
         // authoritative snapshot rather than a predicted transition.
@@ -1851,6 +1867,12 @@ impl EventProcessor {
         // The raw selections are stored as delivered; the reducer is the sole
         // authority on their meaning. No option-index mapping, truncation or
         // spoiling happens here.
+        let prev_proj = self
+            .message_store
+            .get_poll_projections(std::slice::from_ref(&event.poll_message_id))
+            .await?
+            .remove(&event.poll_message_id);
+
         self.message_store
             .save_poll_vote_with_selections(
                 &PollVote {
@@ -1864,20 +1886,44 @@ impl EventProcessor {
                 None,
             )
             .await?;
-        // Annotation snapshots are best-effort: the poll may not be projected
-        // yet. Reads derive the effective state from the stored facts either
-        // way, so a missing snapshot here cannot lose the vote.
-        if let Some(updated) = self
+
+        let new_proj = self
             .message_store
-            .get_message(&event.poll_message_id)
+            .get_poll_projections(std::slice::from_ref(&event.poll_message_id))
             .await?
-        {
-            self.emit(ProjectorEvent::MessageAnnotationsChanged {
-                site_id: updated.site_id.clone(),
-                page_slug: updated.page_slug.clone(),
-                message: updated,
-            })
-            .await;
+            .remove(&event.poll_message_id);
+
+        if let Some(new_proj) = new_proj {
+            let prev_tallies = prev_proj.as_ref().map(|p| &p.tallies);
+            let prev_total = prev_proj.as_ref().map(|p| p.total_votes).unwrap_or(0);
+            if (prev_tallies != Some(&new_proj.tallies) || prev_total != new_proj.total_votes)
+                && let Some(poll_msg) = self
+                    .message_store
+                    .get_message(&event.poll_message_id)
+                    .await?
+            {
+                let show_results = new_proj.disclosed || new_proj.status == PollStatus::Ended;
+                let results = if show_results {
+                    let mut map = serde_json::Map::new();
+                    for tally in &new_proj.tallies {
+                        map.insert(
+                            tally.answer_id.clone(),
+                            serde_json::Value::from(tally.count),
+                        );
+                    }
+                    Some(map)
+                } else {
+                    None
+                };
+                self.emit(ProjectorEvent::PollVoted {
+                    site_id: poll_msg.site_id,
+                    page_slug: poll_msg.page_slug,
+                    poll_id: event.poll_message_id,
+                    results,
+                    total_votes: new_proj.total_votes,
+                })
+                .await;
+            }
         }
         Ok(())
     }
@@ -1912,6 +1958,12 @@ impl EventProcessor {
             debug!("Ignoring tombstoned poll end {}", event.event_id);
             return Ok(());
         }
+        let prev_proj = self
+            .message_store
+            .get_poll_projections(std::slice::from_ref(&event.poll_message_id))
+            .await?
+            .remove(&event.poll_message_id);
+
         self.message_store
             .save_poll_end(&PollEnd {
                 event_id: event.event_id,
@@ -1920,17 +1972,44 @@ impl EventProcessor {
                 origin_server_ts: event.origin_server_ts,
             })
             .await?;
-        if let Some(updated) = self
+
+        let new_proj = self
             .message_store
-            .get_message(&event.poll_message_id)
+            .get_poll_projections(std::slice::from_ref(&event.poll_message_id))
             .await?
-        {
-            self.emit(ProjectorEvent::MessageAnnotationsChanged {
-                site_id: updated.site_id.clone(),
-                page_slug: updated.page_slug.clone(),
-                message: updated,
-            })
-            .await;
+            .remove(&event.poll_message_id);
+
+        if let Some(new_proj) = new_proj {
+            let prev_status = prev_proj.as_ref().map(|p| p.status);
+            if prev_status != Some(PollStatus::Ended)
+                && new_proj.status == PollStatus::Ended
+                && let Some(poll_msg) = self
+                    .message_store
+                    .get_message(&event.poll_message_id)
+                    .await?
+            {
+                let mut results = serde_json::Map::new();
+                for tally in &new_proj.tallies {
+                    results.insert(
+                        tally.answer_id.clone(),
+                        serde_json::Value::from(tally.count),
+                    );
+                }
+                let end_time = new_proj
+                    .end
+                    .as_ref()
+                    .map(|e| e.origin_server_ts)
+                    .unwrap_or(event.origin_server_ts);
+                self.emit(ProjectorEvent::PollEnded {
+                    site_id: poll_msg.site_id,
+                    page_slug: poll_msg.page_slug,
+                    poll_id: event.poll_message_id,
+                    results,
+                    total_votes: new_proj.total_votes,
+                    end_time,
+                })
+                .await;
+            }
         }
         Ok(())
     }
@@ -2719,6 +2798,12 @@ impl EventProcessor {
                 );
                 return Ok(());
             }
+            let prev_proj = self
+                .message_store
+                .get_poll_projections(std::slice::from_ref(&vote.poll_message_id))
+                .await?
+                .remove(&vote.poll_message_id);
+
             if self
                 .message_store
                 .redact_poll_vote(&target_event_id, redacted_at, &redacted_by)
@@ -2728,17 +2813,39 @@ impl EventProcessor {
                     .record_backfill_tombstone(&target_event_id, &event.room_id, &event.event_id)
                     .await?;
                 info!("Successfully redacted poll vote {}", target_event_id);
-                if let Some(updated) = self
+                let new_proj = self
                     .message_store
-                    .get_message(&vote.poll_message_id)
+                    .get_poll_projections(std::slice::from_ref(&vote.poll_message_id))
                     .await?
-                {
-                    self.emit(ProjectorEvent::MessageAnnotationsChanged {
-                        site_id: updated.site_id.clone(),
-                        page_slug: updated.page_slug.clone(),
-                        message: updated,
-                    })
-                    .await;
+                    .remove(&vote.poll_message_id);
+                if let Some(new_proj) = new_proj {
+                    let prev_tallies = prev_proj.as_ref().map(|p| &p.tallies);
+                    let prev_total = prev_proj.as_ref().map(|p| p.total_votes).unwrap_or(0);
+                    if prev_tallies != Some(&new_proj.tallies) || prev_total != new_proj.total_votes
+                    {
+                        let show_results =
+                            new_proj.disclosed || new_proj.status == PollStatus::Ended;
+                        let results = if show_results {
+                            let mut map = serde_json::Map::new();
+                            for tally in &new_proj.tallies {
+                                map.insert(
+                                    tally.answer_id.clone(),
+                                    serde_json::Value::from(tally.count),
+                                );
+                            }
+                            Some(map)
+                        } else {
+                            None
+                        };
+                        self.emit(ProjectorEvent::PollVoted {
+                            site_id: target.site_id,
+                            page_slug: target.page_slug,
+                            poll_id: vote.poll_message_id,
+                            results,
+                            total_votes: new_proj.total_votes,
+                        })
+                        .await;
+                    }
                 }
             }
             return Ok(());

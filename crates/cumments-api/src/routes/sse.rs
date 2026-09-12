@@ -11,7 +11,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use cumments_core::ephemeral::EphemeralEvent;
-use cumments_core::models::{PageSlug, SiteId};
+use cumments_core::models::{Content, PageSlug, SiteId};
 use cumments_core::projector_events::ProjectorEvent;
 use sha2::{Digest, Sha256};
 use std::convert::Infallible;
@@ -128,6 +128,9 @@ pub(crate) async fn sse_handler(
                         ProjectorEvent::MessageUpdated { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
                         ProjectorEvent::MessageAnnotationsChanged { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
                         ProjectorEvent::MessageDeleted { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
+                        ProjectorEvent::PollCreated { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
+                        ProjectorEvent::PollVoted { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
+                        ProjectorEvent::PollEnded { site_id: s, page_slug: p, .. } => s == &site_id && p == &page_slug,
                     };
 
                     if matches {
@@ -138,7 +141,8 @@ pub(crate) async fn sse_handler(
                         match &mut payload {
                             ProjectorEvent::MessageCreated { message, .. }
                             | ProjectorEvent::MessageUpdated { message, .. }
-                            | ProjectorEvent::MessageAnnotationsChanged { message, .. } => {
+                            | ProjectorEvent::MessageAnnotationsChanged { message, .. }
+                            | ProjectorEvent::PollCreated { message, .. } => {
                                 if let Ok(Some(member)) =
                                     store.get_member(&message.room_id, &message.sender_mxid).await
                                     && member.membership == "join"
@@ -146,17 +150,25 @@ pub(crate) async fn sse_handler(
                                     message.author.display_name = member.display_name;
                                     message.author.avatar_url = member.avatar_url;
                                 }
+                                if let Content::Poll(ref mut poll) = message.content {
+                                    poll.my_votes = None;
+                                }
                             }
-                            ProjectorEvent::MessageDeleted { .. } => {}
+                            ProjectorEvent::MessageDeleted { .. }
+                            | ProjectorEvent::PollVoted { .. }
+                            | ProjectorEvent::PollEnded { .. } => {}
                         }
                         if let Some(proxy) = &media_proxy {
                             match &mut payload {
                                 ProjectorEvent::MessageCreated { message, .. }
                                 | ProjectorEvent::MessageUpdated { message, .. }
-                                | ProjectorEvent::MessageAnnotationsChanged { message, .. } => {
+                                | ProjectorEvent::MessageAnnotationsChanged { message, .. }
+                                | ProjectorEvent::PollCreated { message, .. } => {
                                     proxy.proxify_message(message, &media_base);
                                 }
-                                ProjectorEvent::MessageDeleted { .. } => {}
+                                ProjectorEvent::MessageDeleted { .. }
+                                | ProjectorEvent::PollVoted { .. }
+                                | ProjectorEvent::PollEnded { .. } => {}
                             }
                         }
                         let Ok(json) = serde_json::to_string(&payload) else {
@@ -169,6 +181,9 @@ pub(crate) async fn sse_handler(
                                 "message_annotations_changed"
                             }
                             ProjectorEvent::MessageDeleted { .. } => "message_deleted",
+                            ProjectorEvent::PollCreated { .. } => "poll_created",
+                            ProjectorEvent::PollVoted { .. } => "poll_voted",
+                            ProjectorEvent::PollEnded { .. } => "poll_ended",
                         };
                         let mut hasher = Sha256::new();
                         hasher.update(json.as_bytes());
