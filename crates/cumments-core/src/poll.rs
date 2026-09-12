@@ -308,6 +308,132 @@ pub fn is_valid_answer_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
+/// Why raw vote selections are not a valid canonical selection set.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum VoteSelectionError {
+    #[error("answer id {0:?} is not a valid answer identifier")]
+    InvalidId(String),
+    #[error("at most {max} selection(s) are allowed")]
+    TooMany { max: u64 },
+    #[error("answer id {0:?} is not an option of the target poll")]
+    UnknownId(String),
+}
+
+/// Normalize raw vote selections into the canonical selection set.
+///
+/// Selections are an unordered set: the pipeline is exactly the frozen design
+/// (§9.5.2) — validate syntax, deduplicate exactly, sort byte-wise, enforce
+/// `max_selections`, then require every id to exist on the target poll. Order
+/// is only canonicalized for the signed representation; it never affects the
+/// poll's declared answer order. An empty input is a valid explicit unvote.
+pub fn normalize_vote_selections(
+    raw: &[String],
+    max_selections: u64,
+    known_option_ids: &[String],
+) -> Result<Vec<String>, VoteSelectionError> {
+    for id in raw {
+        if !is_valid_answer_id(id) {
+            return Err(VoteSelectionError::InvalidId(id.clone()));
+        }
+    }
+    let mut canonical: Vec<String> = Vec::with_capacity(raw.len());
+    for id in raw {
+        if !canonical.contains(id) {
+            canonical.push(id.clone());
+        }
+    }
+    canonical.sort();
+    if canonical.len() as u64 > max_selections {
+        return Err(VoteSelectionError::TooMany {
+            max: max_selections,
+        });
+    }
+    for id in &canonical {
+        if !known_option_ids.iter().any(|known| known == id) {
+            return Err(VoteSelectionError::UnknownId(id.clone()));
+        }
+    }
+    Ok(canonical)
+}
+
+/// Build the canonical `VOTE` semantic operation (frozen design §9.5.2):
+///
+/// ```text
+/// ["VOTE", [site_id, page_slug, poll_event_id], [canonical_option_ids...], 1]
+/// ```
+///
+/// The payload is already normalized (deduplicated and byte-wise sorted), so
+/// the same selection set always produces the same operation regardless of the
+/// order the client supplied.
+pub fn vote_semantic_operation(
+    site_id: &str,
+    page_slug: &str,
+    poll_event_id: &str,
+    canonical_option_ids: &[String],
+) -> CanonicalJson {
+    CanonicalJson::array(vec![
+        CanonicalJson::string("VOTE"),
+        CanonicalJson::array(vec![
+            CanonicalJson::string(site_id),
+            CanonicalJson::string(page_slug),
+            CanonicalJson::string(poll_event_id),
+        ]),
+        CanonicalJson::array(
+            canonical_option_ids
+                .iter()
+                .map(|id| CanonicalJson::string(id.clone()))
+                .collect(),
+        ),
+        CanonicalJson::int(SEMANTIC_SCHEMA_VERSION),
+    ])
+}
+
+/// The semantic VOTE meaning actually encoded by a `poll.response` wire event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoteWireSemantics {
+    pub site_id: String,
+    pub page_slug: String,
+    pub poll_event_id: String,
+    /// Canonical (deduplicated, byte-wise sorted) selections.
+    pub option_ids: Vec<String>,
+}
+
+impl VoteWireSemantics {
+    /// The canonical semantic operation this wire content denotes.
+    pub fn to_semantic_operation(&self) -> CanonicalJson {
+        vote_semantic_operation(
+            &self.site_id,
+            &self.page_slug,
+            &self.poll_event_id,
+            &self.option_ids,
+        )
+    }
+}
+
+/// Verify a visitor `poll.response` proof against the actual Vote wire content.
+///
+/// Succeeds only when the signature verifies over `signed_operation` and that
+/// signed operation is byte-for-byte the canonical VOTE operation the wire
+/// content denotes.
+#[allow(clippy::too_many_arguments)] // mirrors the wire facts and proof
+pub fn verify_vote_proof(
+    public_key_b64: &str,
+    signed_operation: &CanonicalJson,
+    operation_id: &str,
+    challenge: &str,
+    signature_b64: &str,
+    wire: &VoteWireSemantics,
+) -> bool {
+    wire.to_semantic_operation() == *signed_operation
+        && verify_poll_signature(
+            public_key_b64,
+            signed_operation,
+            operation_id,
+            challenge,
+            signature_b64,
+        )
+}
+
 /// One declared answer option, in presentation order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollAnswerFact {
@@ -1721,6 +1847,170 @@ mod semantic_tests {
             "chal",
             &other_sig,
             &wire
+        ));
+    }
+
+    // ── Vote ──────────────────────────────────────────────────────
+
+    #[test]
+    fn vote_selections_are_canonicalized_as_a_set() {
+        let known: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let norm = |raw: &[&str]| {
+            let raw: Vec<String> = raw.iter().map(|s| s.to_string()).collect();
+            normalize_vote_selections(&raw, 2, &known)
+        };
+
+        assert_eq!(norm(&["a"]).unwrap(), vec!["a"]);
+        assert_eq!(norm(&["b", "a"]).unwrap(), vec!["a", "b"]);
+        assert_eq!(norm(&["a", "a", "b"]).unwrap(), vec!["a", "b"]);
+        // Empty is an explicit unvote.
+        assert_eq!(norm(&[]).unwrap(), Vec::<String>::new());
+
+        // Case-sensitive: "A" and "a" are distinct identifiers.
+        let case_known: Vec<String> = ["a", "A"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            normalize_vote_selections(&["A".to_string(), "a".to_string()], 2, &case_known).unwrap(),
+            vec!["A", "a"]
+        );
+    }
+
+    #[test]
+    fn vote_selection_conflicts_are_rejected() {
+        let known: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        // Invalid syntax.
+        assert_eq!(
+            normalize_vote_selections(&["has space".to_string()], 1, &known),
+            Err(VoteSelectionError::InvalidId("has space".to_string()))
+        );
+        // Unknown id.
+        assert_eq!(
+            normalize_vote_selections(&["zzz".to_string()], 1, &known),
+            Err(VoteSelectionError::UnknownId("zzz".to_string()))
+        );
+        // Too many selections after deduplication (["a","a","b"] -> 2 > 1).
+        assert_eq!(
+            normalize_vote_selections(
+                &["a".to_string(), "a".to_string(), "b".to_string()],
+                1,
+                &known
+            ),
+            Err(VoteSelectionError::TooMany { max: 1 })
+        );
+        // Duplicates do not consume slots after deduplication.
+        assert_eq!(
+            normalize_vote_selections(&["a".to_string(), "a".to_string()], 1, &known),
+            Ok(vec!["a".to_string()])
+        );
+    }
+
+    #[test]
+    fn vote_semantic_operation_matches_the_frozen_structure() {
+        let op = vote_semantic_operation(
+            "site-dev",
+            "post-101",
+            "$poll:hs",
+            &["slot-10am".to_string()],
+        );
+        assert_eq!(
+            op.to_canonical_string(),
+            r#"["VOTE",["site-dev","post-101","$poll:hs"],["slot-10am"],1]"#
+        );
+    }
+
+    #[test]
+    fn vote_operation_is_order_insensitive_but_binds_target_and_set() {
+        let a = vote_semantic_operation(
+            "site",
+            "page",
+            "$poll:hs",
+            &["a".to_string(), "b".to_string()],
+        );
+        // A permutation that normalizes to the same set produces the same
+        // operation and fingerprint.
+        let known = vec!["a".to_string(), "b".to_string()];
+        let permuted_ids =
+            normalize_vote_selections(&["b".to_string(), "a".to_string()], 2, &known).unwrap();
+        let permuted = vote_semantic_operation("site", "page", "$poll:hs", &permuted_ids);
+        assert_eq!(a, permuted);
+        assert_eq!(
+            poll_semantic_fingerprint(&a),
+            poll_semantic_fingerprint(&permuted)
+        );
+
+        // Target changes the operation.
+        let other_target = vote_semantic_operation(
+            "site",
+            "page",
+            "$other:hs",
+            &["a".to_string(), "b".to_string()],
+        );
+        assert_ne!(a, other_target);
+        // Selection set changes the operation.
+        let other_set = vote_semantic_operation("site", "page", "$poll:hs", &["a".to_string()]);
+        assert_ne!(a, other_set);
+        // Schema version is the final element.
+        let json = a.to_json_value();
+        assert_eq!(json[0], "VOTE");
+        assert_eq!(json[1], serde_json::json!(["site", "page", "$poll:hs"]));
+        assert_eq!(json[2], serde_json::json!(["a", "b"]));
+        assert_eq!(json[3], 1);
+    }
+
+    #[test]
+    fn vote_proof_verifies_signature_and_wire_consistency() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[51u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let wire = VoteWireSemantics {
+            site_id: "site".to_string(),
+            page_slug: "page".to_string(),
+            poll_event_id: "$poll:hs".to_string(),
+            option_ids: vec!["a".to_string()],
+        };
+        let signed = wire.to_semantic_operation();
+        let envelope = poll_signature_envelope(&signed, "op-1", "chal");
+        let signature = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(envelope.to_canonical_bytes().as_slice())
+                .to_bytes(),
+        );
+
+        assert!(verify_vote_proof(
+            &public_key,
+            &signed,
+            "op-1",
+            "chal",
+            &signature,
+            &wire
+        ));
+
+        // A different selection set must not verify against the same signature.
+        let tampered = VoteWireSemantics {
+            option_ids: vec!["b".to_string()],
+            ..wire.clone()
+        };
+        assert!(!verify_vote_proof(
+            &public_key,
+            &signed,
+            "op-1",
+            "chal",
+            &signature,
+            &tampered
+        ));
+        // Target changes are rejected too.
+        let other_target = VoteWireSemantics {
+            poll_event_id: "$other:hs".to_string(),
+            ..wire.clone()
+        };
+        assert!(!verify_vote_proof(
+            &public_key,
+            &signed,
+            "op-1",
+            "chal",
+            &signature,
+            &other_target
         ));
     }
 }

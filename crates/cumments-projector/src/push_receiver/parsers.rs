@@ -13,7 +13,7 @@ use cumments_core::models::{
 };
 use cumments_core::poll::{
     PollAnswerFact, PollSemanticAnswer, PollSemanticKind, PollStartFact, PollWireSemantics,
-    verify_poll_start_proof,
+    VoteWireSemantics, verify_poll_start_proof, verify_vote_proof,
 };
 use cumments_core::protocol::{
     MESSAGE_CONTENT_KEY, MESSAGE_SCHEMA_VERSION, PROVENANCE_CONTENT_KEY, PROVENANCE_SCHEMA_VERSION,
@@ -89,10 +89,6 @@ pub(crate) async fn process_single_event(
 
     match event_type {
         "m.room.message" | "m.sticker" | "m.room.encrypted" => {
-            if let Some(vote) = parse_push_poll_vote(event) {
-                processor.process_poll_vote(vote).await?;
-                return Ok(());
-            }
             if let Some(mut parsed) = parse_push_message(event) {
                 if processor.process_bot_command(&parsed).await? {
                     return Ok(());
@@ -557,60 +553,6 @@ fn parse_push_reaction(event: &PushEvent) -> Option<ParsedReaction> {
     })
 }
 
-/// Parse a poll response (`m.room.message` with
-/// `msgtype: org.matrix.msc3381.poll.response`) into a `ParsedPollVote`.
-fn parse_push_poll_vote(event: &PushEvent) -> Option<ParsedPollVote> {
-    let room_id = event.room_id.as_ref()?;
-    let event_id = event.event_id.as_ref()?;
-    let sender = event.sender.as_ref()?;
-    let content = event.content.as_ref()?;
-    if content.get("msgtype").and_then(|v| v.as_str()) != Some("org.matrix.msc3381.poll.response") {
-        return None;
-    }
-    let response = content.get("org.matrix.msc3381.poll.response")?;
-    let answer_ids = response
-        .get("answers")
-        .and_then(|a| a.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-        .collect();
-    let poll_message_id = content
-        .get("m.relates_to")
-        .and_then(|rel| rel.get("event_id"))
-        .and_then(|v| v.as_str())?
-        .to_string();
-    let is_virtual_user_sender = is_virtual_user_sender(sender);
-    let has_cumments_block = content.get(MESSAGE_CONTENT_KEY).is_some();
-    let schema_ok = message_block_schema_is_supported(content.get(MESSAGE_CONTENT_KEY));
-    let effective_virtual = is_virtual_user_sender && (!has_cumments_block || schema_ok);
-    Some(ParsedPollVote {
-        room_id: room_id.clone(),
-        event_id: event_id.clone(),
-        sender: sender.clone(),
-        poll_message_id,
-        answer_ids,
-        origin_server_ts: event.origin_server_ts.unwrap_or(0),
-        is_virtual_user_sender: effective_virtual,
-        author_public_key: if effective_virtual {
-            namespaced_string(content, "public_key").map(|s| s.to_string())
-        } else {
-            None
-        },
-        author_signature: if effective_virtual {
-            namespaced_string(content, "signature").map(|s| s.to_string())
-        } else {
-            None
-        },
-        author_challenge: if effective_virtual {
-            namespaced_string(content, "challenge").map(|s| s.to_string())
-        } else {
-            None
-        },
-        room_identity: None,
-    })
-}
-
 /// Parse a room state event (system message / room metadata).
 fn parse_push_state(event: &PushEvent) -> Option<ParsedRoomState> {
     let room_id = event.room_id.as_ref()?;
@@ -782,10 +724,18 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
             processor.process_room_message(message).await?;
         }
         PollEvent::Response(response) => {
-            let Some(mut vote) = parse_push_poll_response(event, &response) else {
+            // Room identity supplies the target's `site_id` / `page_slug`, which
+            // the wire event does not carry; it is needed to verify a visitor's
+            // signed Vote operation.
+            let Some(room_id) = event.room_id.as_deref() else {
                 return Ok(());
             };
-            vote.room_identity = processor.resolve_room_identity(&vote.room_id).await?;
+            let room_identity = processor.resolve_room_identity(room_id).await?;
+            let Some(mut vote) = parse_push_poll_response(event, &response, room_identity.as_ref())
+            else {
+                return Ok(());
+            };
+            vote.room_identity = room_identity;
             processor.process_poll_vote(vote).await?;
         }
         PollEvent::End(end) => {
@@ -976,16 +926,68 @@ fn parse_push_poll_start(
 }
 
 /// Parse a direct `poll.response` event into a [`ParsedPollVote`].
+///
+/// `room_identity` supplies the target's `site_id` / `page_slug`, which the
+/// wire event does not carry; it is required to prove that a visitor's signed
+/// VOTE operation is the selection set the event actually encodes.
 fn parse_push_poll_response(
     event: &PushEvent,
     response: &PollResponseEvent,
+    room_identity: Option<&RoomIdentity>,
 ) -> Option<ParsedPollVote> {
     let room_id = event.room_id.as_ref()?;
     let content = event.content.as_ref()?;
-    let is_virtual_user_sender = is_virtual_user_sender(&response.sender);
-    let has_cumments_block = content.get(MESSAGE_CONTENT_KEY).is_some();
-    let schema_ok = message_block_schema_is_supported(content.get(MESSAGE_CONTENT_KEY));
-    let effective_virtual = is_virtual_user_sender && (!has_cumments_block || schema_ok);
+    let is_virtual_sender = is_virtual_user_sender(&response.sender);
+
+    // Visitor responses are authenticated by the frozen VOTE envelope in the
+    // provenance block, and the signed operation must denote exactly the
+    // selections this wire event carries. Matrix-native senders carry no
+    // Cumments proof.
+    let (author_public_key, author_signature, author_challenge, trusted) = if is_virtual_sender {
+        let pk = namespaced_string(content, "public_key").map(str::to_owned);
+        let sig = namespaced_string(content, "signature").map(str::to_owned);
+        let chal = namespaced_string(content, "challenge").map(str::to_owned);
+        let operation_id = namespaced_string(content, "operation_id");
+        let signed = content
+            .get(PROVENANCE_CONTENT_KEY)
+            .and_then(|provenance| provenance.get("content"));
+        let valid = match (&pk, &sig, &chal, operation_id, signed, room_identity) {
+            (
+                Some(pk),
+                Some(sig),
+                Some(chal),
+                Some(operation_id),
+                Some(op_json),
+                Some(identity),
+            ) if provenance_schema_is_supported(content) => {
+                // Selections are an unordered set: normalize the wire answers
+                // before comparing them to the signed operation.
+                let mut option_ids = response.content.response.answers.clone();
+                option_ids.sort();
+                option_ids.dedup();
+                let wire = VoteWireSemantics {
+                    site_id: identity.site_id.clone(),
+                    page_slug: identity.page_slug.clone(),
+                    poll_event_id: response.content.relates_to.event_id.clone(),
+                    option_ids,
+                };
+                CanonicalJson::from_json_value(op_json)
+                    .is_some_and(|op| verify_vote_proof(pk, &op, operation_id, chal, sig, &wire))
+            }
+            _ => false,
+        };
+        if !valid {
+            warn!(
+                event_id = ?event.event_id,
+                "Rejecting visitor poll response whose signed operation does not match its wire content"
+            );
+            return None;
+        }
+        (pk, sig, chal, true)
+    } else {
+        (None, None, None, false)
+    };
+
     Some(ParsedPollVote {
         room_id: room_id.clone(),
         event_id: response.event_id.clone().unwrap_or_default(),
@@ -993,22 +995,10 @@ fn parse_push_poll_response(
         poll_message_id: response.content.relates_to.event_id.clone(),
         answer_ids: response.content.response.answers.clone(),
         origin_server_ts: response.origin_server_ts,
-        is_virtual_user_sender: effective_virtual,
-        author_public_key: if effective_virtual {
-            namespaced_string(content, "public_key").map(str::to_owned)
-        } else {
-            None
-        },
-        author_signature: if effective_virtual {
-            namespaced_string(content, "signature").map(str::to_owned)
-        } else {
-            None
-        },
-        author_challenge: if effective_virtual {
-            namespaced_string(content, "challenge").map(str::to_owned)
-        } else {
-            None
-        },
+        is_virtual_user_sender: is_virtual_sender,
+        author_public_key: if trusted { author_public_key } else { None },
+        author_signature: if trusted { author_signature } else { None },
+        author_challenge: if trusted { author_challenge } else { None },
         room_identity: None,
     })
 }
@@ -1404,7 +1394,9 @@ mod tests {
     }
 
     #[test]
-    fn poll_response_is_routed_separately() {
+    fn legacy_poll_response_message_is_ignored() {
+        // The discarded legacy `m.room.message` poll-response wire is no longer
+        // ingested; only the direct `org.matrix.msc3381.poll.response` type is.
         let event = event_with_content(
             "m.room.message",
             serde_json::json!({
@@ -1414,9 +1406,6 @@ mod tests {
             }),
         );
         assert!(parse_push_message(&event).is_none());
-        let vote = parse_push_poll_vote(&event).expect("parse vote");
-        assert_eq!(vote.poll_message_id, "$poll:hs");
-        assert_eq!(vote.answer_ids, vec!["1".to_string()]);
     }
 
     #[test]
@@ -1847,10 +1836,85 @@ mod tests {
         .unwrap() else {
             panic!("expected response");
         };
-        let vote = parse_push_poll_response(&event, &response).expect("project response");
+        let vote = parse_push_poll_response(&event, &response, Some(&poll_identity()))
+            .expect("project response");
         assert_eq!(vote.poll_message_id, "$poll:hs");
         assert_eq!(vote.answer_ids, vec!["a".to_string(), "b".to_string()]);
         assert!(!vote.is_virtual_user_sender);
+    }
+
+    #[test]
+    fn visitor_poll_response_requires_matching_signed_operation() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use cumments_core::poll::{poll_signature_envelope, vote_semantic_operation};
+        use ed25519_dalek::Signer;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[32u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let identity = poll_identity();
+
+        let build = |answers: &[&str], signed_answers: &[&str]| -> PushEvent {
+            let signed: Vec<String> = signed_answers.iter().map(|s| s.to_string()).collect();
+            let op = vote_semantic_operation(
+                &identity.site_id,
+                &identity.page_slug,
+                "$poll:hs",
+                &signed,
+            );
+            let envelope = poll_signature_envelope(&op, "vote-op", "chal");
+            let signature = URL_SAFE_NO_PAD.encode(
+                signing_key
+                    .sign(envelope.to_canonical_bytes().as_slice())
+                    .to_bytes(),
+            );
+            let mut event = direct_event(
+                POLL_RESPONSE_EVENT_TYPE,
+                serde_json::json!({
+                    "m.relates_to": { "rel_type": "m.reference", "event_id": "$poll:hs" },
+                    "org.matrix.msc3381.poll.response": { "answers": answers },
+                    PROVENANCE_CONTENT_KEY: {
+                        "schema": PROVENANCE_SCHEMA_VERSION,
+                        "operation_id": "vote-op",
+                        "public_key": public_key,
+                        "signature": signature,
+                        "challenge": "chal",
+                        "content": op.to_json_value(),
+                    },
+                }),
+            );
+            event.sender =
+                Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
+            event
+        };
+
+        let parse =
+            |event: &PushEvent, identity: Option<&RoomIdentity>| -> Option<ParsedPollVote> {
+                let content = event.content.as_ref().expect("content");
+                let PollEvent::Response(response) = PollEvent::parse(
+                    POLL_RESPONSE_EVENT_TYPE,
+                    Some("$e:hs"),
+                    event.sender.as_deref().unwrap(),
+                    100,
+                    content,
+                )
+                .unwrap()
+                .unwrap() else {
+                    panic!("expected response");
+                };
+                parse_push_poll_response(event, &response, identity)
+            };
+
+        // Valid: the wire set matches the signed set (order-insensitive).
+        let valid = parse(&build(&["b", "a"], &["a", "b"]), Some(&identity))
+            .expect("valid visitor response");
+        assert!(valid.is_virtual_user_sender);
+        assert_eq!(valid.answer_ids, vec!["b".to_string(), "a".to_string()]);
+
+        // Forged: signature is over ["a"] but the wire claims ["b"].
+        assert!(parse(&build(&["b"], &["a"]), Some(&identity)).is_none());
+
+        // Without room identity a visitor response cannot be authenticated.
+        assert!(parse(&build(&["a"], &["a"]), None).is_none());
     }
 
     #[test]

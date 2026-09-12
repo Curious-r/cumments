@@ -1120,6 +1120,10 @@ impl MessageStore for DbStore {
         Ok(result.rows_affected > 0)
     }
 
+    async fn get_poll_projection(&self, poll_message_id: &str) -> Result<Option<PollProjection>> {
+        self.poll_projection(poll_message_id).await
+    }
+
     async fn record_backfill_tombstone(
         &self,
         event_id: &str,

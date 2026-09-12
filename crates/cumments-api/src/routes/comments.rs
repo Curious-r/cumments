@@ -27,11 +27,14 @@ use cumments_core::{
     },
     models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
     poll::{
-        PollSemanticAnswer, poll_semantic_fingerprint, poll_semantic_operation,
-        validate_poll_semantic_definition, verify_poll_signature,
+        PollSemanticAnswer, PollStatus, normalize_vote_selections, poll_semantic_fingerprint,
+        poll_semantic_operation, validate_poll_semantic_definition, verify_poll_signature,
+        vote_semantic_operation,
     },
+    ports::PollResponseRequest,
     submissions::{
-        IdempotencyInput, IdempotencyOutcome, OperationIdentity, deterministic_transaction_id,
+        IdempotencyInput, IdempotencyOutcome, OperationClaimOutcome, OperationIdentity,
+        deterministic_transaction_id, fresh_transaction_id,
     },
 };
 use ruma_common::EventId;
@@ -1347,31 +1350,22 @@ pub(crate) async fn vote_handler(
     if !state.write_limiter.allow(&key) {
         return Err(comment_write_rate_limited(&state));
     }
+    // The HTTP `Idempotency-Key` is the server-wide logical operation id.
+    let operation_id = extract_idempotency_key(&headers)?;
     let req: VoteRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+
+    // 1. Structural validation.
     req.validate().map_err(AppError::Validation)?;
     if let Err(msg) = validate_comment_id_format(&poll_id) {
         return Err(AppError::BadRequest(msg.to_string()));
     }
-    if !state.pow.verify(&req.challenge_response) {
-        return Err(AppError::InvalidPoW);
-    }
-    let challenge = challenge_prefix(&req.challenge_response);
-    let message = signature_message(&[
-        Some("VOTE"),
-        Some(site_id.as_str()),
-        Some(page_slug.as_str()),
-        Some(poll_id.as_str()),
-        Some(req.option_id.as_str()),
-        Some(challenge),
-        Some("1"),
-    ]);
-    if !verify_signature(&req.author_public_key, &message, &req.author_signature) {
-        return Err(AppError::InvalidSignature);
-    }
-
     let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
     let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+
+    // 2. Resolve the target Poll from the derived read model and confirm it is
+    // voteable. The effective state (including whether it has ended) comes from
+    // the Matrix-derived projection, never from local desired state.
     let Some(poll_message) = state
         .store
         .get_message(&poll_id)
@@ -1381,12 +1375,22 @@ pub(crate) async fn vote_handler(
         return Err(AppError::NotFound("Poll not found.".to_string()));
     };
     active_target_in_page(&poll_message, site_id_val.as_str(), page_slug_val.as_str())?;
-    let Content::Poll(poll) = &poll_message.content else {
+    if !matches!(poll_message.content, Content::Poll(_)) {
         return Err(AppError::BadRequest("target is not a poll".to_string()));
-    };
-    if !poll.options.iter().any(|option| option.id == req.option_id) {
-        return Err(AppError::BadRequest("poll option not found".to_string()));
     }
+    let Some(projection) = state
+        .store
+        .get_poll_projection(&poll_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to derive poll state: {e}")))?
+    else {
+        return Err(AppError::NotFound("Poll not found.".to_string()));
+    };
+    if projection.status != PollStatus::Open {
+        return Err(AppError::Conflict("The poll has ended.".to_string()));
+    }
+    // Resolve the Matrix room now so an unroutable target cannot consume PoW
+    // or claim the operation.
     let Some(room_id) = state
         .store
         .get_registered_room(&site_id_val, &page_slug_val)
@@ -1397,31 +1401,110 @@ pub(crate) async fn vote_handler(
             "No room registered for this post.".to_string(),
         ));
     };
-    state
+
+    // 3. Semantic normalization: validate syntax, deduplicate, sort byte-wise,
+    // enforce max_selections, then require every id to exist on the poll.
+    let known: Vec<String> = projection
+        .answers
+        .iter()
+        .map(|answer| answer.id.clone())
+        .collect();
+    let canonical = normalize_vote_selections(&req.option_ids, projection.max_selections, &known)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+
+    // 4. Canonical semantic operation and fingerprint.
+    let operation = vote_semantic_operation(
+        site_id_val.as_str(),
+        page_slug_val.as_str(),
+        &poll_id,
+        &canonical,
+    );
+    let fingerprint = poll_semantic_fingerprint(&operation);
+
+    // 5. Authenticate the author over the frozen signature envelope.
+    let challenge = challenge_prefix(&req.challenge_response);
+    if !verify_poll_signature(
+        &req.author_public_key,
+        &operation,
+        &operation_id,
+        challenge,
+        &req.author_signature,
+    ) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    // 6. Operation preflight: an authenticated replay is a success without
+    // consuming PoW; a mismatch is a conflict. No Matrix event is sent for a
+    // replay. Possessing the key alone never reveals another author's vote.
+    match state.store.lookup_operation(&operation_id).await {
+        Ok(Some(claim))
+            if claim.author_public_key == req.author_public_key
+                && claim.fingerprint == fingerprint =>
+        {
+            tracing::info!("Replayed idempotent VOTE operation {}", operation_id);
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        Ok(Some(_)) => return Err(AppError::IdempotencyReused),
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!("Failed to look up vote operation: {:?}", e);
+            return Err(AppError::Internal(
+                "Failed to verify idempotency.".to_string(),
+            ));
+        }
+    }
+
+    // 7. PoW admission control: only for a genuinely new operation.
+    if !state.pow.verify(&req.challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+
+    // 8. Atomically claim the operation, then emit exactly one Matrix response.
+    let identity = OperationIdentity::new(&operation_id, &req.author_public_key, &fingerprint);
+    match state.store.claim_operation(&identity).await {
+        Ok(OperationClaimOutcome::New) => {}
+        // A concurrent identical request already claimed and is sending; this
+        // request is a replay and must not emit a second event.
+        Ok(OperationClaimOutcome::Replay) => return Ok(StatusCode::NO_CONTENT),
+        Ok(OperationClaimOutcome::Conflict) => return Err(AppError::IdempotencyReused),
+        Err(e) => {
+            tracing::error!("Failed to claim vote operation: {:?}", e);
+            return Err(AppError::Internal("Failed to admit vote.".to_string()));
+        }
+    }
+
+    // A fresh Matrix txnId per new logical operation; it is transport-level
+    // only and never enters the signature or the semantic fingerprint.
+    let txn_id = fresh_transaction_id("vote");
+    let result = state
         .driver
-        .vote_poll(
-            &room_id,
-            &poll_id,
-            &req.option_id,
-            &site_id_val,
-            &req.author_public_key,
-            &req.author_signature,
-            challenge,
-            &deterministic_transaction_id(
-                "vote",
-                &[
-                    site_id_val.as_str(),
-                    page_slug_val.as_str(),
-                    room_id.as_str(),
-                    poll_id.as_str(),
-                    req.author_public_key.as_str(),
-                    req.option_id.as_str(),
-                    req.challenge_response.as_str(),
-                ],
-            ),
-        )
-        .await
-        .map_err(|e| AppError::Internal(format!("failed to send vote: {e}")))?;
+        .post_poll_response(PollResponseRequest {
+            room_id: &room_id,
+            poll_event_id: &poll_id,
+            option_ids: &canonical,
+            site_id: &site_id_val,
+            author_public_key: &req.author_public_key,
+            author_signature: &req.author_signature,
+            author_challenge: challenge,
+            operation_id: &operation_id,
+            semantic_operation: &operation,
+            txn_id: &txn_id,
+        })
+        .await;
+    if let Err(e) = result {
+        // Nothing was emitted; release the claim so a retry can re-attempt the
+        // send instead of replaying a false success. An identical re-sent
+        // response is semantically idempotent under the poll reducer.
+        tracing::error!("Failed to send poll vote response: {e}");
+        if let Err(release_err) = state.store.release_operation(&identity).await {
+            tracing::error!(
+                "Failed to release vote operation {} after send failure: {:?}",
+                operation_id,
+                release_err
+            );
+        }
+        return Err(AppError::Internal("Failed to send vote.".to_string()));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

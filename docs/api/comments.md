@@ -10,8 +10,8 @@ See [Site trust](../site-trust.md) for the policy.
 
 Every write carries the author proof described in the
 [API overview](index.md#authors). Durable submission endpoints also require an
-[`Idempotency-Key`](index.md#idempotent-writes) header; reactions, poll votes,
-and visitor avatar deletion are natural-idempotent exceptions described below.
+[`Idempotency-Key`](index.md#idempotent-writes) header; reactions and visitor
+avatar deletion are natural-idempotent exceptions described below.
 
 ## List comments
 
@@ -289,15 +289,25 @@ The Matrix event is `m.room.message` with `msgtype: "org.matrix.msc3381.poll.sta
 
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes`
 
-Body: `{ "option_id", "author_public_key", "author_signature", "challenge_response" }`.
-The signature covers `["VOTE", site_id, page_slug, poll_id, option_id, challenge, "1"]`;
-the vote is sent as `m.poll.response` (MSC3381) with the signed proof block
-and aggregated into the poll's response counts.
-This endpoint does not use `Idempotency-Key`. Matrix uses a deterministic
-transaction ID derived from the signed request and PoW challenge, so retrying
-the exact same Matrix request does not create another vote event. The PoW
-challenge is single-use at the HTTP API boundary, however, so a repeated HTTP
-request after success returns invalid-PoW instead of duplicating the effect.
+Body: `{ "option_ids", "author_public_key", "author_signature", "challenge_response" }`.
+Selections are an unordered set: `option_ids` is validated, deduplicated and
+byte-wise sorted before it is signed, so `["B","A","B"]` denotes the same vote
+as `["A","B"]`, duplicates do not consume selection slots, and an empty array is
+an explicit unvote. Every id must exist on the target poll and the canonical set
+must not exceed `max_selections`; violations return `400`. Votes against an
+ended poll return `409`.
+
+The signature covers the frozen envelope
+`["host.curious.cumments.signature", "1", ["VOTE", [site_id, page_slug, poll_id], [canonical_option_ids...], 1], operation_id, challenge_prefix]`.
+`Idempotency-Key` is the server-wide `operation_id`: an authenticated retry with
+the same key and fingerprint returns `204` without consuming PoW or sending a
+second event, while a reused key with a different author or fingerprint returns
+`409`. The operation is claimed atomically before it is sent, so a genuinely new
+vote emits exactly one `org.matrix.msc3381.poll.response` event carrying the
+canonical selection set; each new operation gets a fresh Matrix transaction ID
+(transport-level only, never signed). The effective vote state is derived by the
+existing Matrix event projection and reducer, not mutated locally by this
+endpoint.
 
 ## Post a location
 

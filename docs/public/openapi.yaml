@@ -1396,33 +1396,30 @@ paths:
       summary: Vote on a poll
       operationId: votePoll
       description: |
-        Natural-idempotent synchronous operation; no Idempotency-Key is used.
-        A deterministic Matrix transaction ID is derived from the signed
-        request and single-use PoW challenge.
+        Synchronous operation. Requires an `Idempotency-Key`, which is the
+        server-wide logical `operation_id`. Replays return `204` without
+        consuming PoW or emitting a second Matrix event; conflicts return
+        `409`. Each new logical operation allocates a fresh Matrix transaction
+        ID, which is transport-level only and never signed.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
+        description: 'Author signature covers the frozen VOTE envelope ["host.curious.cumments.signature", "1", ["VOTE", [site_id, page_slug, poll_event_id], [canonical_option_ids...], 1], operation_id, challenge_prefix]. `option_ids` is an unordered set: it is deduplicated and byte-wise sorted before signing, so duplicate or reordered ids denote the same vote, and the sorted set is what is emitted on the Matrix `org.matrix.msc3381.poll.response` event.'
         content:
           application/json:
             schema:
-              type: object
-              required: [option_id, author_public_key, author_signature, challenge_response]
-              properties:
-                option_id:
-                  type: string
-                author_public_key:
-                  type: string
-                author_signature:
-                  type: string
-                challenge_response:
-                  type: string
+              $ref: "#/components/schemas/VoteRequest"
       responses:
         "204":
-          description: Vote sent
+          description: Vote accepted
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
@@ -2656,6 +2653,29 @@ components:
         thread_root:
           type: [string, "null"]
           description: Thread root event ID (m.thread). Orthogonal to `reply_to`; bound in the signed target as `thread_root` (null when absent).
+        challenge_response:
+          type: string
+          description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
+    VoteRequest:
+      type: object
+      required: [option_ids, author_public_key, author_signature, challenge_response]
+      properties:
+        option_ids:
+          type: array
+          description: |
+            Desired selections. An unordered set: entries are deduplicated and
+            byte-wise sorted during semantic normalization, so duplicate or
+            reordered ids are accepted and denote the same vote. Each entry must
+            1-64 characters from `[a-zA-Z0-9_.-]` and must exist on the target
+            poll. An empty array is an explicit unvote.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
         challenge_response:
           type: string
           description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.

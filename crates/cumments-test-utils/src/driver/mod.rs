@@ -11,6 +11,17 @@ use tokio::sync::Mutex;
 use cumments_core::models::{MatrixEvent, VisitorProfile};
 use cumments_core::poll::{PollSemanticAnswer, PollSemanticKind};
 
+/// A recorded [`cumments_core::ports::MatrixDriver::post_poll_response`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedPollResponse {
+    pub room_id: String,
+    pub poll_event_id: String,
+    /// Canonical selections emitted on the wire.
+    pub option_ids: Vec<String>,
+    pub operation_id: String,
+    pub txn_id: String,
+}
+
 /// A recorded [`cumments_core::ports::MatrixDriver::post_poll`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedPoll {
@@ -50,7 +61,7 @@ pub struct TestDriver {
     pub space_links: Mutex<Vec<(String, String)>>,
     pub invites: Mutex<Vec<(String, String)>>,
     pub reactions: Mutex<Vec<(String, String, String, String)>>,
-    pub poll_votes: Mutex<Vec<(String, String, String, String)>>,
+    pub poll_responses: Mutex<Vec<RecordedPollResponse>>,
     /// Recorded `post_poll` calls, richest-first so tests can assert the
     /// structured semantic payload the reconciler handed the driver.
     pub polls: Mutex<Vec<RecordedPoll>>,
@@ -83,7 +94,7 @@ impl TestDriver {
             space_links: Mutex::new(Vec::new()),
             invites: Mutex::new(Vec::new()),
             reactions: Mutex::new(Vec::new()),
-            poll_votes: Mutex::new(Vec::new()),
+            poll_responses: Mutex::new(Vec::new()),
             polls: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),

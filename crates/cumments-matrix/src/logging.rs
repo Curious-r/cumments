@@ -169,18 +169,18 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
-    async fn vote_poll(
+    async fn post_poll_response(
         &self,
-        room_id: &str,
-        poll_event_id: &str,
-        answer_id: &str,
-        _site_id: &SiteId,
-        _author_public_key: &str,
-        _author_signature: &str,
-        _author_challenge: &str,
-        _txn_id: &str,
+        request: cumments_core::ports::PollResponseRequest<'_>,
     ) -> Result<()> {
-        info!("LOGGING: Vote on poll {poll_event_id} in {room_id} with {answer_id}");
+        info!(
+            "LOGGING: Poll response on {} in {} with {:?} (op={}, txn={})",
+            request.poll_event_id,
+            request.room_id,
+            request.option_ids,
+            request.operation_id,
+            request.txn_id
+        );
         Ok(())
     }
 

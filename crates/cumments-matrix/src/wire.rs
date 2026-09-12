@@ -303,31 +303,37 @@ pub(crate) fn build_reaction_body(
     })
 }
 
-/// Build the `m.room.message` content for a visitor poll vote (MSC3381).
-pub(crate) fn build_poll_vote_body(
+/// Build the content for a direct Cumments `org.matrix.msc3381.poll.response`
+/// event (the pinned MSC3381 revision, not the remote `m.room.message`
+/// wrapper).
+///
+/// The selections are emitted verbatim as the wire `answers` array — the
+/// caller passes the canonical (deduplicated, byte-wise sorted) set, and the
+/// same canonical order appears on the wire. The provenance block carries the
+/// operation id and the exact canonical Vote semantic operation.
+#[allow(clippy::too_many_arguments)] // wire-format builders carry the full event payload
+pub fn build_poll_response_body(
     poll_event_id: &str,
-    answer_id: &str,
+    option_ids: &[String],
     author_public_key: &str,
     author_signature: &str,
     author_challenge: &str,
+    operation_id: &str,
+    semantic_operation: &serde_json::Value,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "msgtype": "org.matrix.msc3381.poll.response",
-        "org.matrix.msc3381.poll.response": {
-            "answers": [answer_id],
-        },
-        "m.relates_to": {
-            "rel_type": "m.reference",
-            "event_id": poll_event_id,
-        },
-        MESSAGE_CONTENT_KEY: {
-            "schema": MESSAGE_SCHEMA_VERSION,
-            "public_key": author_public_key,
-            "signature": author_signature,
-            "challenge": author_challenge,
-            "content": answer_id,
-        }
-    })
+    use crate::poll::PollResponseContent;
+
+    let content = PollResponseContent::new(poll_event_id, option_ids.to_vec());
+    let mut body = serde_json::to_value(&content).expect("poll response content serializes");
+    body[PROVENANCE_CONTENT_KEY] = serde_json::json!({
+        "schema": PROVENANCE_SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        "content": semantic_operation,
+    });
+    body
 }
 
 /// Build the content for a direct Cumments `org.matrix.msc3381.poll.start`
@@ -820,13 +826,27 @@ mod tests {
     }
 
     #[test]
-    fn poll_vote_body_carries_answer_and_reference() {
-        let body = build_poll_vote_body("$poll:hs", "2", "pk", "sig", "chal");
-        assert_eq!(body["msgtype"], "org.matrix.msc3381.poll.response");
-        assert_eq!(body["org.matrix.msc3381.poll.response"]["answers"][0], "2");
+    fn poll_response_body_uses_direct_event_type_and_provenance() {
+        let answers = vec!["a".to_string(), "b".to_string()];
+        let semantic = serde_json::json!(["VOTE", ["s", "p", "$poll:hs"], ["a", "b"], 1]);
+        let body =
+            build_poll_response_body("$poll:hs", &answers, "pk", "sig", "chal", "op-1", &semantic);
+        // No `m.room.message` wrapper and no `msgtype`.
+        assert!(body.get("msgtype").is_none());
+        assert!(!body.to_string().contains("m.room.message"));
+        assert_eq!(body["m.relates_to"]["rel_type"], "m.reference");
         assert_eq!(body["m.relates_to"]["event_id"], "$poll:hs");
-        assert_eq!(body[MESSAGE_CONTENT_KEY]["content"], "2");
-        assert!(body[MESSAGE_CONTENT_KEY].get("displayname").is_none());
+        assert_eq!(
+            body["org.matrix.msc3381.poll.response"]["answers"],
+            serde_json::json!(["a", "b"])
+        );
+        let provenance = &body[PROVENANCE_CONTENT_KEY];
+        assert_eq!(provenance["schema"], PROVENANCE_SCHEMA_VERSION);
+        assert_eq!(provenance["operation_id"], "op-1");
+        assert_eq!(provenance["public_key"], "pk");
+        assert_eq!(provenance["signature"], "sig");
+        assert_eq!(provenance["challenge"], "chal");
+        assert_eq!(provenance["content"], semantic);
     }
 
     #[test]
@@ -1159,8 +1179,18 @@ mod tests {
         assert_eq!(media[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         let reaction = build_reaction_body("👍", "$t:hs", "pk", "sig", "chal");
         assert_eq!(reaction[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
-        let vote = build_poll_vote_body("$p:hs", "1", "pk", "sig", "chal");
-        assert_eq!(vote[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        // The direct poll response carries the Cumments provenance block.
+        let vote = build_poll_response_body(
+            "$p:hs",
+            &["1".to_string()],
+            "pk",
+            "sig",
+            "chal",
+            "op",
+            &json!(["VOTE"]),
+        );
+        assert_eq!(vote[PROVENANCE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        assert!(vote.get(MESSAGE_CONTENT_KEY).is_none());
         // The direct poll start carries the Cumments provenance block instead
         // of the `m.room.message` block.
         let poll = build_poll_start_body(

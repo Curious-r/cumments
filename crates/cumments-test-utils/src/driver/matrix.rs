@@ -181,23 +181,20 @@ impl MatrixDriver for TestDriver {
         ));
         Ok(())
     }
-    async fn vote_poll(
+    async fn post_poll_response(
         &self,
-        _room_id: &str,
-        _poll_event_id: &str,
-        _answer_id: &str,
-        _site_id: &SiteId,
-        _author_public_key: &str,
-        _author_signature: &str,
-        _author_challenge: &str,
-        _txn_id: &str,
+        request: cumments_core::ports::PollResponseRequest<'_>,
     ) -> anyhow::Result<()> {
-        self.poll_votes.lock().await.push((
-            _room_id.to_string(),
-            _poll_event_id.to_string(),
-            _answer_id.to_string(),
-            _txn_id.to_string(),
-        ));
+        self.poll_responses
+            .lock()
+            .await
+            .push(crate::driver::RecordedPollResponse {
+                room_id: request.room_id.to_string(),
+                poll_event_id: request.poll_event_id.to_string(),
+                option_ids: request.option_ids.to_vec(),
+                operation_id: request.operation_id.to_string(),
+                txn_id: request.txn_id.to_string(),
+            });
         Ok(())
     }
     async fn post_poll(

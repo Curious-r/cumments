@@ -3,7 +3,7 @@
 use super::*;
 use crate::wire::{
     build_edit_body, build_location_body, build_media_body, build_message_body,
-    build_poll_start_body, build_poll_vote_body, build_reaction_body, build_redaction_body,
+    build_poll_response_body, build_poll_start_body, build_reaction_body, build_redaction_body,
     percent_encode,
 };
 use anyhow::{Result, anyhow};
@@ -250,45 +250,45 @@ impl AppServiceMatrixDriver {
         Ok(())
     }
 
-    #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
-    pub(super) async fn vote_poll_impl(
+    #[instrument(skip(self, request))]
+    pub(super) async fn post_poll_response_impl(
         &self,
-        room_id: &str,
-        poll_event_id: &str,
-        answer_id: &str,
-        site_id: &SiteId,
-        author_public_key: &str,
-        author_signature: &str,
-        author_challenge: &str,
-        txn_id: &str,
+        request: cumments_core::ports::PollResponseRequest<'_>,
     ) -> Result<()> {
         let virtual_user = self
-            .resolve_virtual_user(author_public_key, site_id)
+            .resolve_virtual_user(request.author_public_key, request.site_id)
             .await?;
-        self.ensure_joined(room_id, &virtual_user).await?;
-        let body = build_poll_vote_body(
-            poll_event_id,
-            answer_id,
-            author_public_key,
-            author_signature,
-            author_challenge,
+        self.ensure_joined(request.room_id, &virtual_user).await?;
+        let body = build_poll_response_body(
+            request.poll_event_id,
+            request.option_ids,
+            request.author_public_key,
+            request.author_signature,
+            request.author_challenge,
+            request.operation_id,
+            &request.semantic_operation.to_json_value(),
         );
+        // The pinned MSC3381 revision uses a direct event type, not the
+        // `m.room.message` wrapper.
         let path = format!(
-            "_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-            percent_encode(room_id),
-            txn_id
+            "_matrix/client/v3/rooms/{}/send/org.matrix.msc3381.poll.response/{}",
+            percent_encode(request.room_id),
+            request.txn_id
         );
         let resp = self
             .request(reqwest::Method::PUT, &path, Some(&virtual_user))
             .json(&body)
             .send()
             .await
-            .map_err(|e| anyhow!("votePoll request failed: {}", e))?;
+            .map_err(|e| anyhow!("postPollResponse request failed: {}", e))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("Failed to vote ({}): {}", status, error_body));
+            return Err(anyhow!(
+                "Failed to post poll response ({}): {}",
+                status,
+                error_body
+            ));
         }
         Ok(())
     }

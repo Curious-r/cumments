@@ -1843,57 +1843,10 @@ impl EventProcessor {
             return Ok(());
         }
 
-        if event.is_virtual_user_sender {
-            if event.answer_ids.len() != 1 {
-                warn!(
-                    "Rejecting visitor vote {} from {}: visitor votes are single-select",
-                    event.event_id, event.sender
-                );
-                return Ok(());
-            }
-            let answer_id = event.answer_ids.first();
-            let (Some(pk), Some(sig), Some(chal)) = (
-                event.author_public_key.as_deref(),
-                event.author_signature.as_deref(),
-                event.author_challenge.as_deref(),
-            ) else {
-                warn!(
-                    "Rejecting visitor vote {} from {}: missing proof block",
-                    event.event_id, event.sender
-                );
-                return Ok(());
-            };
-            let Some(identity) = &event.room_identity else {
-                debug!(
-                    "Ignoring poll vote {} without room identity",
-                    event.event_id
-                );
-                return Ok(());
-            };
-            let message = signature_message(&[
-                Some("VOTE"),
-                Some(identity.site_id.as_str()),
-                Some(identity.page_slug.as_str()),
-                Some(event.poll_message_id.as_str()),
-                answer_id.map(String::as_str),
-                Some(chal),
-                Some("1"),
-            ]);
-            if !verify_visitor_event(
-                self.server_name.as_deref(),
-                &event.sender,
-                &identity.site_id,
-                pk,
-                sig,
-                &message,
-            ) {
-                warn!(
-                    "Rejecting visitor vote {} from {}: invalid proof",
-                    event.event_id, event.sender
-                );
-                return Ok(());
-            }
-        }
+        // Visitor poll responses are authenticated by the push parser, which
+        // verifies the frozen VOTE envelope against the wire content (it needs
+        // the canonical operation carried in provenance). A response reaching
+        // here with `is_virtual_user_sender` set has therefore been verified.
 
         // The raw selections are stored as delivered; the reducer is the sole
         // authority on their meaning. No option-index mapping, truncation or

@@ -321,6 +321,55 @@ async fn operation_claim_is_independent_of_durable_submissions() {
 }
 
 #[tokio::test]
+async fn releasing_an_operation_claim_requires_an_exact_identity_match() {
+    let url = test_db_url("op-release");
+    let store = DbStore::connect(&url).await.expect("connect db");
+
+    assert_eq!(
+        store
+            .claim_operation(&operation("op-release-123456", "author-a", "fp-a"))
+            .await
+            .expect("claim"),
+        OperationClaimOutcome::New
+    );
+
+    // A non-matching identity must never release the claim.
+    store
+        .release_operation(&operation("op-release-123456", "author-b", "fp-a"))
+        .await
+        .expect("release mismatch author");
+    store
+        .release_operation(&operation("op-release-123456", "author-a", "fp-b"))
+        .await
+        .expect("release mismatch fingerprint");
+    assert_eq!(claim_rows(&url).await.len(), 1);
+
+    // The exact identity releases it, and the operation becomes claimable anew.
+    store
+        .release_operation(&operation("op-release-123456", "author-a", "fp-a"))
+        .await
+        .expect("release");
+    assert_eq!(
+        store.lookup_operation("op-release-123456").await.unwrap(),
+        None
+    );
+    assert_eq!(claim_rows(&url).await.len(), 0);
+
+    // Releasing an absent operation is a no-op.
+    store
+        .release_operation(&operation("op-release-123456", "author-a", "fp-a"))
+        .await
+        .expect("release absent");
+    assert_eq!(
+        store
+            .claim_operation(&operation("op-release-123456", "author-a", "fp-a"))
+            .await
+            .expect("reclaim"),
+        OperationClaimOutcome::New
+    );
+}
+
+#[tokio::test]
 async fn operation_id_is_opaque_and_not_normalized() {
     let store = DbStore::connect(&test_db_url("op-opaque"))
         .await

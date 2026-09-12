@@ -199,11 +199,16 @@ pub struct UnreactRequest {
     pub challenge_response: String,
 }
 
-/// Request DTO for voting on a poll.
+/// Request DTO for submitting a desired vote on a poll.
+///
+/// `option_ids` is an unordered selection set: it is deduplicated and
+/// byte-wise sorted during semantic normalization, so duplicate or reordered
+/// ids denote the same vote. An empty array is an explicit unvote.
 #[derive(Debug, Deserialize, Validate)]
 pub struct VoteRequest {
-    #[validate(length(min = 1, max = 128))]
-    pub option_id: String,
+    /// Desired selections; empty is an explicit unvote.
+    #[serde(default)]
+    pub option_ids: Vec<String>,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]

@@ -25,10 +25,10 @@ pub fn fresh_transaction_id(kind: &str) -> String {
 /// Derive a stable transaction ID for a synchronous Matrix write whose retry
 /// payload is byte-for-byte identical.
 ///
-/// Reactions and poll votes do not have a durable submission row. Their
-/// semantic identity plus the signed PoW challenge acts as the attempt nonce:
-/// an exact network retry reuses the same Matrix transaction ID, while a new
-/// user action gets a fresh challenge and therefore a fresh transaction.
+/// Reactions do not have a durable submission row. Their semantic identity plus
+/// the signed PoW challenge acts as the attempt nonce: an exact network retry
+/// reuses the same Matrix transaction ID, while a new user action gets a fresh
+/// challenge and therefore a fresh transaction.
 pub fn deterministic_transaction_id(kind: &str, identity_parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.as_bytes());

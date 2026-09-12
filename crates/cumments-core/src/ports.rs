@@ -72,6 +72,15 @@ pub trait SubmissionStore: Send + Sync {
         operation: &OperationIdentity,
     ) -> Result<IdempotencyOutcome>;
 
+    /// Releases an operation claim previously made by [`Self::claim_operation`]
+    /// when the subsequent Matrix execution failed before emitting anything.
+    ///
+    /// This keeps a synchronous operation retryable instead of replaying a
+    /// false success. It only removes a claim that exactly matches the given
+    /// identity, so it can never release another author's or another
+    /// fingerprint's operation.
+    async fn release_operation(&self, operation: &OperationIdentity) -> Result<()>;
+
     /// Finds the durable post submission created for a claimed operation, if
     /// any. Used to resolve an authenticated Create Poll replay without
     /// consuming PoW.
@@ -387,6 +396,15 @@ pub trait MessageStore: ProjectionSink {
         poll_message_ids: &[String],
         sender_mxid: &str,
     ) -> Result<std::collections::HashMap<String, Vec<String>>>;
+
+    /// Derives the effective Poll projection for one poll from its canonical
+    /// relation facts. Returns `None` when the poll is not a projected, active
+    /// poll. This is the read-only view of the reducer; callers must treat it
+    /// as derived, disposable state.
+    async fn get_poll_projection(
+        &self,
+        poll_message_id: &str,
+    ) -> Result<Option<crate::poll::PollProjection>>;
 
     /// Records an immutable `org.matrix.msc3381.poll.end` relation fact.
     async fn save_poll_end(&self, end: &PollEnd) -> Result<()>;
@@ -974,6 +992,27 @@ pub struct PollStartRequest<'a> {
     pub txn_id: &'a str,
 }
 
+/// A typed Matrix `org.matrix.msc3381.poll.response` submission.
+///
+/// Carries the canonical (deduplicated, byte-wise sorted) selections plus the
+/// provenance needed to publish `operation_id` and the canonical Vote semantic
+/// operation. The Matrix wire JSON is built by the driver, never by callers.
+pub struct PollResponseRequest<'a> {
+    pub room_id: &'a str,
+    pub poll_event_id: &'a str,
+    /// Canonical selections; emitted verbatim as the wire `answers` array.
+    pub option_ids: &'a [String],
+    pub site_id: &'a SiteId,
+    pub author_public_key: &'a str,
+    pub author_signature: &'a str,
+    pub author_challenge: &'a str,
+    /// Durable logical operation identity persisted in provenance.
+    pub operation_id: &'a str,
+    /// The exact canonical semantic operation, embedded in provenance.
+    pub semantic_operation: &'a CanonicalJson,
+    pub txn_id: &'a str,
+}
+
 /// Defines the atomic actions that can be performed on the Matrix network.
 /// This is the "Hands" of the system.
 ///
@@ -1106,18 +1145,9 @@ pub trait MatrixDriver: Send + Sync {
         txn_id: &str,
     ) -> Result<()>;
 
-    /// Sends a poll vote (`m.poll.response`) as the visitor's virtual user.
-    async fn vote_poll(
-        &self,
-        room_id: &str,
-        poll_event_id: &str,
-        answer_id: &str,
-        site_id: &SiteId,
-        author_public_key: &str,
-        author_signature: &str,
-        author_challenge: &str,
-        txn_id: &str,
-    ) -> Result<()>;
+    /// Sends a direct `org.matrix.msc3381.poll.response` event as the visitor's
+    /// virtual user, using the adopted MSC3381 wire format.
+    async fn post_poll_response(&self, request: PollResponseRequest<'_>) -> Result<()>;
 
     /// Sends a location message (`m.location`, MSC3488) as the visitor's
     /// virtual user. Returns the Matrix event ID and carries the submission

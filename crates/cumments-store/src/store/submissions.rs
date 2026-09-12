@@ -201,6 +201,16 @@ impl SubmissionStore for DbStore {
         }
     }
 
+    async fn release_operation(&self, operation: &OperationIdentity) -> Result<()> {
+        operation_claims::Entity::delete_many()
+            .filter(operation_claims::Column::OperationId.eq(&operation.operation_id))
+            .filter(operation_claims::Column::AuthorPublicKey.eq(&operation.author_public_key))
+            .filter(operation_claims::Column::Fingerprint.eq(&operation.fingerprint))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
     async fn find_post_submission_by_operation(&self, operation_id: &str) -> Result<Option<i64>> {
         let row = post_submissions::Entity::find()
             .filter(post_submissions::Column::OperationId.eq(operation_id))
