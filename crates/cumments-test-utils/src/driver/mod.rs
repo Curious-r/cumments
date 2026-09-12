@@ -22,6 +22,15 @@ pub struct RecordedPollResponse {
     pub txn_id: String,
 }
 
+/// A recorded [`cumments_core::ports::MatrixDriver::post_poll_end`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedPollEnd {
+    pub room_id: String,
+    pub poll_event_id: String,
+    pub operation_id: String,
+    pub txn_id: String,
+}
+
 /// A recorded [`cumments_core::ports::MatrixDriver::post_poll`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedPoll {
@@ -62,6 +71,7 @@ pub struct TestDriver {
     pub invites: Mutex<Vec<(String, String)>>,
     pub reactions: Mutex<Vec<(String, String, String, String)>>,
     pub poll_responses: Mutex<Vec<RecordedPollResponse>>,
+    pub poll_ends: Mutex<Vec<RecordedPollEnd>>,
     /// Recorded `post_poll` calls, richest-first so tests can assert the
     /// structured semantic payload the reconciler handed the driver.
     pub polls: Mutex<Vec<RecordedPoll>>,
@@ -76,6 +86,12 @@ pub struct TestDriver {
     /// Record the next N `post_poll_response` calls into `poll_responses` (homeserver
     /// accepted) but return an error (client response lost).
     pub ambiguous_poll_response_count: Mutex<usize>,
+    /// Fail the next N `post_poll_end` calls with a simulated transport error
+    /// before Matrix accepts the event.
+    pub fail_poll_end_count: Mutex<usize>,
+    /// Record the next N `post_poll_end` calls into `poll_ends` (homeserver
+    /// accepted) but return an error (client response lost).
+    pub ambiguous_poll_end_count: Mutex<usize>,
 }
 
 impl TestDriver {
@@ -101,6 +117,7 @@ impl TestDriver {
             invites: Mutex::new(Vec::new()),
             reactions: Mutex::new(Vec::new()),
             poll_responses: Mutex::new(Vec::new()),
+            poll_ends: Mutex::new(Vec::new()),
             polls: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),
@@ -108,6 +125,8 @@ impl TestDriver {
             fail_join_rooms: Mutex::new(HashSet::new()),
             fail_poll_response_count: Mutex::new(0),
             ambiguous_poll_response_count: Mutex::new(0),
+            fail_poll_end_count: Mutex::new(0),
+            ambiguous_poll_end_count: Mutex::new(0),
         }
     }
 

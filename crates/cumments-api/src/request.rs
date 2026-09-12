@@ -217,6 +217,17 @@ pub struct VoteRequest {
     pub challenge_response: String,
 }
 
+/// Request DTO for ending a poll (`POST .../polls/{poll_id}/end`).
+#[derive(Debug, Deserialize, Validate)]
+pub struct EndPollRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
 /// One caller-authored answer in a Create Poll request.
 ///
 /// `id` is an opaque, case-sensitive token validated by the frozen answer-id

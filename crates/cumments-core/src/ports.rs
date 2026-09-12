@@ -1039,6 +1039,25 @@ pub struct PollResponseRequest<'a> {
     pub txn_id: &'a str,
 }
 
+/// A typed Matrix `org.matrix.msc3381.poll.end` submission.
+///
+/// References the target poll root event and carries provenance with the
+/// `operation_id` and canonical `END_POLL` semantic operation. The Matrix wire
+/// JSON is built by the driver, never by callers.
+pub struct PollEndRequest<'a> {
+    pub room_id: &'a str,
+    pub poll_event_id: &'a str,
+    pub site_id: &'a SiteId,
+    pub author_public_key: &'a str,
+    pub author_signature: &'a str,
+    pub author_challenge: &'a str,
+    /// Durable logical operation identity persisted in provenance.
+    pub operation_id: &'a str,
+    /// The exact canonical semantic operation, embedded in provenance.
+    pub semantic_operation: &'a CanonicalJson,
+    pub txn_id: &'a str,
+}
+
 /// Defines the atomic actions that can be performed on the Matrix network.
 /// This is the "Hands" of the system.
 ///
@@ -1174,6 +1193,10 @@ pub trait MatrixDriver: Send + Sync {
     /// Sends a direct `org.matrix.msc3381.poll.response` event as the visitor's
     /// virtual user, using the adopted MSC3381 wire format.
     async fn post_poll_response(&self, request: PollResponseRequest<'_>) -> Result<()>;
+
+    /// Sends a direct `org.matrix.msc3381.poll.end` event as the visitor's
+    /// virtual user, using the adopted MSC3381 wire format.
+    async fn post_poll_end(&self, request: PollEndRequest<'_>) -> Result<()>;
 
     /// Sends a location message (`m.location`, MSC3488) as the visitor's
     /// virtual user. Returns the Matrix event ID and carries the submission

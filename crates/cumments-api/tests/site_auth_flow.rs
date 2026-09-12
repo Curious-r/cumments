@@ -5951,3 +5951,1039 @@ async fn vote_retry_does_not_consume_or_require_fresh_pow() {
     assert_eq!(execution.status, OperationExecutionStatus::Success);
     assert_eq!(driver.poll_responses.lock().await.len(), 1);
 }
+
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use cumments_core::poll::PollStatus;
+use cumments_core::submissions::OperationExecutionStatus;
+
+async fn seed_poll_with_creator(
+    store: &DbStore,
+    poll_id: &str,
+    options: &[(&str, &str)],
+    max_selections: u8,
+    creator_public_key: &str,
+) {
+    use cumments_core::models::{PollContent, PollOption};
+    let site = SiteId::from("test-blog");
+    let slug = PageSlug::from("hello");
+    let _ = store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await;
+    let _ = store.register_room("!room:hs", &site, &slug).await;
+    store
+        .save_message(&Message {
+            event_id: poll_id.to_string(),
+            site_id: "test-blog".to_string(),
+            page_slug: "hello".to_string(),
+            author: AuthorSnapshot {
+                kind: AuthorKind::Visitor,
+                display_name: Some("Alice".to_string()),
+                avatar_url: None,
+                public_key: Some(creator_public_key.to_string()),
+                mxid: None,
+            },
+            content: Content::Poll(PollContent {
+                question: "q?".to_string(),
+                options: options
+                    .iter()
+                    .map(|(id, text)| PollOption {
+                        id: id.to_string(),
+                        text: text.to_string(),
+                    })
+                    .collect(),
+                max_selections,
+                responses: Vec::new(),
+                my_votes: Vec::new(),
+            }),
+            matrix_event_type: "org.matrix.msc3381.poll.start".to_string(),
+            timestamp: chrono::Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            thread_root: None,
+            submission_id: None,
+            status: MessageStatus::Active,
+            redacted_at: None,
+            redacted_by: None,
+            reactions: Vec::new(),
+            thread_summary: None,
+            room_id: "!room:hs".to_string(),
+            sender_mxid: "@_cumments_test-blog_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:hs".to_string(),
+            raw_content: serde_json::json!({}),
+        })
+        .await
+        .expect("seed poll");
+}
+
+fn signed_end_poll_body(
+    signing_key: &ed25519_dalek::SigningKey,
+    site: &str,
+    page: &str,
+    poll_id: &str,
+    operation_id: &str,
+    challenge_prefix: &str,
+    challenge_response: &str,
+) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use cumments_core::poll::{end_poll_semantic_operation, poll_signature_envelope};
+    use ed25519_dalek::Signer;
+
+    let operation = end_poll_semantic_operation(site, page, poll_id);
+    let envelope = poll_signature_envelope(&operation, operation_id, challenge_prefix);
+    let signature = URL_SAFE_NO_PAD.encode(
+        signing_key
+            .sign(envelope.to_canonical_bytes().as_slice())
+            .to_bytes(),
+    );
+    serde_json::json!({
+        "author_public_key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+        "author_signature": signature,
+        "challenge_response": challenge_response,
+    })
+    .to_string()
+}
+
+fn end_poll_uri() -> &'static str {
+    "/api/v1/sites/test-blog/pages/hello/polls/$poll:hs/end"
+}
+
+#[tokio::test]
+async fn end_poll_creator_emits_one_matrix_end() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-ok",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[71u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "end-op-1",
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", "end-op-1".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let recorded = driver.poll_ends.lock().await;
+    assert_eq!(recorded.len(), 1, "exactly one poll end is emitted");
+    assert_eq!(recorded[0].poll_event_id, "$poll:hs");
+    assert_eq!(recorded[0].operation_id, "end-op-1");
+    assert!(!recorded[0].txn_id.is_empty());
+    drop(recorded);
+
+    // End is synchronous and creates no durable submission.
+    assert!(
+        store
+            .get_pending_post_submissions(10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "End poll must not create a durable submission"
+    );
+
+    // Operation execution is Success in database.
+    let execution = store
+        .get_operation_execution("end-op-1")
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution.status, OperationExecutionStatus::Success);
+}
+
+#[tokio::test]
+async fn end_poll_rejects_unauthorized_non_creator() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-auth",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[72u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    // Non-creator attempts to end poll
+    let other_key = SigningKey::from_bytes(&[73u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_end_poll_body(
+        &other_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "end-op-other",
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", "end-op-other".to_string())],
+            &body,
+        ))
+        .await
+        .expect("call router");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // No Matrix event was emitted
+    assert!(driver.poll_ends.lock().await.is_empty());
+    // No operation was claimed
+    assert!(
+        store
+            .lookup_operation("end-op-other")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Authorization failure does not consume PoW
+    assert!(
+        state.pow.verify(&challenge_response),
+        "authorization failure must not consume PoW"
+    );
+}
+
+#[tokio::test]
+async fn end_poll_signature_binds_target_operation_and_challenge() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-sig",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[74u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+
+    // 1. Changed target poll_id in signature envelope
+    let tampered_target_body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$other-poll:hs",
+        "end-op-sig-1",
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let res1 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", "end-op-sig-1".to_string())],
+            &tampered_target_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::FORBIDDEN);
+
+    // 2. Changed operation_id in signature envelope
+    let tampered_op_body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "different-op-id",
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let res2 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", "end-op-sig-2".to_string())],
+            &tampered_op_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::FORBIDDEN);
+
+    // 3. Changed challenge in signature envelope
+    let tampered_chal_body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "end-op-sig-3",
+        "wrong-prefix",
+        &challenge_response,
+    );
+    let res3 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", "end-op-sig-3".to_string())],
+            &tampered_chal_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res3.status(), StatusCode::FORBIDDEN);
+
+    // No operations were claimed
+    assert!(
+        store
+            .lookup_operation("end-op-sig-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .lookup_operation("end-op-sig-2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .lookup_operation("end-op-sig-3")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(driver.poll_ends.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn end_poll_replay_consumes_no_pow_and_emits_no_second_event() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-replay",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[75u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-replay-1";
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    // First call -> 204
+    let res1 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::NO_CONTENT);
+    assert_eq!(driver.poll_ends.lock().await.len(), 1);
+
+    // Replay with bogus challenge_response -> 204 (bypasses PoW verification)
+    let replay_body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &format!("{}|bogus_nonce", challenge.prefix),
+    );
+    let res2 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &replay_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::NO_CONTENT);
+
+    // No second Matrix event was emitted
+    assert_eq!(driver.poll_ends.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn end_poll_conflicts_on_different_author_or_fingerprint() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-conflict",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[76u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    seed_poll_with_creator(
+        &store,
+        "$poll2:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-conflict-1";
+
+    // Establish operation with creator_key for $poll:hs
+    let body1 = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let res1 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::NO_CONTENT);
+
+    // 1. Same op_id with DIFFERENT author -> 409 Conflict
+    let other_key = SigningKey::from_bytes(&[77u8; 32]);
+    let chal2 = state.pow.generate_challenge();
+    let chal2_resp = solve_pow(&chal2);
+    let body_diff_author = signed_end_poll_body(
+        &other_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &chal2.prefix,
+        &chal2_resp,
+    );
+    let res_author = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body_diff_author,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_author.status(), StatusCode::CONFLICT);
+
+    // 2. Same op_id with DIFFERENT target ($poll2:hs) -> 409 Conflict
+    let chal3 = state.pow.generate_challenge();
+    let chal3_resp = solve_pow(&chal3);
+    let body_diff_target = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll2:hs",
+        op_id,
+        &chal3.prefix,
+        &chal3_resp,
+    );
+    let res_target = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls/$poll2:hs/end",
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body_diff_target,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res_target.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn end_poll_persists_txn_id_and_reuses_on_retry() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-retry-tx",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[78u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-persists-txn";
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let res = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let recorded = driver.poll_ends.lock().await;
+    assert_eq!(recorded.len(), 1);
+    let first_txn = recorded[0].txn_id.clone();
+    drop(recorded);
+
+    let execution = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(execution.txn_id, first_txn);
+    assert_eq!(execution.status, OperationExecutionStatus::Success);
+}
+
+#[tokio::test]
+async fn end_poll_transport_failure_retains_claim_and_reuses_txn_id() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-trans-fail",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[79u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    // Inject transport failure for the first Matrix send
+    *driver.fail_poll_end_count.lock().await = 1;
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-fail-retry";
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    // First attempt fails with 500
+    let res1 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Claim must NOT be released!
+    let claim = store
+        .lookup_operation(op_id)
+        .await
+        .unwrap()
+        .expect("claim retained");
+    assert_eq!(claim.author_public_key, creator_pk);
+
+    // Execution record remains in Failed status with persisted txn_id
+    let exec1 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(exec1.status, OperationExecutionStatus::Failed);
+    let original_txn = exec1.txn_id.clone();
+
+    // Retry the exact same End Poll operation
+    let res2 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::NO_CONTENT);
+
+    // Verify the retry reused the original txn_id
+    let recorded = driver.poll_ends.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].txn_id, original_txn);
+    drop(recorded);
+
+    let exec2 = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(exec2.txn_id, original_txn);
+    assert_eq!(exec2.status, OperationExecutionStatus::Success);
+}
+
+#[tokio::test]
+async fn end_poll_ambiguous_lost_response_deduplicates_on_retry() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-ambig",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[80u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    // Simulate homeserver accepts event, but response is lost
+    *driver.ambiguous_poll_end_count.lock().await = 1;
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-ambig";
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    // First attempt returns error
+    let res1 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Event was recorded by the driver
+    assert_eq!(driver.poll_ends.lock().await.len(), 1);
+
+    // Client retries
+    let res2 = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::NO_CONTENT);
+
+    // Matrix deduplicated by (room_id, txn_id) -> still exactly 1 event!
+    assert_eq!(driver.poll_ends.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn end_poll_concurrent_identical_requests_single_txn_id_and_single_event() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-concurrent",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[81u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-concurrent";
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let r1 = router.clone();
+    let r2 = router.clone();
+    let b1 = body.clone();
+    let b2 = body.clone();
+
+    let task1 = tokio::spawn(async move {
+        r1.oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &b1,
+        ))
+        .await
+        .unwrap()
+    });
+
+    let task2 = tokio::spawn(async move {
+        r2.oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &b2,
+        ))
+        .await
+        .unwrap()
+    });
+
+    let (res1, res2) = tokio::join!(task1, task2);
+    assert_eq!(res1.unwrap().status(), StatusCode::NO_CONTENT);
+    assert_eq!(res2.unwrap().status(), StatusCode::NO_CONTENT);
+
+    // Exactly one Matrix event emitted
+    assert_eq!(driver.poll_ends.lock().await.len(), 1);
+
+    // Exactly one execution record established
+    let exec = store
+        .get_operation_execution(op_id)
+        .await
+        .unwrap()
+        .expect("execution exists");
+    assert_eq!(exec.status, OperationExecutionStatus::Success);
+}
+
+#[tokio::test]
+async fn end_poll_against_already_ended_poll_is_rejected() {
+    use cumments_core::models::PollEnd;
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "end-poll-ended",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+
+    let creator_key = SigningKey::from_bytes(&[82u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+
+    // Projector records a valid PollEnd from creator
+    store
+        .save_poll_end(&PollEnd {
+            event_id: "$end-ev:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: "@_cumments_test-blog_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:hs".to_string(),
+            origin_server_ts: 100,
+        })
+        .await
+        .unwrap();
+
+    let projection = store
+        .get_poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.status, PollStatus::Ended);
+
+    // A NEW logical End operation against the ended poll is rejected with 409 Conflict
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let op_id = "end-op-new-against-ended";
+    let body = signed_end_poll_body(
+        &creator_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        op_id,
+        &challenge.prefix,
+        &challenge_response,
+    );
+
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            end_poll_uri(),
+            Some("null"),
+            &[("idempotency-key", op_id.to_string())],
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // No Matrix event was emitted
+    assert!(driver.poll_ends.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn end_poll_reducer_first_valid_end_wins() {
+    use cumments_core::models::PollEnd;
+    use ed25519_dalek::SigningKey;
+
+    let (_state, store) =
+        test_state("end-poll-reducer", SiteVerificationPolicy::Disabled, None).await;
+
+    let creator_key = SigningKey::from_bytes(&[83u8; 32]);
+    let creator_pk = URL_SAFE_NO_PAD.encode(creator_key.verifying_key().to_bytes());
+    seed_poll_with_creator(
+        &store,
+        "$poll:hs",
+        &[("a", "A"), ("b", "B")],
+        1,
+        &creator_pk,
+    )
+    .await;
+
+    // Initially open
+    let p0 = store
+        .get_poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(p0.status, PollStatus::Open);
+    assert!(p0.end.is_none());
+
+    let sender = "@_cumments_test-blog_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:hs";
+
+    // First valid end at ts = 100
+    store
+        .save_poll_end(&PollEnd {
+            event_id: "$end-first:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: sender.to_string(),
+            origin_server_ts: 100,
+        })
+        .await
+        .unwrap();
+
+    let p1 = store
+        .get_poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(p1.status, PollStatus::Ended);
+    assert_eq!(p1.end.as_ref().map(|e| e.origin_server_ts), Some(100));
+
+    // Later end at ts = 200 (first valid end wins; later end does not change ended_at)
+    store
+        .save_poll_end(&PollEnd {
+            event_id: "$end-later:hs".to_string(),
+            poll_message_id: "$poll:hs".to_string(),
+            sender_mxid: sender.to_string(),
+            origin_server_ts: 200,
+        })
+        .await
+        .unwrap();
+
+    let p2 = store
+        .get_poll_projection("$poll:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(p2.status, PollStatus::Ended);
+    assert_eq!(p2.end.as_ref().map(|e| e.origin_server_ts), Some(100));
+    assert_eq!(
+        p2.end.as_ref().map(|e| e.event_id.as_str()),
+        Some("$end-first:hs")
+    );
+}

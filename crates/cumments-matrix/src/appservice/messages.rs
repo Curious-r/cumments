@@ -3,8 +3,8 @@
 use super::*;
 use crate::wire::{
     build_edit_body, build_location_body, build_media_body, build_message_body,
-    build_poll_response_body, build_poll_start_body, build_reaction_body, build_redaction_body,
-    percent_encode,
+    build_poll_end_body, build_poll_response_body, build_poll_start_body, build_reaction_body,
+    build_redaction_body, percent_encode,
 };
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
@@ -286,6 +286,47 @@ impl AppServiceMatrixDriver {
             let error_body = resp.text().await.unwrap_or_default();
             return Err(anyhow!(
                 "Failed to post poll response ({}): {}",
+                status,
+                error_body
+            ));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self, request))]
+    pub(super) async fn post_poll_end_impl(
+        &self,
+        request: cumments_core::ports::PollEndRequest<'_>,
+    ) -> Result<()> {
+        let virtual_user = self
+            .resolve_virtual_user(request.author_public_key, request.site_id)
+            .await?;
+        self.ensure_joined(request.room_id, &virtual_user).await?;
+        let body = build_poll_end_body(
+            request.poll_event_id,
+            "The poll has ended.",
+            request.author_public_key,
+            request.author_signature,
+            request.author_challenge,
+            request.operation_id,
+            &request.semantic_operation.to_json_value(),
+        );
+        let path = format!(
+            "_matrix/client/v3/rooms/{}/send/org.matrix.msc3381.poll.end/{}",
+            percent_encode(request.room_id),
+            request.txn_id
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| anyhow!("postPollEnd request failed: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Failed to post poll end ({}): {}",
                 status,
                 error_body
             ));

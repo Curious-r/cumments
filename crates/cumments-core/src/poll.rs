@@ -415,7 +415,6 @@ impl VoteWireSemantics {
 /// Succeeds only when the signature verifies over `signed_operation` and that
 /// signed operation is byte-for-byte the canonical VOTE operation the wire
 /// content denotes.
-#[allow(clippy::too_many_arguments)] // mirrors the wire facts and proof
 pub fn verify_vote_proof(
     public_key_b64: &str,
     signed_operation: &CanonicalJson,
@@ -423,6 +422,69 @@ pub fn verify_vote_proof(
     challenge: &str,
     signature_b64: &str,
     wire: &VoteWireSemantics,
+) -> bool {
+    wire.to_semantic_operation() == *signed_operation
+        && verify_poll_signature(
+            public_key_b64,
+            signed_operation,
+            operation_id,
+            challenge,
+            signature_b64,
+        )
+}
+
+/// Build the canonical `END_POLL` semantic operation (frozen design §9.5.3):
+///
+/// ```text
+/// ["END_POLL", [site_id, page_slug, poll_event_id], [], 1]
+/// ```
+///
+/// The payload is intentionally an empty array.
+pub fn end_poll_semantic_operation(
+    site_id: &str,
+    page_slug: &str,
+    poll_event_id: &str,
+) -> CanonicalJson {
+    CanonicalJson::array(vec![
+        CanonicalJson::string("END_POLL"),
+        CanonicalJson::array(vec![
+            CanonicalJson::string(site_id),
+            CanonicalJson::string(page_slug),
+            CanonicalJson::string(poll_event_id),
+        ]),
+        CanonicalJson::array(vec![]),
+        CanonicalJson::int(SEMANTIC_SCHEMA_VERSION),
+    ])
+}
+
+/// The semantic END_POLL meaning actually encoded by a `poll.end` wire event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndPollWireSemantics {
+    pub site_id: String,
+    pub page_slug: String,
+    pub poll_event_id: String,
+}
+
+impl EndPollWireSemantics {
+    /// The canonical semantic operation this wire content denotes.
+    pub fn to_semantic_operation(&self) -> CanonicalJson {
+        end_poll_semantic_operation(&self.site_id, &self.page_slug, &self.poll_event_id)
+    }
+}
+
+/// Verify a visitor `poll.end` proof against the actual End wire content.
+///
+/// Succeeds only when the signature verifies over `signed_operation` and that
+/// signed operation is byte-for-byte the canonical END_POLL operation the wire
+/// content denotes.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_end_poll_proof(
+    public_key_b64: &str,
+    signed_operation: &CanonicalJson,
+    operation_id: &str,
+    challenge: &str,
+    signature_b64: &str,
+    wire: &EndPollWireSemantics,
 ) -> bool {
     wire.to_semantic_operation() == *signed_operation
         && verify_poll_signature(
@@ -2011,6 +2073,104 @@ mod semantic_tests {
             "chal",
             &signature,
             &other_target
+        ));
+    }
+
+    #[test]
+    fn end_poll_semantic_operation_matches_the_frozen_structure() {
+        let op = end_poll_semantic_operation("site-dev", "post-101", "$poll:hs");
+        assert_eq!(
+            op.to_canonical_string(),
+            r#"["END_POLL",["site-dev","post-101","$poll:hs"],[],1]"#
+        );
+        let json = op.to_json_value();
+        assert_eq!(json[0], "END_POLL");
+        assert_eq!(
+            json[1],
+            serde_json::json!(["site-dev", "post-101", "$poll:hs"])
+        );
+        assert_eq!(json[2], serde_json::json!([]));
+        assert_eq!(json[3], 1);
+    }
+
+    #[test]
+    fn end_poll_fingerprint_binds_target_and_excludes_metadata() {
+        let a = end_poll_semantic_operation("site", "page", "$poll:hs");
+        let b = end_poll_semantic_operation("site", "page", "$other:hs");
+        let c = end_poll_semantic_operation("site2", "page", "$poll:hs");
+        let d = end_poll_semantic_operation("site", "page2", "$poll:hs");
+
+        let fp_a = poll_semantic_fingerprint(&a);
+        let fp_b = poll_semantic_fingerprint(&b);
+        let fp_c = poll_semantic_fingerprint(&c);
+        let fp_d = poll_semantic_fingerprint(&d);
+
+        assert_ne!(fp_a, fp_b);
+        assert_ne!(fp_a, fp_c);
+        assert_ne!(fp_a, fp_d);
+    }
+
+    #[test]
+    fn end_poll_proof_verifies_signature_and_wire_consistency() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[61u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let wire = EndPollWireSemantics {
+            site_id: "site".to_string(),
+            page_slug: "page".to_string(),
+            poll_event_id: "$poll:hs".to_string(),
+        };
+        let signed = wire.to_semantic_operation();
+        let envelope = poll_signature_envelope(&signed, "op-end-1", "chal-1");
+        let signature = URL_SAFE_NO_PAD.encode(
+            signing_key
+                .sign(envelope.to_canonical_bytes().as_slice())
+                .to_bytes(),
+        );
+
+        assert!(verify_end_poll_proof(
+            &public_key,
+            &signed,
+            "op-end-1",
+            "chal-1",
+            &signature,
+            &wire
+        ));
+
+        // Different operation_id rejects.
+        assert!(!verify_end_poll_proof(
+            &public_key,
+            &signed,
+            "op-end-2",
+            "chal-1",
+            &signature,
+            &wire
+        ));
+
+        // Different challenge rejects.
+        assert!(!verify_end_poll_proof(
+            &public_key,
+            &signed,
+            "op-end-1",
+            "chal-2",
+            &signature,
+            &wire
+        ));
+
+        // Tampered target rejects.
+        let tampered = EndPollWireSemantics {
+            poll_event_id: "$other:hs".to_string(),
+            ..wire
+        };
+        assert!(!verify_end_poll_proof(
+            &public_key,
+            &signed,
+            "op-end-1",
+            "chal-1",
+            &signature,
+            &tampered
         ));
     }
 }

@@ -217,6 +217,43 @@ impl MatrixDriver for TestDriver {
 
         Ok(())
     }
+
+    async fn post_poll_end(
+        &self,
+        request: cumments_core::ports::PollEndRequest<'_>,
+    ) -> anyhow::Result<()> {
+        let mut fail_count = self.fail_poll_end_count.lock().await;
+        if *fail_count > 0 {
+            *fail_count -= 1;
+            return Err(anyhow::anyhow!("Simulated Matrix transport failure"));
+        }
+        drop(fail_count);
+
+        let mut ends = self.poll_ends.lock().await;
+        if !ends
+            .iter()
+            .any(|r| r.room_id == request.room_id && r.txn_id == request.txn_id)
+        {
+            ends.push(crate::driver::RecordedPollEnd {
+                room_id: request.room_id.to_string(),
+                poll_event_id: request.poll_event_id.to_string(),
+                operation_id: request.operation_id.to_string(),
+                txn_id: request.txn_id.to_string(),
+            });
+        }
+        drop(ends);
+
+        let mut ambig_count = self.ambiguous_poll_end_count.lock().await;
+        if *ambig_count > 0 {
+            *ambig_count -= 1;
+            return Err(anyhow::anyhow!(
+                "Simulated ambiguous transport failure (response lost)"
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn post_poll(
         &self,
         request: cumments_core::ports::PollStartRequest<'_>,

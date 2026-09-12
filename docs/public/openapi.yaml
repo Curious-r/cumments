@@ -1423,7 +1423,49 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/end:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+      - $ref: "#/components/parameters/PageSlug"
+      - name: poll_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Comments]
+      summary: End a poll
+      operationId: endPoll
+      description: |
+        Synchronous operation. Requires an `Idempotency-Key`, which is the
+        server-wide logical `operation_id`. Replays return `204` without
+        consuming PoW or emitting a second Matrix event; conflicts return
+        `409`. Each new logical operation allocates a fresh Matrix transaction
+        ID, which is transport-level only and never signed.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        description: 'Author signature covers the frozen END_POLL envelope ["host.curious.cumments.signature", "1", ["END_POLL", [site_id, page_slug, poll_event_id], [], 1], operation_id, challenge_prefix].'
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EndPollRequest"
+      responses:
+        "204":
+          description: Poll ended
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/pages/{page_slug}/location:
+
     parameters:
       - $ref: "#/components/parameters/SiteId"
       - $ref: "#/components/parameters/PageSlug"
@@ -2679,7 +2721,19 @@ components:
         challenge_response:
           type: string
           description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
+    EndPollRequest:
+      type: object
+      required: [author_public_key, author_signature, challenge_response]
+      properties:
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+          description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
     UpdateCommentRequest:
+
       type: object
       required: [content, author_public_key, author_signature, challenge_response]
       properties:

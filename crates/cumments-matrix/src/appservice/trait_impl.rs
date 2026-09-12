@@ -155,6 +155,10 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.post_poll_response_impl(request).await
     }
 
+    async fn post_poll_end(&self, request: cumments_core::ports::PollEndRequest<'_>) -> Result<()> {
+        self.post_poll_end_impl(request).await
+    }
+
     async fn post_poll(
         &self,
         request: cumments_core::ports::PollStartRequest<'_>,

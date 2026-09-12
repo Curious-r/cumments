@@ -4,7 +4,7 @@ use crate::ApiState;
 use crate::error::AppError;
 use crate::rate_limit::client_key;
 use crate::request::{
-    CreatePollRequest, DeleteCommentRequest, IDEMPOTENT_REPLAYED, LocationRequest,
+    CreatePollRequest, DeleteCommentRequest, EndPollRequest, IDEMPOTENT_REPLAYED, LocationRequest,
     PaginatedResponse, PaginationMeta, PaginationQuery, PostCommentRequest, ReactRequest,
     UnreactRequest, UpdateCommentRequest, VoteRequest, extract_idempotency_key,
     request_fingerprint,
@@ -27,11 +27,11 @@ use cumments_core::{
     },
     models::{AuthorKind, Content, MediaKind, Message, MessageStatus, PageSlug, SiteId},
     poll::{
-        PollSemanticAnswer, PollStatus, normalize_vote_selections, poll_semantic_fingerprint,
-        poll_semantic_operation, validate_poll_semantic_definition, verify_poll_signature,
-        vote_semantic_operation,
+        PollSemanticAnswer, PollStatus, end_poll_semantic_operation, normalize_vote_selections,
+        poll_semantic_fingerprint, poll_semantic_operation, validate_poll_semantic_definition,
+        verify_poll_signature, vote_semantic_operation,
     },
-    ports::PollResponseRequest,
+    ports::{PollEndRequest, PollResponseRequest},
     submissions::{
         IdempotencyInput, IdempotencyOutcome, OperationClaimOutcome, OperationExecutionStatus,
         OperationIdentity, deterministic_transaction_id, fresh_transaction_id,
@@ -1627,6 +1627,318 @@ pub(crate) async fn vote_handler(
             // NOTE: Do NOT release operation claim! The claim and persisted txn_id
             // remain so retries reuse the exact same txn_id.
             Err(AppError::Internal("Failed to send vote.".to_string()))
+        }
+    }
+}
+
+/// `POST /api/v1/sites/{site}/pages/{post}/polls/{poll_id}/end`
+pub(crate) async fn end_poll_handler(
+    State(state): State<ApiState>,
+    Path((site_id, page_slug, poll_id)): Path<(String, String, String)>,
+    connect: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, AppError> {
+    let key = client_key(&headers, Some(connect.0), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(comment_write_rate_limited(&state));
+    }
+    let operation_id = extract_idempotency_key(&headers)?;
+    let req: EndPollRequest = serde_json::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {}", e)))?;
+
+    // 1. Structural validation.
+    req.validate().map_err(AppError::Validation)?;
+    if let Err(msg) = validate_comment_id_format(&poll_id) {
+        return Err(AppError::BadRequest(msg.to_string()));
+    }
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+    let page_slug_val = PageSlug::new(page_slug).map_err(AppError::Validation)?;
+
+    // 2. Resolve the target Poll from the derived read model and confirm it is a valid poll.
+    let Some(poll_message) = state
+        .store
+        .get_message(&poll_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to verify poll: {e}")))?
+    else {
+        return Err(AppError::NotFound("Poll not found.".to_string()));
+    };
+    active_target_in_page(&poll_message, site_id_val.as_str(), page_slug_val.as_str())?;
+    if !matches!(poll_message.content, Content::Poll(_)) {
+        return Err(AppError::BadRequest("target is not a poll".to_string()));
+    }
+    let Some(projection) = state
+        .store
+        .get_poll_projection(&poll_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to derive poll state: {e}")))?
+    else {
+        return Err(AppError::NotFound("Poll not found.".to_string()));
+    };
+
+    // Resolve the Matrix room now so an unroutable target cannot consume PoW
+    // or claim the operation.
+    let Some(room_id) = state
+        .store
+        .get_registered_room(&site_id_val, &page_slug_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to resolve room: {e}")))?
+    else {
+        return Err(AppError::NotFound(
+            "No room registered for this post.".to_string(),
+        ));
+    };
+
+    // 3. Canonical semantic operation and fingerprint.
+    let operation =
+        end_poll_semantic_operation(site_id_val.as_str(), page_slug_val.as_str(), &poll_id);
+    let fingerprint = poll_semantic_fingerprint(&operation);
+
+    // 4. Authenticate the author over the frozen signature envelope.
+    let challenge = challenge_prefix(&req.challenge_response);
+    if !verify_poll_signature(
+        &req.author_public_key,
+        &operation,
+        &operation_id,
+        challenge,
+        &req.author_signature,
+    ) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    // 5. Operation preflight:
+    // If an operation claim already exists:
+    // - A mismatch in author or fingerprint is a conflict (409) without consuming PoW.
+    // - If author and fingerprint match and execution is already confirmed successful,
+    //   replay returns 204 immediately without PoW or lock contention.
+    match state.store.lookup_operation(&operation_id).await {
+        Ok(Some(claim)) => {
+            if claim.author_public_key != req.author_public_key || claim.fingerprint != fingerprint
+            {
+                return Err(AppError::IdempotencyReused);
+            }
+            if let Ok(Some(execution)) = state.store.get_operation_execution(&operation_id).await
+                && execution.status == OperationExecutionStatus::Success
+            {
+                tracing::info!("Replayed idempotent END_POLL operation {}", operation_id);
+                return Ok(StatusCode::NO_CONTENT);
+            }
+        }
+        Ok(None) => {
+            // Genuinely new logical operation:
+            // 5a. Authorization: MSC3381 permits ending by the poll creator or by a user with
+            // room redact power. The Cumments site-moderator to Matrix power mapping is
+            // unresolved; we do not evaluate processing-time room-state snapshots. Only the
+            // original creator's virtual user is authorized; non-creator attempts are rejected with 403.
+            let is_creator =
+                poll_message.author.public_key.as_deref() == Some(req.author_public_key.as_str());
+            if !is_creator {
+                return Err(AppError::Unauthorized(
+                    "You are not authorized to end this poll.".to_string(),
+                ));
+            }
+
+            // 5b. An already ended poll rejects new attempts with 409 Conflict.
+            // (Replays of the winning End operation bypass this via the successful execution record above.)
+            if projection.status != PollStatus::Open {
+                return Err(AppError::Conflict(
+                    "The poll has already ended.".to_string(),
+                ));
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to look up end poll operation: {:?}", e);
+            return Err(AppError::Internal(
+                "Failed to verify idempotency.".to_string(),
+            ));
+        }
+    }
+
+    // 7. Acquire per-operation lock so concurrent identical requests serialize:
+    // exactly one request claims the operation and creates the fresh txnId;
+    // concurrent waiters observe the winner's claim/execution without burning fresh PoW.
+    let op_lock = state.operation_locks.lock_operation(&operation_id).await;
+    let _guard = op_lock.lock().await;
+
+    // 8. Under lock: re-check database state.
+    let txn_id = match state.store.lookup_operation(&operation_id).await {
+        Ok(Some(claim)) => {
+            if claim.author_public_key != req.author_public_key || claim.fingerprint != fingerprint
+            {
+                return Err(AppError::IdempotencyReused);
+            }
+            if let Some(execution) = state
+                .store
+                .get_operation_execution(&operation_id)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to get operation execution under lock: {:?}", e);
+                    AppError::Internal("Failed to admit end poll.".to_string())
+                })?
+            {
+                if execution.status == OperationExecutionStatus::Success {
+                    return Ok(StatusCode::NO_CONTENT);
+                }
+                if execution.status != OperationExecutionStatus::InFlight {
+                    let _ = state
+                        .store
+                        .update_operation_execution_status(
+                            &operation_id,
+                            OperationExecutionStatus::InFlight,
+                        )
+                        .await;
+                }
+                execution.txn_id
+            } else {
+                let fresh_txn = fresh_transaction_id("end");
+                let execution = state
+                    .store
+                    .establish_operation_execution(&operation_id, &fresh_txn)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(
+                            "Failed to establish operation execution under lock: {:?}",
+                            e
+                        );
+                        AppError::Internal("Failed to admit end poll.".to_string())
+                    })?;
+                execution.txn_id
+            }
+        }
+        Ok(None) => {
+            let is_creator =
+                poll_message.author.public_key.as_deref() == Some(req.author_public_key.as_str());
+            if !is_creator {
+                return Err(AppError::Unauthorized(
+                    "You are not authorized to end this poll.".to_string(),
+                ));
+            }
+
+            // Re-check poll status under lock before admitting a new operation
+            if let Some(proj) = state
+                .store
+                .get_poll_projection(&poll_id)
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to derive poll state: {e}")))?
+                && proj.status != PollStatus::Open
+            {
+                return Err(AppError::Conflict(
+                    "The poll has already ended.".to_string(),
+                ));
+            }
+
+            // Genuinely new operation: verify PoW admission control under lock.
+            if !state.pow.verify(&req.challenge_response) {
+                return Err(AppError::InvalidPoW);
+            }
+
+            let identity =
+                OperationIdentity::new(&operation_id, &req.author_public_key, &fingerprint);
+            match state.store.claim_operation(&identity).await {
+                Ok(OperationClaimOutcome::New) => {
+                    let fresh_txn = fresh_transaction_id("end");
+                    let execution = state
+                        .store
+                        .establish_operation_execution(&operation_id, &fresh_txn)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to establish operation execution: {:?}", e);
+                            AppError::Internal("Failed to admit end poll.".to_string())
+                        })?;
+                    execution.txn_id
+                }
+                Ok(OperationClaimOutcome::Replay) => {
+                    if let Some(execution) = state
+                        .store
+                        .get_operation_execution(&operation_id)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to get operation execution: {:?}", e);
+                            AppError::Internal("Failed to admit end poll.".to_string())
+                        })?
+                    {
+                        if execution.status == OperationExecutionStatus::Success {
+                            return Ok(StatusCode::NO_CONTENT);
+                        }
+                        if execution.status != OperationExecutionStatus::InFlight {
+                            let _ = state
+                                .store
+                                .update_operation_execution_status(
+                                    &operation_id,
+                                    OperationExecutionStatus::InFlight,
+                                )
+                                .await;
+                        }
+                        execution.txn_id
+                    } else {
+                        let fresh_txn = fresh_transaction_id("end");
+                        let execution = state
+                            .store
+                            .establish_operation_execution(&operation_id, &fresh_txn)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("Failed to establish operation execution: {:?}", e);
+                                AppError::Internal("Failed to admit end poll.".to_string())
+                            })?;
+                        execution.txn_id
+                    }
+                }
+                Ok(OperationClaimOutcome::Conflict) => return Err(AppError::IdempotencyReused),
+                Err(e) => {
+                    tracing::error!("Failed to claim end poll operation: {:?}", e);
+                    return Err(AppError::Internal("Failed to admit end poll.".to_string()));
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to look up end poll operation under lock: {:?}", e);
+            return Err(AppError::Internal("Failed to admit end poll.".to_string()));
+        }
+    };
+
+    // 9. Send downstream Matrix poll.end using the persisted txn_id.
+    let result = state
+        .driver
+        .post_poll_end(PollEndRequest {
+            room_id: &room_id,
+            poll_event_id: &poll_id,
+            site_id: &site_id_val,
+            author_public_key: &req.author_public_key,
+            author_signature: &req.author_signature,
+            author_challenge: challenge,
+            operation_id: &operation_id,
+            semantic_operation: &operation,
+            txn_id: &txn_id,
+        })
+        .await;
+
+    match result {
+        Ok(()) => {
+            if let Err(e) = state
+                .store
+                .update_operation_execution_status(&operation_id, OperationExecutionStatus::Success)
+                .await
+            {
+                tracing::error!("Failed to mark operation execution as success: {:?}", e);
+            }
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(e) => {
+            tracing::error!("Failed to send poll end: {e}");
+            if let Err(update_err) = state
+                .store
+                .update_operation_execution_status(&operation_id, OperationExecutionStatus::Failed)
+                .await
+            {
+                tracing::error!(
+                    "Failed to mark operation execution as failed: {:?}",
+                    update_err
+                );
+            }
+            // NOTE: Do NOT release operation claim! The claim and persisted txn_id
+            // remain so retries reuse the exact same txn_id.
+            Err(AppError::Internal("Failed to end poll.".to_string()))
         }
     }
 }

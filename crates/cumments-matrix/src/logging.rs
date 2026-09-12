@@ -184,6 +184,14 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
+    async fn post_poll_end(&self, request: cumments_core::ports::PollEndRequest<'_>) -> Result<()> {
+        info!(
+            "LOGGING: Poll end on {} in {} (op={}, txn={})",
+            request.poll_event_id, request.room_id, request.operation_id, request.txn_id
+        );
+        Ok(())
+    }
+
     async fn post_poll(
         &self,
         request: cumments_core::ports::PollStartRequest<'_>,

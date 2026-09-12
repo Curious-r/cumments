@@ -336,6 +336,38 @@ pub fn build_poll_response_body(
     body
 }
 
+/// Build the content for a direct Cumments `org.matrix.msc3381.poll.end`
+/// event (the pinned MSC3381 revision, not the remote `m.room.message`
+/// wrapper).
+///
+/// The end block and fallback text are produced according to MSC3381; the
+/// Cumments provenance block carries the operation id and the exact canonical
+/// END_POLL semantic operation.
+#[allow(clippy::too_many_arguments)]
+pub fn build_poll_end_body(
+    poll_event_id: &str,
+    fallback_text: &str,
+    author_public_key: &str,
+    author_signature: &str,
+    author_challenge: &str,
+    operation_id: &str,
+    semantic_operation: &serde_json::Value,
+) -> serde_json::Value {
+    use crate::poll::PollEndContent;
+
+    let content = PollEndContent::new(poll_event_id, fallback_text);
+    let mut body = serde_json::to_value(&content).expect("poll end content serializes");
+    body[PROVENANCE_CONTENT_KEY] = serde_json::json!({
+        "schema": PROVENANCE_SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "public_key": author_public_key,
+        "signature": author_signature,
+        "challenge": author_challenge,
+        "content": semantic_operation,
+    });
+    body
+}
+
 /// Build the content for a direct Cumments `org.matrix.msc3381.poll.start`
 /// event (the pinned MSC3381 revision, not the remote `m.room.message`
 /// wrapper).
@@ -1211,8 +1243,32 @@ mod tests {
         );
         assert_eq!(poll[PROVENANCE_CONTENT_KEY]["schema"].as_i64(), Some(1));
         assert!(poll.get(MESSAGE_CONTENT_KEY).is_none());
+        // The direct poll end carries the Cumments provenance block.
+        let end = build_poll_end_body(
+            "$p:hs",
+            "The poll has ended.",
+            "pk",
+            "sig",
+            "chal",
+            "op-end",
+            &json!(["END_POLL"]),
+        );
+        assert_eq!(end[PROVENANCE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+        assert!(end.get(MESSAGE_CONTENT_KEY).is_none());
+        assert_eq!(end["m.relates_to"]["event_id"].as_str(), Some("$p:hs"));
+        assert_eq!(
+            end["m.relates_to"]["rel_type"].as_str(),
+            Some("m.reference")
+        );
+        assert_eq!(
+            end["org.matrix.msc1767.text"].as_str(),
+            Some("The poll has ended.")
+        );
+        assert!(end.get("org.matrix.msc3381.poll.end").is_some());
+
         let loc = build_location_body("geo:1,2", None, "pk", "sig", "chal", None, None, None);
         assert_eq!(loc[MESSAGE_CONTENT_KEY]["schema"].as_i64(), Some(1));
+
         let edit = build_edit_body("$o:hs", "new", "pk", "sig", "chal", None);
         assert_eq!(
             edit["m.new_content"][MESSAGE_CONTENT_KEY]["schema"].as_i64(),

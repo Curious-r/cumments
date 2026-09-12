@@ -1,8 +1,9 @@
 use crate::routes::comments::{
-    delete_comment_handler, get_comment_handler, location_handler, poll_handler,
+    delete_comment_handler, end_poll_handler, get_comment_handler, location_handler, poll_handler,
     post_comment_handler, query_comments_handler, react_handler, unreact_handler,
     update_comment_handler, vote_handler,
 };
+
 use crate::routes::governance::{
     create_admin_claim_handler, create_manager_claim_handler, create_page_retirement_handler,
     create_page_room_upgrade_handler, create_room_moderator_claim_handler,
@@ -217,6 +218,10 @@ pub fn build_router(state: ApiState) -> Router {
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes",
             post(vote_handler).fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/end",
+            post(end_poll_handler).fallback(method_not_allowed_handler),
         )
         .route(
             "/api/v1/sites/{site_id}/pages/{page_slug}/media",
