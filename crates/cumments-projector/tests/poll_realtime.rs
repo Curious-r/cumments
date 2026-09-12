@@ -2,9 +2,12 @@
 //! emit `PollVoted`, and ends emit `PollEnded`. Redundant or ineffective
 //! operations emit nothing, and annotations are never leaked into `MessageAnnotationsChanged`.
 
-use cumments_core::models::{Content, PollContent, PollOption, RoomIdentity};
+use cumments_core::models::{
+    AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PollContent, PollOption,
+    RoomIdentity, TextContent, TextStyle,
+};
 use cumments_core::poll::{PollSemanticKind, PollStatus};
-use cumments_core::ports::RegistryStore;
+use cumments_core::ports::{MessageStore, RegistryStore};
 use cumments_core::projector_events::ProjectorEvent;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{
@@ -92,6 +95,31 @@ fn poll_message(
             total_votes: 0,
             responses: Vec::new(),
             my_votes: None,
+        }),
+        author_public_key: None,
+        author_signature: None,
+        author_challenge: None,
+        is_virtual_user_sender: false,
+        submission_id: None,
+        reply_to: None,
+        thread_root: None,
+        origin_server_ts: ts,
+        relates_to: None,
+        room_identity: Some(identity()),
+        raw_content: serde_json::Value::Null,
+    }
+}
+
+fn text_message(event_id: &str, text: &str, ts: i64) -> ParsedRoomMessage {
+    ParsedRoomMessage {
+        room_id: "!room:hs".to_string(),
+        event_id: event_id.to_string(),
+        event_type: "m.room.message".to_string(),
+        sender: "@alice:hs".to_string(),
+        content: Content::Text(TextContent {
+            body: text.to_string(),
+            formatted_body: None,
+            style: TextStyle::Normal,
         }),
         author_public_key: None,
         author_signature: None,
@@ -434,4 +462,156 @@ async fn poll_ended_emitted_on_transition_and_redundant_emits_nothing() {
 
     let captured2 = processor.stop_event_capture().await.expect("captured");
     assert!(captured2.is_empty(), "redundant end emits nothing");
+}
+
+#[tokio::test]
+async fn poll_created_deduplicates_on_replay_and_repeated_processing() {
+    let (_store, processor) = setup("poll-create-dedup").await;
+
+    // First processing of poll start
+    processor.start_event_capture().await;
+    processor
+        .process_room_message(poll_message(
+            "$poll-dup:hs",
+            "Favorite color?",
+            &[("red", "Red"), ("blue", "Blue")],
+            PollSemanticKind::Disclosed,
+            100,
+        ))
+        .await
+        .expect("process poll start");
+
+    let captured1 = processor.stop_event_capture().await.expect("captured");
+    assert_eq!(
+        captured1.len(),
+        1,
+        "first processing emits exactly one PollCreated"
+    );
+    assert!(
+        matches!(&captured1[0], ProjectorEvent::PollCreated { poll_id, .. } if poll_id == "$poll-dup:hs")
+    );
+
+    // Second processing of the exact same poll start (duplicate delivery / replay)
+    processor.start_event_capture().await;
+    processor
+        .process_room_message(poll_message(
+            "$poll-dup:hs",
+            "Favorite color?",
+            &[("red", "Red"), ("blue", "Blue")],
+            PollSemanticKind::Disclosed,
+            100,
+        ))
+        .await
+        .expect("reprocess poll start");
+
+    let captured2 = processor.stop_event_capture().await.expect("captured");
+    assert!(
+        captured2.is_empty(),
+        "reprocessing existing poll start must emit no additional PollCreated"
+    );
+}
+
+#[tokio::test]
+async fn non_poll_comment_repeated_processing_remains_unchanged() {
+    let (_store, processor) = setup("non-poll-repeat").await;
+
+    // First processing of text comment
+    processor.start_event_capture().await;
+    processor
+        .process_room_message(text_message("$text1:hs", "Hello world", 100))
+        .await
+        .expect("process text message");
+
+    let captured1 = processor.stop_event_capture().await.expect("captured");
+    assert_eq!(captured1.len(), 1);
+    assert!(
+        matches!(&captured1[0], ProjectorEvent::MessageCreated { message, .. } if message.event_id == "$text1:hs")
+    );
+
+    // Repeated processing of text comment: behavior remains unchanged (emits MessageCreated)
+    processor.start_event_capture().await;
+    processor
+        .process_room_message(text_message("$text1:hs", "Hello world", 100))
+        .await
+        .expect("reprocess text message");
+
+    let captured2 = processor.stop_event_capture().await.expect("captured");
+    assert_eq!(captured2.len(), 1);
+    assert!(
+        matches!(&captured2[0], ProjectorEvent::MessageCreated { message, .. } if message.event_id == "$text1:hs")
+    );
+}
+
+#[tokio::test]
+async fn already_projected_poll_does_not_emit_poll_created_on_rebuild() {
+    let (store, processor) = setup("poll-already-projected").await;
+
+    // Seed poll directly in store (as if backfilled / projected previously)
+    let msg = Message {
+        event_id: "$poll-preseeded:hs".to_string(),
+        site_id: "my-blog".to_string(),
+        page_slug: "hello".to_string(),
+        author: AuthorSnapshot {
+            kind: AuthorKind::Matrix,
+            display_name: Some("Creator".to_string()),
+            avatar_url: None,
+            public_key: None,
+            mxid: Some("@creator:hs".to_string()),
+        },
+        content: Content::Poll(PollContent {
+            question: "Pre-existing question?".to_string(),
+            answers: vec![
+                PollOption {
+                    id: "a".to_string(),
+                    text: "A".to_string(),
+                },
+                PollOption {
+                    id: "b".to_string(),
+                    text: "B".to_string(),
+                },
+            ],
+            kind: PollSemanticKind::Disclosed,
+            max_selections: 1,
+            status: PollStatus::Open,
+            end_time: None,
+            results: None,
+            total_votes: 0,
+            responses: Vec::new(),
+            my_votes: None,
+        }),
+        matrix_event_type: "org.matrix.msc3381.poll.start".to_string(),
+        timestamp: chrono::Utc::now(),
+        edited_at: None,
+        reply_to: None,
+        thread_root: None,
+        submission_id: None,
+        status: MessageStatus::Active,
+        redacted_at: None,
+        redacted_by: None,
+        reactions: Vec::new(),
+        thread_summary: None,
+        room_id: "!room:hs".to_string(),
+        sender_mxid: "@creator:hs".to_string(),
+        raw_content: serde_json::Value::Null,
+    };
+    store.save_message(&msg).await.expect("preseed message");
+
+    // Rebuilding / reprocessing this poll start via event processor
+    processor.start_event_capture().await;
+    processor
+        .process_room_message(poll_message(
+            "$poll-preseeded:hs",
+            "Pre-existing question?",
+            &[("a", "A"), ("b", "B")],
+            PollSemanticKind::Disclosed,
+            100,
+        ))
+        .await
+        .expect("process already projected poll");
+
+    let captured = processor.stop_event_capture().await.expect("captured");
+    assert!(
+        captured.is_empty(),
+        "reprocessing an already-projected poll start must not emit PollCreated"
+    );
 }

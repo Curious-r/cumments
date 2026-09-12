@@ -1673,18 +1673,20 @@ impl EventProcessor {
             "Observed projected message event"
         );
         if matches!(message.content, Content::Poll(_)) {
-            let hydrated = self
-                .message_store
-                .get_message(&message.event_id)
-                .await?
-                .unwrap_or_else(|| message.clone());
-            self.emit(ProjectorEvent::PollCreated {
-                site_id,
-                page_slug,
-                poll_id: message.event_id.clone(),
-                message: hydrated,
-            })
-            .await;
+            if outcome == MessageSaveOutcome::Inserted {
+                let hydrated = self
+                    .message_store
+                    .get_message(&message.event_id)
+                    .await?
+                    .unwrap_or_else(|| message.clone());
+                self.emit(ProjectorEvent::PollCreated {
+                    site_id,
+                    page_slug,
+                    poll_id: message.event_id.clone(),
+                    message: hydrated,
+                })
+                .await;
+            }
         } else {
             self.emit(ProjectorEvent::MessageCreated {
                 site_id,
