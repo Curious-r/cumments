@@ -247,7 +247,7 @@ async fn process_profile_mutation(
         ));
     }
 
-    // Avatar MediaReference validation: must resolve through Stage C store for this site
+    // Avatar MediaReference validation: must resolve through media reference store for this site
     if let ProfileTargetValue::SetAvatar(ref media_ref) = target_value {
         let resolved = state
             .store

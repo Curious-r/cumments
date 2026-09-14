@@ -72,7 +72,7 @@ impl ProfileOperationsPass {
     /// Reconciles executable pending profile operations.
     ///
     /// Repeatedly finds earliest executable `Pending` operations across all visitors
-    /// and fields, executes them through the Stage B `ProfileOperationExecutor`, and
+    /// and fields, executes them through `ProfileOperationExecutor`, and
     /// loops so that next same-field `Pending` operations become eligible and execute
     /// in the same pass. Operations blocked by `Dispatching` or `Unknown` are skipped.
     pub async fn reconcile(&self) -> Result<u64> {

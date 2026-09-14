@@ -7,7 +7,7 @@
 //! 3. Unknown barrier: ambiguous downstream failure blocks subsequent operations for that field indefinitely.
 //! 4. Restart durability: durable pending operations execute and progress across process restarts.
 //! 5. Multiple fields progress independently: display name and avatar queues do not block each other.
-//! 6. Duplicate workers: concurrent passes prevent double dispatch via Stage B atomic execution leases.
+//! 6. Duplicate workers: concurrent passes prevent double dispatch via atomic execution leases.
 
 use std::sync::Arc;
 
