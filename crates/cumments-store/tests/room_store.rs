@@ -140,6 +140,68 @@ async fn members_upsert_and_lookup() {
         .expect("member exists");
     assert_eq!(member_duplicate.display_name.as_deref(), Some("Alice B"));
     assert_eq!(member_duplicate.membership, "leave");
+
+    // Legacy row with unknown event_id cannot be overwritten by unproven same-timestamp incoming event.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@dan:hs".to_string(),
+            display_name: Some("Dan Original".to_string()),
+            avatar_url: None,
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 5000,
+            event_id: None,
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save legacy dan");
+
+    // Same-timestamp incoming event with event_id cannot prove newer -> rejected.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@dan:hs".to_string(),
+            display_name: Some("Dan Imposter".to_string()),
+            avatar_url: None,
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 5000,
+            event_id: Some("$dan_same_ts".to_string()),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save dan same ts");
+    let dan_after_same = store
+        .get_member("!room:hs", "@dan:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(dan_after_same.display_name.as_deref(), Some("Dan Original"));
+    assert_eq!(dan_after_same.event_id, None);
+
+    // Newer event (ts 6000) overwrites and populates event_id.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@dan:hs".to_string(),
+            display_name: Some("Dan Newer".to_string()),
+            avatar_url: None,
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 6000,
+            event_id: Some("$dan_newer".to_string()),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save dan newer");
+    let dan_after_newer = store
+        .get_member("!room:hs", "@dan:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(dan_after_newer.display_name.as_deref(), Some("Dan Newer"));
+    assert_eq!(dan_after_newer.event_id.as_deref(), Some("$dan_newer"));
 }
 
 #[tokio::test]

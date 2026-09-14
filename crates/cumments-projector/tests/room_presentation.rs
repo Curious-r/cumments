@@ -1677,3 +1677,89 @@ async fn projection_replay_older_to_newer_vs_newer_to_older_converges() {
     );
     assert_eq!(state_forward.event_id, state_reverse.event_id);
 }
+
+#[tokio::test]
+async fn legacy_unrecoverable_member_protected_from_same_timestamp_overwrite() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-legacy-protect:hs";
+    let user_id = "@legacy_user:hs";
+
+    // 1. Manually insert a legacy unrecoverable member row into room_members
+    // with origin_server_ts = 2000, event_id = None
+    store
+        .save_member(&cumments_core::models::RoomMember {
+            room_id: room_id.to_string(),
+            user_id: user_id.to_string(),
+            display_name: Some("Legacy User".to_string()),
+            avatar_url: Some("mxc://hs/legacy-avatar".to_string()),
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 2000,
+            event_id: None,
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("insert legacy member");
+
+    // 2. Process incoming member event at the SAME timestamp (2000) with different presentation
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$same_ts_event".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Imposter User",
+                "avatar_url": "mxc://hs/imposter",
+            }),
+        })
+        .await
+        .expect("process same-ts event");
+
+    // Conservative guarantee: legacy presentation must NOT be overwritten!
+    let member_after_same = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(
+        member_after_same.display_name.as_deref(),
+        Some("Legacy User")
+    );
+    assert_eq!(
+        member_after_same.avatar_url.as_deref(),
+        Some("mxc://hs/legacy-avatar")
+    );
+    assert_eq!(member_after_same.event_id, None);
+    assert_eq!(member_after_same.origin_server_ts, 2000);
+
+    // 3. Process clearly newer event at timestamp 3000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$newer_event".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 3000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Updated User",
+                "avatar_url": "mxc://hs/updated",
+            }),
+        })
+        .await
+        .expect("process newer event");
+
+    // Newer event updates projection and populates event_id
+    let member_after_newer = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(
+        member_after_newer.display_name.as_deref(),
+        Some("Updated User")
+    );
+    assert_eq!(
+        member_after_newer.avatar_url.as_deref(),
+        Some("mxc://hs/updated")
+    );
+    assert_eq!(member_after_newer.event_id.as_deref(), Some("$newer_event"));
+    assert_eq!(member_after_newer.origin_server_ts, 3000);
+}

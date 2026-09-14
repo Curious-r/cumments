@@ -72,8 +72,8 @@ impl RoomStore for DbStore {
                     )))
                     .and(
                         Expr::col((Alias::new("room_members"), room_members::Column::EventId))
-                            .is_null()
-                            .or(
+                            .is_not_null()
+                            .and(
                                 Expr::col((Alias::new("excluded"), room_members::Column::EventId))
                                     .is_not_null()
                                     .and(

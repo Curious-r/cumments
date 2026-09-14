@@ -779,7 +779,16 @@ impl RoomMember {
         if incoming_ts < self.origin_server_ts {
             true
         } else if incoming_ts == self.origin_server_ts {
-            matches!(&self.event_id, Some(eid) if incoming_event_id < eid.as_str())
+            match &self.event_id {
+                Some(eid) => incoming_event_id < eid.as_str(),
+                None => {
+                    // When the existing projection row lacks event_id (e.g. unrecoverable legacy row),
+                    // an incoming event at the same timestamp cannot be proven strictly newer.
+                    // Conservatively treat the incoming event as not newer (older/rejected)
+                    // to prevent unproven overwrites of the legacy projection state.
+                    true
+                }
+            }
         } else {
             false
         }
