@@ -604,15 +604,11 @@ impl cumments_core::ports::HistoricalRoomStateResolver for TestDriver {
         if *self.fail_historical_resolution.lock().await {
             return Err(anyhow::anyhow!("simulated historical resolution failure"));
         }
-        let map = self.historical_member_presentations.lock().await;
-        if let Some(res) = map.get(&(
-            room_id.to_string(),
-            event_id.to_string(),
-            sender_mxid.to_string(),
-        )) {
-            Ok(res.clone())
-        } else {
-            Ok(None)
+        if let Some(stub) = self.historical_stub.lock().await.as_ref() {
+            return Ok(stub.clone());
         }
+        Err(anyhow::anyhow!(
+            "HistoricalRoomStateResolver is not supported by TestDriver for event {event_id} in {room_id} for {sender_mxid} without an explicit stub"
+        ))
     }
 }

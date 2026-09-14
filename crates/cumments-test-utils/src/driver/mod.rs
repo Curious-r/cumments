@@ -98,8 +98,7 @@ pub struct TestDriver {
     pub set_avatar_calls: Mutex<Vec<(String, SiteId, String)>>,
     pub clear_avatar_calls: Mutex<Vec<(String, SiteId)>>,
     pub next_profile_error: Mutex<Option<ProfileDriverError>>,
-    pub historical_member_presentations:
-        Mutex<HashMap<(String, String, String), Option<cumments_core::models::MemberPresentation>>>,
+    pub historical_stub: Mutex<Option<Option<cumments_core::models::MemberPresentation>>>,
     pub fail_historical_resolution: Mutex<bool>,
 }
 
@@ -141,8 +140,20 @@ impl TestDriver {
             set_avatar_calls: Mutex::new(Vec::new()),
             clear_avatar_calls: Mutex::new(Vec::new()),
             next_profile_error: Mutex::new(None),
-            historical_member_presentations: Mutex::new(HashMap::new()),
+            historical_stub: Mutex::new(None),
             fail_historical_resolution: Mutex::new(false),
+        }
+    }
+
+    /// Construct a TestDriver that returns the specified presentation for any
+    /// historical member state query, intended for tests that do not exercise
+    /// historical room-state resolution.
+    pub fn with_historical_stub(
+        presentation: Option<cumments_core::models::MemberPresentation>,
+    ) -> Self {
+        Self {
+            historical_stub: Mutex::new(Some(presentation)),
+            ..Self::new()
         }
     }
 
@@ -238,17 +249,11 @@ impl TestDriver {
             .insert((site_id.into(), author_public_key.into()), profile);
     }
 
-    pub async fn set_historical_member_presentation(
+    pub async fn set_historical_stub(
         &self,
-        room_id: impl Into<String>,
-        event_id: impl Into<String>,
-        sender_mxid: impl Into<String>,
         presentation: Option<cumments_core::models::MemberPresentation>,
     ) {
-        self.historical_member_presentations.lock().await.insert(
-            (room_id.into(), event_id.into(), sender_mxid.into()),
-            presentation,
-        );
+        *self.historical_stub.lock().await = Some(presentation);
     }
 
     pub async fn set_fail_historical_resolution(&self, fail: bool) {

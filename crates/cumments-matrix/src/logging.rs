@@ -483,10 +483,12 @@ impl MatrixProfileDriver for LoggingMatrixDriver {
 impl HistoricalRoomStateResolver for LoggingMatrixDriver {
     async fn resolve_member_presentation(
         &self,
-        _room_id: &str,
-        _event_id: &str,
+        room_id: &str,
+        event_id: &str,
         _sender_mxid: &str,
     ) -> Result<Option<MemberPresentation>> {
-        Ok(None)
+        Err(anyhow::anyhow!(
+            "HistoricalRoomStateResolver is not supported by LoggingMatrixDriver (room_id: {room_id}, event_id: {event_id})"
+        ))
     }
 }

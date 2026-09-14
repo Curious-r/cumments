@@ -5,5 +5,7 @@
 //! copies per test module.
 
 mod driver;
+mod mock_homeserver;
 
 pub use driver::TestDriver;
+pub use mock_homeserver::MockHomeserver;

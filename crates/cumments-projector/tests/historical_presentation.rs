@@ -2,32 +2,33 @@
 //!
 //! Verifies:
 //! 1. Historical snapshot is immutable when author profile changes later.
-//! 2. Arrival-order inversion resolves DAG context, not arrival-time room state.
+//! 2. Canonical history P1 -> E -> P2 resolves E as P1 under all ingestion permutations (P1->E->P2, P2->E->P1, E->P2->P1).
 //! 3. Leave after message preserves historical snapshot.
-//! 4. Leave before message resolves effective DAG state without falling back to old presentation.
+//! 4. Leave before message resolves effective DAG state without falling back to old presentation or current room presentation.
 //! 5. Lifecycle (join P1 -> join P2 -> message at P2 -> leave -> join P3) maintains P2 snapshot while live view shows P3.
 //! 6. Resolver failure fails message processing explicitly without fallback to room_members.
 //! 7. Missing resolver fails message processing explicitly.
-//! 8. Durable MediaReference resolution handles existing references, local uploads, and degraded unknown avatars without speculative IDs.
-//! 9. Rebuild determinism: chronological vs reverse replay produces identical stored snapshots.
+//! 8. Logging driver returns unsupported error and message processing fails explicitly.
+//! 9. Valid "no usable presentation" is distinct from resolver failure.
+//! 10. Durable MediaReference resolution handles existing references, local uploads, and degraded unknown avatars without speculative IDs.
+//! 11. Rebuild determinism: chronological vs reverse replay produces identical stored snapshots.
 
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
 use cumments_core::media_reference::MediaReferenceSource;
-use cumments_core::media_upload::MediaUploadIdempotencyInput;
-use cumments_core::models::{
-    Content, MemberPresentation, PageSlug, RoomIdentity, SiteId, TextContent, TextStyle,
-};
+use cumments_core::models::{Content, PageSlug, RoomIdentity, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{
-    MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
+    HistoricalRoomStateResolver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore,
+    SiteStore,
 };
+use cumments_matrix::LoggingMatrixDriver;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::{ParsedRoomMessage, ParsedRoomState};
 use cumments_store::DbStore;
 use cumments_store::entities::messages;
-use cumments_test_utils::TestDriver;
+use cumments_test_utils::MockHomeserver;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::json;
 
@@ -47,14 +48,11 @@ fn test_db_url(name: &str) -> String {
     format!("sqlite://{}", path.display())
 }
 
-fn create_processor_with_driver(
+fn create_processor_with_resolver(
     store: Arc<DbStore>,
-    driver: Option<Arc<TestDriver>>,
+    resolver: Option<Arc<dyn HistoricalRoomStateResolver>>,
 ) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
-    let historical_state_resolver = driver
-        .clone()
-        .map(|d| d as Arc<dyn cumments_core::ports::HistoricalRoomStateResolver>);
     EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
         registry_store: store.clone(),
@@ -71,7 +69,7 @@ fn create_processor_with_driver(
         site_service: Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as Arc<dyn SiteStore>
         )),
-        driver: driver.map(|d| d as Arc<dyn cumments_core::ports::MatrixDriver>),
+        driver: None,
         operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
@@ -79,7 +77,7 @@ fn create_processor_with_driver(
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
-        historical_state_resolver,
+        historical_state_resolver: resolver,
     })
 }
 
@@ -158,7 +156,7 @@ async fn get_raw_message(store: &DbStore, event_id: &str) -> Option<messages::Mo
 async fn historical_snapshot_is_immutable_when_author_profile_changes_later() {
     let db_url = test_db_url("immutable_on_profile_change");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
@@ -175,7 +173,23 @@ async fn historical_snapshot_is_immutable_when_author_profile_changes_later() {
         .await
         .expect("register room");
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+    // Mount context response at $msg-1: state at $msg-1 is P1
+    homeserver
+        .mount_context(
+            room_id,
+            event_id,
+            MockHomeserver::make_message_event(room_id, event_id, user_id, "Hello world", 1050),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice P1"),
+                Some("mxc://hs/alice1"),
+            )],
+        )
+        .await;
+
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
 
     // 1. Initial member state P1
     processor
@@ -191,21 +205,7 @@ async fn historical_snapshot_is_immutable_when_author_profile_changes_later() {
         .await
         .expect("process member 1");
 
-    // 2. Set resolver for message event_id to return P1
-    driver
-        .set_historical_member_presentation(
-            room_id,
-            event_id,
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice P1".to_string()),
-                avatar_url: Some("mxc://hs/alice1".to_string()),
-                media_reference: None,
-            }),
-        )
-        .await;
-
-    // 3. Process message at $msg-1
+    // 2. Process message at $msg-1 (resolves P1 through homeserver /context)
     processor
         .process_room_message(make_room_message(
             room_id,
@@ -219,7 +219,7 @@ async fn historical_snapshot_is_immutable_when_author_profile_changes_later() {
         .await
         .expect("process room message");
 
-    // 4. Update profile to P2 later
+    // 3. Update profile to P2 later
     processor
         .process_room_state(make_member_state(
             room_id,
@@ -242,112 +242,164 @@ async fn historical_snapshot_is_immutable_when_author_profile_changes_later() {
     assert_eq!(member.display_name.as_deref(), Some("Alice P2"));
     assert_eq!(member.avatar_url.as_deref(), Some("mxc://hs/alice2"));
 
-    // Check raw row in `messages` table retains immutable historical snapshot P1
-    let raw_msg = get_raw_message(&store, event_id)
+    // Check stored raw message row still holds immutable P1
+    let raw = get_raw_message(&store, event_id)
         .await
-        .expect("message row exists");
-    assert_eq!(raw_msg.author_display_name.as_deref(), Some("Alice P1"));
+        .expect("raw message exists");
+    assert_eq!(raw.author_display_name.as_deref(), Some("Alice P1"));
+    assert_eq!(raw.author_avatar_url.as_deref(), Some("mxc://hs/alice1"));
+
+    // Check live message view enriches with current room_members (P2)
+    let page = store
+        .get_messages(&site_id, &page_slug, 10, 0, None)
+        .await
+        .expect("get messages");
+    assert_eq!(page.items.len(), 1);
     assert_eq!(
-        raw_msg.author_avatar_url.as_deref(),
-        Some("mxc://hs/alice1")
+        page.items[0].author.display_name.as_deref(),
+        Some("Alice P2")
+    );
+    assert_eq!(
+        page.items[0].author.avatar_url.as_deref(),
+        Some("mxc://hs/alice2")
     );
 }
 
 #[tokio::test]
-async fn arrival_order_inversion_resolves_dag_context_not_arrival_state() {
-    let db_url = test_db_url("arrival_order_inversion");
-    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+async fn canonical_history_resolves_p1_under_all_ingestion_permutations() {
+    let permutations = [
+        ("p1_e_p2", vec!["p1", "e", "p2"]),
+        ("p2_e_p1", vec!["p2", "e", "p1"]),
+        ("e_p2_p1", vec!["e", "p2", "p1"]),
+    ];
 
-    let site_id = SiteId::from("test-site");
-    let page_slug = PageSlug::from("test-page");
-    let room_id = "!room:hs";
-    let user_id = "@alice:hs";
-    let event_id = "$msg-historic";
+    for (name, order) in permutations {
+        let db_url = test_db_url(&format!("permutation_{name}"));
+        let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+        let homeserver = MockHomeserver::start().await;
 
-    store
-        .ensure_site_exists(site_id.as_str(), "!space:hs")
-        .await
-        .expect("ensure site");
-    store
-        .register_room(room_id, &site_id, &page_slug)
-        .await
-        .expect("register room");
+        let site_id = SiteId::from("test-site");
+        let page_slug = PageSlug::from("test-page");
+        let room_id = "!room:hs";
+        let user_id = "@alice:hs";
+        let event_id = "$msg-perm";
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+        store
+            .ensure_site_exists(site_id.as_str(), "!space:hs")
+            .await
+            .expect("ensure site");
+        store
+            .register_room(room_id, &site_id, &page_slug)
+            .await
+            .expect("register room");
 
-    // 1. Inverted arrival: Projector receives NEWER state P2 FIRST
-    processor
-        .process_room_state(make_member_state(
-            room_id,
-            "$member-p2",
-            user_id,
-            "join",
-            Some("Alice Newer P2"),
-            Some("mxc://hs/newer-avatar"),
-            2000,
-        ))
-        .await
-        .expect("process member 2");
+        // The canonical state at message E in the room DAG is P1.
+        homeserver
+            .mount_context(
+                room_id,
+                event_id,
+                MockHomeserver::make_message_event(room_id, event_id, user_id, "Permuted", 1500),
+                vec![MockHomeserver::make_member_state_event(
+                    user_id,
+                    "join",
+                    Some("Alice P1"),
+                    Some("mxc://hs/alice1"),
+                )],
+            )
+            .await;
 
-    // Current room_members projection is now P2
-    let current_member = store
-        .get_member(room_id, user_id)
-        .await
-        .expect("get member")
-        .expect("member exists");
-    assert_eq!(
-        current_member.display_name.as_deref(),
-        Some("Alice Newer P2")
-    );
+        let processor =
+            create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
 
-    // 2. Resolver is configured to return P1 for $msg-historic (its DAG context)
-    driver
-        .set_historical_member_presentation(
-            room_id,
-            event_id,
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice Historic P1".to_string()),
-                avatar_url: Some("mxc://hs/historic-avatar".to_string()),
-                media_reference: None,
-            }),
-        )
-        .await;
+        for step in order {
+            match step {
+                "p1" => {
+                    processor
+                        .process_room_state(make_member_state(
+                            room_id,
+                            "$member-1",
+                            user_id,
+                            "join",
+                            Some("Alice P1"),
+                            Some("mxc://hs/alice1"),
+                            1000,
+                        ))
+                        .await
+                        .expect("process p1");
+                }
+                "e" => {
+                    processor
+                        .process_room_message(make_room_message(
+                            room_id,
+                            event_id,
+                            user_id,
+                            "Permuted",
+                            1500,
+                            site_id.as_str(),
+                            page_slug.as_str(),
+                        ))
+                        .await
+                        .expect("process e");
+                }
+                "p2" => {
+                    processor
+                        .process_room_state(make_member_state(
+                            room_id,
+                            "$member-2",
+                            user_id,
+                            "join",
+                            Some("Alice P2"),
+                            Some("mxc://hs/alice2"),
+                            2000,
+                        ))
+                        .await
+                        .expect("process p2");
+                }
+                _ => unreachable!(),
+            }
+        }
 
-    // 3. Process historical message
-    processor
-        .process_room_message(make_room_message(
-            room_id,
-            event_id,
-            user_id,
-            "Comment from the past",
-            1000,
-            site_id.as_str(),
-            page_slug.as_str(),
-        ))
-        .await
-        .expect("process room message");
+        // Under all ingestion permutations, event E must resolve to historical P1 snapshot!
+        let raw = get_raw_message(&store, event_id)
+            .await
+            .expect("raw message exists");
+        assert_eq!(
+            raw.author_display_name.as_deref(),
+            Some("Alice P1"),
+            "failed for order {:?}",
+            step_order_desc(name)
+        );
+        assert_eq!(
+            raw.author_avatar_url.as_deref(),
+            Some("mxc://hs/alice1"),
+            "failed for order {:?}",
+            step_order_desc(name)
+        );
 
-    // 4. Verify message row in `messages` stores P1, NOT the current arrival-time projection P2!
-    let raw_msg = get_raw_message(&store, event_id)
-        .await
-        .expect("message row exists");
-    assert_eq!(
-        raw_msg.author_display_name.as_deref(),
-        Some("Alice Historic P1")
-    );
-    assert_eq!(
-        raw_msg.author_avatar_url.as_deref(),
-        Some("mxc://hs/historic-avatar")
-    );
+        // And current room presentation in room_members reflects P2 (latest timestamp)
+        let member = store
+            .get_member(room_id, user_id)
+            .await
+            .expect("get member")
+            .expect("member exists");
+        assert_eq!(member.display_name.as_deref(), Some("Alice P2"));
+    }
+}
+
+fn step_order_desc(name: &str) -> &'static str {
+    match name {
+        "p1_e_p2" => "P1 -> E -> P2",
+        "p2_e_p1" => "P2 -> E -> P1",
+        "e_p2_p1" => "E -> P2 -> P1",
+        _ => "unknown",
+    }
 }
 
 #[tokio::test]
 async fn author_leave_after_message_preserves_historical_snapshot() {
     let db_url = test_db_url("leave_after_message");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
@@ -364,83 +416,94 @@ async fn author_leave_after_message_preserves_historical_snapshot() {
         .await
         .expect("register room");
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
-
-    // 1. Join with P1
-    processor
-        .process_room_state(make_member_state(
-            room_id,
-            "$join-1",
-            user_id,
-            "join",
-            Some("Alice In Room"),
-            Some("mxc://hs/alice-avatar"),
-            1000,
-        ))
-        .await
-        .expect("join");
-
-    // 2. Set resolver for message
-    driver
-        .set_historical_member_presentation(
+    homeserver
+        .mount_context(
             room_id,
             event_id,
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice In Room".to_string()),
-                avatar_url: Some("mxc://hs/alice-avatar".to_string()),
-                media_reference: None,
-            }),
+            MockHomeserver::make_message_event(room_id, event_id, user_id, "Goodbye", 1050),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice P1"),
+                Some("mxc://hs/alice1"),
+            )],
         )
         .await;
 
-    // 3. Process message
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
+
+    // 1. Join at P1
+    processor
+        .process_room_state(make_member_state(
+            room_id,
+            "$member-1",
+            user_id,
+            "join",
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
+            1000,
+        ))
+        .await
+        .expect("process join");
+
+    // 2. Post message at 1050
     processor
         .process_room_message(make_room_message(
             room_id,
             event_id,
             user_id,
-            "I am here",
-            1100,
+            "Goodbye",
+            1050,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
         .expect("process message");
 
-    // 4. Alice leaves
+    // 3. Leave at 2000
     processor
         .process_room_state(make_member_state(
-            room_id, "$leave-1", user_id, "leave", None, None, 2000,
+            room_id,
+            "$leave-1",
+            user_id,
+            "leave",
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
+            2000,
         ))
         .await
-        .expect("leave");
+        .expect("process leave");
 
-    // Verify stored message snapshot is still P1
-    let raw_msg = get_raw_message(&store, event_id)
+    // Stored message keeps P1 snapshot
+    let raw = get_raw_message(&store, event_id)
         .await
-        .expect("message row exists");
+        .expect("raw message exists");
+    assert_eq!(raw.author_display_name.as_deref(), Some("Alice P1"));
+    assert_eq!(raw.author_avatar_url.as_deref(), Some("mxc://hs/alice1"));
+
+    // Live query still enriches with P1 under Model A leave semantics
+    let page = store
+        .get_messages(&site_id, &page_slug, 10, 0, None)
+        .await
+        .expect("get messages");
     assert_eq!(
-        raw_msg.author_display_name.as_deref(),
-        Some("Alice In Room")
-    );
-    assert_eq!(
-        raw_msg.author_avatar_url.as_deref(),
-        Some("mxc://hs/alice-avatar")
+        page.items[0].author.display_name.as_deref(),
+        Some("Alice P1")
     );
 }
 
 #[tokio::test]
-async fn leave_before_message_resolves_effective_dag_state_not_previous_membership() {
+async fn leave_before_message_resolves_effective_dag_state() {
     let db_url = test_db_url("leave_before_message");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
     let room_id = "!room:hs";
     let user_id = "@alice:hs";
-    let event_id = "$msg-departed";
+    let event_id = "$msg-after-leave";
 
     store
         .ensure_site_exists(site_id.as_str(), "!space:hs")
@@ -451,63 +514,80 @@ async fn leave_before_message_resolves_effective_dag_state_not_previous_membersh
         .await
         .expect("register room");
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+    // Context at event E shows user in "leave" state with profile "Alice Departed"
+    homeserver
+        .mount_context(
+            room_id,
+            event_id,
+            MockHomeserver::make_message_event(room_id, event_id, user_id, "Ghost message", 2500),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "leave",
+                Some("Alice Departed"),
+                Some("mxc://hs/departed"),
+            )],
+        )
+        .await;
 
-    // 1. Join with P1 earlier
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
+
+    // 1. Initial join at P1
     processor
         .process_room_state(make_member_state(
             room_id,
-            "$join-1",
+            "$member-1",
             user_id,
             "join",
-            Some("Old Alice"),
-            Some("mxc://hs/old-avatar"),
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
             1000,
         ))
         .await
-        .expect("join");
+        .expect("process join");
 
-    // 2. Leave
+    // 2. Leave at 2000 with "Alice Departed"
     processor
         .process_room_state(make_member_state(
-            room_id, "$leave-1", user_id, "leave", None, None, 2000,
+            room_id,
+            "$leave-1",
+            user_id,
+            "leave",
+            Some("Alice Departed"),
+            Some("mxc://hs/departed"),
+            2000,
         ))
         .await
-        .expect("leave");
+        .expect("process leave");
 
-    // 3. Effective state at DAG context for $msg-departed is None (left / no presentation)
-    driver
-        .set_historical_member_presentation(room_id, event_id, user_id, None)
-        .await;
-
-    // 4. Process message
+    // 3. Process message at 2500
     processor
         .process_room_message(make_room_message(
             room_id,
             event_id,
             user_id,
             "Ghost message",
-            2100,
+            2500,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
         .expect("process message");
 
-    // Stored message must resolve to None, not resurrecting "Old Alice" from previous projection!
-    let raw_msg = get_raw_message(&store, event_id)
+    // The message must resolve to the DAG state effective at E ("Alice Departed"),
+    // not fall back to joined state "Alice P1".
+    let raw = get_raw_message(&store, event_id)
         .await
-        .expect("message row exists");
-    assert_eq!(raw_msg.author_display_name, None);
-    assert_eq!(raw_msg.author_avatar_url, None);
-    assert_eq!(raw_msg.author_media_reference, None);
+        .expect("raw message exists");
+    assert_eq!(raw.author_display_name.as_deref(), Some("Alice Departed"));
+    assert_eq!(raw.author_avatar_url.as_deref(), Some("mxc://hs/departed"));
 }
 
 #[tokio::test]
-async fn join_update_leave_rejoin_lifecycle_snapshot_and_live_presentation() {
-    let db_url = test_db_url("lifecycle_snapshot_and_live");
+async fn lifecycle_rejoin_maintains_message_snapshot_while_live_shows_new_profile() {
+    let db_url = test_db_url("lifecycle_rejoin");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
@@ -524,108 +604,121 @@ async fn join_update_leave_rejoin_lifecycle_snapshot_and_live_presentation() {
         .await
         .expect("register room");
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
-
-    // 1. Join with P1
-    processor
-        .process_room_state(make_member_state(
-            room_id,
-            "$m-1",
-            user_id,
-            "join",
-            Some("Alice P1"),
-            Some("mxc://hs/p1"),
-            1000,
-        ))
-        .await
-        .expect("p1");
-
-    // 2. Update to P2
-    processor
-        .process_room_state(make_member_state(
-            room_id,
-            "$m-2",
-            user_id,
-            "join",
-            Some("Alice P2"),
-            Some("mxc://hs/p2"),
-            2000,
-        ))
-        .await
-        .expect("p2");
-
-    // Resolver returns P2 for $msg-at-p2
-    driver
-        .set_historical_member_presentation(
+    // Context at $msg-at-p2 is P2
+    homeserver
+        .mount_context(
             room_id,
             event_id,
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice P2".to_string()),
-                avatar_url: Some("mxc://hs/p2".to_string()),
-                media_reference: None,
-            }),
+            MockHomeserver::make_message_event(room_id, event_id, user_id, "Message at P2", 2500),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice P2"),
+                Some("mxc://hs/alice2"),
+            )],
         )
         .await;
 
-    // 3. Message sent at P2
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
+
+    // 1. Join P1 (1000)
+    processor
+        .process_room_state(make_member_state(
+            room_id,
+            "$member-1",
+            user_id,
+            "join",
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
+            1000,
+        ))
+        .await
+        .expect("process join 1");
+
+    // 2. Update to P2 (2000)
+    processor
+        .process_room_state(make_member_state(
+            room_id,
+            "$member-2",
+            user_id,
+            "join",
+            Some("Alice P2"),
+            Some("mxc://hs/alice2"),
+            2000,
+        ))
+        .await
+        .expect("process join 2");
+
+    // 3. Post message at 2500 (effective state is P2)
     processor
         .process_room_message(make_room_message(
             room_id,
             event_id,
             user_id,
             "Message at P2",
-            2100,
+            2500,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
-        .expect("message at p2");
+        .expect("process message");
 
-    // 4. Leave
-    processor
-        .process_room_state(make_member_state(
-            room_id, "$m-3", user_id, "leave", None, None, 3000,
-        ))
-        .await
-        .expect("leave");
-
-    // 5. Rejoin with P3
+    // 4. Leave at 3000
     processor
         .process_room_state(make_member_state(
             room_id,
-            "$m-4",
+            "$leave-1",
+            user_id,
+            "leave",
+            Some("Alice P2"),
+            Some("mxc://hs/alice2"),
+            3000,
+        ))
+        .await
+        .expect("process leave");
+
+    // 5. Rejoin at 4000 as P3
+    processor
+        .process_room_state(make_member_state(
+            room_id,
+            "$member-3",
             user_id,
             "join",
             Some("Alice P3"),
-            Some("mxc://hs/p3"),
+            Some("mxc://hs/alice3"),
             4000,
         ))
         .await
-        .expect("rejoin p3");
+        .expect("process rejoin P3");
 
-    // Verify stored snapshot is strictly P2
-    let raw_msg = get_raw_message(&store, event_id)
+    // Historical raw snapshot must remain P2
+    let raw = get_raw_message(&store, event_id)
         .await
-        .expect("message row exists");
-    assert_eq!(raw_msg.author_display_name.as_deref(), Some("Alice P2"));
-    assert_eq!(raw_msg.author_avatar_url.as_deref(), Some("mxc://hs/p2"));
+        .expect("raw message exists");
+    assert_eq!(raw.author_display_name.as_deref(), Some("Alice P2"));
+    assert_eq!(raw.author_avatar_url.as_deref(), Some("mxc://hs/alice2"));
 
-    // Verify live view via MessageStore::get_message hydrates to current P3
-    let hydrated = store
-        .get_message(event_id)
+    // Live view query enriches with P3 (latest room state)
+    let page = store
+        .get_messages(&site_id, &page_slug, 10, 0, None)
         .await
-        .expect("get message")
-        .expect("message exists");
-    assert_eq!(hydrated.author.display_name.as_deref(), Some("Alice P3"));
-    assert_eq!(hydrated.author.avatar_url.as_deref(), Some("mxc://hs/p3"));
+        .expect("get messages");
+    assert_eq!(
+        page.items[0].author.display_name.as_deref(),
+        Some("Alice P3")
+    );
+    assert_eq!(
+        page.items[0].author.avatar_url.as_deref(),
+        Some("mxc://hs/alice3")
+    );
 }
 
 #[tokio::test]
 async fn resolver_failure_fails_processing_explicitly_without_room_members_fallback() {
-    let db_url = test_db_url("resolver_failure_no_fallback");
+    let db_url = test_db_url("resolver_failure");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
@@ -642,44 +735,54 @@ async fn resolver_failure_fails_processing_explicitly_without_room_members_fallb
         .await
         .expect("register room");
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+    // Configure homeserver to return 500 error on /context
+    homeserver
+        .mount_context_response(
+            room_id,
+            event_id,
+            500,
+            json!({ "errcode": "M_UNKNOWN", "error": "Internal server error" }),
+        )
+        .await;
 
-    // Member is in room_members projection with P1
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
+
+    // Initial member state P1 exists in room_members
     processor
         .process_room_state(make_member_state(
             room_id,
             "$member-1",
             user_id,
             "join",
-            Some("Fallback Alice"),
-            Some("mxc://hs/fallback"),
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
             1000,
         ))
         .await
-        .expect("join");
+        .expect("process join");
 
-    // Force resolver to fail
-    driver.set_fail_historical_resolution(true).await;
-
-    // Processing must fail!
-    let res = processor
+    // Process message should FAIL explicitly and NOT fall back to room_members P1!
+    let err = processor
         .process_room_message(make_room_message(
             room_id,
             event_id,
             user_id,
-            "Must fail",
+            "Should fail",
             1050,
             site_id.as_str(),
             page_slug.as_str(),
         ))
-        .await;
-    assert!(res.is_err(), "Must error on resolver failure");
+        .await
+        .expect_err("message processing must fail on resolver error");
 
-    // Message must NOT be saved into messages table (no fallback!)
-    let raw_msg = get_raw_message(&store, event_id).await;
+    assert!(err.to_string().contains("500") || err.to_string().contains("failed"));
+
+    // Message must NOT be saved in database
+    let raw = get_raw_message(&store, event_id).await;
     assert!(
-        raw_msg.is_none(),
-        "Message must not be saved when resolver fails"
+        raw.is_none(),
+        "failed message must not be persisted to messages table"
     );
 }
 
@@ -703,31 +806,133 @@ async fn missing_resolver_fails_explicitly() {
         .await
         .expect("register room");
 
-    // Create processor with historical_state_resolver: None
-    let processor = create_processor_with_driver(store.clone(), None);
+    let processor = create_processor_with_resolver(store.clone(), None);
 
-    let res = processor
+    let err = processor
         .process_room_message(make_room_message(
             room_id,
             event_id,
             user_id,
             "No resolver",
-            1000,
+            1050,
             site_id.as_str(),
             page_slug.as_str(),
         ))
+        .await
+        .expect_err("message processing must fail when resolver is missing");
+
+    assert!(
+        err.to_string()
+            .contains("HistoricalRoomStateResolver is unavailable")
+    );
+}
+
+#[tokio::test]
+async fn unsupported_logging_driver_fails_explicitly() {
+    let db_url = test_db_url("logging_driver_unsupported");
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+
+    let site_id = SiteId::from("test-site");
+    let page_slug = PageSlug::from("test-page");
+    let room_id = "!room:hs";
+    let user_id = "@alice:hs";
+    let event_id = "$msg-logging";
+
+    store
+        .ensure_site_exists(site_id.as_str(), "!space:hs")
+        .await
+        .expect("ensure site");
+    store
+        .register_room(room_id, &site_id, &page_slug)
+        .await
+        .expect("register room");
+
+    let logging_resolver = Arc::new(LoggingMatrixDriver) as Arc<dyn HistoricalRoomStateResolver>;
+    let processor = create_processor_with_resolver(store.clone(), Some(logging_resolver));
+
+    let err = processor
+        .process_room_message(make_room_message(
+            room_id,
+            event_id,
+            user_id,
+            "Logging test",
+            1050,
+            site_id.as_str(),
+            page_slug.as_str(),
+        ))
+        .await
+        .expect_err("message processing must fail when resolver is LoggingMatrixDriver");
+
+    assert!(
+        err.to_string()
+            .contains("not supported by LoggingMatrixDriver")
+    );
+    assert!(get_raw_message(&store, event_id).await.is_none());
+}
+
+#[tokio::test]
+async fn no_usable_presentation_is_distinct_from_resolver_failure() {
+    let db_url = test_db_url("no_usable_presentation");
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+    let homeserver = MockHomeserver::start().await;
+
+    let site_id = SiteId::from("test-site");
+    let page_slug = PageSlug::from("test-page");
+    let room_id = "!room:hs";
+    let user_id = "@alice:hs";
+    let event_id = "$msg-no-pres";
+
+    store
+        .ensure_site_exists(site_id.as_str(), "!space:hs")
+        .await
+        .expect("ensure site");
+    store
+        .register_room(room_id, &site_id, &page_slug)
+        .await
+        .expect("register room");
+
+    // Member state has membership: "join", but no displayname and no avatar_url
+    homeserver
+        .mount_context(
+            room_id,
+            event_id,
+            MockHomeserver::make_message_event(room_id, event_id, user_id, "Bare member", 1050),
+            vec![MockHomeserver::make_member_state_event(
+                user_id, "join", None, None,
+            )],
+        )
         .await;
 
-    assert!(res.is_err(), "Must fail when resolver is missing");
-    let err = res.unwrap_err().to_string();
-    assert!(err.contains("HistoricalRoomStateResolver is unavailable"));
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
+
+    // Message processing must succeed with None profile (valid absence)
+    processor
+        .process_room_message(make_room_message(
+            room_id,
+            event_id,
+            user_id,
+            "Bare member",
+            1050,
+            site_id.as_str(),
+            page_slug.as_str(),
+        ))
+        .await
+        .expect("process room message succeeds with None presentation");
+
+    let raw = get_raw_message(&store, event_id)
+        .await
+        .expect("raw message exists");
+    assert_eq!(raw.author_display_name, None);
+    assert_eq!(raw.author_avatar_url, None);
+    assert_eq!(raw.author_media_reference, None);
 }
 
 #[tokio::test]
 async fn durable_media_reference_resolution_and_degraded_unknown_avatar() {
-    let db_url = test_db_url("media_ref_and_degraded");
+    let db_url = test_db_url("media_ref_resolution");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
-    let driver = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
@@ -743,135 +948,142 @@ async fn durable_media_reference_resolution_and_degraded_unknown_avatar() {
         .await
         .expect("register room");
 
-    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+    let processor =
+        create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
 
-    // 1. Existing reference mapping in MediaReferenceStore
-    let known_mxc = "mxc://hs/known-avatar";
+    // 1. Message 1: Existing MediaReference in media_references table
     let existing_ref = store
-        .get_or_create_reference(&site_id, known_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(
+            &site_id,
+            "mxc://hs/existing-avatar",
+            MediaReferenceSource::Cumments,
+        )
         .await
-        .expect("create existing reference");
+        .expect("create reference");
 
-    driver
-        .set_historical_member_presentation(
+    homeserver
+        .mount_context(
             room_id,
-            "$msg-known",
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice Known".to_string()),
-                avatar_url: Some(known_mxc.to_string()),
-                media_reference: None,
-            }),
+            "$msg-existing-ref",
+            MockHomeserver::make_message_event(
+                room_id,
+                "$msg-existing-ref",
+                user_id,
+                "Msg 1",
+                1000,
+            ),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice Existing"),
+                Some("mxc://hs/existing-avatar"),
+            )],
         )
         .await;
 
     processor
         .process_room_message(make_room_message(
             room_id,
-            "$msg-known",
+            "$msg-existing-ref",
             user_id,
-            "With known avatar",
+            "Msg 1",
             1000,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
-        .expect("process known");
+        .expect("process msg 1");
 
-    let known_msg = get_raw_message(&store, "$msg-known")
-        .await
-        .expect("known msg exists");
+    let raw1 = get_raw_message(&store, "$msg-existing-ref").await.unwrap();
     assert_eq!(
-        known_msg.author_media_reference.as_deref(),
+        raw1.author_media_reference.as_deref(),
         Some(existing_ref.as_str())
     );
 
-    // 2. Local upload record mapping
-    let upload_mxc = "mxc://hs/upload-avatar";
+    // 2. Message 2: Authoritative local upload in media_uploads table
     store
-        .save_media_upload_idempotent(
-            upload_mxc,
-            "author-pubkey",
+        .record_media_upload(
+            "mxc://hs/uploaded-avatar",
+            "author-pubkey-1",
             site_id.as_str(),
-            Some(page_slug.as_str()),
-            &MediaUploadIdempotencyInput {
-                key: "key-1".to_string(),
-                request_fingerprint: "fp-1".to_string(),
-            },
+            None,
         )
         .await
-        .expect("create upload record");
+        .expect("record upload");
 
-    driver
-        .set_historical_member_presentation(
+    homeserver
+        .mount_context(
             room_id,
-            "$msg-upload",
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice Upload".to_string()),
-                avatar_url: Some(upload_mxc.to_string()),
-                media_reference: None,
-            }),
-        )
-        .await;
-
-    processor
-        .process_room_message(make_room_message(
-            room_id,
-            "$msg-upload",
-            user_id,
-            "With uploaded avatar",
-            1100,
-            site_id.as_str(),
-            page_slug.as_str(),
-        ))
-        .await
-        .expect("process upload");
-
-    let upload_msg = get_raw_message(&store, "$msg-upload")
-        .await
-        .expect("upload msg exists");
-    assert!(
-        upload_msg.author_media_reference.is_some(),
-        "Upload-backed avatar must resolve a durable MediaReference"
-    );
-
-    // 3. Unknown degraded avatar (neither reference nor upload record exists)
-    driver
-        .set_historical_member_presentation(
-            room_id,
-            "$msg-unknown",
-            user_id,
-            Some(MemberPresentation {
-                display_name: Some("Alice Unknown".to_string()),
-                avatar_url: Some("mxc://hs/unknown-external-avatar".to_string()),
-                media_reference: None,
-            }),
+            "$msg-uploaded-ref",
+            MockHomeserver::make_message_event(
+                room_id,
+                "$msg-uploaded-ref",
+                user_id,
+                "Msg 2",
+                2000,
+            ),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice Uploaded"),
+                Some("mxc://hs/uploaded-avatar"),
+            )],
         )
         .await;
 
     processor
         .process_room_message(make_room_message(
             room_id,
-            "$msg-unknown",
+            "$msg-uploaded-ref",
             user_id,
-            "With unknown avatar",
-            1200,
+            "Msg 2",
+            2000,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
-        .expect("process unknown");
+        .expect("process msg 2");
 
-    let unknown_msg = get_raw_message(&store, "$msg-unknown")
+    let raw2 = get_raw_message(&store, "$msg-uploaded-ref").await.unwrap();
+    assert!(raw2.author_media_reference.is_some());
+    let ref2 = raw2.author_media_reference.unwrap();
+    assert!(ref2.starts_with("cumments-media:"));
+
+    // 3. Message 3: Unknown provenance MXC (no local upload record, not in media_references)
+    homeserver
+        .mount_context(
+            room_id,
+            "$msg-unknown-ref",
+            MockHomeserver::make_message_event(room_id, "$msg-unknown-ref", user_id, "Msg 3", 3000),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice Unknown"),
+                Some("mxc://hs/speculative-external"),
+            )],
+        )
+        .await;
+
+    processor
+        .process_room_message(make_room_message(
+            room_id,
+            "$msg-unknown-ref",
+            user_id,
+            "Msg 3",
+            3000,
+            site_id.as_str(),
+            page_slug.as_str(),
+        ))
         .await
-        .expect("unknown msg exists");
+        .expect("process msg 3");
+
+    let raw3 = get_raw_message(&store, "$msg-unknown-ref").await.unwrap();
+    // Keeps raw compatibility MXC, but does NOT invent speculative MediaReference!
     assert_eq!(
-        unknown_msg.author_avatar_url.as_deref(),
-        Some("mxc://hs/unknown-external-avatar")
+        raw3.author_avatar_url.as_deref(),
+        Some("mxc://hs/speculative-external")
     );
-    // Crucial requirement: Media reference must remain None without allocating speculative IDs
-    assert_eq!(unknown_msg.author_media_reference, None);
+    assert_eq!(raw3.author_media_reference, None);
 }
 
 #[tokio::test]
@@ -881,130 +1093,173 @@ async fn rebuild_determinism_chronological_vs_reverse_order() {
     let room_id = "!room:hs";
     let user_id = "@alice:hs";
 
-    // Setup Store A (chronological replay)
-    let db_url_a = test_db_url("rebuild_chrono");
-    let store_a = Arc::new(DbStore::connect(&db_url_a).await.expect("connect a"));
-    let driver_a = Arc::new(TestDriver::new());
+    let homeserver = MockHomeserver::start().await;
 
-    store_a
+    // Messages at 1050 (P1) and 2050 (P2)
+    homeserver
+        .mount_context(
+            room_id,
+            "$msg-rebuild-1",
+            MockHomeserver::make_message_event(room_id, "$msg-rebuild-1", user_id, "Msg 1", 1050),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice P1"),
+                Some("mxc://hs/alice1"),
+            )],
+        )
+        .await;
+
+    homeserver
+        .mount_context(
+            room_id,
+            "$msg-rebuild-2",
+            MockHomeserver::make_message_event(room_id, "$msg-rebuild-2", user_id, "Msg 2", 2050),
+            vec![MockHomeserver::make_member_state_event(
+                user_id,
+                "join",
+                Some("Alice P2"),
+                Some("mxc://hs/alice2"),
+            )],
+        )
+        .await;
+
+    // Database 1: chronological replay
+    let db1_url = test_db_url("rebuild_chrono");
+    let store1 = Arc::new(DbStore::connect(&db1_url).await.expect("connect db1"));
+    store1
         .ensure_site_exists(site_id.as_str(), "!space:hs")
         .await
-        .expect("ensure site");
-    store_a
+        .unwrap();
+    store1
         .register_room(room_id, &site_id, &page_slug)
         .await
-        .expect("register room");
+        .unwrap();
+    let processor1 =
+        create_processor_with_resolver(store1.clone(), Some(homeserver.historical_resolver()));
 
-    let processor_a = create_processor_with_driver(store_a.clone(), Some(driver_a.clone()));
+    processor1
+        .process_room_state(make_member_state(
+            room_id,
+            "$m-1",
+            user_id,
+            "join",
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
+            1000,
+        ))
+        .await
+        .unwrap();
+    processor1
+        .process_room_message(make_room_message(
+            room_id,
+            "$msg-rebuild-1",
+            user_id,
+            "Msg 1",
+            1050,
+            site_id.as_str(),
+            page_slug.as_str(),
+        ))
+        .await
+        .unwrap();
+    processor1
+        .process_room_state(make_member_state(
+            room_id,
+            "$m-2",
+            user_id,
+            "join",
+            Some("Alice P2"),
+            Some("mxc://hs/alice2"),
+            2000,
+        ))
+        .await
+        .unwrap();
+    processor1
+        .process_room_message(make_room_message(
+            room_id,
+            "$msg-rebuild-2",
+            user_id,
+            "Msg 2",
+            2050,
+            site_id.as_str(),
+            page_slug.as_str(),
+        ))
+        .await
+        .unwrap();
 
-    // Setup Store B (reverse replay)
-    let db_url_b = test_db_url("rebuild_reverse");
-    let store_b = Arc::new(DbStore::connect(&db_url_b).await.expect("connect b"));
-    let driver_b = Arc::new(TestDriver::new());
-
-    store_b
+    // Database 2: reverse replay
+    let db2_url = test_db_url("rebuild_reverse");
+    let store2 = Arc::new(DbStore::connect(&db2_url).await.expect("connect db2"));
+    store2
         .ensure_site_exists(site_id.as_str(), "!space:hs")
         .await
-        .expect("ensure site");
-    store_b
+        .unwrap();
+    store2
         .register_room(room_id, &site_id, &page_slug)
         .await
-        .expect("register room");
+        .unwrap();
+    let processor2 =
+        create_processor_with_resolver(store2.clone(), Some(homeserver.historical_resolver()));
 
-    let processor_b = create_processor_with_driver(store_b.clone(), Some(driver_b.clone()));
-
-    // Configure presentations for both drivers
-    let pres_1 = MemberPresentation {
-        display_name: Some("Alice Early".to_string()),
-        avatar_url: Some("mxc://hs/early".to_string()),
-        media_reference: None,
-    };
-    let pres_2 = MemberPresentation {
-        display_name: Some("Alice Later".to_string()),
-        avatar_url: Some("mxc://hs/later".to_string()),
-        media_reference: None,
-    };
-
-    driver_a
-        .set_historical_member_presentation(room_id, "$msg-1", user_id, Some(pres_1.clone()))
-        .await;
-    driver_a
-        .set_historical_member_presentation(room_id, "$msg-2", user_id, Some(pres_2.clone()))
-        .await;
-
-    driver_b
-        .set_historical_member_presentation(room_id, "$msg-1", user_id, Some(pres_1))
-        .await;
-    driver_b
-        .set_historical_member_presentation(room_id, "$msg-2", user_id, Some(pres_2))
-        .await;
-
-    // Chronological replay in A: msg1 then msg2
-    processor_a
+    processor2
         .process_room_message(make_room_message(
             room_id,
-            "$msg-1",
+            "$msg-rebuild-2",
             user_id,
-            "First",
-            1000,
+            "Msg 2",
+            2050,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
-        .expect("msg 1 in a");
-    processor_a
-        .process_room_message(make_room_message(
+        .unwrap();
+    processor2
+        .process_room_state(make_member_state(
             room_id,
-            "$msg-2",
+            "$m-2",
             user_id,
-            "Second",
+            "join",
+            Some("Alice P2"),
+            Some("mxc://hs/alice2"),
             2000,
+        ))
+        .await
+        .unwrap();
+    processor2
+        .process_room_message(make_room_message(
+            room_id,
+            "$msg-rebuild-1",
+            user_id,
+            "Msg 1",
+            1050,
             site_id.as_str(),
             page_slug.as_str(),
         ))
         .await
-        .expect("msg 2 in a");
-
-    // Reverse replay in B: msg2 then msg1
-    processor_b
-        .process_room_message(make_room_message(
+        .unwrap();
+    processor2
+        .process_room_state(make_member_state(
             room_id,
-            "$msg-2",
+            "$m-1",
             user_id,
-            "Second",
-            2000,
-            site_id.as_str(),
-            page_slug.as_str(),
-        ))
-        .await
-        .expect("msg 2 in b");
-    processor_b
-        .process_room_message(make_room_message(
-            room_id,
-            "$msg-1",
-            user_id,
-            "First",
+            "join",
+            Some("Alice P1"),
+            Some("mxc://hs/alice1"),
             1000,
-            site_id.as_str(),
-            page_slug.as_str(),
         ))
         .await
-        .expect("msg 1 in b");
+        .unwrap();
 
-    // Compare stored message snapshots between A and B
-    let msg1_a = get_raw_message(&store_a, "$msg-1").await.expect("msg1_a");
-    let msg1_b = get_raw_message(&store_b, "$msg-1").await.expect("msg1_b");
+    // Verify both databases have identical stored snapshots for both messages!
+    let msg1_db1 = get_raw_message(&store1, "$msg-rebuild-1").await.unwrap();
+    let msg1_db2 = get_raw_message(&store2, "$msg-rebuild-1").await.unwrap();
+    assert_eq!(msg1_db1.author_display_name, msg1_db2.author_display_name);
+    assert_eq!(msg1_db1.author_avatar_url, msg1_db2.author_avatar_url);
+    assert_eq!(msg1_db1.author_display_name.as_deref(), Some("Alice P1"));
 
-    assert_eq!(msg1_a.author_display_name, msg1_b.author_display_name);
-    assert_eq!(msg1_a.author_avatar_url, msg1_b.author_avatar_url);
-    assert_eq!(msg1_a.author_media_reference, msg1_b.author_media_reference);
-    assert_eq!(msg1_a.author_display_name.as_deref(), Some("Alice Early"));
-
-    let msg2_a = get_raw_message(&store_a, "$msg-2").await.expect("msg2_a");
-    let msg2_b = get_raw_message(&store_b, "$msg-2").await.expect("msg2_b");
-
-    assert_eq!(msg2_a.author_display_name, msg2_b.author_display_name);
-    assert_eq!(msg2_a.author_avatar_url, msg2_b.author_avatar_url);
-    assert_eq!(msg2_a.author_media_reference, msg2_b.author_media_reference);
-    assert_eq!(msg2_a.author_display_name.as_deref(), Some("Alice Later"));
+    let msg2_db1 = get_raw_message(&store1, "$msg-rebuild-2").await.unwrap();
+    let msg2_db2 = get_raw_message(&store2, "$msg-rebuild-2").await.unwrap();
+    assert_eq!(msg2_db1.author_display_name, msg2_db2.author_display_name);
+    assert_eq!(msg2_db1.author_avatar_url, msg2_db2.author_avatar_url);
+    assert_eq!(msg2_db1.author_display_name.as_deref(), Some("Alice P2"));
 }

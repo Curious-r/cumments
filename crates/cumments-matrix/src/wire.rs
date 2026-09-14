@@ -554,7 +554,7 @@ pub(crate) fn build_redaction_body(proof: Option<&serde_json::Value>) -> serde_j
 /// Percent-encode a string for safe use in URL path segments.
 /// Matrix room IDs contain `!` and `:` — these are technically safe in
 /// URL paths, but we encode them for correctness.
-pub(crate) fn percent_encode(s: &str) -> String {
+pub fn percent_encode(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for byte in s.bytes() {
         match byte {

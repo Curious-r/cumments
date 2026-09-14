@@ -294,10 +294,7 @@ async fn run() -> Result<(), CliError> {
     } else {
         tracing::info!("Using 'logging' mode driver.");
         let logging_driver = Arc::new(cumments_matrix::logging::LoggingMatrixDriver);
-        (
-            logging_driver.clone(),
-            Some(logging_driver as Arc<dyn cumments_core::ports::HistoricalRoomStateResolver>),
-        )
+        (logging_driver.clone(), None)
     };
 
     // CLI site commands need the driver for applied-role removal; they run

@@ -81,7 +81,9 @@ async fn harness(name: &str) -> (Arc<DbStore>, Router) {
         projection_notify: Arc::new(tokio::sync::Notify::new()),
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
-        historical_state_resolver: Some(Arc::new(cumments_test_utils::TestDriver::new())),
+        historical_state_resolver: Some(Arc::new(
+            cumments_test_utils::TestDriver::with_historical_stub(None),
+        )),
     }));
 
     let app = push_router(

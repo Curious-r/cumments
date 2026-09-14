@@ -1053,8 +1053,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "cumments-core",
+ "cumments-matrix",
  "serde_json",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
