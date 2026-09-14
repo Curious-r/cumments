@@ -176,6 +176,7 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
             user_id: message.sender_mxid.clone(),
             display_name: Some("新版名字".to_string()),
             avatar_url: Some("mxc://hs/new-avatar".to_string()),
+            media_reference: None,
             membership: "join".to_string(),
             updated_at: chrono::Utc::now(),
         })
@@ -204,6 +205,7 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
             user_id: message.sender_mxid,
             display_name: None,
             avatar_url: None,
+            media_reference: None,
             membership: "leave".to_string(),
             updated_at: chrono::Utc::now(),
         })

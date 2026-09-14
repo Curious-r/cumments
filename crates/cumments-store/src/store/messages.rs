@@ -812,16 +812,16 @@ impl MessageStore for DbStore {
         else {
             return Ok(None);
         };
-        // Edits maintain the author's current display name (live profile),
-        // falling back to the stored projection when the member left.
+        // Current room presentation uses latest usable member state
+        // regardless of membership == join. Historical snapshot remains fallback.
         if let Some(member) = room_members::Entity::find()
             .filter(room_members::Column::RoomId.eq(&model.room_id))
             .filter(room_members::Column::UserId.eq(&model.sender_mxid))
-            .filter(room_members::Column::Membership.eq("join"))
             .one(&self.db)
             .await?
+            && let Some(display_name) = member.display_name
         {
-            return Ok(Some(member.display_name));
+            return Ok(Some(Some(display_name)));
         }
         Ok(Some(model.author_display_name))
     }
@@ -1570,13 +1570,12 @@ impl DbStore {
         Ok(())
     }
 
-    /// Overlays the current joined member profile onto message authors so
-    /// the public read path reflects live display-name and avatar changes
-    /// (renames and MSC4466 profile propagation update `room_members`).
+    /// Overlays the latest usable room presentation onto message authors so
+    /// the public read path reflects display-name and avatar changes.
     ///
-    /// The stored snapshot columns remain as the fallback: members who left
-    /// the room (or whose member state was never seen) keep the value
-    /// captured at projection time.
+    /// Leaving or being banned does not erase or rewind room presentation:
+    /// comments continue to render the author's latest usable room presentation.
+    /// The stored snapshot columns remain as the fallback when no usable member state exists.
     async fn enrich_author_profiles(&self, messages: &mut [Message]) -> Result<()> {
         if messages.is_empty() {
             return Ok(());
@@ -1589,7 +1588,6 @@ impl DbStore {
             .collect();
         let members = room_members::Entity::find()
             .filter(room_members::Column::RoomId.is_in(room_ids))
-            .filter(room_members::Column::Membership.eq("join"))
             .all(&self.db)
             .await?;
         let by_key: HashMap<(String, String), &room_members::Model> = members
@@ -1600,8 +1598,12 @@ impl DbStore {
             if let Some(member) =
                 by_key.get(&(message.room_id.clone(), message.sender_mxid.clone()))
             {
-                message.author.display_name = member.display_name.clone();
-                message.author.avatar_url = member.avatar_url.clone();
+                if let Some(ref name) = member.display_name {
+                    message.author.display_name = Some(name.clone());
+                }
+                if let Some(ref avatar) = member.avatar_url {
+                    message.author.avatar_url = Some(avatar.clone());
+                }
             }
         }
         Ok(())
@@ -2588,6 +2590,7 @@ mod tests {
                 user_id: "@alice:hs".to_string(),
                 display_name: Some("Alice".to_string()),
                 avatar_url: Some("mxc://hs/a".to_string()),
+                media_reference: None,
                 membership: "join".to_string(),
                 updated_at: Utc::now(),
             })
@@ -2599,6 +2602,7 @@ mod tests {
                 user_id: "@bob:hs".to_string(),
                 display_name: Some("Bob".to_string()),
                 avatar_url: None,
+                media_reference: None,
                 membership: "join".to_string(),
                 updated_at: Utc::now(),
             })
@@ -2656,6 +2660,7 @@ mod tests {
                 user_id: "@alice:hs".to_string(),
                 display_name: Some("Alice".to_string()),
                 avatar_url: Some("mxc://hs/a".to_string()),
+                media_reference: None,
                 membership: "leave".to_string(),
                 updated_at: Utc::now(),
             })
@@ -2729,6 +2734,7 @@ mod tests {
                 user_id: "@alice:hs".to_string(),
                 display_name: Some("Alice".to_string()),
                 avatar_url: Some("mxc://hs/a".to_string()),
+                media_reference: None,
                 membership: "join".to_string(),
                 updated_at: Utc::now(),
             })
@@ -2752,6 +2758,7 @@ mod tests {
                 user_id: "@alice:hs".to_string(),
                 display_name: Some("Alice Smith".to_string()),
                 avatar_url: Some("mxc://hs/b".to_string()),
+                media_reference: None,
                 membership: "join".to_string(),
                 updated_at: Utc::now(),
             })

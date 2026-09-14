@@ -2217,30 +2217,41 @@ impl EventProcessor {
                     }
                 }
             }
-            let display_name = event
+            let event_display_name = event
                 .content
                 .get("displayname")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let avatar_url = event
+            let event_avatar_url = event
                 .content
                 .get("avatar_url")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            // Leave events usually omit the profile; keep the last known one
-            // instead of wiping it from the member snapshot.
-            let (display_name, avatar_url) = if membership == "leave" {
-                let existing = self
-                    .room_store
-                    .get_member(&event.room_id, &event.state_key)
-                    .await?;
-                (
-                    display_name.or_else(|| existing.as_ref().and_then(|m| m.display_name.clone())),
-                    avatar_url.or_else(|| existing.as_ref().and_then(|m| m.avatar_url.clone())),
-                )
-            } else {
-                (display_name, avatar_url)
-            };
+
+            // Leave and ban presentation semantics:
+            // An author departure (`membership: leave`) or ban (`membership: ban`)
+            // does NOT erase or rewind the latest usable room presentation.
+            // When departure or ban events omit profile fields, preserve the
+            // last known usable profile (including MediaReference) from existing projection.
+            let (display_name, avatar_url, existing_media_ref) =
+                if membership == "leave" || membership == "ban" {
+                    let existing = self
+                        .room_store
+                        .get_member(&event.room_id, &event.state_key)
+                        .await?;
+                    let dn = event_display_name
+                        .or_else(|| existing.as_ref().and_then(|m| m.display_name.clone()));
+                    let (av, mr) = match event_avatar_url {
+                        Some(url) => (Some(url), None),
+                        None => (
+                            existing.as_ref().and_then(|m| m.avatar_url.clone()),
+                            existing.as_ref().and_then(|m| m.media_reference.clone()),
+                        ),
+                    };
+                    (dn, av, mr)
+                } else {
+                    (event_display_name, event_avatar_url, None)
+                };
 
             // Media reference observation for member avatar:
             // When an avatar MXC URI is observed in a member event for a room
@@ -2254,7 +2265,10 @@ impl EventProcessor {
             // 3. An ordinary `m.room.member` event alone does NOT imply external writer
             //    provenance; unknown avatars without local upload records are NOT
             //    blindly classified as external.
-            if let Some(ref media_store) = self.media_reference_store {
+            let mut media_reference = existing_media_ref;
+            if media_reference.is_none()
+                && let Some(ref media_store) = self.media_reference_store
+            {
                 let site_id =
                     if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
                         SiteId::new(identity.site_id).ok()
@@ -2267,21 +2281,22 @@ impl EventProcessor {
                     };
 
                 if let Some(ref site_id) = site_id {
-                    if let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
-                        && media_store.find_reference(site_id, mxc).await?.is_none()
-                    {
-                        if self
+                    if let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://")) {
+                        if let Some(existing) = media_store.find_reference(site_id, mxc).await? {
+                            media_reference = Some(existing);
+                        } else if self
                             .message_store
                             .has_media_upload_for_site(site_id.as_str(), mxc)
                             .await?
                         {
-                            media_store
+                            let created = media_store
                                 .get_or_create_reference(
                                     site_id,
                                     mxc,
                                     MediaReferenceSource::Cumments,
                                 )
                                 .await?;
+                            media_reference = Some(created);
                         } else {
                             debug!(
                                 site_id = %site_id.as_str(),
@@ -2305,6 +2320,7 @@ impl EventProcessor {
                     user_id: event.state_key.clone(),
                     display_name,
                     avatar_url,
+                    media_reference,
                     membership,
                     updated_at: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
                         .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
@@ -3109,6 +3125,7 @@ impl EventProcessor {
                                 .get("avatar_url")
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string),
+                            media_reference: None,
                             membership: stripped
                                 .get("membership")
                                 .and_then(|v| v.as_str())
@@ -3276,6 +3293,7 @@ mod tests {
             user_id: "@alice:hs".to_string(),
             display_name: display_name.map(str::to_string),
             avatar_url: avatar_url.map(str::to_string),
+            media_reference: None,
             membership: "join".to_string(),
             updated_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
         }

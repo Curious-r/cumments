@@ -24,6 +24,7 @@ async fn members_upsert_and_lookup() {
             user_id: "@alice:hs".to_string(),
             display_name: Some("Alice".to_string()),
             avatar_url: None,
+            media_reference: None,
             membership: "join".to_string(),
             updated_at: Utc::now(),
         })
@@ -45,6 +46,7 @@ async fn members_upsert_and_lookup() {
             user_id: "@alice:hs".to_string(),
             display_name: Some("Alice B".to_string()),
             avatar_url: Some("mxc://hs/a".to_string()),
+            media_reference: None,
             membership: "leave".to_string(),
             updated_at: Utc::now(),
         })
@@ -76,6 +78,7 @@ async fn metadata_uses_latest_state_events_and_counts_joined() {
                 user_id: user.to_string(),
                 display_name: None,
                 avatar_url: None,
+                media_reference: None,
                 membership: membership.to_string(),
                 updated_at: Utc::now(),
             })

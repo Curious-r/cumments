@@ -145,10 +145,13 @@ pub(crate) async fn sse_handler(
                             | ProjectorEvent::PollCreated { message, .. } => {
                                 if let Ok(Some(member)) =
                                     store.get_member(&message.room_id, &message.sender_mxid).await
-                                    && member.membership == "join"
                                 {
-                                    message.author.display_name = member.display_name;
-                                    message.author.avatar_url = member.avatar_url;
+                                    if let Some(display_name) = member.display_name {
+                                        message.author.display_name = Some(display_name);
+                                    }
+                                    if let Some(avatar_url) = member.avatar_url {
+                                        message.author.avatar_url = Some(avatar_url);
+                                    }
                                 }
                                 if let Content::Poll(ref mut poll) = message.content {
                                     poll.my_votes = None;

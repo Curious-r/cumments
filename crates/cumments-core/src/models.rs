@@ -761,6 +761,7 @@ pub struct RoomMember {
     pub user_id: String,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
+    pub media_reference: Option<MediaReference>,
     /// Matrix membership: `join`, `invite`, `leave`, `ban`.
     pub membership: String,
     pub updated_at: DateTime<Utc>,

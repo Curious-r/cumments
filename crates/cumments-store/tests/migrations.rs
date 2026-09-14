@@ -128,6 +128,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000074_profile_operation_unique_sequence".to_string()),
         "000074 must be registered or profile_operations unique sequence index is missing"
     );
+    assert!(
+        names.contains(&"m20260915_000075_room_members_media_reference".to_string()),
+        "000075 must be registered or room_members media_reference column is missing"
+    );
 }
 
 #[tokio::test]
@@ -825,4 +829,52 @@ async fn migration_000074_succeeds_on_valid_data_and_rollback_is_symmetric() {
         re_up_res.is_err(),
         "re-applying migration 74 with duplicate must fail"
     );
+}
+
+#[tokio::test]
+async fn migration_000075_room_members_media_reference_and_rollback_is_symmetric() {
+    let url = test_db_url("migration-000075-media-ref");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Migrate all the way up to latest
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    // Insert a room member with media_reference
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
+         VALUES ('!r:hs', '@u:hs', 'User', 'mxc://hs/pic', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', '{now}');"
+    ))
+    .await
+    .expect("insert with media_reference under migration 75");
+
+    // Rollback migration 75 (down 1 step)
+    Migrator::down(&db, Some(1))
+        .await
+        .expect("rollback migration 75");
+
+    // Under rolled back state, media_reference column does not exist
+    let res = db
+        .execute_unprepared(&format!(
+            "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
+             VALUES ('!r2:hs', '@u2:hs', 'User2', 'mxc://hs/pic2', 'cumments-media:00000000-0000-4000-8000-000000000002', 'join', '{now}');"
+        ))
+        .await;
+    assert!(
+        res.is_err(),
+        "inserting media_reference must fail after rollback of migration 75"
+    );
+
+    // Re-apply migration 75
+    Migrator::up(&db, Some(1))
+        .await
+        .expect("re-apply migration 75");
+
+    // Re-applying adds the column back via alter_table
+    db.execute_unprepared(&format!(
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
+         VALUES ('!r3:hs', '@u3:hs', 'User3', 'mxc://hs/pic3', 'cumments-media:00000000-0000-4000-8000-000000000003', 'join', '{now}');"
+    ))
+    .await
+    .expect("inserting media_reference succeeds after re-applying migration 75");
 }
