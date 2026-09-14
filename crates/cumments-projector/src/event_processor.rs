@@ -2217,115 +2217,139 @@ impl EventProcessor {
                     }
                 }
             }
-            let event_display_name = event
-                .content
-                .get("displayname")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let event_avatar_url = event
-                .content
-                .get("avatar_url")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            // Leave and ban presentation semantics:
-            // An author departure (`membership: leave`) or ban (`membership: ban`)
-            // does NOT erase or rewind the latest usable room presentation.
-            // When departure or ban events omit profile fields, preserve the
-            // last known usable profile (including MediaReference) from existing projection.
-            let (display_name, avatar_url, existing_media_ref) =
-                if membership == "leave" || membership == "ban" {
-                    let existing = self
-                        .room_store
-                        .get_member(&event.room_id, &event.state_key)
-                        .await?;
-                    let dn = event_display_name
-                        .or_else(|| existing.as_ref().and_then(|m| m.display_name.clone()));
-                    let (av, mr) = match event_avatar_url {
-                        Some(url) => (Some(url), None),
-                        None => (
-                            existing.as_ref().and_then(|m| m.avatar_url.clone()),
-                            existing.as_ref().and_then(|m| m.media_reference.clone()),
-                        ),
-                    };
-                    (dn, av, mr)
-                } else {
-                    (event_display_name, event_avatar_url, None)
-                };
-
-            // Media reference observation for member avatar:
-            // When an avatar MXC URI is observed in a member event for a room
-            // associated with a site:
-            // 1. If an existing MediaReference mapping exists for (site_id, mxc),
-            //    keep it untouched (preserving existing provenance).
-            // 2. If no mapping exists, only create a Cumments-owned mapping
-            //    (`MediaReferenceSource::Cumments` / `is_external = false`) if there is
-            //    an authoritative local record in `media_uploads` indicating Cumments
-            //    created/owns the upload for this site.
-            // 3. An ordinary `m.room.member` event alone does NOT imply external writer
-            //    provenance; unknown avatars without local upload records are NOT
-            //    blindly classified as external.
-            let mut media_reference = existing_media_ref;
-            if media_reference.is_none()
-                && let Some(ref media_store) = self.media_reference_store
-            {
-                let site_id =
-                    if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
-                        SiteId::new(identity.site_id).ok()
-                    } else if let Some(site) =
-                        self.site_store.get_site_by_space_id(&event.room_id).await?
-                    {
-                        SiteId::new(site.id).ok()
-                    } else {
-                        None
-                    };
-
-                if let Some(ref site_id) = site_id {
-                    if let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://")) {
-                        if let Some(existing) = media_store.find_reference(site_id, mxc).await? {
-                            media_reference = Some(existing);
-                        } else if self
-                            .message_store
-                            .has_media_upload_for_site(site_id.as_str(), mxc)
-                            .await?
-                        {
-                            let created = media_store
-                                .get_or_create_reference(
-                                    site_id,
-                                    mxc,
-                                    MediaReferenceSource::Cumments,
-                                )
-                                .await?;
-                            media_reference = Some(created);
-                        } else {
-                            debug!(
-                                site_id = %site_id.as_str(),
-                                mxc_uri = %mxc,
-                                "Avatar in room member event has unknown provenance and no authoritative local upload record; skipping speculative external reference creation"
-                            );
-                        }
-                    }
-                } else if avatar_url.is_some() {
-                    debug!(
-                        room_id = %event.room_id,
-                        "Skipping avatar media reference observation for room without site context"
-                    );
-                }
-            }
-
-            self.room_store
-                .save_member(&RoomMember {
-                    room_id: event.room_id.clone(),
-                    // `m.room.member` state key is the member's user ID.
-                    user_id: event.state_key.clone(),
-                    display_name,
-                    avatar_url,
-                    media_reference,
-                    membership,
-                    updated_at: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
-                        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
-                })
+            let existing = self
+                .room_store
+                .get_member(&event.room_id, &event.state_key)
                 .await?;
+
+            let should_project = match &existing {
+                Some(existing) => {
+                    !existing.is_incoming_older(event.origin_server_ts, &event.event_id)
+                }
+                None => true,
+            };
+
+            if should_project {
+                let event_display_name = event
+                    .content
+                    .get("displayname")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let event_avatar_url = event
+                    .content
+                    .get("avatar_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                // Leave and ban presentation semantics:
+                // An author departure (`membership: leave`) or ban (`membership: ban`)
+                // does NOT erase or rewind the latest usable room presentation.
+                // When departure or ban events omit profile fields, preserve the
+                // last known usable profile (including MediaReference) from existing projection.
+                let (display_name, avatar_url, existing_media_ref) =
+                    if membership == "leave" || membership == "ban" {
+                        let dn = event_display_name
+                            .or_else(|| existing.as_ref().and_then(|m| m.display_name.clone()));
+                        let (av, mr) = match event_avatar_url {
+                            Some(url) => (Some(url), None),
+                            None => (
+                                existing.as_ref().and_then(|m| m.avatar_url.clone()),
+                                existing.as_ref().and_then(|m| m.media_reference.clone()),
+                            ),
+                        };
+                        (dn, av, mr)
+                    } else {
+                        (event_display_name, event_avatar_url, None)
+                    };
+
+                // Media reference observation for member avatar:
+                // When an avatar MXC URI is observed in a member event for a room
+                // associated with a site:
+                // 1. If an existing MediaReference mapping exists for (site_id, mxc),
+                //    keep it untouched (preserving existing provenance).
+                // 2. If no mapping exists, only create a Cumments-owned mapping
+                //    (`MediaReferenceSource::Cumments` / `is_external = false`) if there is
+                //    an authoritative local record in `media_uploads` indicating Cumments
+                //    created/owns the upload for this site.
+                // 3. An ordinary `m.room.member` event alone does NOT imply external writer
+                //    provenance; unknown avatars without local upload records are NOT
+                //    blindly classified as external.
+                let mut media_reference = existing_media_ref;
+                if media_reference.is_none()
+                    && let Some(ref media_store) = self.media_reference_store
+                {
+                    let site_id =
+                        if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
+                            SiteId::new(identity.site_id).ok()
+                        } else if let Some(site) =
+                            self.site_store.get_site_by_space_id(&event.room_id).await?
+                        {
+                            SiteId::new(site.id).ok()
+                        } else {
+                            None
+                        };
+
+                    if let Some(ref site_id) = site_id {
+                        if let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
+                        {
+                            if let Some(existing) = media_store.find_reference(site_id, mxc).await?
+                            {
+                                media_reference = Some(existing);
+                            } else if self
+                                .message_store
+                                .has_media_upload_for_site(site_id.as_str(), mxc)
+                                .await?
+                            {
+                                let created = media_store
+                                    .get_or_create_reference(
+                                        site_id,
+                                        mxc,
+                                        MediaReferenceSource::Cumments,
+                                    )
+                                    .await?;
+                                media_reference = Some(created);
+                            } else {
+                                debug!(
+                                    site_id = %site_id.as_str(),
+                                    mxc_uri = %mxc,
+                                    "Avatar in room member event has unknown provenance and no authoritative local upload record; skipping speculative external reference creation"
+                                );
+                            }
+                        }
+                    } else if avatar_url.is_some() {
+                        debug!(
+                            room_id = %event.room_id,
+                            "Skipping avatar media reference observation for room without site context"
+                        );
+                    }
+                }
+
+                self.room_store
+                    .save_member(&RoomMember {
+                        room_id: event.room_id.clone(),
+                        // `m.room.member` state key is the member's user ID.
+                        user_id: event.state_key.clone(),
+                        display_name,
+                        avatar_url,
+                        media_reference,
+                        membership,
+                        origin_server_ts: event.origin_server_ts,
+                        event_id: Some(event.event_id.clone()),
+                        updated_at: chrono::DateTime::from_timestamp_millis(event.origin_server_ts)
+                            .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+                    })
+                    .await?;
+            } else {
+                debug!(
+                    room_id = %event.room_id,
+                    user_id = %event.state_key,
+                    event_id = %event.event_id,
+                    origin_server_ts = event.origin_server_ts,
+                    existing_origin_server_ts = existing.as_ref().map(|e| e.origin_server_ts),
+                    existing_event_id = ?existing.as_ref().and_then(|e| e.event_id.as_deref()),
+                    "Ignoring older member event because current room_members projection is newer"
+                );
+            }
         }
 
         // A native tombstone is trusted only when the AS sender issued it.
@@ -3131,6 +3155,8 @@ impl EventProcessor {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string(),
+                            origin_server_ts: redacted_at_ts,
+                            event_id: Some(state.event_id.clone()),
                             updated_at: chrono::DateTime::from_timestamp_millis(redacted_at_ts)
                                 .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
                         })
@@ -3295,6 +3321,8 @@ mod tests {
             avatar_url: avatar_url.map(str::to_string),
             media_reference: None,
             membership: "join".to_string(),
+            origin_server_ts: 0,
+            event_id: None,
             updated_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
         }
     }

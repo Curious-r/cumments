@@ -132,6 +132,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000075_room_members_media_reference".to_string()),
         "000075 must be registered or room_members media_reference column is missing"
     );
+    assert!(
+        names.contains(&"m20260915_000076_room_members_projection_ordering".to_string()),
+        "000076 must be registered or room_members projection ordering columns are missing"
+    );
 }
 
 #[tokio::test]
@@ -836,8 +840,8 @@ async fn migration_000075_room_members_media_reference_and_rollback_is_symmetric
     let url = test_db_url("migration-000075-media-ref");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Migrate all the way up to latest
-    Migrator::up(&db, None).await.expect("migrate to latest");
+    // Migrate up to 75
+    Migrator::up(&db, Some(75)).await.expect("migrate to 75");
 
     // Insert a room member with media_reference
     let now = chrono::Utc::now().to_rfc3339();
@@ -877,4 +881,52 @@ async fn migration_000075_room_members_media_reference_and_rollback_is_symmetric
     ))
     .await
     .expect("inserting media_reference succeeds after re-applying migration 75");
+}
+
+#[tokio::test]
+async fn migration_000076_room_members_projection_ordering_and_rollback_is_symmetric() {
+    let url = test_db_url("migration-000076-ordering");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Migrate all the way up to latest
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    // Insert a room member with origin_server_ts and event_id
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, origin_server_ts, event_id, updated_at) \
+         VALUES ('!r:hs', '@u:hs', 'User', 'mxc://hs/pic', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', 1000, '$event1', '{now}');"
+    ))
+    .await
+    .expect("insert with ordering fields under migration 76");
+
+    // Rollback migration 76 (down 1 step)
+    Migrator::down(&db, Some(1))
+        .await
+        .expect("rollback migration 76");
+
+    // Under rolled back state, origin_server_ts and event_id do not exist
+    let res = db
+        .execute_unprepared(&format!(
+            "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, origin_server_ts, event_id, updated_at) \
+             VALUES ('!r2:hs', '@u2:hs', 'User2', 'mxc://hs/pic2', 'cumments-media:00000000-0000-4000-8000-000000000002', 'join', 2000, '$event2', '{now}');"
+        ))
+        .await;
+    assert!(
+        res.is_err(),
+        "inserting origin_server_ts/event_id must fail after rollback of migration 76"
+    );
+
+    // Re-apply migration 76
+    Migrator::up(&db, Some(1))
+        .await
+        .expect("re-apply migration 76");
+
+    // Re-applying adds the columns back
+    db.execute_unprepared(&format!(
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, origin_server_ts, event_id, updated_at) \
+         VALUES ('!r3:hs', '@u3:hs', 'User3', 'mxc://hs/pic3', 'cumments-media:00000000-0000-4000-8000-000000000003', 'join', 3000, '$event3', '{now}');"
+    ))
+    .await
+    .expect("inserting ordering columns succeeds after re-applying migration 76");
 }

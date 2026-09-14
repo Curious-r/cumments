@@ -123,7 +123,7 @@ pub struct ParsedPollEnd {
 }
 
 /// A parsed room state event (system message / room metadata).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedRoomState {
     pub room_id: String,
     pub event_id: String,

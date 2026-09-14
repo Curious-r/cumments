@@ -764,7 +764,26 @@ pub struct RoomMember {
     pub media_reference: Option<MediaReference>,
     /// Matrix membership: `join`, `invite`, `leave`, `ban`.
     pub membership: String,
+    /// Matrix `origin_server_ts` of the member event that established this projection state.
+    pub origin_server_ts: i64,
+    /// Matrix `event_id` of the member event that established this projection state.
+    pub event_id: Option<String>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl RoomMember {
+    /// Determines whether an incoming member event `(incoming_ts, incoming_event_id)`
+    /// is strictly older than this projection record's version according to the
+    /// deterministic projection ordering key `(origin_server_ts, event_id)`.
+    pub fn is_incoming_older(&self, incoming_ts: i64, incoming_event_id: &str) -> bool {
+        if incoming_ts < self.origin_server_ts {
+            true
+        } else if incoming_ts == self.origin_server_ts {
+            matches!(&self.event_id, Some(eid) if incoming_event_id < eid.as_str())
+        } else {
+            false
+        }
+    }
 }
 
 /// A raw room state event kept for the system-message feed and room metadata.

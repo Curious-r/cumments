@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot};
 use cumments_core::ports::RoomStore;
+use sea_orm::sea_query::{Alias, Expr};
 use sea_orm::{
     ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
@@ -24,6 +25,8 @@ fn state_event_from_model(model: room_state_events::Model) -> RoomStateEvent {
 #[async_trait]
 impl RoomStore for DbStore {
     async fn save_member(&self, member: &RoomMember) -> Result<()> {
+        use sea_orm::sea_query::ExprTrait;
+
         let model = room_members::ActiveModel {
             room_id: Set(member.room_id.clone()),
             user_id: Set(member.user_id.clone()),
@@ -31,9 +34,11 @@ impl RoomStore for DbStore {
             avatar_url: Set(member.avatar_url.clone()),
             media_reference: Set(member.media_reference.as_ref().map(|r| r.to_string())),
             membership: Set(member.membership.clone()),
+            origin_server_ts: Set(member.origin_server_ts),
+            event_id: Set(member.event_id.clone()),
             updated_at: Set(member.updated_at),
         };
-        room_members::Entity::insert(model)
+        match room_members::Entity::insert(model)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::columns([
                     room_members::Column::RoomId,
@@ -44,13 +49,54 @@ impl RoomStore for DbStore {
                     room_members::Column::AvatarUrl,
                     room_members::Column::MediaReference,
                     room_members::Column::Membership,
+                    room_members::Column::OriginServerTs,
+                    room_members::Column::EventId,
                     room_members::Column::UpdatedAt,
                 ])
+                .action_and_where(
+                    Expr::col((
+                        Alias::new("room_members"),
+                        room_members::Column::OriginServerTs,
+                    ))
+                    .lt(Expr::col((
+                        Alias::new("excluded"),
+                        room_members::Column::OriginServerTs,
+                    )))
+                    .or(Expr::col((
+                        Alias::new("room_members"),
+                        room_members::Column::OriginServerTs,
+                    ))
+                    .eq(Expr::col((
+                        Alias::new("excluded"),
+                        room_members::Column::OriginServerTs,
+                    )))
+                    .and(
+                        Expr::col((Alias::new("room_members"), room_members::Column::EventId))
+                            .is_null()
+                            .or(
+                                Expr::col((Alias::new("excluded"), room_members::Column::EventId))
+                                    .is_not_null()
+                                    .and(
+                                        Expr::col((
+                                            Alias::new("room_members"),
+                                            room_members::Column::EventId,
+                                        ))
+                                        .lte(Expr::col((
+                                            Alias::new("excluded"),
+                                            room_members::Column::EventId,
+                                        ))),
+                                    ),
+                            ),
+                    )),
+                )
                 .to_owned(),
             )
             .exec(&self.db)
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(_) | Err(sea_orm::DbErr::RecordNotInserted) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn get_member(&self, room_id: &str, user_id: &str) -> Result<Option<RoomMember>> {
@@ -67,8 +113,19 @@ impl RoomStore for DbStore {
                 .as_deref()
                 .and_then(|s| MediaReference::parse(s).ok()),
             membership: m.membership,
+            origin_server_ts: m.origin_server_ts,
+            event_id: m.event_id,
             updated_at: m.updated_at,
         }))
+    }
+
+    async fn delete_member(&self, room_id: &str, user_id: &str) -> Result<()> {
+        room_members::Entity::delete_many()
+            .filter(room_members::Column::RoomId.eq(room_id))
+            .filter(room_members::Column::UserId.eq(user_id))
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 
     async fn save_state_event(&self, event: &RoomStateEvent) -> Result<()> {

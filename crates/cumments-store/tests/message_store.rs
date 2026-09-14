@@ -178,6 +178,8 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
             avatar_url: Some("mxc://hs/new-avatar".to_string()),
             media_reference: None,
             membership: "join".to_string(),
+            origin_server_ts: 1000,
+            event_id: Some("$join".to_string()),
             updated_at: chrono::Utc::now(),
         })
         .await
@@ -207,6 +209,8 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
             avatar_url: None,
             media_reference: None,
             membership: "leave".to_string(),
+            origin_server_ts: 2000,
+            event_id: Some("$leave".to_string()),
             updated_at: chrono::Utc::now(),
         })
         .await

@@ -2592,6 +2592,8 @@ mod tests {
                 avatar_url: Some("mxc://hs/a".to_string()),
                 media_reference: None,
                 membership: "join".to_string(),
+                origin_server_ts: 100,
+                event_id: Some("$m_alice".to_string()),
                 updated_at: Utc::now(),
             })
             .await
@@ -2604,6 +2606,8 @@ mod tests {
                 avatar_url: None,
                 media_reference: None,
                 membership: "join".to_string(),
+                origin_server_ts: 100,
+                event_id: Some("$m_bob".to_string()),
                 updated_at: Utc::now(),
             })
             .await
@@ -2662,6 +2666,8 @@ mod tests {
                 avatar_url: Some("mxc://hs/a".to_string()),
                 media_reference: None,
                 membership: "leave".to_string(),
+                origin_server_ts: 100,
+                event_id: Some("$m_alice_leave".to_string()),
                 updated_at: Utc::now(),
             })
             .await
@@ -2736,6 +2742,8 @@ mod tests {
                 avatar_url: Some("mxc://hs/a".to_string()),
                 media_reference: None,
                 membership: "join".to_string(),
+                origin_server_ts: 100,
+                event_id: Some("$m15_1".to_string()),
                 updated_at: Utc::now(),
             })
             .await
@@ -2760,6 +2768,8 @@ mod tests {
                 avatar_url: Some("mxc://hs/b".to_string()),
                 media_reference: None,
                 membership: "join".to_string(),
+                origin_server_ts: 200,
+                event_id: Some("$m15_2".to_string()),
                 updated_at: Utc::now(),
             })
             .await

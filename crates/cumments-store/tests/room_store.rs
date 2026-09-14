@@ -26,6 +26,8 @@ async fn members_upsert_and_lookup() {
             avatar_url: None,
             media_reference: None,
             membership: "join".to_string(),
+            origin_server_ts: 1000,
+            event_id: Some("$e1".to_string()),
             updated_at: Utc::now(),
         })
         .await
@@ -38,8 +40,10 @@ async fn members_upsert_and_lookup() {
         .expect("member exists");
     assert_eq!(member.display_name.as_deref(), Some("Alice"));
     assert_eq!(member.membership, "join");
+    assert_eq!(member.origin_server_ts, 1000);
+    assert_eq!(member.event_id.as_deref(), Some("$e1"));
 
-    // Upsert updates the profile.
+    // Upsert updates the profile when incoming event is newer.
     store
         .save_member(&RoomMember {
             room_id: "!room:hs".to_string(),
@@ -48,6 +52,8 @@ async fn members_upsert_and_lookup() {
             avatar_url: Some("mxc://hs/a".to_string()),
             media_reference: None,
             membership: "leave".to_string(),
+            origin_server_ts: 2000,
+            event_id: Some("$e2".to_string()),
             updated_at: Utc::now(),
         })
         .await
@@ -59,6 +65,81 @@ async fn members_upsert_and_lookup() {
         .expect("member exists");
     assert_eq!(member.display_name.as_deref(), Some("Alice B"));
     assert_eq!(member.membership, "leave");
+    assert_eq!(member.origin_server_ts, 2000);
+    assert_eq!(member.event_id.as_deref(), Some("$e2"));
+
+    // Atomic conditional upsert ignores older event (timestamp 1500 < 2000).
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@alice:hs".to_string(),
+            display_name: Some("Older Alice".to_string()),
+            avatar_url: None,
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 1500,
+            event_id: Some("$e_old".to_string()),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save older member");
+    let member_after_older = store
+        .get_member("!room:hs", "@alice:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(member_after_older.display_name.as_deref(), Some("Alice B"));
+    assert_eq!(member_after_older.membership, "leave");
+    assert_eq!(member_after_older.origin_server_ts, 2000);
+
+    // Atomic conditional upsert ignores older event ID at equal timestamp.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@alice:hs".to_string(),
+            display_name: Some("Older ID Alice".to_string()),
+            avatar_url: None,
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 2000,
+            event_id: Some("$e1_smaller".to_string()),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save older id member");
+    let member_after_older_id = store
+        .get_member("!room:hs", "@alice:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(
+        member_after_older_id.display_name.as_deref(),
+        Some("Alice B")
+    );
+    assert_eq!(member_after_older_id.membership, "leave");
+
+    // Exact duplicate delivery is idempotent.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@alice:hs".to_string(),
+            display_name: Some("Alice B".to_string()),
+            avatar_url: Some("mxc://hs/a".to_string()),
+            media_reference: None,
+            membership: "leave".to_string(),
+            origin_server_ts: 2000,
+            event_id: Some("$e2".to_string()),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("re-save exact member");
+    let member_duplicate = store
+        .get_member("!room:hs", "@alice:hs")
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(member_duplicate.display_name.as_deref(), Some("Alice B"));
+    assert_eq!(member_duplicate.membership, "leave");
 }
 
 #[tokio::test]
@@ -80,6 +161,8 @@ async fn metadata_uses_latest_state_events_and_counts_joined() {
                 avatar_url: None,
                 media_reference: None,
                 membership: membership.to_string(),
+                origin_server_ts: 0,
+                event_id: None,
                 updated_at: Utc::now(),
             })
             .await

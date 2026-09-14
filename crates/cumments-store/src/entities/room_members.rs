@@ -13,6 +13,9 @@ pub struct Model {
     pub media_reference: Option<String>,
     /// Matrix membership: `join`, `invite`, `leave`, `ban`.
     pub membership: String,
+    #[sea_orm(default_value = 0)]
+    pub origin_server_ts: i64,
+    pub event_id: Option<String>,
     pub updated_at: DateTimeUtc,
 }
 

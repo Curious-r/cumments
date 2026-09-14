@@ -581,6 +581,9 @@ pub trait RoomStore: Send + Sync {
     /// Looks up a member profile by room and user.
     async fn get_member(&self, room_id: &str, user_id: &str) -> Result<Option<RoomMember>>;
 
+    /// Deletes a room member profile projection row (e.g. for projection reset/rebuild).
+    async fn delete_member(&self, room_id: &str, user_id: &str) -> Result<()>;
+
     /// Stores one room state event (idempotent by event ID).
     async fn save_state_event(&self, event: &RoomStateEvent) -> Result<()>;
 

@@ -19,8 +19,8 @@ use tokio::sync::broadcast;
 
 use cumments_core::media_reference::MediaReferenceSource;
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, RoomMember, SiteId,
-    TextContent, TextStyle,
+    AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, SiteId, TextContent,
+    TextStyle,
 };
 use cumments_core::ports::{
     MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
@@ -69,6 +69,28 @@ fn create_processor(store: Arc<DbStore>) -> EventProcessor {
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
     })
+}
+
+static TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+async fn setup_test_environment() -> (EventProcessor, Arc<DbStore>, Arc<DbStore>) {
+    let id = TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let db_url = test_db_url(&format!("ordering-{}", id));
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+
+    let site_id = SiteId::from("test-site");
+    store
+        .ensure_site_exists(site_id.as_str(), "!space:hs")
+        .await
+        .expect("ensure test-site");
+
+    store
+        .ensure_site_exists("example.com", "!example-space:hs")
+        .await
+        .expect("ensure example.com");
+
+    let processor = create_processor(store.clone());
+    (processor, store.clone(), store)
 }
 
 fn create_test_message(
@@ -627,17 +649,9 @@ async fn media_reference_mapping_and_projection_rebuild_determinism() {
     // 3. Simulate projection reset / rebuild: wipe room_members
     // but keep durable media_references intact.
     store
-        .save_member(&RoomMember {
-            room_id: room_id.to_string(),
-            user_id: user_id.to_string(),
-            display_name: None,
-            avatar_url: None,
-            media_reference: None,
-            membership: "leave".to_string(),
-            updated_at: chrono::Utc::now(),
-        })
+        .delete_member(room_id, user_id)
         .await
-        .expect("reset member projection");
+        .expect("wipe member projection");
 
     // Replay the join event
     processor
@@ -1077,4 +1091,589 @@ async fn message_author_enrichment_does_not_require_join() {
         Some("mxc://hs/old-dave"),
         "author without room member state must fall back to historical avatar"
     );
+}
+
+#[tokio::test]
+async fn out_of_order_newer_join_then_older_join_ignores_older() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-1:hs";
+    let user_id = "@user1:hs";
+
+    // 1. Newer join P2 @ 2000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-p2".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "P2",
+                "avatar_url": "mxc://hs/p2",
+            }),
+        })
+        .await
+        .expect("process p2");
+
+    let member = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member.membership, "join");
+    assert_eq!(member.display_name.as_deref(), Some("P2"));
+    assert_eq!(member.origin_server_ts, 2000);
+    assert_eq!(member.event_id.as_deref(), Some("$join-p2"));
+
+    // 2. Older join P1 @ 1000 arrives late
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-p1".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "P1",
+                "avatar_url": "mxc://hs/p1",
+            }),
+        })
+        .await
+        .expect("process p1");
+
+    // Older join must be ignored; projection remains P2 @ 2000
+    let member_after = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member_after.membership, "join");
+    assert_eq!(member_after.display_name.as_deref(), Some("P2"));
+    assert_eq!(member_after.origin_server_ts, 2000);
+    assert_eq!(member_after.event_id.as_deref(), Some("$join-p2"));
+}
+
+#[tokio::test]
+async fn out_of_order_leave_preserves_presentation_when_older_join_arrives() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-2:hs";
+    let user_id = "@user2:hs";
+
+    // 1. Join P1 @ 1000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-p1".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "P1",
+                "avatar_url": "mxc://hs/p1",
+            }),
+        })
+        .await
+        .expect("process p1");
+
+    // 2. Leave @ 3000 (preserves P1)
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$leave-p1".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 3000,
+            content: json!({
+                "membership": "leave",
+            }),
+        })
+        .await
+        .expect("process leave");
+
+    let member_left = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member_left.membership, "leave");
+    assert_eq!(member_left.display_name.as_deref(), Some("P1"));
+    assert_eq!(member_left.origin_server_ts, 3000);
+
+    // 3. Older join P0 @ 2000 arrives late
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-p0".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "P0",
+                "avatar_url": "mxc://hs/p0",
+            }),
+        })
+        .await
+        .expect("process p0");
+
+    // Must still remain leave + P1 @ 3000
+    let member_after_old_join = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member_after_old_join.membership, "leave");
+    assert_eq!(member_after_old_join.display_name.as_deref(), Some("P1"));
+    assert_eq!(member_after_old_join.origin_server_ts, 3000);
+    assert_eq!(member_after_old_join.event_id.as_deref(), Some("$leave-p1"));
+}
+
+#[tokio::test]
+async fn out_of_order_ban_preserves_presentation_when_older_join_arrives() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-3:hs";
+    let user_id = "@user3:hs";
+
+    // 1. Join P1 @ 1000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-p1".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "P1",
+                "avatar_url": "mxc://hs/p1",
+            }),
+        })
+        .await
+        .expect("process p1");
+
+    // 2. Ban @ 3000 (preserves P1)
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$ban-p1".to_string(),
+            sender: "@admin:hs".to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 3000,
+            content: json!({
+                "membership": "ban",
+            }),
+        })
+        .await
+        .expect("process ban");
+
+    let member_banned = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member_banned.membership, "ban");
+    assert_eq!(member_banned.display_name.as_deref(), Some("P1"));
+    assert_eq!(member_banned.origin_server_ts, 3000);
+
+    // 3. Older join P0 @ 2000 arrives late
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-p0".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "P0",
+                "avatar_url": "mxc://hs/p0",
+            }),
+        })
+        .await
+        .expect("process p0");
+
+    // Must still remain ban + P1 @ 3000
+    let member_after_old_join = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member_after_old_join.membership, "ban");
+    assert_eq!(member_after_old_join.display_name.as_deref(), Some("P1"));
+    assert_eq!(member_after_old_join.origin_server_ts, 3000);
+    assert_eq!(member_after_old_join.event_id.as_deref(), Some("$ban-p1"));
+}
+
+#[tokio::test]
+async fn out_of_order_newer_join_cannot_be_overwritten_by_older_leave() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-4:hs";
+    let user_id = "@user4:hs";
+
+    // 1. Newer join @ 3000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-3000".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 3000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Newer Join",
+            }),
+        })
+        .await
+        .expect("process newer join");
+
+    // 2. Older leave @ 2000 arrives late
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$leave-2000".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "leave",
+            }),
+        })
+        .await
+        .expect("process older leave");
+
+    // Projection must remain join
+    let member = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member.membership, "join");
+    assert_eq!(member.display_name.as_deref(), Some("Newer Join"));
+    assert_eq!(member.origin_server_ts, 3000);
+    assert_eq!(member.event_id.as_deref(), Some("$join-3000"));
+}
+
+#[tokio::test]
+async fn out_of_order_leave_cannot_be_overwritten_by_older_join() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-5:hs";
+    let user_id = "@user5:hs";
+
+    // 1. Leave @ 3000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$leave-3000".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 3000,
+            content: json!({
+                "membership": "leave",
+                "displayname": "Departed",
+            }),
+        })
+        .await
+        .expect("process leave");
+
+    // 2. Older join @ 2000 arrives
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-2000".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Older Join",
+            }),
+        })
+        .await
+        .expect("process older join");
+
+    // Projection must remain leave
+    let member = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member.membership, "leave");
+    assert_eq!(member.origin_server_ts, 3000);
+    assert_eq!(member.event_id.as_deref(), Some("$leave-3000"));
+}
+
+#[tokio::test]
+async fn equal_timestamps_ordering_is_deterministic_by_event_id() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-6:hs";
+    let user_a = "@user6a:hs";
+    let user_b = "@user6b:hs";
+
+    // Case 6A: process larger event_id "$b" first, then smaller event_id "$a"
+    // $b @ 1000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$b".to_string(),
+            sender: user_a.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_a.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Name B",
+            }),
+        })
+        .await
+        .expect("process b");
+
+    // $a @ 1000 arrives late ("$a" < "$b", so $a is older)
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$a".to_string(),
+            sender: user_a.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_a.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Name A",
+            }),
+        })
+        .await
+        .expect("process a");
+
+    let member_a = store.get_member(room_id, user_a).await.unwrap().unwrap();
+    assert_eq!(member_a.event_id.as_deref(), Some("$b"));
+    assert_eq!(member_a.display_name.as_deref(), Some("Name B"));
+
+    // Case 6B: process smaller event_id "$a" first, then larger event_id "$b"
+    // $a @ 1000
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$a".to_string(),
+            sender: user_b.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_b.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Name A",
+            }),
+        })
+        .await
+        .expect("process a");
+
+    // $b @ 1000 arrives ("$b" > "$a", so $b is newer and updates)
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$b".to_string(),
+            sender: user_b.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_b.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Name B",
+            }),
+        })
+        .await
+        .expect("process b");
+
+    let member_b = store.get_member(room_id, user_b).await.unwrap().unwrap();
+    assert_eq!(member_b.event_id.as_deref(), Some("$b"));
+    assert_eq!(member_b.display_name.as_deref(), Some("Name B"));
+}
+
+#[tokio::test]
+async fn duplicate_member_event_delivery_is_idempotent() {
+    let (processor, store, media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-7:hs";
+    let user_id = "@user7:hs";
+    let mxc_uri = "mxc://hs/user7-avatar";
+
+    let state_event = ParsedRoomState {
+        room_id: room_id.to_string(),
+        event_id: "$event-repeat".to_string(),
+        sender: user_id.to_string(),
+        event_type: "m.room.member".to_string(),
+        state_key: user_id.to_string(),
+        origin_server_ts: 1500,
+        content: json!({
+            "membership": "join",
+            "displayname": "User Seven",
+            "avatar_url": mxc_uri,
+        }),
+    };
+
+    // First delivery
+    processor
+        .process_room_state(state_event.clone())
+        .await
+        .expect("first delivery");
+    let member_1 = store.get_member(room_id, user_id).await.unwrap().unwrap();
+
+    // Second delivery of identical event
+    processor
+        .process_room_state(state_event)
+        .await
+        .expect("second delivery");
+    let member_2 = store.get_member(room_id, user_id).await.unwrap().unwrap();
+
+    assert_eq!(member_1, member_2);
+    assert_eq!(member_2.display_name.as_deref(), Some("User Seven"));
+    assert_eq!(member_2.avatar_url.as_deref(), Some(mxc_uri));
+    assert_eq!(member_2.origin_server_ts, 1500);
+    assert_eq!(member_2.event_id.as_deref(), Some("$event-repeat"));
+
+    // Media reference store must have at most 1 reference (no duplicates created)
+    let site_id = SiteId::from("example.com");
+    let ref_found = media_store.find_reference(&site_id, mxc_uri).await.unwrap();
+    assert!(ref_found.is_none()); // because no local upload record exists, none created
+}
+
+#[tokio::test]
+async fn ignored_older_event_does_not_create_media_reference() {
+    let (processor, store, media_store) = setup_test_environment().await;
+    let room_id = "!room-ordering-8:hs";
+    let user_id = "@user8:hs";
+    let site_id = "example.com";
+    let old_mxc = "mxc://hs/old-avatar";
+    let site = SiteId::from(site_id);
+    let page_slug = PageSlug::from("page-8");
+    store
+        .register_room(room_id, &site, &page_slug)
+        .await
+        .expect("register room");
+
+    // Create an authoritative local upload record for the old avatar
+    store
+        .record_media_upload(old_mxc, "author-8", site_id, None)
+        .await
+        .expect("record media upload");
+
+    // 1. Newer join @ 2000 without avatar
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-newer".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Newer User",
+            }),
+        })
+        .await
+        .expect("process newer join");
+
+    // 2. Older join @ 1000 with old_mxc arrives late
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$join-older".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Older User",
+                "avatar_url": old_mxc,
+            }),
+        })
+        .await
+        .expect("process older join");
+
+    // Since older event was ignored, no MediaReference mapping should have been created!
+    let mapping = media_store.find_reference(&site, old_mxc).await.unwrap();
+    assert!(
+        mapping.is_none(),
+        "ignored older event must not create MediaReference"
+    );
+}
+
+#[tokio::test]
+async fn projection_replay_older_to_newer_vs_newer_to_older_converges() {
+    let (processor, store, _media_store) = setup_test_environment().await;
+    let room_id_forward = "!room-forward:hs";
+    let user_forward = "@user-forward:hs";
+    let room_id_reverse = "!room-reverse:hs";
+    let user_reverse = "@user-reverse:hs";
+
+    let events_forward = [
+        ParsedRoomState {
+            room_id: room_id_forward.to_string(),
+            event_id: "$e1".to_string(),
+            sender: user_forward.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_forward.to_string(),
+            origin_server_ts: 1000,
+            content: json!({ "membership": "join", "displayname": "Alice 1" }),
+        },
+        ParsedRoomState {
+            room_id: room_id_forward.to_string(),
+            event_id: "$e2".to_string(),
+            sender: user_forward.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_forward.to_string(),
+            origin_server_ts: 2000,
+            content: json!({ "membership": "join", "displayname": "Alice 2" }),
+        },
+        ParsedRoomState {
+            room_id: room_id_forward.to_string(),
+            event_id: "$e3".to_string(),
+            sender: user_forward.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_forward.to_string(),
+            origin_server_ts: 3000,
+            content: json!({ "membership": "leave" }),
+        },
+    ];
+
+    let events_reverse = [
+        ParsedRoomState {
+            room_id: room_id_reverse.to_string(),
+            event_id: "$e3".to_string(),
+            sender: user_reverse.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_reverse.to_string(),
+            origin_server_ts: 3000,
+            content: json!({ "membership": "leave", "displayname": "Alice 2" }),
+        },
+        ParsedRoomState {
+            room_id: room_id_reverse.to_string(),
+            event_id: "$e2".to_string(),
+            sender: user_reverse.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_reverse.to_string(),
+            origin_server_ts: 2000,
+            content: json!({ "membership": "join", "displayname": "Alice 2" }),
+        },
+        ParsedRoomState {
+            room_id: room_id_reverse.to_string(),
+            event_id: "$e1".to_string(),
+            sender: user_reverse.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_reverse.to_string(),
+            origin_server_ts: 1000,
+            content: json!({ "membership": "join", "displayname": "Alice 1" }),
+        },
+    ];
+
+    // Replay forward
+    for event in events_forward {
+        processor.process_room_state(event).await.unwrap();
+    }
+    let state_forward = store
+        .get_member(room_id_forward, user_forward)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Replay reverse
+    for event in events_reverse {
+        processor.process_room_state(event).await.unwrap();
+    }
+    let state_reverse = store
+        .get_member(room_id_reverse, user_reverse)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(state_forward.membership, state_reverse.membership);
+    assert_eq!(state_forward.display_name, state_reverse.display_name);
+    assert_eq!(
+        state_forward.origin_server_ts,
+        state_reverse.origin_server_ts
+    );
+    assert_eq!(state_forward.event_id, state_reverse.event_id);
 }

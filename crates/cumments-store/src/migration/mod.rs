@@ -78,6 +78,7 @@ pub mod m20260915_000072_profile_operations;
 pub mod m20260915_000073_profile_operation_site_scope;
 pub mod m20260915_000074_profile_operation_unique_sequence;
 pub mod m20260915_000075_room_members_media_reference;
+pub mod m20260915_000076_room_members_projection_ordering;
 
 pub struct Migrator;
 
@@ -216,6 +217,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260915_000073_profile_operation_site_scope::Migration),
             Box::new(m20260915_000074_profile_operation_unique_sequence::Migration),
             Box::new(m20260915_000075_room_members_media_reference::Migration),
+            Box::new(m20260915_000076_room_members_projection_ordering::Migration),
         ]
     }
 }
