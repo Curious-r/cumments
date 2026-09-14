@@ -24,7 +24,7 @@ pub struct Model {
     pub target_value: Option<String>,
     /// Lifecycle execution status (`pending`, `dispatching`, `unknown`, `completed`, `failed`, `aborted`).
     pub status: ProfileOperationStatus,
-    /// Monotonic sequence number per (author_public_key, field).
+    /// Monotonic sequence number per (site_id, author_public_key, field).
     pub sequence: i64,
     /// Terminal response payload serialized for idempotent replay, if completed.
     pub response_payload: Option<String>,

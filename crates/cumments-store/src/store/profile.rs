@@ -65,8 +65,9 @@ impl ProfileStore for DbStore {
                 let field_enum =
                     crate::entities::active_enums::ProfileField::from(target_value.field());
 
-                // Calculate next monotonic sequence for (author_public_key, field)
+                // Calculate next monotonic sequence for (site_id, author_public_key, field)
                 let max_seq_row = profile_operations::Entity::find()
+                    .filter(profile_operations::Column::SiteId.eq(site_id.as_str()))
                     .filter(profile_operations::Column::AuthorPublicKey.eq(author_public_key))
                     .filter(profile_operations::Column::Field.eq(field_enum))
                     .order_by_desc(profile_operations::Column::Sequence)
@@ -162,14 +163,16 @@ impl ProfileStore for DbStore {
                      AND status = 'pending' \
                      AND NOT EXISTS ( \
                          SELECT 1 FROM profile_operations AS blocking \
-                         WHERE blocking.author_public_key = profile_operations.author_public_key \
+                         WHERE blocking.site_id = profile_operations.site_id \
+                           AND blocking.author_public_key = profile_operations.author_public_key \
                            AND blocking.field = profile_operations.field \
                            AND blocking.status IN ('dispatching', 'unknown') \
                            AND blocking.id != profile_operations.id \
                      ) \
                      AND NOT EXISTS ( \
                          SELECT 1 FROM profile_operations AS earlier \
-                         WHERE earlier.author_public_key = profile_operations.author_public_key \
+                         WHERE earlier.site_id = profile_operations.site_id \
+                           AND earlier.author_public_key = profile_operations.author_public_key \
                            AND earlier.field = profile_operations.field \
                            AND earlier.sequence < profile_operations.sequence \
                            AND earlier.status = 'pending' \
@@ -275,13 +278,15 @@ impl ProfileStore for DbStore {
 
     async fn get_next_executable_operation(
         &self,
+        site_id: &SiteId,
         author_public_key: &str,
         field: ProfileField,
     ) -> Result<Option<ProfileOperation>> {
         let field_enum = crate::entities::active_enums::ProfileField::from(field);
 
-        // Check if queue for this (author, field) is blocked by Dispatching or Unknown
+        // Check if queue for this (site_id, author, field) is blocked by Dispatching or Unknown
         let is_blocked = profile_operations::Entity::find()
+            .filter(profile_operations::Column::SiteId.eq(site_id.as_str()))
             .filter(profile_operations::Column::AuthorPublicKey.eq(author_public_key))
             .filter(profile_operations::Column::Field.eq(field_enum))
             .filter(profile_operations::Column::Status.is_in([
@@ -297,6 +302,7 @@ impl ProfileStore for DbStore {
         }
 
         let next_pending = profile_operations::Entity::find()
+            .filter(profile_operations::Column::SiteId.eq(site_id.as_str()))
             .filter(profile_operations::Column::AuthorPublicKey.eq(author_public_key))
             .filter(profile_operations::Column::Field.eq(field_enum))
             .filter(
@@ -312,11 +318,13 @@ impl ProfileStore for DbStore {
 
     async fn list_operations_for_field(
         &self,
+        site_id: &SiteId,
         author_public_key: &str,
         field: ProfileField,
     ) -> Result<Vec<ProfileOperation>> {
         let field_enum = crate::entities::active_enums::ProfileField::from(field);
         let rows = profile_operations::Entity::find()
+            .filter(profile_operations::Column::SiteId.eq(site_id.as_str()))
             .filter(profile_operations::Column::AuthorPublicKey.eq(author_public_key))
             .filter(profile_operations::Column::Field.eq(field_enum))
             .order_by_asc(profile_operations::Column::Sequence)
@@ -356,14 +364,16 @@ impl ProfileStore for DbStore {
                    WHERE status = 'pending' \
                      AND NOT EXISTS ( \
                          SELECT 1 FROM profile_operations AS blocking \
-                         WHERE blocking.author_public_key = profile_operations.author_public_key \
+                         WHERE blocking.site_id = profile_operations.site_id \
+                           AND blocking.author_public_key = profile_operations.author_public_key \
                            AND blocking.field = profile_operations.field \
                            AND blocking.status IN ('dispatching', 'unknown') \
                            AND blocking.id != profile_operations.id \
                      ) \
                      AND NOT EXISTS ( \
                          SELECT 1 FROM profile_operations AS earlier \
-                         WHERE earlier.author_public_key = profile_operations.author_public_key \
+                         WHERE earlier.site_id = profile_operations.site_id \
+                           AND earlier.author_public_key = profile_operations.author_public_key \
                            AND earlier.field = profile_operations.field \
                            AND earlier.sequence < profile_operations.sequence \
                            AND earlier.status = 'pending' \

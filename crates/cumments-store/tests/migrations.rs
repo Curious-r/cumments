@@ -120,6 +120,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000072_profile_operations".to_string()),
         "000072 must be registered or profile_operations table is missing"
     );
+    assert!(
+        names.contains(&"m20260915_000073_profile_operation_site_scope".to_string()),
+        "000073 must be registered or profile_operations site scope index is missing"
+    );
 }
 
 #[tokio::test]

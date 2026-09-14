@@ -469,3 +469,115 @@ async fn duplicate_workers_prevent_double_dispatch() {
     names.sort();
     assert_eq!(names, vec!["Alice".to_string(), "Bob".to_string()]);
 }
+
+#[tokio::test]
+async fn worker_sweep_respects_site_scope_when_another_site_is_blocked() {
+    // Case 6: Worker sweep: site-A blocked (Unknown), site-B executable (Pending)
+    // worker sweep must execute site-B without being affected by site-A blocker.
+    let db_url = test_db_url("worker_sweep_site_scope");
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+    store
+        .ensure_site_exists(site_a.as_str(), "!space-a:hs")
+        .await
+        .expect("ensure site a");
+    store
+        .ensure_site_exists(site_b.as_str(), "!space-b:hs")
+        .await
+        .expect("ensure site b");
+
+    let driver = Arc::new(TestDriver::new());
+    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+
+    let author = "pubkey-sweep-shared";
+    let target_a1 = ProfileTargetValue::SetDisplayName("Name A1".to_string());
+    let target_a2 = ProfileTargetValue::SetDisplayName("Name A2".to_string());
+    let target_b1 = ProfileTargetValue::SetDisplayName("Name B1".to_string());
+
+    // 1. Enqueue op-a1 on site-a
+    store
+        .claim_or_get_profile_operation("op-a1", author, &site_a, &target_a1)
+        .await
+        .unwrap();
+
+    // Make op-a1 fail ambiguously -> transitions to Unknown
+    driver
+        .set_next_profile_error(ProfileDriverError::Ambiguous("site A timeout".into()))
+        .await;
+    assert_eq!(pass.reconcile().await.unwrap(), 1);
+    assert_eq!(
+        store
+            .get_profile_operation("op-a1")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Unknown
+    );
+
+    // 2. Enqueue op-a2 on site-a (which is now blocked by op-a1 being Unknown)
+    store
+        .claim_or_get_profile_operation("op-a2", author, &site_a, &target_a2)
+        .await
+        .unwrap();
+
+    // 3. Enqueue op-b1 on site-b for the SAME author and field
+    store
+        .claim_or_get_profile_operation("op-b1", author, &site_b, &target_b1)
+        .await
+        .unwrap();
+
+    // Both op-a2 and op-b1 are currently Pending
+    assert_eq!(
+        store
+            .get_profile_operation("op-a2")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Pending
+    );
+    assert_eq!(
+        store
+            .get_profile_operation("op-b1")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Pending
+    );
+
+    // 4. Run reconciler pass sweep!
+    // op-b1 MUST be executed and reach Completed!
+    // op-a2 MUST remain Pending and NOT block op-b1!
+    let handled = pass.reconcile().await.expect("sweep reconcile");
+    assert_eq!(handled, 1);
+
+    assert_eq!(
+        store
+            .get_profile_operation("op-b1")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Completed
+    );
+    assert_eq!(
+        store
+            .get_profile_operation("op-a2")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Pending
+    );
+
+    // Verify driver only processed op-b1 on site-b
+    let calls = driver.set_display_name_calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0],
+        (author.to_string(), site_b.clone(), "Name B1".to_string())
+    );
+}

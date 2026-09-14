@@ -115,7 +115,7 @@ async fn same_field_queueing_order_and_blocking() {
     store.record_completed("op-3", None).await.unwrap();
 
     let ops = store
-        .list_operations_for_field(author, ProfileField::DisplayName)
+        .list_operations_for_field(&site, author, ProfileField::DisplayName)
         .await
         .unwrap();
     assert_eq!(ops.len(), 3);
@@ -224,7 +224,7 @@ async fn unknown_status_blocks_later_operations_until_resolved() {
     assert!(!store.claim_for_execution("op-2").await.unwrap());
     assert!(
         store
-            .get_next_executable_operation(author, ProfileField::DisplayName)
+            .get_next_executable_operation(&site, author, ProfileField::DisplayName)
             .await
             .unwrap()
             .is_none()
@@ -241,7 +241,7 @@ async fn unknown_status_blocks_later_operations_until_resolved() {
 
     // op2 can now execute!
     let next_op = store
-        .get_next_executable_operation(author, ProfileField::DisplayName)
+        .get_next_executable_operation(&site, author, ProfileField::DisplayName)
         .await
         .unwrap()
         .unwrap();
@@ -897,4 +897,328 @@ async fn concurrent_claims_on_different_fields_both_succeed() {
 
     assert_eq!(op_n.status, ProfileOperationStatus::Dispatching);
     assert_eq!(op_a.status, ProfileOperationStatus::Dispatching);
+}
+
+// ---------------------------------------------------------------------------
+// Site-Scoped Profile Operation Serialization Tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cross_site_same_key_same_field_concurrency() {
+    // Case 1: Same key, same field, different sites
+    let store = DbStore::connect(&test_db_url("cross_site_same_field"))
+        .await
+        .expect("connect db");
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+    let author = "pubkey-shared-visitor";
+
+    let op_a_target = ProfileTargetValue::SetDisplayName("Alice A".to_string());
+    let op_b_target = ProfileTargetValue::SetDisplayName("Alice B".to_string());
+
+    store
+        .claim_or_get_profile_operation("op-site-a", author, &site_a, &op_a_target)
+        .await
+        .unwrap();
+    store
+        .claim_or_get_profile_operation("op-site-b", author, &site_b, &op_b_target)
+        .await
+        .unwrap();
+
+    // Both can claim for execution concurrently (A -> Dispatching, B -> Dispatching)
+    assert!(store.claim_for_execution("op-site-a").await.unwrap());
+    assert!(store.claim_for_execution("op-site-b").await.unwrap());
+
+    let op_a = store
+        .get_profile_operation("op-site-a")
+        .await
+        .unwrap()
+        .unwrap();
+    let op_b = store
+        .get_profile_operation("op-site-b")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op_a.status, ProfileOperationStatus::Dispatching);
+    assert_eq!(op_b.status, ProfileOperationStatus::Dispatching);
+}
+
+#[tokio::test]
+async fn same_site_same_key_same_field_serialization() {
+    // Case 2: Same site, same key, same field
+    let store = DbStore::connect(&test_db_url("same_site_serialization"))
+        .await
+        .expect("connect db");
+    let site_a = SiteId::from("site-a");
+    let author = "pubkey-user-1";
+
+    let op_1_target = ProfileTargetValue::SetDisplayName("Name 1".to_string());
+    let op_2_target = ProfileTargetValue::SetDisplayName("Name 2".to_string());
+
+    store
+        .claim_or_get_profile_operation("op-1", author, &site_a, &op_1_target)
+        .await
+        .unwrap();
+    store
+        .claim_or_get_profile_operation("op-2", author, &site_a, &op_2_target)
+        .await
+        .unwrap();
+
+    // Op 1 claims into Dispatching
+    assert!(store.claim_for_execution("op-1").await.unwrap());
+
+    // Op 2 is blocked by Op 1 (remains Pending)
+    assert!(!store.claim_for_execution("op-2").await.unwrap());
+    assert_eq!(
+        store
+            .get_profile_operation("op-2")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Pending
+    );
+
+    // Op 1 completes -> Op 2 can now claim into Dispatching
+    store.record_completed("op-1", None).await.unwrap();
+    assert!(store.claim_for_execution("op-2").await.unwrap());
+    assert_eq!(
+        store
+            .get_profile_operation("op-2")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Dispatching
+    );
+}
+
+#[tokio::test]
+async fn cross_site_different_fields_independence() {
+    // Case 3: Same key, different sites, different fields
+    let store = DbStore::connect(&test_db_url("cross_site_diff_fields"))
+        .await
+        .expect("connect db");
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+    let author = "pubkey-shared-user";
+
+    let ref_b = MediaReference::new_v4();
+    let op_a_target = ProfileTargetValue::SetDisplayName("Site A Name".to_string());
+    let op_b_target = ProfileTargetValue::SetAvatar(ref_b);
+
+    store
+        .claim_or_get_profile_operation("op-a-name", author, &site_a, &op_a_target)
+        .await
+        .unwrap();
+    store
+        .claim_or_get_profile_operation("op-b-avatar", author, &site_b, &op_b_target)
+        .await
+        .unwrap();
+
+    assert!(store.claim_for_execution("op-a-name").await.unwrap());
+    assert!(store.claim_for_execution("op-b-avatar").await.unwrap());
+
+    assert_eq!(
+        store
+            .get_profile_operation("op-a-name")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Dispatching
+    );
+    assert_eq!(
+        store
+            .get_profile_operation("op-b-avatar")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Dispatching
+    );
+}
+
+#[tokio::test]
+async fn site_scoped_sequence_isolation() {
+    // Case 4: Sequence isolation
+    let store = DbStore::connect(&test_db_url("sequence_isolation"))
+        .await
+        .expect("connect db");
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+    let author = "pubkey-multi-site";
+
+    let op_a1 = store
+        .claim_or_get_profile_operation(
+            "op-a1",
+            author,
+            &site_a,
+            &ProfileTargetValue::SetDisplayName("A1".to_string()),
+        )
+        .await
+        .unwrap();
+    let op_b1 = store
+        .claim_or_get_profile_operation(
+            "op-b1",
+            author,
+            &site_b,
+            &ProfileTargetValue::SetDisplayName("B1".to_string()),
+        )
+        .await
+        .unwrap();
+
+    let ProfileClaimOutcome::New(a1) = op_a1 else {
+        panic!("expected new")
+    };
+    let ProfileClaimOutcome::New(b1) = op_b1 else {
+        panic!("expected new")
+    };
+
+    // Both streams start at sequence 1
+    assert_eq!(a1.sequence, 1);
+    assert_eq!(b1.sequence, 1);
+
+    let op_a2 = store
+        .claim_or_get_profile_operation(
+            "op-a2",
+            author,
+            &site_a,
+            &ProfileTargetValue::SetDisplayName("A2".to_string()),
+        )
+        .await
+        .unwrap();
+    let op_b2 = store
+        .claim_or_get_profile_operation(
+            "op-b2",
+            author,
+            &site_b,
+            &ProfileTargetValue::SetDisplayName("B2".to_string()),
+        )
+        .await
+        .unwrap();
+
+    let ProfileClaimOutcome::New(a2) = op_a2 else {
+        panic!("expected new")
+    };
+    let ProfileClaimOutcome::New(b2) = op_b2 else {
+        panic!("expected new")
+    };
+
+    // Subsequent operations increment independently
+    assert_eq!(a2.sequence, 2);
+    assert_eq!(b2.sequence, 2);
+
+    let ops_a = store
+        .list_operations_for_field(&site_a, author, ProfileField::DisplayName)
+        .await
+        .unwrap();
+    let ops_b = store
+        .list_operations_for_field(&site_b, author, ProfileField::DisplayName)
+        .await
+        .unwrap();
+
+    assert_eq!(ops_a.len(), 2);
+    assert_eq!(ops_a[0].sequence, 1);
+    assert_eq!(ops_a[1].sequence, 2);
+
+    assert_eq!(ops_b.len(), 2);
+    assert_eq!(ops_b[0].sequence, 1);
+    assert_eq!(ops_b[1].sequence, 2);
+}
+
+#[tokio::test]
+async fn cross_site_unknown_status_isolation() {
+    // Case 5: Unknown isolation
+    let store = DbStore::connect(&test_db_url("unknown_isolation"))
+        .await
+        .expect("connect db");
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+    let author = "pubkey-unknown-isolation";
+
+    store
+        .claim_or_get_profile_operation(
+            "op-a-unk",
+            author,
+            &site_a,
+            &ProfileTargetValue::SetDisplayName("Unknown A".to_string()),
+        )
+        .await
+        .unwrap();
+    store
+        .claim_or_get_profile_operation(
+            "op-b-pend",
+            author,
+            &site_b,
+            &ProfileTargetValue::SetDisplayName("Pending B".to_string()),
+        )
+        .await
+        .unwrap();
+
+    // Put op-a-unk into Dispatching, then Unknown
+    assert!(store.claim_for_execution("op-a-unk").await.unwrap());
+    store
+        .record_unknown("op-a-unk", "network timeout on site A")
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_profile_operation("op-a-unk")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProfileOperationStatus::Unknown
+    );
+
+    // op-b-pend is for site-b and MUST NOT be blocked by site-a's Unknown!
+    assert!(store.claim_for_execution("op-b-pend").await.unwrap());
+    let op_b = store
+        .get_profile_operation("op-b-pend")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op_b.status, ProfileOperationStatus::Dispatching);
+
+    store.record_completed("op-b-pend", None).await.unwrap();
+
+    // Now enqueue op-a2 and op-b2
+    store
+        .claim_or_get_profile_operation(
+            "op-a2",
+            author,
+            &site_a,
+            &ProfileTargetValue::SetDisplayName("A2".to_string()),
+        )
+        .await
+        .unwrap();
+    store
+        .claim_or_get_profile_operation(
+            "op-b2",
+            author,
+            &site_b,
+            &ProfileTargetValue::SetDisplayName("B2".to_string()),
+        )
+        .await
+        .unwrap();
+
+    // site-a is blocked by op-a-unk being Unknown
+    assert!(
+        store
+            .get_next_executable_operation(&site_a, author, ProfileField::DisplayName)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!store.claim_for_execution("op-a2").await.unwrap());
+
+    // site-b is unblocked and executable!
+    let next_b = store
+        .get_next_executable_operation(&site_b, author, ProfileField::DisplayName)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(next_b.operation_id, "op-b2");
+    assert!(store.claim_for_execution("op-b2").await.unwrap());
 }

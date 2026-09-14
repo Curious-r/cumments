@@ -75,6 +75,7 @@ pub mod m20260827_000069_operation_claim_decoupling;
 pub mod m20260827_000070_operation_executions;
 pub mod m20260915_000071_media_references;
 pub mod m20260915_000072_profile_operations;
+pub mod m20260915_000073_profile_operation_site_scope;
 
 pub struct Migrator;
 
@@ -210,6 +211,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260827_000070_operation_executions::Migration),
             Box::new(m20260915_000071_media_references::Migration),
             Box::new(m20260915_000072_profile_operations::Migration),
+            Box::new(m20260915_000073_profile_operation_site_scope::Migration),
         ]
     }
 }

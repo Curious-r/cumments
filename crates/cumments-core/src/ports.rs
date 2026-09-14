@@ -1627,7 +1627,7 @@ pub trait ProfileStore: Send + Sync {
 
     /// Atomically claims execution lease for an operation, transitioning it from
     /// `Pending` to `Dispatching` if and only if no earlier operation for
-    /// `(author_public_key, field)` is unresolved (`Pending`, `Dispatching`, `Unknown`).
+    /// `(site_id, author_public_key, field)` is unresolved (`Pending`, `Dispatching`, `Unknown`).
     async fn claim_for_execution(&self, operation_id: &str) -> Result<bool>;
 
     /// Transitions an operation to `Completed`, storing optional serialized response payload.
@@ -1646,18 +1646,20 @@ pub trait ProfileStore: Send + Sync {
     /// Transitions an operation to `Aborted` (e.g. pre-dispatch cancellation or admin intervention).
     async fn record_aborted(&self, operation_id: &str, reason: &str) -> Result<()>;
 
-    /// Returns the next executable operation for `(author_public_key, field)`, if any.
+    /// Returns the next executable operation for `(site_id, author_public_key, field)`, if any.
     /// Returns `Ok(None)` if the queue is blocked by an unresolved operation
     /// (`Dispatching` or `Unknown`) or if no pending operations exist.
     async fn get_next_executable_operation(
         &self,
+        site_id: &SiteId,
         author_public_key: &str,
         field: ProfileField,
     ) -> Result<Option<ProfileOperation>>;
 
-    /// Lists all operations for `(author_public_key, field)` ordered by sequence ASC.
+    /// Lists all operations for `(site_id, author_public_key, field)` ordered by sequence ASC.
     async fn list_operations_for_field(
         &self,
+        site_id: &SiteId,
         author_public_key: &str,
         field: ProfileField,
     ) -> Result<Vec<ProfileOperation>>;
@@ -1672,8 +1674,8 @@ pub trait ProfileStore: Send + Sync {
     ///
     /// An operation is executable if:
     /// - It is in `Pending` status.
-    /// - No earlier operation for the same `(author_public_key, field)` is in `Pending` status.
-    /// - No active operation for the same `(author_public_key, field)` is in `Dispatching` or `Unknown` status.
+    /// - No earlier operation for the same `(site_id, author_public_key, field)` is in `Pending` status.
+    /// - No active operation for the same `(site_id, author_public_key, field)` is in `Dispatching` or `Unknown` status.
     async fn list_executable_pending_operations(&self, limit: u64)
     -> Result<Vec<ProfileOperation>>;
 }

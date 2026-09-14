@@ -1084,6 +1084,66 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
     assert_eq!(body_avatar.field, ProfileField::Avatar);
 }
 
+#[tokio::test]
+async fn different_sites_same_key_same_field_do_not_block_each_other() {
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver("cross-site-noblock", driver.clone()).await;
+    let site_a = SiteId::new("site-a".to_string()).unwrap();
+    store
+        .register_site("site-a", &token_hash("claim-a"), false)
+        .await
+        .unwrap();
+    store
+        .register_site("site-b", &token_hash("claim-b"), false)
+        .await
+        .unwrap();
+
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[14u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+
+    // 1. Manually insert an unresolved operation in store for site-a display_name
+    let blocker_target = ProfileTargetValue::SetDisplayName("Blocker A".to_string());
+    let _ = store
+        .claim_or_get_profile_operation("op-blocker-a", &public_key, &site_a, &blocker_target)
+        .await
+        .unwrap();
+    assert!(store.claim_for_execution("op-blocker-a").await.unwrap());
+
+    // 2. Submit mutation on site-b for the SAME public key and field
+    let ch = state.pow.generate_challenge();
+    let ch_resp = solve_pow(&ch);
+    let op_b = "op-site-b-independent";
+    let sig_b = sign(
+        &signing_key,
+        &set_display_name_signature_message("site-b", op_b, "Bob On Site B"),
+    );
+
+    let res_b = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/site-b/visitors/profile/display_name",
+            &[("idempotency-key", op_b)],
+            &serde_json::json!({
+                "display_name": "Bob On Site B",
+                "author_public_key": public_key,
+                "author_signature": sig_b,
+                "challenge_response": ch_resp,
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+    // site-b is NOT blocked by site-a's Dispatching operation! It completes immediately (200 OK)
+    assert_eq!(res_b.status(), StatusCode::OK);
+    let body_b: ProfileOperationResponse = body_json(res_b).await;
+    assert_eq!(body_b.status, ProfileOperationStatus::Completed);
+    assert_eq!(body_b.field, ProfileField::DisplayName);
+    assert_eq!(body_b.value.as_deref(), Some("Bob On Site B"));
+}
+
 // ---------------------------------------------------------------------------
 // 6. Authoritative GET /profile & Read-Only Invariants
 // ---------------------------------------------------------------------------

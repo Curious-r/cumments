@@ -490,15 +490,16 @@ impl ProfileOperationExecutor {
         }
     }
 
-    /// Attempts to execute the next pending operation for the given visitor and field.
+    /// Attempts to execute the next pending operation for the given site, visitor and field.
     pub async fn execute_next(
         &self,
+        site_id: &SiteId,
         author_public_key: &str,
         field: ProfileField,
     ) -> anyhow::Result<Option<ProfileOperationExecutionResult>> {
         let next_op = self
             .store
-            .get_next_executable_operation(author_public_key, field)
+            .get_next_executable_operation(site_id, author_public_key, field)
             .await?;
 
         match next_op {
