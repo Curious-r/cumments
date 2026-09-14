@@ -1666,4 +1666,14 @@ pub trait ProfileStore: Send + Sync {
     /// transitioning them to `Unknown` because their downstream outcome is ambiguous.
     /// Returns the number of recovered operations.
     async fn recover_crashed_dispatching(&self) -> Result<u64>;
+
+    /// Returns up to `limit` executable `Pending` operations across all visitors and fields,
+    /// ordered by sequence ASC, created_at ASC.
+    ///
+    /// An operation is executable if:
+    /// - It is in `Pending` status.
+    /// - No earlier operation for the same `(author_public_key, field)` is in `Pending` status.
+    /// - No active operation for the same `(author_public_key, field)` is in `Dispatching` or `Unknown` status.
+    async fn list_executable_pending_operations(&self, limit: u64)
+    -> Result<Vec<ProfileOperation>>;
 }

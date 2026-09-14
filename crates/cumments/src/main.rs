@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
-use cumments_core::ports::{CommandAuditStore, MatrixDriver};
+use cumments_core::ports::{CommandAuditStore, MatrixDriver, ProfileStore};
 use cumments_core::site_service::SiteService;
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -423,6 +423,8 @@ async fn run() -> Result<(), CliError> {
     // ─────────────────────────────────────────────────────────────
     // 9. Initialize and run Reconciler (Orchestrator)
     // ─────────────────────────────────────────────────────────────
+    let _ = db_store.recover_crashed_dispatching().await;
+
     let reconciler = cumments_reconciler::Reconciler::new(
         cumments_reconciler::ReconcilerDeps {
             submission_store: db_store.clone(),
@@ -439,6 +441,8 @@ async fn run() -> Result<(), CliError> {
             state_redaction_repairer: event_processor.clone(),
             driver: driver.clone(),
             site_service: site_service.clone(),
+            profile_store: Some(db_store.clone()),
+            media_resolver: Some(db_store.clone()),
         },
         cumments_reconciler::PassWakeups {
             submission: submission_notify.clone(),

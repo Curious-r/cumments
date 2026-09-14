@@ -140,6 +140,8 @@ mod tests {
             site_service: Arc::new(cumments_core::site_service::SiteService::new(
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
             )),
+            profile_store: None,
+            media_resolver: None,
         });
         let pass = RoomCleanupPass::new(
             deps,

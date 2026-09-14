@@ -227,12 +227,11 @@ impl ProfileTargetValue {
 
 /// Builds the canonical signature envelope signed for a visitor profile mutation.
 ///
-/// Format: `["OP_NAME", site_id, operation_id, semantic_fingerprint, challenge]`
+/// Format: `["OP_NAME", site_id, operation_id, semantic_fingerprint]`
 pub fn profile_signature_message(
     target_value: &ProfileTargetValue,
     site_id: &str,
     operation_id: &str,
-    challenge: &str,
 ) -> String {
     let op_name = match target_value {
         ProfileTargetValue::SetDisplayName(_) => "SET_DISPLAY_NAME",
@@ -246,7 +245,6 @@ pub fn profile_signature_message(
         Some(site_id),
         Some(operation_id),
         Some(&fingerprint),
-        Some(challenge),
     ])
 }
 
@@ -256,10 +254,9 @@ pub fn verify_profile_signature(
     target_value: &ProfileTargetValue,
     site_id: &str,
     operation_id: &str,
-    challenge: &str,
     signature_b64: &str,
 ) -> bool {
-    let message = profile_signature_message(target_value, site_id, operation_id, challenge);
+    let message = profile_signature_message(target_value, site_id, operation_id);
     crate::identity::verify_signature(public_key_b64, &message, signature_b64)
 }
 
@@ -267,54 +264,32 @@ pub fn set_display_name_signature_message(
     site_id: &str,
     operation_id: &str,
     display_name: &str,
-    challenge: &str,
 ) -> String {
     profile_signature_message(
         &ProfileTargetValue::SetDisplayName(display_name.to_string()),
         site_id,
         operation_id,
-        challenge,
     )
 }
 
-pub fn clear_display_name_signature_message(
-    site_id: &str,
-    operation_id: &str,
-    challenge: &str,
-) -> String {
-    profile_signature_message(
-        &ProfileTargetValue::ClearDisplayName,
-        site_id,
-        operation_id,
-        challenge,
-    )
+pub fn clear_display_name_signature_message(site_id: &str, operation_id: &str) -> String {
+    profile_signature_message(&ProfileTargetValue::ClearDisplayName, site_id, operation_id)
 }
 
 pub fn set_avatar_signature_message(
     site_id: &str,
     operation_id: &str,
     media_ref: &MediaReference,
-    challenge: &str,
 ) -> String {
     profile_signature_message(
         &ProfileTargetValue::SetAvatar(media_ref.clone()),
         site_id,
         operation_id,
-        challenge,
     )
 }
 
-pub fn clear_avatar_signature_message(
-    site_id: &str,
-    operation_id: &str,
-    challenge: &str,
-) -> String {
-    profile_signature_message(
-        &ProfileTargetValue::ClearAvatar,
-        site_id,
-        operation_id,
-        challenge,
-    )
+pub fn clear_avatar_signature_message(site_id: &str, operation_id: &str) -> String {
+    profile_signature_message(&ProfileTargetValue::ClearAvatar, site_id, operation_id)
 }
 
 /// The outcome of an atomic operation claim attempt for a profile mutation.
@@ -724,43 +699,43 @@ mod tests {
         let target_clear_avatar = ProfileTargetValue::ClearAvatar;
 
         // 1. Signature messages follow the canonical envelope structure
-        let msg_set_name = set_display_name_signature_message(site, op_id, "Alice", chal);
+        let msg_set_name = set_display_name_signature_message(site, op_id, "Alice");
         let expected_fp = target_set_name.semantic_fingerprint(site);
         assert_eq!(
             msg_set_name,
             format!(
-                "[\"SET_DISPLAY_NAME\",\"{}\",\"{}\",\"{}\",\"{}\"]",
-                site, op_id, expected_fp, chal
+                "[\"SET_DISPLAY_NAME\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_fp
             )
         );
 
-        let msg_clear_name = clear_display_name_signature_message(site, op_id, chal);
+        let msg_clear_name = clear_display_name_signature_message(site, op_id);
         let expected_clear_fp = target_clear_name.semantic_fingerprint(site);
         assert_eq!(
             msg_clear_name,
             format!(
-                "[\"CLEAR_DISPLAY_NAME\",\"{}\",\"{}\",\"{}\",\"{}\"]",
-                site, op_id, expected_clear_fp, chal
+                "[\"CLEAR_DISPLAY_NAME\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_clear_fp
             )
         );
 
-        let msg_set_avatar = set_avatar_signature_message(site, op_id, &media_ref, chal);
+        let msg_set_avatar = set_avatar_signature_message(site, op_id, &media_ref);
         let expected_av_fp = target_set_avatar.semantic_fingerprint(site);
         assert_eq!(
             msg_set_avatar,
             format!(
-                "[\"SET_AVATAR\",\"{}\",\"{}\",\"{}\",\"{}\"]",
-                site, op_id, expected_av_fp, chal
+                "[\"SET_AVATAR\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_av_fp
             )
         );
 
-        let msg_clear_avatar = clear_avatar_signature_message(site, op_id, chal);
+        let msg_clear_avatar = clear_avatar_signature_message(site, op_id);
         let expected_clear_av_fp = target_clear_avatar.semantic_fingerprint(site);
         assert_eq!(
             msg_clear_avatar,
             format!(
-                "[\"CLEAR_AVATAR\",\"{}\",\"{}\",\"{}\",\"{}\"]",
-                site, op_id, expected_clear_av_fp, chal
+                "[\"CLEAR_AVATAR\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_clear_av_fp
             )
         );
 
@@ -772,7 +747,6 @@ mod tests {
             &target_set_name,
             site,
             op_id,
-            chal,
             &sig_set_name
         ));
 
@@ -783,7 +757,6 @@ mod tests {
             &target_set_bob,
             site,
             op_id,
-            chal,
             &sig_set_name
         ));
 
@@ -793,7 +766,6 @@ mod tests {
             &target_clear_name,
             site,
             op_id,
-            chal,
             &sig_set_name
         ));
 
@@ -803,7 +775,6 @@ mod tests {
             &target_set_name,
             "other-site",
             op_id,
-            chal,
             &sig_set_name
         ));
 
@@ -813,17 +784,18 @@ mod tests {
             &target_set_name,
             site,
             "other-op-456",
-            chal,
             &sig_set_name
         ));
 
-        // 7. Signature bound to PoW challenge: fails on different challenge
-        assert!(!verify_profile_signature(
+        // 7. Signature does NOT contain PoW challenge, so it authorizes the semantic operation
+        // independent of whatever PoW challenge is verified at HTTP admission.
+        let other_chal = "some-other-challenge";
+        assert_ne!(chal, other_chal);
+        assert!(verify_profile_signature(
             &public_key,
             &target_set_name,
             site,
             op_id,
-            "other-challenge",
             &sig_set_name
         ));
     }

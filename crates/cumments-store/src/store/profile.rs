@@ -346,4 +346,53 @@ impl ProfileStore for DbStore {
             .await?;
         Ok(res.rows_affected)
     }
+
+    async fn list_executable_pending_operations(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<ProfileOperation>> {
+        let backend = self.db.get_database_backend();
+        let sql = "SELECT operation_id FROM profile_operations \
+                   WHERE status = 'pending' \
+                     AND NOT EXISTS ( \
+                         SELECT 1 FROM profile_operations AS blocking \
+                         WHERE blocking.author_public_key = profile_operations.author_public_key \
+                           AND blocking.field = profile_operations.field \
+                           AND blocking.status IN ('dispatching', 'unknown') \
+                           AND blocking.id != profile_operations.id \
+                     ) \
+                     AND NOT EXISTS ( \
+                         SELECT 1 FROM profile_operations AS earlier \
+                         WHERE earlier.author_public_key = profile_operations.author_public_key \
+                           AND earlier.field = profile_operations.field \
+                           AND earlier.sequence < profile_operations.sequence \
+                           AND earlier.status = 'pending' \
+                     ) \
+                   ORDER BY sequence ASC, created_at ASC \
+                   LIMIT ?";
+        let rows = self
+            .db
+            .query_all_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                vec![Value::from(limit as i64)],
+            ))
+            .await?;
+        let op_ids = rows
+            .iter()
+            .filter_map(|row| row.try_get_by_index::<String>(0).ok())
+            .collect::<Vec<_>>();
+
+        if op_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut ops = Vec::new();
+        for id in op_ids {
+            if let Some(op) = self.get_profile_operation(&id).await? {
+                ops.push(op);
+            }
+        }
+        Ok(ops)
+    }
 }

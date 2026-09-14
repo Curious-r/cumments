@@ -22,7 +22,7 @@ use cumments_core::ports::{MediaReferenceStore, ProfileStore, SiteAuthStore};
 use cumments_core::profile::{
     ProfileField, ProfileOperationStatus, ProfileTargetValue, clear_avatar_signature_message,
     clear_display_name_signature_message, set_avatar_signature_message,
-    set_display_name_signature_message,
+    set_display_name_signature_message, verify_profile_signature,
 };
 use cumments_core::site_auth::{SiteAuthPolicy, SiteVerificationPolicy, token_hash};
 use cumments_core::site_service::SiteService;
@@ -148,7 +148,7 @@ async fn set_display_name_success_and_query() {
     let op_id = "op-name-100";
     let name = "Alice Bob";
 
-    let sig_msg = set_display_name_signature_message("my-site", op_id, name, &challenge.prefix);
+    let sig_msg = set_display_name_signature_message("my-site", op_id, name);
     let signature = sign(&signing_key, &sig_msg);
 
     let req_body = serde_json::json!({
@@ -217,7 +217,7 @@ async fn clear_display_name_success_and_query() {
     let op1 = "op-name-init";
     let sig1 = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op1, "Init Name", &ch1.prefix),
+        &set_display_name_signature_message("my-site", op1, "Init Name"),
     );
     let _ = router
         .clone()
@@ -242,7 +242,7 @@ async fn clear_display_name_success_and_query() {
     let op2 = "op-name-clear";
     let sig2 = sign(
         &signing_key,
-        &clear_display_name_signature_message("my-site", op2, &ch2.prefix),
+        &clear_display_name_signature_message("my-site", op2),
     );
 
     let res = router
@@ -373,7 +373,7 @@ async fn display_name_rejects_invalid_signature_and_cross_operation_signature() 
     // 2. Signature for wrong operation: CLEAR_DISPLAY_NAME signature provided to PUT
     let wrong_sig = sign(
         &signing_key,
-        &clear_display_name_signature_message("my-site", op_id, &ch.prefix),
+        &clear_display_name_signature_message("my-site", op_id),
     );
     let res2 = router
         .clone()
@@ -411,7 +411,7 @@ async fn display_name_rejects_invalid_pow() {
     let bad_ch_resp = "bad_prefix|999999";
     let sig = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "Alice", "bad_prefix"),
+        &set_display_name_signature_message("my-site", op_id, "Alice"),
     );
 
     let res = router
@@ -467,7 +467,7 @@ async fn set_and_clear_avatar_success() {
     let op1 = "op-avatar-set";
     let sig1 = sign(
         &signing_key,
-        &set_avatar_signature_message("my-site", op1, &media_ref, &ch1.prefix),
+        &set_avatar_signature_message("my-site", op1, &media_ref),
     );
 
     let res = router
@@ -505,7 +505,7 @@ async fn set_and_clear_avatar_success() {
     let op2 = "op-avatar-clear";
     let sig2 = sign(
         &signing_key,
-        &clear_avatar_signature_message("my-site", op2, &ch2.prefix),
+        &clear_avatar_signature_message("my-site", op2),
     );
 
     let res_clear = router
@@ -569,7 +569,7 @@ async fn set_avatar_rejects_unknown_cross_site_and_raw_mxc() {
     let ch_resp = solve_pow(&ch);
     let sig_unmapped = sign(
         &signing_key,
-        &set_avatar_signature_message("site-a", "op-unmapped", &unmapped_ref, &ch.prefix),
+        &set_avatar_signature_message("site-a", "op-unmapped", &unmapped_ref),
     );
 
     let res = router
@@ -595,7 +595,7 @@ async fn set_avatar_rejects_unknown_cross_site_and_raw_mxc() {
     let ch_resp_b = solve_pow(&ch_b);
     let sig_cross = sign(
         &signing_key,
-        &set_avatar_signature_message("site-b", "op-cross", &media_site_a, &ch_b.prefix),
+        &set_avatar_signature_message("site-b", "op-cross", &media_site_a),
     );
 
     let res_cross = router
@@ -657,7 +657,7 @@ async fn idempotent_replay_returns_cached_operation_without_reexecution() {
     let op_id = "op-replay-1";
     let sig = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "Bob", &ch.prefix),
+        &set_display_name_signature_message("my-site", op_id, "Bob"),
     );
     let body = serde_json::json!({
         "display_name": "Bob",
@@ -683,14 +683,24 @@ async fn idempotent_replay_returns_cached_operation_without_reexecution() {
 
     assert_eq!(driver.set_display_name_calls.lock().await.len(), 1);
 
-    // Replay with exact same payload and idempotency key
+    // Replay with different valid PoW challenge using the SAME signature
+    let ch2 = state.pow.generate_challenge();
+    let ch_resp2 = solve_pow(&ch2);
+    let body2 = serde_json::json!({
+        "display_name": "Bob",
+        "author_public_key": public_key,
+        "author_signature": sig,
+        "challenge_response": ch_resp2,
+    })
+    .to_string();
+
     let res2 = router
         .clone()
         .oneshot(request(
             Method::PUT,
             "/api/v1/sites/my-site/visitors/profile/display_name",
             &[("idempotency-key", op_id)],
-            &body,
+            &body2,
         ))
         .await
         .unwrap();
@@ -726,7 +736,7 @@ async fn replay_conflict_on_different_fingerprint() {
     let op_id = "op-conflict-1";
     let sig1 = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "Bob", &ch1.prefix),
+        &set_display_name_signature_message("my-site", op_id, "Bob"),
     );
     let _ = router
         .clone()
@@ -750,7 +760,7 @@ async fn replay_conflict_on_different_fingerprint() {
     let ch_resp2 = solve_pow(&ch2);
     let sig2 = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "Charlie", &ch2.prefix),
+        &set_display_name_signature_message("my-site", op_id, "Charlie"),
     );
     let res = router
         .clone()
@@ -788,7 +798,7 @@ async fn replay_with_fresh_pow_is_accepted() {
     let op_id = "op-fresh-pow";
     let sig1 = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "Bob", &ch1.prefix),
+        &set_display_name_signature_message("my-site", op_id, "Bob"),
     );
     let _ = router
         .clone()
@@ -807,13 +817,9 @@ async fn replay_with_fresh_pow_is_accepted() {
         .await
         .unwrap();
 
-    // Generate brand new challenge, solve it, and sign it for the same op_id & value
+    // Generate brand new challenge, solve it, and reuse the EXACT SAME signature sig1!
     let ch2 = state.pow.generate_challenge();
     let ch_resp2 = solve_pow(&ch2);
-    let sig2 = sign(
-        &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "Bob", &ch2.prefix),
-    );
 
     let res = router
         .clone()
@@ -824,7 +830,7 @@ async fn replay_with_fresh_pow_is_accepted() {
             &serde_json::json!({
                 "display_name": "Bob",
                 "author_public_key": public_key,
-                "author_signature": sig2,
+                "author_signature": sig1,
                 "challenge_response": ch_resp2,
             })
             .to_string(),
@@ -869,7 +875,7 @@ async fn operation_state_failed_downstream_returns_error_response() {
     let op_id = "op-fail-downstream";
     let sig = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "BadName", &ch.prefix),
+        &set_display_name_signature_message("my-site", op_id, "BadName"),
     );
 
     let res = router
@@ -925,7 +931,7 @@ async fn operation_state_unknown_downstream_returns_accepted() {
     let op_id = "op-ambiguous-downstream";
     let sig = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op_id, "TimeoutName", &ch.prefix),
+        &set_display_name_signature_message("my-site", op_id, "TimeoutName"),
     );
 
     let res = router
@@ -960,6 +966,8 @@ async fn operation_state_unknown_downstream_returns_accepted() {
     assert_eq!(op.status, ProfileOperationStatus::Unknown);
 
     // Replay also returns 202 Accepted and does NOT claim to be completed
+    let ch_replay = state.pow.generate_challenge();
+    let ch_resp_replay = solve_pow(&ch_replay);
     let res_replay = router
         .clone()
         .oneshot(request(
@@ -970,7 +978,7 @@ async fn operation_state_unknown_downstream_returns_accepted() {
                 "display_name": "TimeoutName",
                 "author_public_key": public_key,
                 "author_signature": sig,
-                "challenge_response": ch_resp,
+                "challenge_response": ch_resp_replay,
             })
             .to_string(),
         ))
@@ -1018,7 +1026,7 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
     let op2 = "op-blocked-subsequent";
     let sig2 = sign(
         &signing_key,
-        &set_display_name_signature_message("my-site", op2, "Queued", &ch.prefix),
+        &set_display_name_signature_message("my-site", op2, "Queued"),
     );
 
     let res_blocked = router
@@ -1049,7 +1057,7 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
     let op3 = "op-avatar-independent";
     let sig3 = sign(
         &signing_key,
-        &set_avatar_signature_message("my-site", op3, &media_ref, &ch3.prefix),
+        &set_avatar_signature_message("my-site", op3, &media_ref),
     );
 
     let res_avatar = router
@@ -1159,4 +1167,137 @@ async fn get_profile_is_read_only_and_does_not_expose_raw_mxc() {
     assert_eq!(prof2["avatar"], media_ref.as_str());
     // Since media proxy is disabled in this test state, avatar_url is null (never raw MXC!)
     assert!(prof2["avatar_url"].is_null());
+}
+
+#[tokio::test]
+async fn pow_decoupling_and_signature_invariants() {
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver("pow-decoupling", driver.clone()).await;
+    store
+        .register_site("my-site", &token_hash("claim"), false)
+        .await
+        .unwrap();
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[15u8; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+
+    let op_id = "op-decoupled-pow";
+    let target = ProfileTargetValue::SetDisplayName("Alice".to_string());
+
+    // 1. Signature generated WITHOUT PoW challenge is accepted when PoW is valid.
+    let sig_msg = set_display_name_signature_message("my-site", op_id, "Alice");
+    assert_eq!(
+        sig_msg,
+        format!(
+            "[\"SET_DISPLAY_NAME\",\"my-site\",\"{}\",\"{}\"]",
+            op_id,
+            target.semantic_fingerprint("my-site")
+        )
+    );
+    let signature = sign(&signing_key, &sig_msg);
+
+    let ch1 = state.pow.generate_challenge();
+    let ch_resp1 = solve_pow(&ch1);
+
+    let res1 = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/my-site/visitors/profile/display_name",
+            &[("idempotency-key", op_id)],
+            &serde_json::json!({
+                "display_name": "Alice",
+                "author_public_key": public_key,
+                "author_signature": signature,
+                "challenge_response": ch_resp1,
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    // 2. Same signature can be replayed with a different valid PoW challenge.
+    let ch2 = state.pow.generate_challenge();
+    let ch_resp2 = solve_pow(&ch2);
+    assert_ne!(ch1.prefix, ch2.prefix);
+
+    let res2 = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/my-site/visitors/profile/display_name",
+            &[("idempotency-key", op_id)],
+            &serde_json::json!({
+                "display_name": "Alice",
+                "author_public_key": public_key,
+                "author_signature": signature, // SAME signature!
+                "challenge_response": ch_resp2,
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+    assert_eq!(
+        res2.headers()
+            .get("idempotent-replayed")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+
+    // 3. Changing only the PoW challenge does not change the semantic fingerprint.
+    let fp1 = target.semantic_fingerprint("my-site");
+    let fp2 = target.semantic_fingerprint("my-site");
+    assert_eq!(fp1, fp2);
+
+    // 4. A signature for one semantic operation cannot authorize another semantic operation.
+    let ch3 = state.pow.generate_challenge();
+    let ch_resp3 = solve_pow(&ch3);
+    let res3 = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/my-site/visitors/profile/display_name",
+            &[("idempotency-key", "op-diff-val")],
+            &serde_json::json!({
+                "display_name": "Bob",
+                "author_public_key": public_key,
+                "author_signature": signature, // signature for "Alice"
+                "challenge_response": ch_resp3,
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res3.status(), StatusCode::FORBIDDEN);
+
+    // 5. Expired / invalid PoW is still rejected independently.
+    let bad_ch_resp = format!("{}|0", ch3.prefix); // un-mined nonce
+    let res4 = router
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            "/api/v1/sites/my-site/visitors/profile/display_name",
+            &[("idempotency-key", "op-bad-pow")],
+            &serde_json::json!({
+                "display_name": "Alice",
+                "author_public_key": public_key,
+                "author_signature": signature,
+                "challenge_response": bad_ch_resp,
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res4.status(), StatusCode::FORBIDDEN);
+
+    // 6. Removing or changing the PoW challenge does not invalidate the semantic signature itself.
+    assert!(verify_profile_signature(
+        &public_key,
+        &target,
+        "my-site",
+        op_id,
+        &signature,
+    ));
 }

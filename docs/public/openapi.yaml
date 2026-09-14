@@ -35,6 +35,8 @@ tags:
     description: Operator-only management endpoints
   - name: Meta
     description: Infrastructure endpoints
+  - name: Visitors
+    description: Visitor profile management and presentation
 security: []
 paths:
   /health:
@@ -1626,7 +1628,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     put:
-      tags: [Comments]
+      tags: [Visitors]
       summary: Set the visitor display name
       operationId: setVisitorDisplayName
       description: |
@@ -1634,7 +1636,7 @@ paths:
         Requires the `Idempotency-Key` header; replays return the operation state
         with `Idempotent-Replayed: true`. The request body carries the new display name,
         author public key, challenge response, and an Ed25519 signature over
-        `["SET_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint, challenge]`.
+        `["SET_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint]`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1679,7 +1681,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
     delete:
-      tags: [Comments]
+      tags: [Visitors]
       summary: Clear the visitor display name
       operationId: clearVisitorDisplayName
       description: |
@@ -1687,7 +1689,7 @@ paths:
         Requires the `Idempotency-Key` header; replays return the operation state
         with `Idempotent-Replayed: true`. The request body carries the author public key,
         challenge response, and an Ed25519 signature over
-        `["CLEAR_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint, challenge]`.
+        `["CLEAR_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint]`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1735,16 +1737,16 @@ paths:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     put:
-      tags: [Comments]
+      tags: [Visitors]
       summary: Set the visitor avatar
       operationId: setVisitorAvatar
       description: |
         Sets the avatar on the visitor's virtual user global Matrix profile using
-        an existing site-scoped MediaReference (`med_...`).
+        an existing site-scoped MediaReference (`cumments-media:<uuid>`).
         Requires the `Idempotency-Key` header; replays return the operation state
         with `Idempotent-Replayed: true`. The request body carries the MediaReference,
         author public key, challenge response, and an Ed25519 signature over
-        `["SET_AVATAR", site_id, operation_id, semantic_fingerprint, challenge]`.
+        `["SET_AVATAR", site_id, operation_id, semantic_fingerprint]`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1789,7 +1791,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
     delete:
-      tags: [Comments]
+      tags: [Visitors]
       summary: Clear the visitor avatar
       operationId: clearVisitorAvatar
       description: |
@@ -1797,7 +1799,7 @@ paths:
         Requires the `Idempotency-Key` header; replays return the operation state
         with `Idempotent-Replayed: true`. The request body carries the author public key,
         challenge response, and an Ed25519 signature over
-        `["CLEAR_AVATAR", site_id, operation_id, semantic_fingerprint, challenge]`.
+        `["CLEAR_AVATAR", site_id, operation_id, semantic_fingerprint]`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1845,7 +1847,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     get:
-      tags: [Comments]
+      tags: [Visitors]
       summary: Get the visitor's current profile for this site
       operationId: getVisitorProfile
       description: |
@@ -2424,7 +2426,7 @@ components:
           description: Current Matrix profile display name, or null when unset.
         avatar:
           type: [string, "null"]
-          description: MediaReference string identifier (`med_...`), or null when unset or unmapped.
+          description: MediaReference string identifier (`cumments-media:<uuid>`), or null when unset or unmapped.
         avatar_url:
           type: [string, "null"]
           description: |
@@ -2915,7 +2917,7 @@ components:
           type: string
           minLength: 1
           maxLength: 256
-          description: MediaReference string identifier (`med_...`).
+          description: MediaReference string identifier (`cumments-media:<uuid>`).
         author_public_key:
           type: string
         author_signature:

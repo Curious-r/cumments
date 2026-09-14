@@ -7,7 +7,6 @@ use crate::request::{
     ClearAvatarRequest, ClearDisplayNameRequest, IDEMPOTENT_REPLAYED, ProfileOperationResponse,
     SetAvatarRequest, SetDisplayNameRequest, extract_idempotency_key,
 };
-use crate::routes::comments::challenge_prefix;
 use crate::routes::media::media_url_base;
 use axum::{
     Json,
@@ -263,58 +262,41 @@ async fn process_profile_mutation(
         }
     }
 
-    // Verify Ed25519 signature over canonical profile mutation envelope
-    let challenge = challenge_prefix(challenge_response);
+    // Verify Ed25519 signature over canonical semantic profile mutation envelope
     if !verify_profile_signature(
         author_public_key,
         &target_value,
         site_id.as_str(),
         &idempotency_key,
-        challenge,
         author_signature,
     ) {
         return Err(AppError::InvalidSignature);
     }
 
-    // Check if operation already exists (idempotency replay short-circuit).
-    // An identical replay returns the operation state without consuming fresh PoW.
-    let existing_op = state
+    // Independently verify PoW freshness at HTTP admission boundary
+    if !state.pow.verify(challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+
+    // Claim or get operation in durable ProfileStore
+    let claim_res = state
         .store
-        .get_profile_operation(&idempotency_key)
+        .claim_or_get_profile_operation(
+            &idempotency_key,
+            author_public_key,
+            &site_id,
+            &target_value,
+        )
         .await
-        .map_err(|e| AppError::Internal(format!("failed to check idempotency: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("failed to claim profile operation: {e}")))?;
 
-    let (op, replayed) = if let Some(existing) = existing_op {
-        if existing.author_public_key != author_public_key
-            || existing.target_value.semantic_fingerprint(site_id.as_str())
-                != target_value.semantic_fingerprint(site_id.as_str())
-        {
-            return Err(AppError::IdempotencyReused);
+    let (op, replayed) = match claim_res {
+        ProfileClaimOutcome::New(op) => {
+            state.submission_notify.notify_one();
+            (op, false)
         }
-        (existing, true)
-    } else {
-        // Fresh admission: verify PoW challenge
-        if !state.pow.verify(challenge_response) {
-            return Err(AppError::InvalidPoW);
-        }
-
-        // Claim operation in durable ProfileStore
-        let claim_res = state
-            .store
-            .claim_or_get_profile_operation(
-                &idempotency_key,
-                author_public_key,
-                &site_id,
-                &target_value,
-            )
-            .await
-            .map_err(|e| AppError::Internal(format!("failed to claim profile operation: {e}")))?;
-
-        match claim_res {
-            ProfileClaimOutcome::New(op) => (op, false),
-            ProfileClaimOutcome::Replay(op) => (op, true),
-            ProfileClaimOutcome::Conflict => return Err(AppError::IdempotencyReused),
-        }
+        ProfileClaimOutcome::Replay(op) => (op, true),
+        ProfileClaimOutcome::Conflict => return Err(AppError::IdempotencyReused),
     };
 
     let executor = ProfileOperationExecutor::new(

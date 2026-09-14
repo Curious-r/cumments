@@ -16,13 +16,13 @@ Response:
 {
   "visitor_id": "a1b2c3d4e5f60718a1b2c3d4e5f60718",
   "display_name": "Alice",
-  "avatar": "med_01j6p3x...",
+  "avatar": "cumments-media:550e8400-e29b-41d4-a716-446655440000",
   "avatar_url": "https://comments.example.net/api/v1/media/..."
 }
 ```
 
 - `display_name` is the current profile display name, or `null` when unset.
-- `avatar` is the site-scoped `MediaReference` identifier (`med_...`), or `null` when unset or unmapped.
+- `avatar` is the site-scoped `MediaReference` identifier (`cumments-media:<uuid>`), or `null` when unset or unmapped.
 - `avatar_url` is a signed proxy URL (96×96 crop variant when the media proxy is enabled), or `null` when unset or unmapped. Raw `mxc://` transport addresses are never exposed.
 - Unknown virtual users and homeservers configured not to disclose profiles
   (`403`, MSC4170) both return an **empty profile** (`null` fields) with
@@ -54,7 +54,7 @@ Body:
 ```
 
 The author signature covers:
-`["SET_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint, challenge]`
+`["SET_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint]`
 
 ### Clear visitor display name
 
@@ -72,7 +72,7 @@ Body:
 ```
 
 The author signature covers:
-`["CLEAR_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint, challenge]`
+`["CLEAR_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint]`
 
 ### Set visitor avatar
 
@@ -83,7 +83,7 @@ Headers: `Idempotency-Key: <key>`
 Body:
 ```json
 {
-  "avatar": "med_01j6p3x...",
+  "avatar": "cumments-media:550e8400-e29b-41d4-a716-446655440000",
   "author_public_key": "<base64url-public-key>",
   "author_signature": "<base64url-signature>",
   "challenge_response": "<prefix|nonce>"
@@ -93,7 +93,7 @@ Body:
 `avatar` must be a valid, site-scoped `MediaReference` previously uploaded or ingested. Raw `mxc://` URIs are rejected.
 
 The author signature covers:
-`["SET_AVATAR", site_id, operation_id, semantic_fingerprint, challenge]`
+`["SET_AVATAR", site_id, operation_id, semantic_fingerprint]`
 
 ### Clear visitor avatar
 
@@ -111,7 +111,7 @@ Body:
 ```
 
 The author signature covers:
-`["CLEAR_AVATAR", site_id, operation_id, semantic_fingerprint, challenge]`
+`["CLEAR_AVATAR", site_id, operation_id, semantic_fingerprint]`
 
 ### Mutation responses
 

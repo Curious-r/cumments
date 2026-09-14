@@ -1,8 +1,9 @@
 mod deletions;
 mod governance;
 mod media;
-mod pass;
+pub mod pass;
 mod posts;
+pub mod profile_operations;
 mod projection_repairs;
 mod room_retirement;
 mod rooms;
@@ -15,9 +16,9 @@ use cumments_core::{
     matrix_error::MatrixError,
     models::{PageSlug, QuarantinedRoom, SiteId},
     ports::{
-        GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore, RegistryStore,
-        RoleClaimStore, RoomStore, SiteAuthStore, SiteStore, SiteTransferStore,
-        StateRedactionRepairer, SubmissionStore, VirtualUserStore,
+        GovernanceStore, MatrixDriver, MediaReferenceResolver, MessageStore, ProfileStore,
+        ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteAuthStore, SiteStore,
+        SiteTransferStore, StateRedactionRepairer, SubmissionStore, VirtualUserStore,
     },
     site_service::SiteService,
 };
@@ -141,6 +142,8 @@ pub struct ReconcilerDeps {
     pub state_redaction_repairer: Arc<dyn StateRedactionRepairer>,
     pub driver: Arc<dyn MatrixDriver>,
     pub site_service: Arc<SiteService>,
+    pub profile_store: Option<Arc<dyn ProfileStore>>,
+    pub media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
 }
 
 /// The event sources that wake the reconcile passes. Each pass subscribes to
@@ -166,7 +169,7 @@ impl Reconciler {
         let deps = Arc::new(deps);
         let schedule = pass_schedule(&wakeups);
 
-        let passes: Vec<Arc<dyn ReconcilePass>> = vec![
+        let mut passes: Vec<Arc<dyn ReconcilePass>> = vec![
             Arc::new(posts::PostsPass::new(deps.clone(), schedule.posts)),
             Arc::new(deletions::DeletionsPass::new(
                 deps.clone(),
@@ -203,6 +206,14 @@ impl Reconciler {
                 schedule.projection_repairs,
             )),
         ];
+
+        if deps.profile_store.is_some() {
+            passes.push(Arc::new(profile_operations::ProfileOperationsPass::new(
+                deps.clone(),
+                schedule.profile_operations,
+            )));
+        }
+
         Self { passes }
     }
 
@@ -230,6 +241,7 @@ struct PassSchedule {
     room_retirements: PassConfig,
     site_retirements: PassConfig,
     projection_repairs: PassConfig,
+    profile_operations: PassConfig,
 }
 
 fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
@@ -254,6 +266,7 @@ fn pass_schedule(wakeups: &PassWakeups) -> PassSchedule {
         deletions: submission("deletions"),
         updates: submission("updates"),
         timeouts: submission("timeouts"),
+        profile_operations: submission("profile_operations"),
         claims: projection("claims"),
         governance_sync: projection("governance_sync"),
         rooms: governance("rooms"),
@@ -354,6 +367,7 @@ mod tests {
             &schedule.deletions,
             &schedule.updates,
             &schedule.timeouts,
+            &schedule.profile_operations,
         ] {
             assert_eq!(config.interval, SUBMISSION_PASS_INTERVAL);
             assert!(Arc::ptr_eq(&config.wakeup, &submission), "{}", config.name);
