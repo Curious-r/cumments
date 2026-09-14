@@ -932,8 +932,8 @@ async fn migration_000076_room_members_projection_ordering_and_rollback_is_symme
 }
 
 #[tokio::test]
-async fn migration_000076_legacy_projection_version_recovery_and_conservative_fallback() {
-    let url = test_db_url("migration-000076-recovery");
+async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical() {
+    let url = test_db_url("migration-000076-discard-rebuild");
     let db = Database::connect(&url).await.expect("connect db");
 
     // Migrate up to 75 (before migration 76)
@@ -943,10 +943,8 @@ async fn migration_000076_legacy_projection_version_recovery_and_conservative_fa
     let t1_ms: i64 = 1789466400123;
     let t2_str = "2026-09-15T10:30:00.000Z";
     let t2_ms: i64 = 1789468200000;
-    let t3_str = "2026-09-15T11:00:00.000Z";
-    let t3_ms: i64 = 1789470000000;
 
-    // 1. Case 1: Recoverable legacy rows in room_members with corresponding room_state_events
+    // 1. Canonical Matrix event data in room_state_events
     // User Alice: join event at t1
     db.execute_unprepared(&format!(
         "INSERT INTO room_state_events \
@@ -957,14 +955,7 @@ async fn migration_000076_legacy_projection_version_recovery_and_conservative_fa
     .await
     .expect("insert alice state event");
 
-    db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-         VALUES ('!r1:hs', '@alice:hs', 'Alice', 'mxc://hs/alice', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', '{t1_str}');"
-    ))
-    .await
-    .expect("insert legacy alice room member");
-
-    // User Bob: join then leave
+    // User Bob: join at t1, then leave at t2
     db.execute_unprepared(&format!(
         "INSERT INTO room_state_events \
          (event_id, room_id, event_type, state_key, sender, origin_server_ts, content_json, created_at) \
@@ -976,138 +967,153 @@ async fn migration_000076_legacy_projection_version_recovery_and_conservative_fa
     .await
     .expect("insert bob state events");
 
-    // Under room presentation semantics, leave preserves previous presentation
+    // 2. Pre-076 disposable room_members rows
     db.execute_unprepared(&format!(
         "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-         VALUES ('!r1:hs', '@bob:hs', 'Bob', 'mxc://hs/bob', 'cumments-media:00000000-0000-4000-8000-000000000002', 'leave', '{t2_str}');"
+         VALUES ('!r1:hs', '@alice:hs', 'Alice', 'mxc://hs/alice', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', '{t1_str}'), \
+                ('!r1:hs', '@bob:hs', 'Bob', 'mxc://hs/bob', 'cumments-media:00000000-0000-4000-8000-000000000002', 'leave', '{t2_str}');"
     ))
     .await
-    .expect("insert legacy bob room member");
+    .expect("insert legacy room members");
 
-    // 2. Case 2: Unrecoverable legacy row (no matching room_state_events)
-    // User Carol: legacy row with no state event recorded
-    db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-         VALUES ('!r1:hs', '@carol:hs', 'Carol', 'mxc://hs/carol', 'cumments-media:00000000-0000-4000-8000-000000000003', 'join', '{t3_str}');"
-    ))
-    .await
-    .expect("insert legacy carol room member");
+    // Verify pre-conditions: 2 projection rows, 3 canonical state events
+    use sea_orm::{ConnectionTrait, Statement};
+    let pre_proj_rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) as cnt FROM room_members".to_string(),
+        ))
+        .await
+        .expect("count pre room members");
+    let pre_proj_cnt: i64 = pre_proj_rows[0].try_get("", "cnt").unwrap();
+    assert_eq!(pre_proj_cnt, 2);
+
+    let pre_state_rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) as cnt FROM room_state_events".to_string(),
+        ))
+        .await
+        .expect("count pre room state events");
+    let pre_state_cnt: i64 = pre_state_rows[0].try_get("", "cnt").unwrap();
+    assert_eq!(pre_state_cnt, 3);
 
     // 3. Apply migration 76!
     Migrator::up(&db, Some(1))
         .await
         .expect("apply migration 76");
 
-    // Verify Case 1: Recoverable rows receive real origin_server_ts and event_id
-    use sea_orm::{ConnectionTrait, Statement};
-    let rows = db
+    // Verification 1: room_members projection data is discarded/reset
+    let post_proj_rows = db
         .query_all_raw(Statement::from_string(
             db.get_database_backend(),
-            "SELECT user_id, display_name, avatar_url, membership, origin_server_ts, event_id \
-             FROM room_members WHERE room_id = '!r1:hs' ORDER BY user_id ASC"
-                .to_string(),
+            "SELECT COUNT(*) as cnt FROM room_members".to_string(),
         ))
         .await
-        .expect("query room members");
+        .expect("count post room members");
+    let post_proj_cnt: i64 = post_proj_rows[0].try_get("", "cnt").unwrap();
+    assert_eq!(
+        post_proj_cnt, 0,
+        "disposable room_members projection must be cleared by migration 76"
+    );
 
-    assert_eq!(rows.len(), 3);
+    // Verification 2: new columns origin_server_ts and event_id exist
+    let columns = column_names(&db, "room_members").await;
+    assert!(columns.iter().any(|c| c == "origin_server_ts"));
+    assert!(columns.iter().any(|c| c == "event_id"));
 
-    // Alice: recovered real event_id and real ts
-    let alice_eid: Option<String> = rows[0].try_get("", "event_id").unwrap();
-    let alice_ts: i64 = rows[0].try_get("", "origin_server_ts").unwrap();
-    let alice_name: Option<String> = rows[0].try_get("", "display_name").unwrap();
-    let alice_mem: String = rows[0].try_get("", "membership").unwrap();
-    assert_eq!(alice_eid.as_deref(), Some("$join_alice"));
-    assert_eq!(alice_ts, t1_ms);
-    assert_eq!(alice_name.as_deref(), Some("Alice"));
-    assert_eq!(alice_mem, "join");
+    // Verification 3: canonical Matrix event data remains untouched
+    let post_state_rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) as cnt FROM room_state_events".to_string(),
+        ))
+        .await
+        .expect("count post room state events");
+    let post_state_cnt: i64 = post_state_rows[0].try_get("", "cnt").unwrap();
+    assert_eq!(
+        post_state_cnt, 3,
+        "canonical room_state_events must remain completely intact"
+    );
 
-    // Bob: recovered real leave event_id and ts
-    let bob_eid: Option<String> = rows[1].try_get("", "event_id").unwrap();
-    let bob_ts: i64 = rows[1].try_get("", "origin_server_ts").unwrap();
-    let bob_name: Option<String> = rows[1].try_get("", "display_name").unwrap();
-    let bob_mem: String = rows[1].try_get("", "membership").unwrap();
-    assert_eq!(bob_eid.as_deref(), Some("$leave_bob"));
-    assert_eq!(bob_ts, t2_ms);
-    assert_eq!(bob_name.as_deref(), Some("Bob"));
-    assert_eq!(bob_mem, "leave");
-
-    // Case 2: Unrecoverable Carol has event_id = NULL and origin_server_ts from updated_at
-    let carol_eid: Option<String> = rows[2].try_get("", "event_id").unwrap();
-    let carol_ts: i64 = rows[2].try_get("", "origin_server_ts").unwrap();
-    let carol_name: Option<String> = rows[2].try_get("", "display_name").unwrap();
-    let carol_mem: String = rows[2].try_get("", "membership").unwrap();
-    assert_eq!(carol_eid, None);
-    assert_eq!(carol_ts, t3_ms);
-    assert_eq!(carol_name.as_deref(), Some("Carol"));
-    assert_eq!(carol_mem, "join");
-
-    // Connect store to verify ordering behavior under RoomStore
+    // 4. Projection Rebuild from canonical data
     let store = cumments_store::DbStore::connect(&url)
         .await
         .expect("connect store");
     use cumments_core::models::RoomMember;
     use cumments_core::ports::RoomStore;
 
-    // Case 2 continuation: Carol at same timestamp (t3_ms) with incoming event "$carol_same_ts"
-    // Cannot be proven newer -> must NOT overwrite Carol's legacy presentation!
+    // Replay Alice's join
     store
         .save_member(&RoomMember {
             room_id: "!r1:hs".to_string(),
-            user_id: "@carol:hs".to_string(),
-            display_name: Some("Imposter Carol".to_string()),
-            avatar_url: None,
+            user_id: "@alice:hs".to_string(),
+            display_name: Some("Alice".to_string()),
+            avatar_url: Some("mxc://hs/alice".to_string()),
             media_reference: None,
             membership: "join".to_string(),
-            origin_server_ts: t3_ms,
-            event_id: Some("$carol_same_ts".to_string()),
+            origin_server_ts: t1_ms,
+            event_id: Some("$join_alice".to_string()),
             updated_at: chrono::Utc::now(),
         })
         .await
-        .expect("save carol same ts member");
+        .expect("replay alice join");
 
-    let carol_after_same = store
-        .get_member("!r1:hs", "@carol:hs")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        carol_after_same.display_name.as_deref(),
-        Some("Carol"),
-        "unrecoverable legacy row must not be overwritten by unproven same-timestamp incoming event"
-    );
-    assert_eq!(carol_after_same.event_id, None);
-
-    // Case 3: Newer event (t3_ms + 1000) for Carol updates projection and populates event_id
-    let t_newer = t3_ms + 1000;
+    // Replay Bob's join followed by leave (preserving presentation)
     store
         .save_member(&RoomMember {
             room_id: "!r1:hs".to_string(),
-            user_id: "@carol:hs".to_string(),
-            display_name: Some("Carol Updated".to_string()),
-            avatar_url: Some("mxc://hs/carol-new".to_string()),
+            user_id: "@bob:hs".to_string(),
+            display_name: Some("Bob".to_string()),
+            avatar_url: Some("mxc://hs/bob".to_string()),
             media_reference: None,
             membership: "join".to_string(),
-            origin_server_ts: t_newer,
-            event_id: Some("$carol_newer".to_string()),
+            origin_server_ts: t1_ms,
+            event_id: Some("$join_bob".to_string()),
             updated_at: chrono::Utc::now(),
         })
         .await
-        .expect("save newer carol member");
+        .expect("replay bob join");
+    store
+        .save_member(&RoomMember {
+            room_id: "!r1:hs".to_string(),
+            user_id: "@bob:hs".to_string(),
+            display_name: Some("Bob".to_string()),
+            avatar_url: Some("mxc://hs/bob".to_string()),
+            media_reference: None,
+            membership: "leave".to_string(),
+            origin_server_ts: t2_ms,
+            event_id: Some("$leave_bob".to_string()),
+            updated_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("replay bob leave");
 
-    let carol_after_newer = store
-        .get_member("!r1:hs", "@carol:hs")
+    // Verify repopulated projection rows contain real version metadata
+    let alice = store
+        .get_member("!r1:hs", "@alice:hs")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        carol_after_newer.display_name.as_deref(),
-        Some("Carol Updated")
-    );
-    assert_eq!(carol_after_newer.origin_server_ts, t_newer);
-    assert_eq!(carol_after_newer.event_id.as_deref(), Some("$carol_newer"));
+    assert_eq!(alice.display_name.as_deref(), Some("Alice"));
+    assert_eq!(alice.avatar_url.as_deref(), Some("mxc://hs/alice"));
+    assert_eq!(alice.membership, "join");
+    assert_eq!(alice.origin_server_ts, t1_ms);
+    assert_eq!(alice.event_id.as_deref(), Some("$join_alice"));
 
-    // Case 4: Older event for Alice (t1_ms - 1000) is rejected
+    let bob = store
+        .get_member("!r1:hs", "@bob:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bob.display_name.as_deref(), Some("Bob"));
+    assert_eq!(bob.avatar_url.as_deref(), Some("mxc://hs/bob"));
+    assert_eq!(bob.membership, "leave");
+    assert_eq!(bob.origin_server_ts, t2_ms);
+    assert_eq!(bob.event_id.as_deref(), Some("$leave_bob"));
+
+    // 5. Ordering after rebuild:
+    // Case A: Older event for Alice (t1_ms - 1000) is rejected
     store
         .save_member(&RoomMember {
             room_id: "!r1:hs".to_string(),
@@ -1132,9 +1138,7 @@ async fn migration_000076_legacy_projection_version_recovery_and_conservative_fa
     assert_eq!(alice_after_older.origin_server_ts, t1_ms);
     assert_eq!(alice_after_older.event_id.as_deref(), Some("$join_alice"));
 
-    // Case 5: Equal timestamp with complete versions
-    // Alice has ts = t1_ms, event_id = "$join_alice"
-    // Incoming event with lexicographically smaller event_id "$a_alice" is rejected
+    // Case B: Same timestamp with lexicographically smaller event_id is rejected
     store
         .save_member(&RoomMember {
             room_id: "!r1:hs".to_string(),
@@ -1158,7 +1162,7 @@ async fn migration_000076_legacy_projection_version_recovery_and_conservative_fa
     assert_eq!(alice_after_smaller.display_name.as_deref(), Some("Alice"));
     assert_eq!(alice_after_smaller.event_id.as_deref(), Some("$join_alice"));
 
-    // Incoming event with lexicographically larger event_id "$z_alice" is accepted
+    // Case C: Same timestamp with lexicographically larger event_id is accepted
     store
         .save_member(&RoomMember {
             room_id: "!r1:hs".to_string(),
@@ -1185,57 +1189,32 @@ async fn migration_000076_legacy_projection_version_recovery_and_conservative_fa
     );
     assert_eq!(alice_after_larger.event_id.as_deref(), Some("$z_alice"));
 
-    // Case 6: Real lifecycle after migration: join -> leave -> join
-    // Alice leaves at t1_ms + 5000: membership becomes leave, presentation preserved
-    let t_leave = t1_ms + 5000;
+    // Case D: Newer event (t1_ms + 5000) is accepted
+    let t_newer = t1_ms + 5000;
     store
         .save_member(&RoomMember {
             room_id: "!r1:hs".to_string(),
             user_id: "@alice:hs".to_string(),
-            display_name: Some("Larger Alice".to_string()),
-            avatar_url: Some("mxc://hs/alice-larger".to_string()),
-            media_reference: None,
-            membership: "leave".to_string(),
-            origin_server_ts: t_leave,
-            event_id: Some("$leave_alice_2".to_string()),
-            updated_at: chrono::Utc::now(),
-        })
-        .await
-        .expect("save alice leave");
-
-    let alice_leave = store
-        .get_member("!r1:hs", "@alice:hs")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(alice_leave.membership, "leave");
-    assert_eq!(alice_leave.display_name.as_deref(), Some("Larger Alice"));
-    assert_eq!(alice_leave.origin_server_ts, t_leave);
-
-    // Alice rejoins at t1_ms + 10000 with new presentation "Alice Rejoined"
-    let t_rejoin = t1_ms + 10000;
-    store
-        .save_member(&RoomMember {
-            room_id: "!r1:hs".to_string(),
-            user_id: "@alice:hs".to_string(),
-            display_name: Some("Alice Rejoined".to_string()),
-            avatar_url: Some("mxc://hs/alice-rejoined".to_string()),
+            display_name: Some("Alice Updated".to_string()),
+            avatar_url: Some("mxc://hs/alice-updated".to_string()),
             media_reference: None,
             membership: "join".to_string(),
-            origin_server_ts: t_rejoin,
-            event_id: Some("$rejoin_alice".to_string()),
+            origin_server_ts: t_newer,
+            event_id: Some("$newer_alice".to_string()),
             updated_at: chrono::Utc::now(),
         })
         .await
-        .expect("save alice rejoin");
+        .expect("save newer alice");
 
-    let alice_rejoin = store
+    let alice_after_newer = store
         .get_member("!r1:hs", "@alice:hs")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(alice_rejoin.membership, "join");
-    assert_eq!(alice_rejoin.display_name.as_deref(), Some("Alice Rejoined"));
-    assert_eq!(alice_rejoin.origin_server_ts, t_rejoin);
-    assert_eq!(alice_rejoin.event_id.as_deref(), Some("$rejoin_alice"));
+    assert_eq!(
+        alice_after_newer.display_name.as_deref(),
+        Some("Alice Updated")
+    );
+    assert_eq!(alice_after_newer.origin_server_ts, t_newer);
+    assert_eq!(alice_after_newer.event_id.as_deref(), Some("$newer_alice"));
 }

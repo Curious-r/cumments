@@ -71,22 +71,9 @@ impl RoomStore for DbStore {
                         room_members::Column::OriginServerTs,
                     )))
                     .and(
-                        Expr::col((Alias::new("room_members"), room_members::Column::EventId))
-                            .is_not_null()
-                            .and(
-                                Expr::col((Alias::new("excluded"), room_members::Column::EventId))
-                                    .is_not_null()
-                                    .and(
-                                        Expr::col((
-                                            Alias::new("room_members"),
-                                            room_members::Column::EventId,
-                                        ))
-                                        .lte(Expr::col((
-                                            Alias::new("excluded"),
-                                            room_members::Column::EventId,
-                                        ))),
-                                    ),
-                            ),
+                        Expr::col((Alias::new("room_members"), room_members::Column::EventId)).lte(
+                            Expr::col((Alias::new("excluded"), room_members::Column::EventId)),
+                        ),
                     )),
                 )
                 .to_owned(),

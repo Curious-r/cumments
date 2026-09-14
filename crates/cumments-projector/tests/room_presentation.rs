@@ -1679,60 +1679,132 @@ async fn projection_replay_older_to_newer_vs_newer_to_older_converges() {
 }
 
 #[tokio::test]
-async fn legacy_unrecoverable_member_protected_from_same_timestamp_overwrite() {
+async fn monotonic_projection_ordering_and_rebuild_via_event_processor() {
     let (processor, store, _media_store) = setup_test_environment().await;
-    let room_id = "!room-legacy-protect:hs";
-    let user_id = "@legacy_user:hs";
+    let room_id = "!room-monotonic:hs";
+    let user_id = "@monotonic_user:hs";
 
-    // 1. Manually insert a legacy unrecoverable member row into room_members
-    // with origin_server_ts = 2000, event_id = None
-    store
-        .save_member(&cumments_core::models::RoomMember {
-            room_id: room_id.to_string(),
-            user_id: user_id.to_string(),
-            display_name: Some("Legacy User".to_string()),
-            avatar_url: Some("mxc://hs/legacy-avatar".to_string()),
-            media_reference: None,
-            membership: "join".to_string(),
-            origin_server_ts: 2000,
-            event_id: None,
-            updated_at: chrono::Utc::now(),
-        })
-        .await
-        .expect("insert legacy member");
-
-    // 2. Process incoming member event at the SAME timestamp (2000) with different presentation
+    // 1. Initial join event at ts 2000 with event_id "$event_b"
     processor
         .process_room_state(ParsedRoomState {
             room_id: room_id.to_string(),
-            event_id: "$same_ts_event".to_string(),
+            event_id: "$event_b".to_string(),
             sender: user_id.to_string(),
             event_type: "m.room.member".to_string(),
             state_key: user_id.to_string(),
             origin_server_ts: 2000,
             content: json!({
                 "membership": "join",
-                "displayname": "Imposter User",
-                "avatar_url": "mxc://hs/imposter",
+                "displayname": "User B",
+                "avatar_url": "mxc://hs/avatar-b",
             }),
         })
         .await
-        .expect("process same-ts event");
+        .expect("process initial join");
 
-    // Conservative guarantee: legacy presentation must NOT be overwritten!
-    let member_after_same = store.get_member(room_id, user_id).await.unwrap().unwrap();
-    assert_eq!(
-        member_after_same.display_name.as_deref(),
-        Some("Legacy User")
-    );
-    assert_eq!(
-        member_after_same.avatar_url.as_deref(),
-        Some("mxc://hs/legacy-avatar")
-    );
-    assert_eq!(member_after_same.event_id, None);
-    assert_eq!(member_after_same.origin_server_ts, 2000);
+    let initial = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(initial.display_name.as_deref(), Some("User B"));
+    assert_eq!(initial.origin_server_ts, 2000);
+    assert_eq!(initial.event_id.as_deref(), Some("$event_b"));
 
-    // 3. Process clearly newer event at timestamp 3000
+    // 2. Incoming event at the same timestamp (2000) with lexicographically smaller event_id "$event_a" is rejected
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$event_a".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "User A",
+                "avatar_url": "mxc://hs/avatar-a",
+            }),
+        })
+        .await
+        .expect("process smaller same-ts event");
+
+    let after_smaller = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(after_smaller.display_name.as_deref(), Some("User B"));
+    assert_eq!(after_smaller.event_id.as_deref(), Some("$event_b"));
+
+    // 3. Incoming event at the same timestamp (2000) with lexicographically larger event_id "$event_c" is accepted
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$event_c".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "User C",
+                "avatar_url": "mxc://hs/avatar-c",
+            }),
+        })
+        .await
+        .expect("process larger same-ts event");
+
+    let after_larger = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(after_larger.display_name.as_deref(), Some("User C"));
+    assert_eq!(after_larger.event_id.as_deref(), Some("$event_c"));
+
+    // 4. Older event at timestamp 1000 is rejected
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$event_old".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "User Old",
+                "avatar_url": "mxc://hs/avatar-old",
+            }),
+        })
+        .await
+        .expect("process older event");
+
+    let after_older = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(after_older.display_name.as_deref(), Some("User C"));
+    assert_eq!(after_older.origin_server_ts, 2000);
+    assert_eq!(after_older.event_id.as_deref(), Some("$event_c"));
+
+    // 5. Projection reset / rebuild: wipe room_members projection
+    store
+        .delete_member(room_id, user_id)
+        .await
+        .expect("wipe member projection");
+    assert!(store.get_member(room_id, user_id).await.unwrap().is_none());
+
+    // Replay canonical event through processor
+    processor
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$event_c".to_string(),
+            sender: user_id.to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: user_id.to_string(),
+            origin_server_ts: 2000,
+            content: json!({
+                "membership": "join",
+                "displayname": "User C",
+                "avatar_url": "mxc://hs/avatar-c",
+            }),
+        })
+        .await
+        .expect("replay event");
+
+    let rebuilt = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(rebuilt.display_name.as_deref(), Some("User C"));
+    assert_eq!(rebuilt.origin_server_ts, 2000);
+    assert_eq!(rebuilt.event_id.as_deref(), Some("$event_c"));
+
+    // 6. Newer event at timestamp 3000 updates projection
     processor
         .process_room_state(ParsedRoomState {
             room_id: room_id.to_string(),
@@ -1750,7 +1822,6 @@ async fn legacy_unrecoverable_member_protected_from_same_timestamp_overwrite() {
         .await
         .expect("process newer event");
 
-    // Newer event updates projection and populates event_id
     let member_after_newer = store.get_member(room_id, user_id).await.unwrap().unwrap();
     assert_eq!(
         member_after_newer.display_name.as_deref(),

@@ -141,7 +141,7 @@ async fn members_upsert_and_lookup() {
     assert_eq!(member_duplicate.display_name.as_deref(), Some("Alice B"));
     assert_eq!(member_duplicate.membership, "leave");
 
-    // Legacy row with unknown event_id cannot be overwritten by unproven same-timestamp incoming event.
+    // Monotonic projection ordering:
     store
         .save_member(&RoomMember {
             room_id: "!room:hs".to_string(),
@@ -151,13 +151,39 @@ async fn members_upsert_and_lookup() {
             media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: 5000,
-            event_id: None,
+            event_id: Some("$dan_1".to_string()),
             updated_at: Utc::now(),
         })
         .await
-        .expect("save legacy dan");
+        .expect("save initial dan");
 
-    // Same-timestamp incoming event with event_id cannot prove newer -> rejected.
+    // Older event (ts 4000) is rejected.
+    store
+        .save_member(&RoomMember {
+            room_id: "!room:hs".to_string(),
+            user_id: "@dan:hs".to_string(),
+            display_name: Some("Dan Older".to_string()),
+            avatar_url: None,
+            media_reference: None,
+            membership: "join".to_string(),
+            origin_server_ts: 4000,
+            event_id: Some("$dan_older".to_string()),
+            updated_at: Utc::now(),
+        })
+        .await
+        .expect("save older dan");
+    let dan_after_older = store
+        .get_member("!room:hs", "@dan:hs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        dan_after_older.display_name.as_deref(),
+        Some("Dan Original")
+    );
+    assert_eq!(dan_after_older.event_id.as_deref(), Some("$dan_1"));
+
+    // Same-timestamp incoming event with smaller event_id is rejected.
     store
         .save_member(&RoomMember {
             room_id: "!room:hs".to_string(),
@@ -167,20 +193,23 @@ async fn members_upsert_and_lookup() {
             media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: 5000,
-            event_id: Some("$dan_same_ts".to_string()),
+            event_id: Some("$dan_0".to_string()),
             updated_at: Utc::now(),
         })
         .await
-        .expect("save dan same ts");
-    let dan_after_same = store
+        .expect("save dan smaller");
+    let dan_after_smaller = store
         .get_member("!room:hs", "@dan:hs")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(dan_after_same.display_name.as_deref(), Some("Dan Original"));
-    assert_eq!(dan_after_same.event_id, None);
+    assert_eq!(
+        dan_after_smaller.display_name.as_deref(),
+        Some("Dan Original")
+    );
+    assert_eq!(dan_after_smaller.event_id.as_deref(), Some("$dan_1"));
 
-    // Newer event (ts 6000) overwrites and populates event_id.
+    // Newer event (ts 6000) overwrites and updates projection.
     store
         .save_member(&RoomMember {
             room_id: "!room:hs".to_string(),
@@ -223,8 +252,8 @@ async fn metadata_uses_latest_state_events_and_counts_joined() {
                 avatar_url: None,
                 media_reference: None,
                 membership: membership.to_string(),
-                origin_server_ts: 0,
-                event_id: None,
+                origin_server_ts: 1000,
+                event_id: Some(format!("$member-{user}")),
                 updated_at: Utc::now(),
             })
             .await
