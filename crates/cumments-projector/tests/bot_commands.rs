@@ -103,7 +103,7 @@ fn processor_with_driver(
         site_service: Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as Arc<dyn cumments_core::ports::SiteStore>
         )),
-        driver: Some(driver),
+        driver: Some(driver.clone()),
         operator_mxids,
         backfill_tx,
         event_bus: tx,
@@ -111,6 +111,7 @@ fn processor_with_driver(
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
+        historical_state_resolver: Some(driver),
     })
 }
 

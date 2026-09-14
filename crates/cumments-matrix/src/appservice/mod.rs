@@ -3,6 +3,7 @@
 
 mod membership;
 mod messages;
+mod resolver;
 mod rooms;
 #[cfg(test)]
 mod test_support;

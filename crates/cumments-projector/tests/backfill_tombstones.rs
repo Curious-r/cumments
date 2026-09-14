@@ -87,6 +87,7 @@ async fn processor_named(store: Arc<DbStore>, server_name: Option<&str>) -> Even
         projection_notify: Arc::new(tokio::sync::Notify::new()),
         server_name: server_name.map(|s| s.to_string()),
         media_reference_store: Some(store.clone()),
+        historical_state_resolver: Some(Arc::new(cumments_test_utils::TestDriver::new())),
     })
 }
 

@@ -589,6 +589,7 @@ mod tests {
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
+                media_reference: None,
                 public_key: Some("pk".to_string()),
                 mxid: None,
             },

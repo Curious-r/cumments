@@ -3,9 +3,11 @@ mod wire;
 pub mod appservice;
 pub mod logging;
 pub mod poll;
+pub mod resolver;
 
 pub use appservice::AppServiceMatrixDriver;
 pub use logging::LoggingMatrixDriver;
+pub use resolver::MatrixHistoricalStateResolver;
 
 /// Content builders for the Matrix event wire format.
 ///

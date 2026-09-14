@@ -269,24 +269,35 @@ async fn run() -> Result<(), CliError> {
     // ─────────────────────────────────────────────────────────────
     // 7. Initialize Matrix Driver (Hands) based on mode
     // ─────────────────────────────────────────────────────────────
-    let driver: Arc<dyn MatrixDriver> = if let Some(as_conf) = &appservice {
+    let (driver, historical_state_resolver): (
+        Arc<dyn MatrixDriver>,
+        Option<Arc<dyn cumments_core::ports::HistoricalRoomStateResolver>>,
+    ) = if let Some(as_conf) = &appservice {
         let virtual_user_store: Arc<dyn cumments_core::ports::VirtualUserStore> = db_store.clone();
         tracing::info!(
             "Initializing AppService Matrix driver for {} (domain: {})",
             as_conf.homeserver_url,
             as_conf.server_name
         );
-        Arc::new(cumments_matrix::AppServiceMatrixDriver::new(
+        let appservice_driver = Arc::new(cumments_matrix::AppServiceMatrixDriver::new(
             as_conf.homeserver_url.clone(),
             as_conf.as_token.clone(),
             as_conf.server_name.clone(),
             as_conf.sender_localpart.clone(),
             virtual_user_store,
             as_conf.room_version.clone(),
-        )?)
+        )?);
+        (
+            appservice_driver.clone(),
+            Some(appservice_driver as Arc<dyn cumments_core::ports::HistoricalRoomStateResolver>),
+        )
     } else {
         tracing::info!("Using 'logging' mode driver.");
-        Arc::new(cumments_matrix::logging::LoggingMatrixDriver)
+        let logging_driver = Arc::new(cumments_matrix::logging::LoggingMatrixDriver);
+        (
+            logging_driver.clone(),
+            Some(logging_driver as Arc<dyn cumments_core::ports::HistoricalRoomStateResolver>),
+        )
     };
 
     // CLI site commands need the driver for applied-role removal; they run
@@ -349,6 +360,7 @@ async fn run() -> Result<(), CliError> {
                 .as_ref()
                 .and_then(|h| h.domain.clone()),
             media_reference_store: Some(db_store.clone()),
+            historical_state_resolver,
         },
     ));
     tracing::info!("EventProcessor initialized.");

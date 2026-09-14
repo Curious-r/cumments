@@ -67,6 +67,7 @@ fn create_processor_with_driver(
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
+        historical_state_resolver: None,
     })
 }
 

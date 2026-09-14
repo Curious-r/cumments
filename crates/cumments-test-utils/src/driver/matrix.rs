@@ -592,3 +592,27 @@ impl MatrixProfileDriver for TestDriver {
         Ok(())
     }
 }
+
+#[async_trait::async_trait]
+impl cumments_core::ports::HistoricalRoomStateResolver for TestDriver {
+    async fn resolve_member_presentation(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        sender_mxid: &str,
+    ) -> anyhow::Result<Option<cumments_core::models::MemberPresentation>> {
+        if *self.fail_historical_resolution.lock().await {
+            return Err(anyhow::anyhow!("simulated historical resolution failure"));
+        }
+        let map = self.historical_member_presentations.lock().await;
+        if let Some(res) = map.get(&(
+            room_id.to_string(),
+            event_id.to_string(),
+            sender_mxid.to_string(),
+        )) {
+            Ok(res.clone())
+        } else {
+            Ok(None)
+        }
+    }
+}

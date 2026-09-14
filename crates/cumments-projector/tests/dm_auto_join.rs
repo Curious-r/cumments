@@ -75,7 +75,7 @@ fn processor(store: Arc<DbStore>, driver: Arc<common::TestDriver>) -> EventProce
         site_service: std::sync::Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as std::sync::Arc<dyn cumments_core::ports::SiteStore>,
         )),
-        driver: Some(driver),
+        driver: Some(driver.clone()),
         operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
@@ -83,6 +83,7 @@ fn processor(store: Arc<DbStore>, driver: Arc<common::TestDriver>) -> EventProce
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
+        historical_state_resolver: Some(driver.clone()),
     })
 }
 

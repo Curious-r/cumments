@@ -68,6 +68,7 @@ fn create_processor(store: Arc<DbStore>) -> EventProcessor {
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
+        historical_state_resolver: None,
     })
 }
 
@@ -108,6 +109,7 @@ fn create_test_message(
             kind: AuthorKind::Visitor,
             display_name: snapshot_name.map(str::to_string),
             avatar_url: snapshot_avatar.map(str::to_string),
+            media_reference: None,
             public_key: Some("test_pubkey_1234567890".to_string()),
             mxid: None,
         },

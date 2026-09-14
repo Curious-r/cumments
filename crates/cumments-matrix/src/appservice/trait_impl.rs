@@ -8,8 +8,11 @@ use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
-    models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
-    ports::{MatrixDriver, MatrixProfileDriver},
+    models::{
+        CommentMedia, MatrixEvent, MemberPresentation, PageSlug, RoomEventPage, SiteId,
+        VisitorProfile,
+    },
+    ports::{HistoricalRoomStateResolver, MatrixDriver, MatrixProfileDriver},
     profile::ProfileDriverError,
 };
 
@@ -373,5 +376,18 @@ impl MatrixProfileDriver for AppServiceMatrixDriver {
         site_id: &SiteId,
     ) -> std::result::Result<(), ProfileDriverError> {
         self.clear_avatar_impl(author_public_key, site_id).await
+    }
+}
+
+#[async_trait]
+impl HistoricalRoomStateResolver for AppServiceMatrixDriver {
+    async fn resolve_member_presentation(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        sender_mxid: &str,
+    ) -> Result<Option<MemberPresentation>> {
+        self.resolve_member_presentation_impl(room_id, event_id, sender_mxid)
+            .await
     }
 }

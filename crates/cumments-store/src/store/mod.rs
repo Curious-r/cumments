@@ -121,6 +121,11 @@ impl DbStore {
         Ok(Self { db })
     }
 
+    /// Returns a reference to the underlying database connection.
+    pub fn connection(&self) -> &DatabaseConnection {
+        &self.db
+    }
+
     /// Create a consistent standalone SQLite snapshot at `destination`.
     ///
     /// First runs a WAL checkpoint so uncheckpointed writes are folded into the

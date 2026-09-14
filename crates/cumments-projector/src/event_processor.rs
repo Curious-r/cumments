@@ -31,9 +31,9 @@ use cumments_core::{
     },
     poll::PollStatus,
     ports::{
-        CommandAuditStore, GovernanceStore, MatrixDriver, MediaReferenceStore, MessageStore,
-        ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteStore,
-        StickerPackStore, SubmissionStore,
+        CommandAuditStore, GovernanceStore, HistoricalRoomStateResolver, MatrixDriver,
+        MediaReferenceStore, MessageStore, ProjectionRepairStore, RegistryStore, RoleClaimStore,
+        RoomStore, SiteStore, StickerPackStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
@@ -85,6 +85,7 @@ pub struct EventProcessor {
     event_capture: Mutex<Option<Vec<ProjectorEvent>>>,
     media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
     avatar_reconciler: Option<ExternalAvatarReconciler>,
+    historical_state_resolver: Option<Arc<dyn HistoricalRoomStateResolver>>,
 }
 
 /// Dependencies of the [`EventProcessor`], kept as one struct so the growing
@@ -117,6 +118,7 @@ pub struct EventProcessorDeps {
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
     pub media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
+    pub historical_state_resolver: Option<Arc<dyn HistoricalRoomStateResolver>>,
 }
 
 /// Chat command router: owns the command-only state and executes `!cumments`
@@ -1245,6 +1247,7 @@ impl EventProcessor {
             event_capture: Mutex::new(None),
             media_reference_store: deps.media_reference_store,
             avatar_reconciler,
+            historical_state_resolver: deps.historical_state_resolver,
         }
     }
 
@@ -1441,6 +1444,7 @@ impl EventProcessor {
     /// Matrix state, never signed event content. The stored value is a
     /// fallback; the API/SSE read path joins live member state on output
     /// (see `misc/design/visitor-identity.md`).
+    #[allow(dead_code)]
     fn author_profile_snapshot(member: Option<&RoomMember>) -> (Option<String>, Option<String>) {
         (
             member.and_then(|member| member.display_name.clone()),
@@ -1714,11 +1718,44 @@ impl EventProcessor {
 
         // Handle original messages.
         let is_matrix_native = !event.is_virtual_user_sender;
-        let member = self
-            .room_store
-            .get_member(&event.room_id, &event.sender)
+        let resolver = self
+            .historical_state_resolver
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("HistoricalRoomStateResolver is unavailable"))?;
+        let presentation = resolver
+            .resolve_member_presentation(&event.room_id, &event.event_id, &event.sender)
             .await?;
-        let (display_name, avatar_url) = Self::author_profile_snapshot(member.as_ref());
+
+        let (display_name, avatar_url, mut media_reference) = match presentation {
+            Some(p) => (p.display_name, p.avatar_url, p.media_reference),
+            None => (None, None, None),
+        };
+
+        if media_reference.is_none()
+            && let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
+            && let Some(ref media_store) = self.media_reference_store
+            && let Ok(site_id_obj) = SiteId::new(site_id.clone())
+        {
+            if let Some(existing) = media_store.find_reference(&site_id_obj, mxc).await? {
+                media_reference = Some(existing);
+            } else if self
+                .message_store
+                .has_media_upload_for_site(site_id_obj.as_str(), mxc)
+                .await?
+            {
+                let created = media_store
+                    .get_or_create_reference(&site_id_obj, mxc, MediaReferenceSource::Cumments)
+                    .await?;
+                media_reference = Some(created);
+            } else {
+                debug!(
+                    site_id = %site_id_obj.as_str(),
+                    mxc_uri = %mxc,
+                    "Historical avatar has unknown provenance and no authoritative local upload record; degraded presentation without speculative external reference"
+                );
+            }
+        }
+
         let message = Message {
             event_id: event.event_id.clone(),
             site_id: site_id.clone(),
@@ -1731,6 +1768,7 @@ impl EventProcessor {
                 },
                 display_name,
                 avatar_url,
+                media_reference,
                 public_key: event.author_public_key.clone(),
                 mxid: if is_matrix_native {
                     Some(event.sender.clone())

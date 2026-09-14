@@ -3,8 +3,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cumments_core::{
     identity::derive_visitor_id_from_public_key,
-    models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
-    ports::{MatrixDriver, MatrixProfileDriver},
+    models::{
+        CommentMedia, MatrixEvent, MemberPresentation, PageSlug, RoomEventPage, SiteId,
+        VisitorProfile,
+    },
+    ports::{HistoricalRoomStateResolver, MatrixDriver, MatrixProfileDriver},
     profile::ProfileDriverError,
 };
 use tracing::{debug, info};
@@ -473,5 +476,17 @@ impl MatrixProfileDriver for LoggingMatrixDriver {
             site_id.as_str()
         );
         Ok(())
+    }
+}
+
+#[async_trait]
+impl HistoricalRoomStateResolver for LoggingMatrixDriver {
+    async fn resolve_member_presentation(
+        &self,
+        _room_id: &str,
+        _event_id: &str,
+        _sender_mxid: &str,
+    ) -> Result<Option<MemberPresentation>> {
+        Ok(None)
     }
 }

@@ -76,6 +76,11 @@ async fn insert_message_if_absent<C: ConnectionTrait>(
         author_kind: Set(message.author.kind.as_str().to_string()),
         author_display_name: Set(message.author.display_name.clone()),
         author_avatar_url: Set(message.author.avatar_url.clone()),
+        author_media_reference: Set(message
+            .author
+            .media_reference
+            .as_ref()
+            .map(|r| r.as_str().to_string())),
         author_public_key: Set(message.author.public_key.clone()),
         content_json: Set(content_to_json(&message.content)),
         original_content_json: Set(content_to_json(&message.content)),
@@ -540,6 +545,10 @@ fn message_from_model(model: messages::Model) -> Message {
             kind,
             display_name: model.author_display_name,
             avatar_url: model.author_avatar_url,
+            media_reference: model
+                .author_media_reference
+                .as_deref()
+                .and_then(|s| s.parse().ok()),
             public_key: model.author_public_key,
             mxid: if kind == AuthorKind::Matrix {
                 Some(model.sender_mxid.clone())
@@ -1603,6 +1612,10 @@ impl DbStore {
                 }
                 if let Some(ref avatar) = member.avatar_url {
                     message.author.avatar_url = Some(avatar.clone());
+                    message.author.media_reference = member
+                        .media_reference
+                        .as_deref()
+                        .and_then(|s| s.parse().ok());
                 }
             }
         }
@@ -2045,6 +2058,7 @@ mod tests {
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
+                media_reference: None,
                 public_key: Some(
                     "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
                         .to_string(),

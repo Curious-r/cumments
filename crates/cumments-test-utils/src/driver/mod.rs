@@ -98,6 +98,9 @@ pub struct TestDriver {
     pub set_avatar_calls: Mutex<Vec<(String, SiteId, String)>>,
     pub clear_avatar_calls: Mutex<Vec<(String, SiteId)>>,
     pub next_profile_error: Mutex<Option<ProfileDriverError>>,
+    pub historical_member_presentations:
+        Mutex<HashMap<(String, String, String), Option<cumments_core::models::MemberPresentation>>>,
+    pub fail_historical_resolution: Mutex<bool>,
 }
 
 impl TestDriver {
@@ -138,6 +141,8 @@ impl TestDriver {
             set_avatar_calls: Mutex::new(Vec::new()),
             clear_avatar_calls: Mutex::new(Vec::new()),
             next_profile_error: Mutex::new(None),
+            historical_member_presentations: Mutex::new(HashMap::new()),
+            fail_historical_resolution: Mutex::new(false),
         }
     }
 
@@ -231,6 +236,23 @@ impl TestDriver {
             .lock()
             .await
             .insert((site_id.into(), author_public_key.into()), profile);
+    }
+
+    pub async fn set_historical_member_presentation(
+        &self,
+        room_id: impl Into<String>,
+        event_id: impl Into<String>,
+        sender_mxid: impl Into<String>,
+        presentation: Option<cumments_core::models::MemberPresentation>,
+    ) {
+        self.historical_member_presentations.lock().await.insert(
+            (room_id.into(), event_id.into(), sender_mxid.into()),
+            presentation,
+        );
+    }
+
+    pub async fn set_fail_historical_resolution(&self, fail: bool) {
+        *self.fail_historical_resolution.lock().await = fail;
     }
 }
 

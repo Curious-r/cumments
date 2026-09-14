@@ -57,6 +57,7 @@ fn visitor_message(event_id: &str, body: &str) -> Message {
             kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
+            media_reference: None,
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             mxid: None,
         },

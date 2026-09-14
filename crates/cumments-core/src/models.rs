@@ -216,6 +216,14 @@ impl AuthorKind {
     }
 }
 
+/// Effective member presentation at a resolved room-state context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberPresentation {
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub media_reference: Option<MediaReference>,
+}
+
 /// Author identity profile, captured when the message was projected.
 ///
 /// The stored values are a fallback: the public read path (message list,
@@ -233,6 +241,8 @@ pub struct AuthorSnapshot {
     pub kind: AuthorKind,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_reference: Option<MediaReference>,
     pub public_key: Option<String>,
     pub mxid: Option<String>,
 }

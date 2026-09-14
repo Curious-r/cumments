@@ -27,6 +27,7 @@ async fn save_message(store: &DbStore, event_id: &str, room_id: &str, content: &
             kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
+            media_reference: None,
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             mxid: None,
         },

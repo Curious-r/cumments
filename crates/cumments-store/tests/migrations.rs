@@ -136,6 +136,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000076_room_members_projection_ordering".to_string()),
         "000076 must be registered or room_members projection ordering columns are missing"
     );
+    assert!(
+        names.contains(&"m20260915_000077_messages_author_media_reference".to_string()),
+        "000077 must be registered or messages author_media_reference column is missing"
+    );
 }
 
 #[tokio::test]
@@ -888,8 +892,8 @@ async fn migration_000076_room_members_projection_ordering_and_rollback_is_symme
     let url = test_db_url("migration-000076-ordering");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Migrate all the way up to latest
-    Migrator::up(&db, None).await.expect("migrate to latest");
+    // Migrate up to 76
+    Migrator::up(&db, Some(76)).await.expect("migrate to 76");
 
     // Insert a room member with origin_server_ts and event_id
     let now = chrono::Utc::now().to_rfc3339();
@@ -1217,4 +1221,17 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
     );
     assert_eq!(alice_after_newer.origin_server_ts, t_newer);
     assert_eq!(alice_after_newer.event_id.as_deref(), Some("$newer_alice"));
+}
+
+#[tokio::test]
+async fn messages_table_has_author_media_reference_column() {
+    let url = test_db_url("messages-author-media-ref");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let cols = column_names(&db, "messages").await;
+    assert!(
+        cols.contains(&"author_media_reference".to_string()),
+        "messages table must include author_media_reference column"
+    );
 }

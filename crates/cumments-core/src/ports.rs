@@ -7,7 +7,7 @@ use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
 use crate::models::{
-    CommentMedia, EditProjectionOutcome, MatrixEvent, Message, MessagePage,
+    CommentMedia, EditProjectionOutcome, MatrixEvent, MemberPresentation, Message, MessagePage,
     MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, PageSlug, PollEnd, PollVote,
     ProjectionRepair, ProjectionRepairInput, QuarantinedRoom, Reaction, RoomEventPage,
     RoomIdentity, RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot, RoomStatus,
@@ -1681,4 +1681,22 @@ pub trait ProfileStore: Send + Sync {
     /// - No active operation for the same `(site_id, author_public_key, field)` is in `Dispatching` or `Unknown` status.
     async fn list_executable_pending_operations(&self, limit: u64)
     -> Result<Vec<ProfileOperation>>;
+}
+
+/// Independent port for resolving historical room member presentation at an event's DAG context.
+#[async_trait]
+pub trait HistoricalRoomStateResolver: Send + Sync {
+    /// Resolves the effective `m.room.member` presentation for `sender_mxid`
+    /// at event `event_id`'s resolved room-state DAG context in `room_id`.
+    ///
+    /// Returns:
+    /// - `Ok(Some(presentation))` when a usable member presentation was effective at event $E$
+    /// - `Ok(None)` when no usable member presentation existed at event $E$
+    /// - `Err(e)` when the underlying resolver capability is unavailable or failed
+    async fn resolve_member_presentation(
+        &self,
+        room_id: &str,
+        event_id: &str,
+        sender_mxid: &str,
+    ) -> Result<Option<MemberPresentation>>;
 }
