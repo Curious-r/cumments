@@ -104,6 +104,7 @@ async fn power_levels_project_site_and_room_roles() {
         governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: projection_notify.clone(),
         server_name: Some("hs".to_string()),
+        media_reference_store: Some(store.clone()),
     });
 
     // The Space's roles exclude the AS-managed sender.
@@ -213,6 +214,7 @@ async fn claim_dm_activates_only_the_matching_token() {
         governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: projection_notify.clone(),
         server_name: Some("hs".to_string()),
+        media_reference_store: Some(store.clone()),
     });
 
     store
@@ -330,6 +332,7 @@ async fn claim_dm_requires_a_verified_private_channel() {
         governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
+        media_reference_store: Some(store.clone()),
     });
 
     let message = claim_message("@bob:hs", "cumments-claim:secret-token");

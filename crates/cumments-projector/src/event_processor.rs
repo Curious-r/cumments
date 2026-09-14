@@ -22,6 +22,7 @@ use cumments_core::{
         validate_governance_user_id,
     },
     identity::{post_signature_message, signature_message},
+    media_reference::ExternalAvatarReconciler,
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
@@ -30,8 +31,9 @@ use cumments_core::{
     },
     poll::PollStatus,
     ports::{
-        CommandAuditStore, GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore,
-        RegistryStore, RoleClaimStore, RoomStore, SiteStore, StickerPackStore, SubmissionStore,
+        CommandAuditStore, GovernanceStore, MatrixDriver, MediaReferenceStore, MessageStore,
+        ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteStore,
+        StickerPackStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
@@ -81,6 +83,8 @@ pub struct EventProcessor {
     /// Set by the AppService router while an event is projected. Captured
     /// events are persisted to the SSE outbox instead of broadcast directly.
     event_capture: Mutex<Option<Vec<ProjectorEvent>>>,
+    media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
+    avatar_reconciler: Option<ExternalAvatarReconciler>,
 }
 
 /// Dependencies of the [`EventProcessor`], kept as one struct so the growing
@@ -112,6 +116,7 @@ pub struct EventProcessorDeps {
     pub governance_notify: Arc<Notify>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
+    pub media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
 }
 
 /// Chat command router: owns the command-only state and executes `!cumments`
@@ -1212,6 +1217,10 @@ impl BotCommandRouter {
 impl EventProcessor {
     pub fn new(deps: EventProcessorDeps) -> Self {
         let command_router = BotCommandRouter::new(&deps);
+        let avatar_reconciler = deps
+            .media_reference_store
+            .as_ref()
+            .map(|s| ExternalAvatarReconciler::new(s.clone()));
         Self {
             site_store: deps.site_store,
             registry_store: deps.registry_store,
@@ -1234,7 +1243,17 @@ impl EventProcessor {
             ),
             command_router,
             event_capture: Mutex::new(None),
+            media_reference_store: deps.media_reference_store,
+            avatar_reconciler,
         }
+    }
+
+    pub fn media_reference_store(&self) -> Option<&Arc<dyn MediaReferenceStore>> {
+        self.media_reference_store.as_ref()
+    }
+
+    pub fn avatar_reconciler(&self) -> Option<&ExternalAvatarReconciler> {
+        self.avatar_reconciler.as_ref()
     }
 
     pub async fn start_event_capture(&self) {
@@ -2142,6 +2161,35 @@ impl EventProcessor {
             } else {
                 (display_name, avatar_url)
             };
+
+            // External avatar reconciliation:
+            // When an avatar MXC URI is observed in a member event for a room
+            // associated with a site, reconcile it into a durable MediaReference
+            // marked `is_external = true`.
+            if let Some(ref reconciler) = self.avatar_reconciler {
+                let site_id =
+                    if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
+                        SiteId::new(identity.site_id).ok()
+                    } else if let Some(site) =
+                        self.site_store.get_site_by_space_id(&event.room_id).await?
+                    {
+                        SiteId::new(site.id).ok()
+                    } else {
+                        None
+                    };
+
+                if let Some(ref site_id) = site_id {
+                    reconciler
+                        .reconcile_room_member_avatar(site_id, avatar_url.as_deref())
+                        .await?;
+                } else if avatar_url.is_some() {
+                    debug!(
+                        room_id = %event.room_id,
+                        "Skipping external avatar reconciliation for room without site context"
+                    );
+                }
+            }
+
             self.room_store
                 .save_member(&RoomMember {
                     room_id: event.room_id.clone(),

@@ -348,6 +348,7 @@ async fn run() -> Result<(), CliError> {
                 .homeserver
                 .as_ref()
                 .and_then(|h| h.domain.clone()),
+            media_reference_store: Some(db_store.clone()),
         },
     ));
     tracing::info!("EventProcessor initialized.");
