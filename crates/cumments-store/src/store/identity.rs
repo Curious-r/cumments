@@ -79,4 +79,17 @@ impl VirtualUserStore for DbStore {
             .await?;
         Ok(rows.into_iter().map(|row| row.virtual_user_id).collect())
     }
+
+    async fn find_author_public_key(
+        &self,
+        virtual_user_id: &str,
+        site_id: &SiteId,
+    ) -> Result<Option<String>> {
+        let row = virtual_users::Entity::find()
+            .filter(virtual_users::Column::VirtualUserId.eq(virtual_user_id))
+            .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
+            .one(&self.db)
+            .await?;
+        Ok(row.map(|r| r.public_key))
+    }
 }

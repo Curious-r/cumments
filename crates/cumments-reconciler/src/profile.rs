@@ -10,13 +10,14 @@ use cumments_core::media_reference::{
     ExternalAvatarReconciler, MediaReference, MediaReferenceSource,
 };
 use cumments_core::models::{SiteId, VisitorProfile};
-use cumments_core::ports::{MatrixDriver, MediaReferenceStore, MessageStore};
+use cumments_core::ports::{MatrixDriver, MediaReferenceStore, MessageStore, VirtualUserStore};
 
 /// Background workflow for reconciling authoritative Matrix visitor profiles into durable MediaReferences.
 pub struct ExternalProfileReconciler {
     driver: Arc<dyn MatrixDriver>,
     media_store: Arc<dyn MediaReferenceStore>,
     message_store: Arc<dyn MessageStore>,
+    virtual_user_store: Option<Arc<dyn VirtualUserStore>>,
     avatar_reconciler: ExternalAvatarReconciler,
 }
 
@@ -31,8 +32,18 @@ impl ExternalProfileReconciler {
             driver,
             media_store,
             message_store,
+            virtual_user_store: None,
             avatar_reconciler,
         }
+    }
+
+    /// Attaches an optional [`VirtualUserStore`] to enable resolving virtual user IDs.
+    pub fn with_virtual_user_store(
+        mut self,
+        virtual_user_store: Arc<dyn VirtualUserStore>,
+    ) -> Self {
+        self.virtual_user_store = Some(virtual_user_store);
+        self
     }
 
     /// Reconciles an authoritative Matrix visitor profile reading into a durable [`MediaReference`].
@@ -104,6 +115,28 @@ impl ExternalProfileReconciler {
     ) -> Result<MediaReference> {
         self.avatar_reconciler
             .reconcile_external_profile_avatar(site_id, mxc_uri)
+            .await
+    }
+
+    /// Reconciles an authoritative Matrix profile reading for a virtual user into a durable [`MediaReference`].
+    ///
+    /// Looks up the author's public key from the virtual user store, then delegates to
+    /// [`reconcile_visitor_profile`](Self::reconcile_visitor_profile).
+    pub async fn reconcile_virtual_user_profile(
+        &self,
+        site_id: &SiteId,
+        virtual_user_id: &str,
+    ) -> Result<Option<MediaReference>> {
+        let Some(virtual_user_store) = &self.virtual_user_store else {
+            return Ok(None);
+        };
+        let Some(author_public_key) = virtual_user_store
+            .find_author_public_key(virtual_user_id, site_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.reconcile_visitor_profile(site_id, &author_public_key)
             .await
     }
 }

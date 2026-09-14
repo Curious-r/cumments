@@ -1480,6 +1480,16 @@ pub trait VirtualUserStore: Send + Sync {
 
     /// Lists every virtual Matrix user ID recorded for one site.
     async fn list_virtual_users_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
+
+    /// Finds the author public key associated with a virtual user ID for a site, if known.
+    async fn find_author_public_key(
+        &self,
+        virtual_user_id: &str,
+        site_id: &SiteId,
+    ) -> Result<Option<String>> {
+        let _ = (virtual_user_id, site_id);
+        Ok(None)
+    }
 }
 
 /// Detailed record of a durable media reference mapping.

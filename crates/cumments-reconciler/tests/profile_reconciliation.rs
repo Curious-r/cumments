@@ -2,7 +2,7 @@
 
 use cumments_core::media_reference::MediaReferenceSource;
 use cumments_core::models::{SiteId, VisitorProfile};
-use cumments_core::ports::{MediaReferenceStore, MessageStore, SiteStore};
+use cumments_core::ports::{MediaReferenceStore, MessageStore, SiteStore, VirtualUserStore};
 use cumments_reconciler::ExternalProfileReconciler;
 use cumments_store::DbStore;
 use cumments_test_utils::TestDriver;
@@ -210,4 +210,83 @@ async fn external_profile_reconciler_distinguishes_provenance_and_preserves_dura
         .unwrap()
         .unwrap();
     assert_eq!(media_ref, restarted_ref);
+}
+
+#[tokio::test]
+async fn external_profile_reconciler_reconciles_virtual_user_profile() {
+    let db_url = test_db_url("reconcile_virtual_user");
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+
+    let site_id = SiteId::from("vu-site");
+    store
+        .ensure_site_exists(site_id.as_str(), "!space:hs")
+        .await
+        .expect("ensure site");
+
+    let author_pubkey = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+    let virtual_user_id = store
+        .get_or_create_virtual_user(author_pubkey, &site_id, "hs")
+        .await
+        .expect("create virtual user");
+
+    let driver = Arc::new(TestDriver::new());
+    let ext_mxc = "mxc://hs/virtual-user-ext-avatar-999";
+    driver.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), author_pubkey.to_string()),
+        VisitorProfile {
+            display_name: Some("Virtual User External".to_string()),
+            avatar_url: Some(ext_mxc.to_string()),
+        },
+    );
+
+    // 1. Without VirtualUserStore wired: returns None
+    let unconfigured_reconciler = ExternalProfileReconciler::new(
+        driver.clone(),
+        store.clone() as Arc<dyn MediaReferenceStore>,
+        store.clone() as Arc<dyn MessageStore>,
+    );
+    assert!(
+        unconfigured_reconciler
+            .reconcile_virtual_user_profile(&site_id, &virtual_user_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // 2. With VirtualUserStore wired: resolves and reconciles external avatar
+    let configured_reconciler =
+        unconfigured_reconciler.with_virtual_user_store(store.clone() as Arc<dyn VirtualUserStore>);
+
+    let media_ref = configured_reconciler
+        .reconcile_virtual_user_profile(&site_id, &virtual_user_id)
+        .await
+        .expect("reconcile virtual user profile")
+        .expect("media ref resolved");
+
+    assert!(media_ref.as_str().starts_with("cumments-media:"));
+    let rec = store
+        .get_record(&site_id, &media_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rec.is_external);
+    assert_eq!(rec.source(), MediaReferenceSource::External);
+    assert_eq!(rec.mxc_uri, ext_mxc);
+
+    // 3. Unknown virtual user: returns None
+    assert!(
+        configured_reconciler
+            .reconcile_virtual_user_profile(&site_id, "@_cumments_vu-site_unknown:hs")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // 4. Idempotency: repeated call returns identical MediaReference
+    let repeated_ref = configured_reconciler
+        .reconcile_virtual_user_profile(&site_id, &virtual_user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(media_ref, repeated_ref);
 }
