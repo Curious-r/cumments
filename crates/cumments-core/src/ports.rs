@@ -1479,6 +1479,21 @@ pub trait VirtualUserStore: Send + Sync {
     async fn list_virtual_users_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
 }
 
+/// Detailed record of a durable media reference mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaReferenceRecord {
+    /// The stable opaque domain identity (`cumments-media:<uuid>`).
+    pub media_reference: MediaReference,
+    /// Site scope of this media reference mapping.
+    pub site_id: SiteId,
+    /// Underlying Matrix homeserver MXC URI (`mxc://...`).
+    pub mxc_uri: String,
+    /// Whether this media was discovered via external Matrix avatar.
+    pub is_external: bool,
+    /// Timestamp when this reference mapping was created.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Capability to resolve a `MediaReference` into an `mxc://...` Matrix content URI.
 #[async_trait]
 pub trait MediaReferenceResolver: Send + Sync {
@@ -1488,6 +1503,47 @@ pub trait MediaReferenceResolver: Send + Sync {
         site_id: &SiteId,
         reference: &MediaReference,
     ) -> Result<Option<String>>;
+}
+
+/// Port for durable media-domain identity mappings.
+///
+/// Maps stable [`MediaReference`] domain identities to and from underlying
+/// Matrix transport MXC URIs within explicit site boundaries.
+#[async_trait]
+pub trait MediaReferenceStore: MediaReferenceResolver + Send + Sync {
+    /// Finds an existing `MediaReference` for the given site and MXC URI.
+    ///
+    /// Returns `Ok(Some(reference))` if mapped, `Ok(None)` if absent, or `Err(...)` on store failure.
+    async fn find_reference(
+        &self,
+        site_id: &SiteId,
+        mxc_uri: &str,
+    ) -> Result<Option<MediaReference>>;
+
+    /// Gets an existing `MediaReference` or atomically creates a new one for the given site and MXC URI.
+    ///
+    /// If newly created, records whether this media was externally discovered (e.g. from an external Matrix avatar).
+    /// Concurrent calls for the same `(site_id, mxc_uri)` converge on the same `MediaReference`.
+    async fn get_or_create_reference(
+        &self,
+        site_id: &SiteId,
+        mxc_uri: &str,
+        is_external: bool,
+    ) -> Result<MediaReference>;
+
+    /// Gets the full mapping record for the given site and reference, if it exists.
+    async fn get_record(
+        &self,
+        site_id: &SiteId,
+        reference: &MediaReference,
+    ) -> Result<Option<MediaReferenceRecord>>;
+
+    /// Gets the full mapping record for the given site and MXC URI, if it exists.
+    async fn get_record_by_mxc(
+        &self,
+        site_id: &SiteId,
+        mxc_uri: &str,
+    ) -> Result<Option<MediaReferenceRecord>>;
 }
 
 /// The driver port for Matrix Client-Server API profile mutations.

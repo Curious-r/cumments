@@ -130,6 +130,77 @@ impl<'de> Deserialize<'de> for MediaReference {
     }
 }
 
+/// Background reconciliation service for externally assigned Matrix avatars.
+///
+/// Converts externally observed Matrix avatar MXC URIs (e.g. from room member
+/// state or global Matrix profile state) into durable [`MediaReference`] identities.
+///
+/// Invariants:
+/// - Allocates a stable [`MediaReference`] for previously unseen MXC URIs on this site,
+///   marked `is_external = true`.
+/// - Idempotently reuses an existing mapping without modifying its provenance.
+/// - Never alters Matrix profile authority (read-only with respect to homeserver profile state).
+/// - Never creates or modifies upload ownership records (`media_uploads`).
+pub struct ExternalAvatarReconciler {
+    store: std::sync::Arc<dyn crate::ports::MediaReferenceStore>,
+}
+
+impl ExternalAvatarReconciler {
+    pub fn new(store: std::sync::Arc<dyn crate::ports::MediaReferenceStore>) -> Self {
+        Self { store }
+    }
+
+    /// Reconciles an avatar MXC URI into a stable [`MediaReference`].
+    ///
+    /// If previously unseen, creates a new mapping marked `is_external = true`.
+    /// If already known, reuses the existing mapping without modifying its provenance.
+    pub async fn reconcile_avatar(
+        &self,
+        site_id: &crate::models::SiteId,
+        mxc_uri: &str,
+    ) -> anyhow::Result<MediaReference> {
+        self.store
+            .get_or_create_reference(site_id, mxc_uri, true)
+            .await
+    }
+
+    /// Reconciles an avatar URL observed in an `m.room.member` state event.
+    ///
+    /// Returns `Ok(Some(reference))` if `avatar_url` is a valid `mxc://...` URI,
+    /// or `Ok(None)` if no avatar is set.
+    pub async fn reconcile_room_member_avatar(
+        &self,
+        site_id: &crate::models::SiteId,
+        avatar_url: Option<&str>,
+    ) -> anyhow::Result<Option<MediaReference>> {
+        match avatar_url {
+            Some(mxc) if mxc.starts_with("mxc://") => {
+                let reference = self.reconcile_avatar(site_id, mxc).await?;
+                Ok(Some(reference))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Reconciles an avatar URL observed in a global Matrix profile.
+    ///
+    /// Returns `Ok(Some(reference))` if `avatar_url` is a valid `mxc://...` URI,
+    /// or `Ok(None)` if no avatar is set.
+    pub async fn reconcile_global_profile_avatar(
+        &self,
+        site_id: &crate::models::SiteId,
+        avatar_url: Option<&str>,
+    ) -> anyhow::Result<Option<MediaReference>> {
+        match avatar_url {
+            Some(mxc) if mxc.starts_with("mxc://") => {
+                let reference = self.reconcile_avatar(site_id, mxc).await?;
+                Ok(Some(reference))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
