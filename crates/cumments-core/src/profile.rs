@@ -376,17 +376,13 @@ impl ProfileOperationExecutor {
                     .await
             }
             ProfileTargetValue::SetAvatar(media_ref) => {
-                let mxc = match &self.media_resolver {
-                    Some(resolver) => resolver.resolve_mxc(&op.site_id, media_ref).await?,
-                    None => None,
+                let resolved_mxc = match &self.media_resolver {
+                    Some(resolver) => resolver.resolve_mxc(&op.site_id, media_ref).await,
+                    None => Ok(None),
                 };
-                match mxc {
-                    Some(mxc_url) => {
-                        self.driver
-                            .set_avatar(&op.author_public_key, &op.site_id, &mxc_url)
-                            .await
-                    }
-                    None => {
+                let mxc_url = match resolved_mxc {
+                    Ok(Some(mxc_url)) => mxc_url,
+                    Ok(None) => {
                         let err = format!(
                             "unresolvable media reference '{media_ref}' for site '{}'",
                             op.site_id.as_str()
@@ -394,7 +390,15 @@ impl ProfileOperationExecutor {
                         self.store.record_failed(operation_id, &err).await?;
                         return Ok(ProfileOperationExecutionResult::Failed(err));
                     }
-                }
+                    Err(e) => {
+                        let err = format!("failed to resolve media reference '{media_ref}': {e}");
+                        self.store.record_unknown(operation_id, &err).await?;
+                        return Ok(ProfileOperationExecutionResult::Unknown(err));
+                    }
+                };
+                self.driver
+                    .set_avatar(&op.author_public_key, &op.site_id, &mxc_url)
+                    .await
             }
             ProfileTargetValue::ClearAvatar => {
                 self.driver

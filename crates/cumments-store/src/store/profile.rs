@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set, Statement,
+    TransactionTrait, Value,
 };
 
 use cumments_core::models::SiteId;
@@ -153,72 +154,35 @@ impl ProfileStore for DbStore {
     }
 
     async fn claim_for_execution(&self, operation_id: &str) -> Result<bool> {
-        let txn = self.db.begin().await?;
-
-        // 1. Fetch the targeted operation
-        let row = match profile_operations::Entity::find()
-            .filter(profile_operations::Column::OperationId.eq(operation_id))
-            .one(&txn)
-            .await?
-        {
-            Some(r) => r,
-            None => {
-                txn.rollback().await?;
-                return Ok(false);
-            }
-        };
-
-        if row.status != crate::entities::active_enums::ProfileOperationStatus::Pending {
-            txn.rollback().await?;
-            return Ok(false);
-        }
-
-        // 2. Strict same-field serialization check:
-        // Are there any operations for (author, field) currently Dispatching or Unknown?
-        let has_blocking = profile_operations::Entity::find()
-            .filter(profile_operations::Column::AuthorPublicKey.eq(&row.author_public_key))
-            .filter(profile_operations::Column::Field.eq(row.field))
-            .filter(profile_operations::Column::Status.is_in([
-                crate::entities::active_enums::ProfileOperationStatus::Dispatching,
-                crate::entities::active_enums::ProfileOperationStatus::Unknown,
-            ]))
-            .one(&txn)
-            .await?
-            .is_some();
-
-        if has_blocking {
-            txn.rollback().await?;
-            return Ok(false);
-        }
-
-        // 3. Strict sequence order check:
-        // Are there earlier operations (sequence < current) for (author, field) that are still Pending?
-        let has_earlier_pending = profile_operations::Entity::find()
-            .filter(profile_operations::Column::AuthorPublicKey.eq(&row.author_public_key))
-            .filter(profile_operations::Column::Field.eq(row.field))
-            .filter(profile_operations::Column::Sequence.lt(row.sequence))
-            .filter(
-                profile_operations::Column::Status
-                    .eq(crate::entities::active_enums::ProfileOperationStatus::Pending),
-            )
-            .one(&txn)
-            .await?
-            .is_some();
-
-        if has_earlier_pending {
-            txn.rollback().await?;
-            return Ok(false);
-        }
-
-        // 4. Atomically transition to Dispatching
+        let backend = self.db.get_database_backend();
         let now = Utc::now();
-        let mut active: profile_operations::ActiveModel = row.into();
-        active.status = Set(crate::entities::active_enums::ProfileOperationStatus::Dispatching);
-        active.updated_at = Set(now);
-        active.update(&txn).await?;
-
-        txn.commit().await?;
-        Ok(true)
+        let sql = "UPDATE profile_operations \
+                   SET status = 'dispatching', updated_at = ? \
+                   WHERE operation_id = ? \
+                     AND status = 'pending' \
+                     AND NOT EXISTS ( \
+                         SELECT 1 FROM profile_operations AS blocking \
+                         WHERE blocking.author_public_key = profile_operations.author_public_key \
+                           AND blocking.field = profile_operations.field \
+                           AND blocking.status IN ('dispatching', 'unknown') \
+                           AND blocking.id != profile_operations.id \
+                     ) \
+                     AND NOT EXISTS ( \
+                         SELECT 1 FROM profile_operations AS earlier \
+                         WHERE earlier.author_public_key = profile_operations.author_public_key \
+                           AND earlier.field = profile_operations.field \
+                           AND earlier.sequence < profile_operations.sequence \
+                           AND earlier.status = 'pending' \
+                     )";
+        let res = self
+            .db
+            .execute_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                vec![Value::from(now), Value::from(operation_id.to_string())],
+            ))
+            .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     async fn record_completed(

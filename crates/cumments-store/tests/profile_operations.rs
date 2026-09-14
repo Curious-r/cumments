@@ -538,3 +538,363 @@ async fn executor_deterministic_vs_ambiguous_error_handling() {
         .unwrap();
     assert_eq!(op_blocked.status, ProfileOperationStatus::Pending);
 }
+
+struct FailingMediaResolver {
+    error: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl MediaReferenceResolver for FailingMediaResolver {
+    async fn resolve_mxc(
+        &self,
+        _site_id: &SiteId,
+        _reference: &MediaReference,
+    ) -> anyhow::Result<Option<String>> {
+        match &self.error {
+            Some(err) => anyhow::bail!("{err}"),
+            None => Ok(None),
+        }
+    }
+}
+
+#[tokio::test]
+async fn resolver_failure_never_strands_operation_in_dispatching() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("resolver_failure_safety"))
+            .await
+            .expect("connect db"),
+    );
+    let driver = Arc::new(TestDriver::new());
+    let failing_resolver = Arc::new(FailingMediaResolver {
+        error: Some("infrastructure error: media backend unreachable".to_string()),
+    });
+
+    let executor = ProfileOperationExecutor::new(
+        store.clone(),
+        driver.clone(),
+        Some(failing_resolver as Arc<dyn MediaReferenceResolver>),
+    );
+
+    let site = SiteId::from("blog");
+    let author = "pubkey-resolver-fail";
+
+    let media1 = MediaReference::new_v4();
+    let op_avatar_1 = ProfileTargetValue::SetAvatar(media1);
+    store
+        .claim_or_get_profile_operation("avatar-fail-1", author, &site, &op_avatar_1)
+        .await
+        .unwrap();
+
+    let media2 = MediaReference::new_v4();
+    let op_avatar_2 = ProfileTargetValue::SetAvatar(media2);
+    store
+        .claim_or_get_profile_operation("avatar-fail-2", author, &site, &op_avatar_2)
+        .await
+        .unwrap();
+
+    // Execute op 1 with failing resolver
+    let res1 = executor.execute("avatar-fail-1").await.unwrap();
+    assert!(
+        matches!(res1, ProfileOperationExecutionResult::Unknown(ref msg) if msg.contains("media backend unreachable")),
+        "expected Unknown result, got {res1:?}"
+    );
+
+    // Matrix driver was NEVER called because resolution failed beforehand
+    assert_eq!(driver.set_avatar_calls.lock().await.len(), 0);
+
+    // CRITICAL INVARIANT: Operation must NOT be left in Dispatching! It must be Unknown.
+    let op1 = store
+        .get_profile_operation("avatar-fail-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op1.status, ProfileOperationStatus::Unknown);
+    assert!(op1.resolved_at.is_none());
+    assert!(
+        op1.error_detail
+            .as_deref()
+            .unwrap()
+            .contains("media backend unreachable")
+    );
+
+    // Subsequent operation on the same field MUST be blocked by Unknown status
+    let res2 = executor.execute("avatar-fail-2").await.unwrap();
+    assert!(
+        matches!(res2, ProfileOperationExecutionResult::Blocked(_)),
+        "expected Blocked result, got {res2:?}"
+    );
+
+    let op2 = store
+        .get_profile_operation("avatar-fail-2")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op2.status, ProfileOperationStatus::Pending);
+}
+
+#[tokio::test]
+async fn resolver_unresolvable_media_records_failed_and_unblocks_next() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("resolver_unresolvable"))
+            .await
+            .expect("connect db"),
+    );
+    let driver = Arc::new(TestDriver::new());
+    let missing_resolver = Arc::new(FailingMediaResolver { error: None });
+
+    let executor = ProfileOperationExecutor::new(
+        store.clone(),
+        driver.clone(),
+        Some(missing_resolver as Arc<dyn MediaReferenceResolver>),
+    );
+
+    let site = SiteId::from("blog");
+    let author = "pubkey-resolver-missing";
+
+    let media = MediaReference::new_v4();
+    let op_avatar_1 = ProfileTargetValue::SetAvatar(media);
+    store
+        .claim_or_get_profile_operation("avatar-missing-1", author, &site, &op_avatar_1)
+        .await
+        .unwrap();
+
+    let op_avatar_2 = ProfileTargetValue::ClearAvatar;
+    store
+        .claim_or_get_profile_operation("avatar-clear-2", author, &site, &op_avatar_2)
+        .await
+        .unwrap();
+
+    // Execute op 1: resolver returns Ok(None) -> deterministic business failure (Failed)
+    let res1 = executor.execute("avatar-missing-1").await.unwrap();
+    assert!(
+        matches!(res1, ProfileOperationExecutionResult::Failed(ref msg) if msg.contains("unresolvable")),
+        "expected Failed result, got {res1:?}"
+    );
+
+    let op1 = store
+        .get_profile_operation("avatar-missing-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op1.status, ProfileOperationStatus::Failed);
+    assert!(op1.resolved_at.is_some());
+
+    // Because Failed is terminal, subsequent operation can execute successfully!
+    let res2 = executor.execute("avatar-clear-2").await.unwrap();
+    assert_eq!(res2, ProfileOperationExecutionResult::Completed);
+
+    let op2 = store
+        .get_profile_operation("avatar-clear-2")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op2.status, ProfileOperationStatus::Completed);
+}
+
+#[tokio::test]
+async fn concurrent_same_field_claims_never_produce_two_dispatching() {
+    let db_url = test_db_url("concurrent_same_field");
+    let store1 = Arc::new(DbStore::connect(&db_url).await.expect("connect store 1"));
+    let store2 = Arc::new(DbStore::connect(&db_url).await.expect("connect store 2"));
+
+    let site = SiteId::from("blog");
+    let author = "pubkey-concurrent-author";
+
+    let op_a = ProfileTargetValue::SetDisplayName("Alice First".to_string());
+    let op_b = ProfileTargetValue::SetDisplayName("Alice Second".to_string());
+
+    store1
+        .claim_or_get_profile_operation("op-concurrent-a", author, &site, &op_a)
+        .await
+        .unwrap();
+    store1
+        .claim_or_get_profile_operation("op-concurrent-b", author, &site, &op_b)
+        .await
+        .unwrap();
+
+    // Verify initial state: both are Pending
+    let a_init = store1
+        .get_profile_operation("op-concurrent-a")
+        .await
+        .unwrap()
+        .unwrap();
+    let b_init = store1
+        .get_profile_operation("op-concurrent-b")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(a_init.status, ProfileOperationStatus::Pending);
+    assert_eq!(b_init.status, ProfileOperationStatus::Pending);
+    assert_eq!(a_init.sequence, 1);
+    assert_eq!(b_init.sequence, 2);
+
+    // Concurrently attempt to claim op-a and op-b using two independent connections
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let store1_task = store1.clone();
+    let barrier1 = barrier.clone();
+    let handle1 = tokio::spawn(async move {
+        barrier1.wait().await;
+        store1_task.claim_for_execution("op-concurrent-a").await
+    });
+
+    let store2_task = store2.clone();
+    let barrier2 = barrier.clone();
+    let handle2 = tokio::spawn(async move {
+        barrier2.wait().await;
+        store2_task.claim_for_execution("op-concurrent-b").await
+    });
+
+    let res_a = handle1.await.unwrap().unwrap();
+    let res_b = handle2.await.unwrap().unwrap();
+
+    // Operation A (sequence 1) must be claimed
+    assert!(res_a, "op-concurrent-a must be successfully claimed");
+    // Operation B (sequence 2) MUST NOT be claimed
+    assert!(!res_b, "op-concurrent-b must NOT be claimed concurrently");
+
+    // Check database state
+    let a_post = store1
+        .get_profile_operation("op-concurrent-a")
+        .await
+        .unwrap()
+        .unwrap();
+    let b_post = store1
+        .get_profile_operation("op-concurrent-b")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(a_post.status, ProfileOperationStatus::Dispatching);
+    assert_eq!(b_post.status, ProfileOperationStatus::Pending);
+
+    // Crucial check: it is impossible for both to be Dispatching
+    assert!(
+        !(a_post.status == ProfileOperationStatus::Dispatching
+            && b_post.status == ProfileOperationStatus::Dispatching),
+        "concurrent claims must never produce two Dispatching operations for the same field"
+    );
+
+    // Complete op-a
+    store1
+        .record_completed("op-concurrent-a", None)
+        .await
+        .unwrap();
+
+    // Now op-b can be claimed via store2
+    assert!(store2.claim_for_execution("op-concurrent-b").await.unwrap());
+    let b_final = store2
+        .get_profile_operation("op-concurrent-b")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(b_final.status, ProfileOperationStatus::Dispatching);
+}
+
+#[tokio::test]
+async fn concurrent_claims_on_same_operation_yields_exactly_one_winner() {
+    let db_url = test_db_url("concurrent_same_op");
+    let store1 = Arc::new(DbStore::connect(&db_url).await.expect("connect store 1"));
+    let store2 = Arc::new(DbStore::connect(&db_url).await.expect("connect store 2"));
+
+    let site = SiteId::from("blog");
+    let author = "pubkey-same-op";
+    let target = ProfileTargetValue::SetDisplayName("Solo".to_string());
+
+    store1
+        .claim_or_get_profile_operation("op-solo", author, &site, &target)
+        .await
+        .unwrap();
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let store1_task = store1.clone();
+    let barrier1 = barrier.clone();
+    let handle1 = tokio::spawn(async move {
+        barrier1.wait().await;
+        store1_task.claim_for_execution("op-solo").await
+    });
+
+    let store2_task = store2.clone();
+    let barrier2 = barrier.clone();
+    let handle2 = tokio::spawn(async move {
+        barrier2.wait().await;
+        store2_task.claim_for_execution("op-solo").await
+    });
+
+    let res1 = handle1.await.unwrap().unwrap();
+    let res2 = handle2.await.unwrap().unwrap();
+
+    // Exactly one winner
+    assert!(
+        res1 ^ res2,
+        "exactly one worker must succeed in claiming op-solo, got ({res1}, {res2})"
+    );
+
+    let op = store1
+        .get_profile_operation("op-solo")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op.status, ProfileOperationStatus::Dispatching);
+}
+
+#[tokio::test]
+async fn concurrent_claims_on_different_fields_both_succeed() {
+    let db_url = test_db_url("concurrent_different_fields");
+    let store1 = Arc::new(DbStore::connect(&db_url).await.expect("connect store 1"));
+    let store2 = Arc::new(DbStore::connect(&db_url).await.expect("connect store 2"));
+
+    let site = SiteId::from("blog");
+    let author = "pubkey-multi-concurrent";
+
+    let op_name = ProfileTargetValue::SetDisplayName("Name".to_string());
+    let media = MediaReference::new_v4();
+    let op_avatar = ProfileTargetValue::SetAvatar(media);
+
+    store1
+        .claim_or_get_profile_operation("op-diff-name", author, &site, &op_name)
+        .await
+        .unwrap();
+    store1
+        .claim_or_get_profile_operation("op-diff-avatar", author, &site, &op_avatar)
+        .await
+        .unwrap();
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let store1_task = store1.clone();
+    let barrier1 = barrier.clone();
+    let handle1 = tokio::spawn(async move {
+        barrier1.wait().await;
+        store1_task.claim_for_execution("op-diff-name").await
+    });
+
+    let store2_task = store2.clone();
+    let barrier2 = barrier.clone();
+    let handle2 = tokio::spawn(async move {
+        barrier2.wait().await;
+        store2_task.claim_for_execution("op-diff-avatar").await
+    });
+
+    let res1 = handle1.await.unwrap().unwrap();
+    let res2 = handle2.await.unwrap().unwrap();
+
+    // Both succeed concurrently because DisplayName and Avatar are independent fields!
+    assert!(res1, "DisplayName claim must succeed");
+    assert!(res2, "Avatar claim must succeed");
+
+    let op_n = store1
+        .get_profile_operation("op-diff-name")
+        .await
+        .unwrap()
+        .unwrap();
+    let op_a = store1
+        .get_profile_operation("op-diff-avatar")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(op_n.status, ProfileOperationStatus::Dispatching);
+    assert_eq!(op_a.status, ProfileOperationStatus::Dispatching);
+}
