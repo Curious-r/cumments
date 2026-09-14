@@ -1217,6 +1217,15 @@ impl MessageStore for DbStore {
         Ok(found.is_some())
     }
 
+    async fn has_media_upload_for_site(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
+        let found = media_uploads::Entity::find()
+            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+            .filter(media_uploads::Column::SiteId.eq(site_id))
+            .one(&self.db)
+            .await?;
+        Ok(found.is_some())
+    }
+
     async fn mark_media_used(&self, mxc_url: &str) -> Result<()> {
         media_uploads::Entity::update_many()
             .col_expr(

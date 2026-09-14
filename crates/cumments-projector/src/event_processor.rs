@@ -22,7 +22,7 @@ use cumments_core::{
         validate_governance_user_id,
     },
     identity::{post_signature_message, signature_message},
-    media_reference::ExternalAvatarReconciler,
+    media_reference::{ExternalAvatarReconciler, MediaReferenceSource},
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
@@ -2162,11 +2162,19 @@ impl EventProcessor {
                 (display_name, avatar_url)
             };
 
-            // External avatar reconciliation:
+            // Media reference observation for member avatar:
             // When an avatar MXC URI is observed in a member event for a room
-            // associated with a site, reconcile it into a durable MediaReference
-            // marked `is_external = true`.
-            if let Some(ref reconciler) = self.avatar_reconciler {
+            // associated with a site:
+            // 1. If an existing MediaReference mapping exists for (site_id, mxc),
+            //    keep it untouched (preserving existing provenance).
+            // 2. If no mapping exists, only create a Cumments-owned mapping
+            //    (`MediaReferenceSource::Cumments` / `is_external = false`) if there is
+            //    an authoritative local record in `media_uploads` indicating Cumments
+            //    created/owns the upload for this site.
+            // 3. An ordinary `m.room.member` event alone does NOT imply external writer
+            //    provenance; unknown avatars without local upload records are NOT
+            //    blindly classified as external.
+            if let Some(ref media_store) = self.media_reference_store {
                 let site_id =
                     if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
                         SiteId::new(identity.site_id).ok()
@@ -2179,13 +2187,33 @@ impl EventProcessor {
                     };
 
                 if let Some(ref site_id) = site_id {
-                    reconciler
-                        .reconcile_room_member_avatar(site_id, avatar_url.as_deref())
-                        .await?;
+                    if let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
+                        && media_store.find_reference(site_id, mxc).await?.is_none()
+                    {
+                        if self
+                            .message_store
+                            .has_media_upload_for_site(site_id.as_str(), mxc)
+                            .await?
+                        {
+                            media_store
+                                .get_or_create_reference(
+                                    site_id,
+                                    mxc,
+                                    MediaReferenceSource::Cumments,
+                                )
+                                .await?;
+                        } else {
+                            debug!(
+                                site_id = %site_id.as_str(),
+                                mxc_uri = %mxc,
+                                "Avatar in room member event has unknown provenance and no authoritative local upload record; skipping speculative external reference creation"
+                            );
+                        }
+                    }
                 } else if avatar_url.is_some() {
                     debug!(
                         room_id = %event.room_id,
-                        "Skipping external avatar reconciliation for room without site context"
+                        "Skipping avatar media reference observation for room without site context"
                     );
                 }
             }

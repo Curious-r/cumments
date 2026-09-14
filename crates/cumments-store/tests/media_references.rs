@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use cumments_core::media_reference::{ExternalAvatarReconciler, MediaReference};
+use cumments_core::media_reference::{
+    ExternalAvatarReconciler, MediaReference, MediaReferenceSource,
+};
 use cumments_core::models::SiteId;
 use cumments_core::ports::{MediaReferenceResolver, MediaReferenceStore};
 use cumments_store::DbStore;
@@ -29,7 +31,7 @@ async fn basic_mapping_and_idempotent_lookup() {
 
     // First get_or_create allocates a new MediaReference
     let ref1 = store
-        .get_or_create_reference(&site, mxc, false)
+        .get_or_create_reference(&site, mxc, MediaReferenceSource::Cumments)
         .await
         .unwrap();
     assert!(ref1.as_str().starts_with("cumments-media:"));
@@ -40,17 +42,21 @@ async fn basic_mapping_and_idempotent_lookup() {
 
     // Repeated get_or_create returns identical MediaReference
     let ref2 = store
-        .get_or_create_reference(&site, mxc, false)
+        .get_or_create_reference(&site, mxc, MediaReferenceSource::Cumments)
         .await
         .unwrap();
     assert_eq!(ref1, ref2);
 
-    // Repeated call with is_external=true still returns the existing reference
+    // Repeated call with External source still returns the existing reference and preserves provenance
     let ref3 = store
-        .get_or_create_reference(&site, mxc, true)
+        .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
         .await
         .unwrap();
     assert_eq!(ref1, ref3);
+
+    let rec = store.get_record(&site, &ref1).await.unwrap().unwrap();
+    assert_eq!(rec.source(), MediaReferenceSource::Cumments);
+    assert!(!rec.is_external);
 }
 
 #[tokio::test]
@@ -62,7 +68,7 @@ async fn reverse_lookup_resolves_original_mxc() {
     let mxc = "mxc://homeserver.example.org/avatar-abc";
 
     let reference = store
-        .get_or_create_reference(&site, mxc, false)
+        .get_or_create_reference(&site, mxc, MediaReferenceSource::Cumments)
         .await
         .unwrap();
 
@@ -94,11 +100,11 @@ async fn site_isolation_creates_independent_mappings() {
     let shared_mxc = "mxc://matrix.org/shared-media-object";
 
     let ref_a = store
-        .get_or_create_reference(&site_a, shared_mxc, false)
+        .get_or_create_reference(&site_a, shared_mxc, MediaReferenceSource::Cumments)
         .await
         .unwrap();
     let ref_b = store
-        .get_or_create_reference(&site_b, shared_mxc, false)
+        .get_or_create_reference(&site_b, shared_mxc, MediaReferenceSource::Cumments)
         .await
         .unwrap();
 
@@ -148,7 +154,7 @@ async fn concurrent_get_or_create_converges_to_single_mapping() {
     let handle1 = tokio::spawn(async move {
         barrier1.wait().await;
         store1_task
-            .get_or_create_reference(&site1, mxc, false)
+            .get_or_create_reference(&site1, mxc, MediaReferenceSource::Cumments)
             .await
     });
 
@@ -158,7 +164,7 @@ async fn concurrent_get_or_create_converges_to_single_mapping() {
     let handle2 = tokio::spawn(async move {
         barrier2.wait().await;
         store2_task
-            .get_or_create_reference(&site2, mxc, false)
+            .get_or_create_reference(&site2, mxc, MediaReferenceSource::Cumments)
             .await
     });
 
@@ -185,7 +191,7 @@ async fn restart_durability_preserves_media_identity() {
     let initial_ref = {
         let store = DbStore::connect(&db_url).await.expect("connect session 1");
         store
-            .get_or_create_reference(&site, mxc, true)
+            .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
             .await
             .unwrap()
     };
@@ -194,7 +200,7 @@ async fn restart_durability_preserves_media_identity() {
     {
         let store = DbStore::connect(&db_url).await.expect("connect session 2");
         let reloaded_ref = store
-            .get_or_create_reference(&site, mxc, true)
+            .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
             .await
             .unwrap();
 
@@ -227,11 +233,10 @@ async fn external_discovery_reconciles_and_preserves_provenance() {
     let site = SiteId::from("blog");
     let external_mxc = "mxc://homeserver.org/external-avatar-999";
 
-    // 1. Reconcile room member avatar
+    // 1. Reconcile explicit external avatar
     let ref1 = reconciler
-        .reconcile_room_member_avatar(&site, Some(external_mxc))
+        .reconcile_external_avatar(&site, external_mxc)
         .await
-        .unwrap()
         .unwrap();
 
     let record1 = store.get_record(&site, &ref1).await.unwrap().unwrap();
@@ -239,6 +244,7 @@ async fn external_discovery_reconciles_and_preserves_provenance() {
         record1.is_external,
         "externally discovered avatar must be marked is_external = true"
     );
+    assert_eq!(record1.source(), MediaReferenceSource::External);
 
     // 2. Repeated discovery reuses existing mapping
     let ref2 = reconciler
@@ -251,12 +257,13 @@ async fn external_discovery_reconciles_and_preserves_provenance() {
     // 3. If an upload was created first (is_external = false), external discovery does NOT flip it
     let upload_mxc = "mxc://homeserver.org/upload-avatar-111";
     let upload_ref = store
-        .get_or_create_reference(&site, upload_mxc, false)
+        .get_or_create_reference(&site, upload_mxc, MediaReferenceSource::Cumments)
         .await
         .unwrap();
 
     let upload_record = store.get_record(&site, &upload_ref).await.unwrap().unwrap();
     assert!(!upload_record.is_external);
+    assert_eq!(upload_record.source(), MediaReferenceSource::Cumments);
 
     // Subsequent external reconciliation of the same MXC returns existing ref and preserves is_external = false
     let reconciled_upload = reconciler
@@ -270,25 +277,26 @@ async fn external_discovery_reconciles_and_preserves_provenance() {
         !preserved_record.is_external,
         "existing is_external provenance must not be arbitrarily flipped"
     );
+    assert_eq!(preserved_record.source(), MediaReferenceSource::Cumments);
 
     // 4. Missing or empty avatars return Ok(None)
     assert!(
         reconciler
-            .reconcile_room_member_avatar(&site, None)
+            .reconcile_global_profile_avatar(&site, None)
             .await
             .unwrap()
             .is_none()
     );
     assert!(
         reconciler
-            .reconcile_room_member_avatar(&site, Some(""))
+            .reconcile_global_profile_avatar(&site, Some(""))
             .await
             .unwrap()
             .is_none()
     );
     assert!(
         reconciler
-            .reconcile_room_member_avatar(&site, Some("https://example.com/not-mxc"))
+            .reconcile_global_profile_avatar(&site, Some("https://example.com/not-mxc"))
             .await
             .unwrap()
             .is_none()
@@ -392,7 +400,7 @@ async fn profile_executor_integration_with_media_reference_store() {
     // 1. Create a media reference mapping in DbStore
     let mxc_url = "mxc://homeserver.example.org/avatar-file-789";
     let media_ref = store
-        .get_or_create_reference(&site, mxc_url, false)
+        .get_or_create_reference(&site, mxc_url, MediaReferenceSource::Cumments)
         .await
         .unwrap();
 

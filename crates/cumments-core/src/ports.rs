@@ -2,7 +2,7 @@ use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use crate::canonical::CanonicalJson;
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry, SiteTransfer};
-use crate::media_reference::MediaReference;
+use crate::media_reference::{MediaReference, MediaReferenceSource};
 use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
@@ -474,6 +474,9 @@ pub trait MessageStore: ProjectionSink {
         site_id: &str,
         page_slug: &str,
     ) -> Result<bool>;
+
+    /// Whether an MXC media URL was uploaded by Cumments for this site.
+    async fn has_media_upload_for_site(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
 
     /// Marks a media URL as referenced by a a comment submission.
     async fn mark_media_used(&self, mxc_url: &str) -> Result<()>;
@@ -1494,6 +1497,13 @@ pub struct MediaReferenceRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl MediaReferenceRecord {
+    /// Returns the provenance source of this media reference.
+    pub fn source(&self) -> MediaReferenceSource {
+        MediaReferenceSource::from(self.is_external)
+    }
+}
+
 /// Capability to resolve a `MediaReference` into an `mxc://...` Matrix content URI.
 #[async_trait]
 pub trait MediaReferenceResolver: Send + Sync {
@@ -1522,13 +1532,13 @@ pub trait MediaReferenceStore: MediaReferenceResolver + Send + Sync {
 
     /// Gets an existing `MediaReference` or atomically creates a new one for the given site and MXC URI.
     ///
-    /// If newly created, records whether this media was externally discovered (e.g. from an external Matrix avatar).
+    /// If newly created, records the source/provenance of this media mapping.
     /// Concurrent calls for the same `(site_id, mxc_uri)` converge on the same `MediaReference`.
     async fn get_or_create_reference(
         &self,
         site_id: &SiteId,
         mxc_uri: &str,
-        is_external: bool,
+        source: MediaReferenceSource,
     ) -> Result<MediaReference>;
 
     /// Gets the full mapping record for the given site and reference, if it exists.

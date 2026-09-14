@@ -130,14 +130,40 @@ impl<'de> Deserialize<'de> for MediaReference {
     }
 }
 
+/// Provenance / discovery source of a [`MediaReference`] mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaReferenceSource {
+    /// Created or owned by Cumments (e.g. visitor upload or profile mutation).
+    Cumments,
+    /// Discovered from an external Matrix media object.
+    External,
+}
+
+impl MediaReferenceSource {
+    pub fn is_external(&self) -> bool {
+        matches!(self, Self::External)
+    }
+}
+
+impl From<bool> for MediaReferenceSource {
+    fn from(is_external: bool) -> Self {
+        if is_external {
+            Self::External
+        } else {
+            Self::Cumments
+        }
+    }
+}
+
 /// Background reconciliation service for externally assigned Matrix avatars.
 ///
-/// Converts externally observed Matrix avatar MXC URIs (e.g. from room member
-/// state or global Matrix profile state) into durable [`MediaReference`] identities.
+/// Converts externally observed Matrix avatar MXC URIs (e.g. from explicit
+/// external profile observation) into durable [`MediaReference`] identities.
 ///
 /// Invariants:
 /// - Allocates a stable [`MediaReference`] for previously unseen MXC URIs on this site,
-///   marked `is_external = true`.
+///   marked `is_external = true` (`MediaReferenceSource::External`).
 /// - Idempotently reuses an existing mapping without modifying its provenance.
 /// - Never alters Matrix profile authority (read-only with respect to homeserver profile state).
 /// - Never creates or modifies upload ownership records (`media_uploads`).
@@ -150,39 +176,31 @@ impl ExternalAvatarReconciler {
         Self { store }
     }
 
-    /// Reconciles an avatar MXC URI into a stable [`MediaReference`].
+    /// Explicit external avatar discovery entrypoint.
     ///
-    /// If previously unseen, creates a new mapping marked `is_external = true`.
-    /// If already known, reuses the existing mapping without modifying its provenance.
-    pub async fn reconcile_avatar(
+    /// Reconciles an externally discovered Matrix avatar MXC URI into a stable [`MediaReference`].
+    /// - If previously unseen, creates a new mapping marked `MediaReferenceSource::External` (`is_external = true`).
+    /// - If already known, reuses the existing mapping without modifying its provenance.
+    pub async fn reconcile_external_avatar(
         &self,
         site_id: &crate::models::SiteId,
         mxc_uri: &str,
     ) -> anyhow::Result<MediaReference> {
         self.store
-            .get_or_create_reference(site_id, mxc_uri, true)
+            .get_or_create_reference(site_id, mxc_uri, MediaReferenceSource::External)
             .await
     }
 
-    /// Reconciles an avatar URL observed in an `m.room.member` state event.
-    ///
-    /// Returns `Ok(Some(reference))` if `avatar_url` is a valid `mxc://...` URI,
-    /// or `Ok(None)` if no avatar is set.
-    pub async fn reconcile_room_member_avatar(
+    /// Alias for [`Self::reconcile_external_avatar`].
+    pub async fn reconcile_avatar(
         &self,
         site_id: &crate::models::SiteId,
-        avatar_url: Option<&str>,
-    ) -> anyhow::Result<Option<MediaReference>> {
-        match avatar_url {
-            Some(mxc) if mxc.starts_with("mxc://") => {
-                let reference = self.reconcile_avatar(site_id, mxc).await?;
-                Ok(Some(reference))
-            }
-            _ => Ok(None),
-        }
+        mxc_uri: &str,
+    ) -> anyhow::Result<MediaReference> {
+        self.reconcile_external_avatar(site_id, mxc_uri).await
     }
 
-    /// Reconciles an avatar URL observed in a global Matrix profile.
+    /// Reconciles an avatar URL observed in an explicit external profile observation (e.g. global Matrix profile).
     ///
     /// Returns `Ok(Some(reference))` if `avatar_url` is a valid `mxc://...` URI,
     /// or `Ok(None)` if no avatar is set.
@@ -193,7 +211,7 @@ impl ExternalAvatarReconciler {
     ) -> anyhow::Result<Option<MediaReference>> {
         match avatar_url {
             Some(mxc) if mxc.starts_with("mxc://") => {
-                let reference = self.reconcile_avatar(site_id, mxc).await?;
+                let reference = self.reconcile_external_avatar(site_id, mxc).await?;
                 Ok(Some(reference))
             }
             _ => Ok(None),

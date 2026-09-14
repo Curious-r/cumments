@@ -8,7 +8,7 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, Statement, Value,
 };
 
-use cumments_core::media_reference::MediaReference;
+use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
 use cumments_core::models::SiteId;
 use cumments_core::ports::{MediaReferenceRecord, MediaReferenceResolver, MediaReferenceStore};
 
@@ -68,7 +68,7 @@ impl MediaReferenceStore for DbStore {
         &self,
         site_id: &SiteId,
         mxc_uri: &str,
-        is_external: bool,
+        source: MediaReferenceSource,
     ) -> Result<MediaReference> {
         // Fast path: if mapping already exists, return it without write lock
         if let Some(existing) = self.find_reference(site_id, mxc_uri).await? {
@@ -99,7 +99,7 @@ impl MediaReferenceStore for DbStore {
                     Value::from(new_reference.as_str().to_string()),
                     Value::from(site_id.as_str().to_string()),
                     Value::from(mxc_uri.to_string()),
-                    Value::from(is_external),
+                    Value::from(source.is_external()),
                     Value::from(now),
                 ],
             ))
