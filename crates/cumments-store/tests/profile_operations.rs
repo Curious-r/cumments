@@ -1539,3 +1539,82 @@ async fn sequence_allocation_survives_explicit_rollback_and_prunes_gaps() {
     assert_eq!(ops[0].sequence, 1);
     assert_eq!(ops[1].sequence, 2);
 }
+
+#[tokio::test]
+async fn error_classification_distinguishes_unique_from_non_unique_constraints_and_identifies_sequence_conflict()
+ {
+    use cumments_store::{is_profile_sequence_unique_violation, is_unique_violation};
+    use sea_orm::{ConnectionTrait, Database};
+
+    let url = test_db_url("error_classification");
+    let _store = DbStore::connect(&url).await.expect("connect db");
+    let db = Database::connect(&url).await.expect("connect raw db");
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // 1. Insert initial row
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, sequence, status, created_at, updated_at) \
+         VALUES ('op-err-base', 'author-err', 'site-err', 'display_name', 1, 'pending', '{now}', '{now}')"
+    ))
+    .await
+    .expect("insert base row");
+
+    // 2. Non-unique constraint failure: NOT NULL violation on site_id
+    let not_null_err = db
+        .execute_unprepared(&format!(
+            "INSERT INTO profile_operations \
+             (operation_id, author_public_key, site_id, field, sequence, status, created_at, updated_at) \
+             VALUES ('op-err-null', 'author-err', NULL, 'display_name', 2, 'pending', '{now}', '{now}')"
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        !is_unique_violation(&not_null_err),
+        "NOT NULL constraint failure must NOT be classified as unique violation"
+    );
+    assert!(
+        !is_profile_sequence_unique_violation(&not_null_err),
+        "NOT NULL constraint failure must NOT be classified as profile sequence violation"
+    );
+
+    // 3. Unique violation on operation_id (server-wide uniqueness, non-sequence unique conflict)
+    let dup_op_err = db
+        .execute_unprepared(&format!(
+            "INSERT INTO profile_operations \
+             (operation_id, author_public_key, site_id, field, sequence, status, created_at, updated_at) \
+             VALUES ('op-err-base', 'author-other', 'site-err', 'display_name', 2, 'pending', '{now}', '{now}')"
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        is_unique_violation(&dup_op_err),
+        "duplicate operation_id MUST be classified as a unique violation"
+    );
+    assert!(
+        !is_profile_sequence_unique_violation(&dup_op_err),
+        "duplicate operation_id must NOT be classified as profile sequence violation"
+    );
+
+    // 4. Unique violation on (site_id, author_public_key, field, sequence)
+    let dup_seq_err = db
+        .execute_unprepared(&format!(
+            "INSERT INTO profile_operations \
+             (operation_id, author_public_key, site_id, field, sequence, status, created_at, updated_at) \
+             VALUES ('op-err-seq', 'author-err', 'site-err', 'display_name', 1, 'pending', '{now}', '{now}')"
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        is_unique_violation(&dup_seq_err),
+        "duplicate sequence MUST be classified as a unique violation"
+    );
+    assert!(
+        is_profile_sequence_unique_violation(&dup_seq_err),
+        "duplicate sequence MUST be specifically classified as profile sequence violation"
+    );
+}

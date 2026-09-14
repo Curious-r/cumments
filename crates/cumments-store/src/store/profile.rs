@@ -19,7 +19,9 @@ use cumments_core::submissions::OperationIdentity;
 
 use crate::entities::profile_operations;
 use crate::store::submissions::ClaimAttempt;
-use crate::store::{DbStore, is_busy_anyhow_error, is_busy_error, is_unique_violation};
+use crate::store::{
+    DbStore, is_busy_anyhow_error, is_busy_error, is_profile_sequence_unique_violation,
+};
 
 fn model_to_domain(row: &profile_operations::Model) -> Result<ProfileOperation> {
     let field = ProfileField::from(row.field);
@@ -155,7 +157,8 @@ impl ProfileStore for DbStore {
                             Err(err) => return Err(err.into()),
                         },
                         Err(err)
-                            if (is_unique_violation(&err) || is_busy_error(&err))
+                            if (is_profile_sequence_unique_violation(&err)
+                                || is_busy_error(&err))
                                 && attempt + 1 < MAX_ALLOCATION_RETRIES =>
                         {
                             let _ = txn.rollback().await;

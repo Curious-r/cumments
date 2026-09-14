@@ -710,8 +710,8 @@ async fn profile_operations_table_enforces_unique_operation_id_and_tracks_fields
 }
 
 #[tokio::test]
-async fn migration_000074_prunes_duplicate_sequences_before_creating_unique_index() {
-    let url = test_db_url("profile-ops-prune-dup");
+async fn migration_000074_fails_on_duplicate_sequences_and_preserves_all_operations() {
+    let url = test_db_url("profile-ops-dup-fail");
     let db = Database::connect(&url).await.expect("connect db");
 
     // Run migrations up to 73
@@ -724,27 +724,105 @@ async fn migration_000074_prunes_duplicate_sequences_before_creating_unique_inde
     db.execute_unprepared(&format!(
         "INSERT INTO profile_operations \
          (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
-         VALUES ('op-old', 'author-dup', 'site-x', 'display_name', NULL, 'pending', 1, '{t1}', '{t1}'); \
+         VALUES ('op-dup-1', 'author-dup', 'site-x', 'display_name', NULL, 'pending', 1, '{t1}', '{t1}'); \
          INSERT INTO profile_operations \
          (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
-         VALUES ('op-new', 'author-dup', 'site-x', 'display_name', NULL, 'pending', 1, '{t2}', '{t2}');"
+         VALUES ('op-dup-2', 'author-dup', 'site-x', 'display_name', NULL, 'completed', 1, '{t2}', '{t2}');"
     ))
     .await
     .expect("insert duplicates on migration 73");
 
-    // Now run migration 74 up
-    Migrator::up(&db, Some(1)).await.expect("migrate up to 74");
+    // Attempt to run migration 74 up -> MUST FAIL explicitly
+    let mig_res = Migrator::up(&db, Some(1)).await;
+    assert!(
+        mig_res.is_err(),
+        "migration 74 must explicitly fail when duplicate sequences exist"
+    );
+    let err_msg = mig_res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("author-dup")
+            && err_msg.contains("site-x")
+            && err_msg.contains("display_name"),
+        "error message must provide diagnostic details about the duplicate serialization stream: {err_msg}"
+    );
 
-    // Check that op-old was pruned and op-new was kept
+    // CRITICAL: BOTH operations MUST still exist in database — nothing silently deleted!
     let rows = db
         .query_all_raw(Statement::from_string(
             db.get_database_backend(),
-            "SELECT operation_id FROM profile_operations WHERE author_public_key = 'author-dup'",
+            "SELECT operation_id, status FROM profile_operations WHERE author_public_key = 'author-dup' ORDER BY operation_id",
         ))
         .await
         .expect("query rows");
 
-    assert_eq!(rows.len(), 1, "exactly one row should survive pruning");
-    let surviving_id: String = rows[0].try_get("", "operation_id").unwrap();
-    assert_eq!(surviving_id, "op-new");
+    assert_eq!(
+        rows.len(),
+        2,
+        "migration failure must preserve ALL profile operations without deleting any"
+    );
+    let id_1: String = rows[0].try_get("", "operation_id").unwrap();
+    let id_2: String = rows[1].try_get("", "operation_id").unwrap();
+    assert_eq!(id_1, "op-dup-1");
+    assert_eq!(id_2, "op-dup-2");
+}
+
+#[tokio::test]
+async fn migration_000074_succeeds_on_valid_data_and_rollback_is_symmetric() {
+    let url = test_db_url("profile-ops-rollback-sym");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Run migrations up to 73
+    Migrator::up(&db, Some(73)).await.expect("migrate to 73");
+
+    let t1 = "2026-09-15T10:00:00Z";
+    let t2 = "2026-09-15T10:05:00Z";
+
+    // Insert valid non-duplicate sequences
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-valid-1', 'author-sym', 'site-x', 'display_name', NULL, 'pending', 1, '{t1}', '{t1}'); \
+         INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-valid-2', 'author-sym', 'site-x', 'display_name', NULL, 'pending', 2, '{t2}', '{t2}');"
+    ))
+    .await
+    .expect("insert valid operations on migration 73");
+
+    // Migration 74 up succeeds on valid data
+    Migrator::up(&db, Some(1)).await.expect("migrate to 74");
+
+    // Unique constraint is enforced under migration 74
+    let dup_res = db
+        .execute_unprepared(&format!(
+            "INSERT INTO profile_operations \
+             (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+             VALUES ('op-valid-3', 'author-sym', 'site-x', 'display_name', NULL, 'pending', 1, '{t2}', '{t2}');"
+        ))
+        .await;
+    assert!(
+        dup_res.is_err(),
+        "duplicate sequence must be rejected by unique index under migration 74"
+    );
+
+    // Rollback migration 74 (down 1 step back to migration 73 state)
+    Migrator::down(&db, Some(1))
+        .await
+        .expect("rollback migration 74");
+
+    // Under migration 73, duplicate sequence is permitted again (restoring non-unique index)
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-valid-3', 'author-sym', 'site-x', 'display_name', NULL, 'pending', 1, '{t2}', '{t2}');"
+    ))
+    .await
+    .expect("duplicate sequence must succeed after rolling back to migration 73");
+
+    // Re-apply migration 74 -> now it should fail because op-valid-3 created a duplicate!
+    let re_up_res = Migrator::up(&db, Some(1)).await;
+    assert!(
+        re_up_res.is_err(),
+        "re-applying migration 74 with duplicate must fail"
+    );
 }

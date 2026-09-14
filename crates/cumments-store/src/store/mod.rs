@@ -27,30 +27,36 @@ pub mod submissions;
 /// Whether a SeaORM error is a SQLite unique/primary-key constraint
 /// violation. Matching the error code keeps this independent of SQLite's
 /// human-readable message text.
-pub(crate) fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
+pub fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
     let sqlx = match err {
         sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
         | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
-        _ => {
-            let msg = err.to_string();
-            return msg.contains("UNIQUE constraint failed")
-                || msg.contains("PRIMARY KEY constraint failed");
-        }
+        _ => return false,
     };
-    if let Some(db) = sqlx.as_database_error() {
-        if let Some(code) = db.code()
-            && (code == "2067" || code == "1555" || code == "19")
-        {
-            return true;
-        }
-        let msg = db.message();
-        if msg.contains("UNIQUE constraint failed") || msg.contains("PRIMARY KEY constraint failed")
-        {
-            return true;
-        }
+    sqlx.as_database_error()
+        .and_then(|db| db.code())
+        .is_some_and(|code| code == "2067" || code == "1555")
+}
+
+/// Whether a SeaORM error is specifically a unique constraint violation on
+/// `profile_operations(site_id, author_public_key, field, sequence)`.
+pub fn is_profile_sequence_unique_violation(err: &sea_orm::DbErr) -> bool {
+    let sqlx = match err {
+        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
+        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
+        _ => return false,
+    };
+    let Some(db) = sqlx.as_database_error() else {
+        return false;
+    };
+    // Code 2067 is SQLITE_CONSTRAINT_UNIQUE
+    if db.code().as_deref() != Some("2067") {
+        return false;
     }
-    let msg = err.to_string();
-    msg.contains("UNIQUE constraint failed") || msg.contains("PRIMARY KEY constraint failed")
+    let msg = db.message();
+    msg.contains("uq_profile_ops_site_author_field")
+        || msg.contains("idx_profile_ops_site_author_field")
+        || (msg.contains("profile_operations") && msg.contains("sequence"))
 }
 
 /// Whether a SeaORM error is a SQLite busy or locked contention error.
