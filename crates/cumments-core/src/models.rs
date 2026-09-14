@@ -875,6 +875,11 @@ pub struct SseOutbox {
     pub created_at: DateTime<Utc>,
 }
 
+pub use crate::media_reference::MediaReference;
+pub use crate::profile::{
+    ProfileField, ProfileOperation, ProfileOperationStatus, ProfileTargetValue,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

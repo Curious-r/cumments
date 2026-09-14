@@ -112,6 +112,14 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260827_000068_operation_claims".to_string()),
         "000068 must be registered or operation identity is not server-wide unique"
     );
+    assert!(
+        names.contains(&"m20260915_000071_media_references".to_string()),
+        "000071 must be registered or media_references table is missing"
+    );
+    assert!(
+        names.contains(&"m20260915_000072_profile_operations".to_string()),
+        "000072 must be registered or profile_operations table is missing"
+    );
 }
 
 #[tokio::test]
@@ -566,4 +574,89 @@ async fn terminology_rename_migration_converges_legacy_schema() {
     assert_eq!(rows.len(), 1);
     let kind: String = rows[0].try_get("", "author_kind").expect("author_kind");
     assert_eq!(kind, "visitor", "guest author kind must be rewritten");
+}
+
+#[tokio::test]
+async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplicates_within_site() {
+    let url = test_db_url("media-references");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    // 1. Insert on site-a
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_references \
+         (media_reference, site_id, mxc_uri, is_external, created_at) \
+         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-a', 'mxc://hs/1', 0, '{now}')"
+    ))
+    .await
+    .expect("first media reference");
+
+    // 2. Same MXC URI on site-b with a different media_reference MUST SUCCEED (not globally unique)
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_references \
+         (media_reference, site_id, mxc_uri, is_external, created_at) \
+         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440001', 'site-b', 'mxc://hs/1', 0, '{now}')"
+    ))
+    .await
+    .expect("same mxc on different site is allowed");
+
+    // 3. Duplicate (site_id, mxc_uri) on site-a MUST FAIL
+    let dup_site_mxc = db
+        .execute_unprepared(&format!(
+            "INSERT INTO media_references \
+             (media_reference, site_id, mxc_uri, is_external, created_at) \
+             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440002', 'site-a', 'mxc://hs/1', 0, '{now}')"
+        ))
+        .await;
+    assert!(
+        dup_site_mxc.is_err(),
+        "duplicate (site_id, mxc_uri) must be rejected by unique constraint"
+    );
+
+    // 4. Duplicate media_reference (primary key) MUST FAIL
+    let dup_pk = db
+        .execute_unprepared(&format!(
+            "INSERT INTO media_references \
+             (media_reference, site_id, mxc_uri, is_external, created_at) \
+             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-c', 'mxc://hs/2', 0, '{now}')"
+        ))
+        .await;
+    assert!(dup_pk.is_err(), "duplicate primary key must be rejected");
+}
+
+#[tokio::test]
+async fn profile_operations_table_enforces_unique_operation_id_and_tracks_fields() {
+    let url = test_db_url("profile-operations");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    // 1. Insert first profile operation
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-prof-1', 'author-1', 'site-a', 'display_name', '{{\"kind\":\"set_display_name\",\"value\":\"Alice\"}}', 'pending', 1, '{now}', '{now}')"
+    ))
+    .await
+    .expect("insert profile operation");
+
+    // 2. Duplicate operation_id MUST FAIL
+    let dup_op = db
+        .execute_unprepared(&format!(
+            "INSERT INTO profile_operations \
+             (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+             VALUES ('op-prof-1', 'author-2', 'site-b', 'avatar', NULL, 'pending', 1, '{now}', '{now}')"
+        ))
+        .await;
+    assert!(dup_op.is_err(), "duplicate operation_id must be rejected");
+
+    // 3. Different operation_id for same author/field with incremented sequence succeeds
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-prof-2', 'author-1', 'site-a', 'display_name', '{{\"kind\":\"clear_display_name\"}}', 'completed', 2, '{now}', '{now}')"
+    ))
+    .await
+    .expect("second profile operation with incremented sequence");
 }
