@@ -54,33 +54,16 @@ signature covers the media URL instead of text content).
 
 ## Visitor avatar
 
-`PUT /api/v1/sites/{site_id}/visitors/avatar?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
+Visitor avatar mutations are managed through dedicated profile endpoints operating on site-scoped [`MediaReference`](/api/visitors#set-visitor-avatar) identifiers rather than direct compound upload endpoints.
 
-Uploads raw image bytes as the visitor's virtual user and sets the avatar on
-that virtual user's global profile in one request. The signature covers
-`["UPLOAD_AVATAR", site_id, mime, sha256_hex(body), challenge]`; `mime` must
-be an `image/*` type and the request uses the same `Idempotency-Key` header,
-rate limiting, size/type caps and 24-hour replay window as visitor media
-uploads. The response returns the avatar as a signed proxy URL
-(`{ "avatar_url": "https://.../api/v1/media/..." }`, absolute against the
-base resolved as described above; the raw MXC URL when the media proxy is
-disabled). Replays return the original URL with
-`Idempotent-Replayed: true` and re-apply the profile write so a retry heals
-a partially completed request.
+To set an avatar:
+1. Upload media or reference existing site media to obtain a `MediaReference` (`med_...`).
+2. Submit a `PUT /api/v1/sites/{site_id}/visitors/profile/avatar` request with the `MediaReference`.
 
-The avatar is stored in the virtual user's Matrix profile and propagates to
-the rooms the user has joined as `m.room.member` events
-(MSC4466 `propagate_to: all` query parameter), so Matrix clients and the Cumments
-projection observe it without an event-content fallback. Avatars are
-site-scoped: the virtual user is derived from `site_id + author_public_key`,
-so the same visitor has independent avatars per site.
+To clear an avatar:
+- Submit a `DELETE /api/v1/sites/{site_id}/visitors/profile/avatar` request.
 
-`DELETE /api/v1/sites/{site_id}/visitors/avatar?author_public_key=...&author_signature=...&challenge_response=...`
-
-Removes the avatar. The signature covers
-`["DELETE_AVATAR", site_id, challenge]`; deleting a missing avatar is a
-successful no-op. This natural-idempotent operation does not use
-`Idempotency-Key`.
+See [Visitors documentation](/api/visitors#set-visitor-avatar) for full request specifications and signature envelopes.
 
 ## Site sticker packs
 

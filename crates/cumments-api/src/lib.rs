@@ -13,9 +13,8 @@ use crate::routes::governance::{
     require_claim_token, start_owner_transfer_handler,
 };
 use crate::routes::media::{
-    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, delete_visitor_avatar_handler,
-    list_stickers_handler, media_handler, remove_site_sticker_handler, set_visitor_avatar_handler,
-    upload_media_handler,
+    MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, list_stickers_handler, media_handler,
+    remove_site_sticker_handler, upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::operator::{
@@ -32,7 +31,10 @@ use crate::routes::sites::{
     start_verification_handler,
 };
 use crate::routes::sse::sse_handler;
-use crate::routes::visitors::visitor_profile_handler;
+use crate::routes::visitors::{
+    clear_visitor_avatar_handler, clear_visitor_display_name_handler, set_visitor_avatar_handler,
+    set_visitor_display_name_handler, visitor_profile_handler,
+};
 use crate::site_auth::{enforce_site_auth, public_cors};
 use axum::{
     Router,
@@ -43,9 +45,9 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        GovernanceStore, MatrixDriver, MessageStore, ProjectionRepairStore, RegistryStore,
-        RoleClaimStore, RoomStore, SiteAuthStore, SiteStore, SiteTransferStore, StickerPackStore,
-        SubmissionStore, VirtualUserStore,
+        GovernanceStore, MatrixDriver, MediaReferenceStore, MessageStore, ProfileStore,
+        ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteAuthStore, SiteStore,
+        SiteTransferStore, StickerPackStore, SubmissionStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -80,6 +82,8 @@ pub trait ApiStore:
     + RoleClaimStore
     + SiteTransferStore
     + VirtualUserStore
+    + ProfileStore
+    + MediaReferenceStore
     + Send
     + Sync
 {
@@ -97,6 +101,8 @@ impl<
         + RoleClaimStore
         + SiteTransferStore
         + VirtualUserStore
+        + ProfileStore
+        + MediaReferenceStore
         + Send
         + Sync,
 > ApiStore for T
@@ -241,11 +247,16 @@ pub fn build_router(state: ApiState) -> Router {
             post(location_handler).fallback(method_not_allowed_handler),
         )
         .route(
-            "/api/v1/sites/{site_id}/visitors/avatar",
+            "/api/v1/sites/{site_id}/visitors/profile/display_name",
+            put(set_visitor_display_name_handler)
+                .delete(clear_visitor_display_name_handler)
+                .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/visitors/profile/avatar",
             put(set_visitor_avatar_handler)
-                .delete(delete_visitor_avatar_handler)
-                .fallback(method_not_allowed_handler)
-                .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
+                .delete(clear_visitor_avatar_handler)
+                .fallback(method_not_allowed_handler),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

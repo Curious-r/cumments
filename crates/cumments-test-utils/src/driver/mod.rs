@@ -216,6 +216,22 @@ impl TestDriver {
             .insert((site_id.into(), author_public_key.into()), profile);
         self
     }
+
+    pub async fn set_next_profile_error(&self, error: cumments_core::profile::ProfileDriverError) {
+        *self.next_profile_error.lock().await = Some(error);
+    }
+
+    pub async fn insert_visitor_profile(
+        &self,
+        site_id: impl Into<String>,
+        author_public_key: impl Into<String>,
+        profile: VisitorProfile,
+    ) {
+        self.visitor_profiles
+            .lock()
+            .await
+            .insert((site_id.into(), author_public_key.into()), profile);
+    }
 }
 
 impl Default for TestDriver {

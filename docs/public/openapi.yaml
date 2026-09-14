@@ -1622,60 +1622,30 @@ paths:
                 $ref: "#/components/schemas/RetirementResponse"
         "404":
           $ref: "#/components/responses/Error"
-  /api/v1/sites/{site_id}/visitors/avatar:
+  /api/v1/sites/{site_id}/visitors/profile/display_name:
     parameters:
       - $ref: "#/components/parameters/SiteId"
     put:
       tags: [Comments]
-      summary: Upload and set the visitor avatar
-      operationId: setVisitorAvatar
+      summary: Set the visitor display name
+      operationId: setVisitorDisplayName
       description: |
-        Uploads raw image bytes as the visitor's virtual user and sets the
-        avatar on that virtual user's global profile in one request. Query
-        parameters carry the PoW challenge response and an Ed25519 signature
-        over
-        `UPLOAD_AVATAR/site/mime/sha256_hex(body)/challenge`. Requires the
-        same `Idempotency-Key` header as comment write submissions; replays
-        return the original URL with `Idempotent-Replayed: true`. Avatars are
-        site-scoped and propagate to the user's joined rooms as
-        `m.room.member` events (MSC4466 `propagate_to: all` query parameter).
+        Sets the display name on the visitor's virtual user global Matrix profile.
+        Requires the `Idempotency-Key` header; replays return the operation state
+        with `Idempotent-Replayed: true`. The request body carries the new display name,
+        author public key, challenge response, and an Ed25519 signature over
+        `["SET_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint, challenge]`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
-        - name: mime
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: filename
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: author_public_key
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: author_signature
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: challenge_response
-          in: query
-          required: true
-          schema:
-            type: string
       requestBody:
         required: true
         content:
-          application/octet-stream:
+          application/json:
             schema:
-              type: string
-              format: binary
+              $ref: "#/components/schemas/SetDisplayNameRequest"
       responses:
         "200":
-          description: Avatar set on the virtual user's profile
+          description: Profile mutation completed synchronously
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -1685,61 +1655,189 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [avatar_url]
-                properties:
-                  avatar_url:
-                    type: string
-                    description: >
-                      Signed proxy URL for the uploaded avatar (96×96 crop
-                      variant when the media proxy is enabled; the raw MXC
-                      URL otherwise).
+                $ref: "#/components/schemas/ProfileOperationResponse"
+        "202":
+          description: Profile mutation accepted and pending execution
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileOperationResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
     delete:
       tags: [Comments]
-      summary: Remove the visitor avatar
-      operationId: deleteVisitorAvatar
+      summary: Clear the visitor display name
+      operationId: clearVisitorDisplayName
       description: |
-        Removes the avatar from the visitor's virtual-user profile. This is a
-        natural-idempotent operation and does not use Idempotency-Key. Query
-        parameters carry the PoW challenge response and an Ed25519 signature
-        over `DELETE_AVATAR/site/challenge`. Deleting a missing avatar is a
-        successful no-op.
+        Clears the display name from the visitor's virtual user global Matrix profile.
+        Requires the `Idempotency-Key` header; replays return the operation state
+        with `Idempotent-Replayed: true`. The request body carries the author public key,
+        challenge response, and an Ed25519 signature over
+        `["CLEAR_DISPLAY_NAME", site_id, operation_id, semantic_fingerprint, challenge]`.
       parameters:
-        - name: author_public_key
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: author_signature
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: challenge_response
-          in: query
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClearDisplayNameRequest"
       responses:
         "200":
-          description: Avatar removed
+          description: Profile mutation completed synchronously
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ProfileOperationResponse"
+        "202":
+          description: Profile mutation accepted and pending execution
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileOperationResponse"
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/visitors/profile/avatar:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    put:
+      tags: [Comments]
+      summary: Set the visitor avatar
+      operationId: setVisitorAvatar
+      description: |
+        Sets the avatar on the visitor's virtual user global Matrix profile using
+        an existing site-scoped MediaReference (`med_...`).
+        Requires the `Idempotency-Key` header; replays return the operation state
+        with `Idempotent-Replayed: true`. The request body carries the MediaReference,
+        author public key, challenge response, and an Ed25519 signature over
+        `["SET_AVATAR", site_id, operation_id, semantic_fingerprint, challenge]`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetAvatarRequest"
+      responses:
+        "200":
+          description: Profile mutation completed synchronously
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileOperationResponse"
+        "202":
+          description: Profile mutation accepted and pending execution
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileOperationResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Comments]
+      summary: Clear the visitor avatar
+      operationId: clearVisitorAvatar
+      description: |
+        Clears the avatar from the visitor's virtual user global Matrix profile.
+        Requires the `Idempotency-Key` header; replays return the operation state
+        with `Idempotent-Replayed: true`. The request body carries the author public key,
+        challenge response, and an Ed25519 signature over
+        `["CLEAR_AVATAR", site_id, operation_id, semantic_fingerprint, challenge]`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClearAvatarRequest"
+      responses:
+        "200":
+          description: Profile mutation completed synchronously
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileOperationResponse"
+        "202":
+          description: Profile mutation accepted and pending execution
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileOperationResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
@@ -2316,7 +2414,7 @@ components:
           enum: [ok]
     VisitorProfile:
       type: object
-      required: [visitor_id, display_name, avatar_url]
+      required: [visitor_id, display_name, avatar, avatar_url]
       properties:
         visitor_id:
           type: string
@@ -2324,11 +2422,14 @@ components:
         display_name:
           type: [string, "null"]
           description: Current Matrix profile display name, or null when unset.
+        avatar:
+          type: [string, "null"]
+          description: MediaReference string identifier (`med_...`), or null when unset or unmapped.
         avatar_url:
           type: [string, "null"]
           description: |
             Signed proxy URL (96×96 crop variant when the media proxy is
-            enabled; the raw MXC URL otherwise), or null when unset.
+            enabled), or null when unset or unmapped. Never exposes raw MXC.
     ChallengeResponse:
       type: object
       required: [prefix, difficulty]
@@ -2779,6 +2880,76 @@ components:
           type: string
         challenge_response:
           type: string
+    SetDisplayNameRequest:
+      type: object
+      required: [display_name, author_public_key, author_signature, challenge_response]
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Display name (1-50 Unicode extended grapheme clusters per UAX #29).
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+          description: PoW challenge response `prefix|nonce`.
+    ClearDisplayNameRequest:
+      type: object
+      required: [author_public_key, author_signature, challenge_response]
+      properties:
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+          description: PoW challenge response `prefix|nonce`.
+    SetAvatarRequest:
+      type: object
+      required: [avatar, author_public_key, author_signature, challenge_response]
+      properties:
+        avatar:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: MediaReference string identifier (`med_...`).
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+          description: PoW challenge response `prefix|nonce`.
+    ClearAvatarRequest:
+      type: object
+      required: [author_public_key, author_signature, challenge_response]
+      properties:
+        author_public_key:
+          type: string
+        author_signature:
+          type: string
+        challenge_response:
+          type: string
+          description: PoW challenge response `prefix|nonce`.
+    ProfileOperationResponse:
+      type: object
+      required: [operation_id, status, field]
+      properties:
+        operation_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, dispatching, unknown, completed, failed, aborted]
+        field:
+          type: string
+          enum: [display_name, avatar]
+        value:
+          type: [string, "null"]
+        error:
+          type: [string, "null"]
     RegisterSiteRequest:
       type: object
       properties:

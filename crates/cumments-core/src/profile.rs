@@ -225,6 +225,98 @@ impl ProfileTargetValue {
     }
 }
 
+/// Builds the canonical signature envelope signed for a visitor profile mutation.
+///
+/// Format: `["OP_NAME", site_id, operation_id, semantic_fingerprint, challenge]`
+pub fn profile_signature_message(
+    target_value: &ProfileTargetValue,
+    site_id: &str,
+    operation_id: &str,
+    challenge: &str,
+) -> String {
+    let op_name = match target_value {
+        ProfileTargetValue::SetDisplayName(_) => "SET_DISPLAY_NAME",
+        ProfileTargetValue::ClearDisplayName => "CLEAR_DISPLAY_NAME",
+        ProfileTargetValue::SetAvatar(_) => "SET_AVATAR",
+        ProfileTargetValue::ClearAvatar => "CLEAR_AVATAR",
+    };
+    let fingerprint = target_value.semantic_fingerprint(site_id);
+    crate::identity::signature_message(&[
+        Some(op_name),
+        Some(site_id),
+        Some(operation_id),
+        Some(&fingerprint),
+        Some(challenge),
+    ])
+}
+
+/// Verifies an Ed25519 signature over the canonical profile mutation envelope.
+pub fn verify_profile_signature(
+    public_key_b64: &str,
+    target_value: &ProfileTargetValue,
+    site_id: &str,
+    operation_id: &str,
+    challenge: &str,
+    signature_b64: &str,
+) -> bool {
+    let message = profile_signature_message(target_value, site_id, operation_id, challenge);
+    crate::identity::verify_signature(public_key_b64, &message, signature_b64)
+}
+
+pub fn set_display_name_signature_message(
+    site_id: &str,
+    operation_id: &str,
+    display_name: &str,
+    challenge: &str,
+) -> String {
+    profile_signature_message(
+        &ProfileTargetValue::SetDisplayName(display_name.to_string()),
+        site_id,
+        operation_id,
+        challenge,
+    )
+}
+
+pub fn clear_display_name_signature_message(
+    site_id: &str,
+    operation_id: &str,
+    challenge: &str,
+) -> String {
+    profile_signature_message(
+        &ProfileTargetValue::ClearDisplayName,
+        site_id,
+        operation_id,
+        challenge,
+    )
+}
+
+pub fn set_avatar_signature_message(
+    site_id: &str,
+    operation_id: &str,
+    media_ref: &MediaReference,
+    challenge: &str,
+) -> String {
+    profile_signature_message(
+        &ProfileTargetValue::SetAvatar(media_ref.clone()),
+        site_id,
+        operation_id,
+        challenge,
+    )
+}
+
+pub fn clear_avatar_signature_message(
+    site_id: &str,
+    operation_id: &str,
+    challenge: &str,
+) -> String {
+    profile_signature_message(
+        &ProfileTargetValue::ClearAvatar,
+        site_id,
+        operation_id,
+        challenge,
+    )
+}
+
 /// The outcome of an atomic operation claim attempt for a profile mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileClaimOutcome {
@@ -611,5 +703,128 @@ mod tests {
 
         let amb = ProfileDriverError::Ambiguous("504 Gateway Timeout".to_string());
         assert!(amb.to_string().contains("ambiguous"));
+    }
+
+    #[test]
+    fn profile_signature_canonicalization_and_verification() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+
+        let site = "my-site";
+        let op_id = "op-uuid-123";
+        let chal = "chal-pow-abc";
+
+        let target_set_name = ProfileTargetValue::SetDisplayName("Alice".to_string());
+        let target_clear_name = ProfileTargetValue::ClearDisplayName;
+        let media_ref = MediaReference::new_v4();
+        let target_set_avatar = ProfileTargetValue::SetAvatar(media_ref.clone());
+        let target_clear_avatar = ProfileTargetValue::ClearAvatar;
+
+        // 1. Signature messages follow the canonical envelope structure
+        let msg_set_name = set_display_name_signature_message(site, op_id, "Alice", chal);
+        let expected_fp = target_set_name.semantic_fingerprint(site);
+        assert_eq!(
+            msg_set_name,
+            format!(
+                "[\"SET_DISPLAY_NAME\",\"{}\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_fp, chal
+            )
+        );
+
+        let msg_clear_name = clear_display_name_signature_message(site, op_id, chal);
+        let expected_clear_fp = target_clear_name.semantic_fingerprint(site);
+        assert_eq!(
+            msg_clear_name,
+            format!(
+                "[\"CLEAR_DISPLAY_NAME\",\"{}\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_clear_fp, chal
+            )
+        );
+
+        let msg_set_avatar = set_avatar_signature_message(site, op_id, &media_ref, chal);
+        let expected_av_fp = target_set_avatar.semantic_fingerprint(site);
+        assert_eq!(
+            msg_set_avatar,
+            format!(
+                "[\"SET_AVATAR\",\"{}\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_av_fp, chal
+            )
+        );
+
+        let msg_clear_avatar = clear_avatar_signature_message(site, op_id, chal);
+        let expected_clear_av_fp = target_clear_avatar.semantic_fingerprint(site);
+        assert_eq!(
+            msg_clear_avatar,
+            format!(
+                "[\"CLEAR_AVATAR\",\"{}\",\"{}\",\"{}\",\"{}\"]",
+                site, op_id, expected_clear_av_fp, chal
+            )
+        );
+
+        // 2. Sign and verify valid signatures
+        let sig_set_name =
+            URL_SAFE_NO_PAD.encode(signing_key.sign(msg_set_name.as_bytes()).to_bytes());
+        assert!(verify_profile_signature(
+            &public_key,
+            &target_set_name,
+            site,
+            op_id,
+            chal,
+            &sig_set_name
+        ));
+
+        // 3. Signature for SetDisplayName("Alice") fails if verified against SetDisplayName("Bob")
+        let target_set_bob = ProfileTargetValue::SetDisplayName("Bob".to_string());
+        assert!(!verify_profile_signature(
+            &public_key,
+            &target_set_bob,
+            site,
+            op_id,
+            chal,
+            &sig_set_name
+        ));
+
+        // 4. Signature for SetDisplayName fails on ClearDisplayName
+        assert!(!verify_profile_signature(
+            &public_key,
+            &target_clear_name,
+            site,
+            op_id,
+            chal,
+            &sig_set_name
+        ));
+
+        // 5. Signature bound to site: fails on another site
+        assert!(!verify_profile_signature(
+            &public_key,
+            &target_set_name,
+            "other-site",
+            op_id,
+            chal,
+            &sig_set_name
+        ));
+
+        // 6. Signature bound to operation_id: fails on different operation_id
+        assert!(!verify_profile_signature(
+            &public_key,
+            &target_set_name,
+            site,
+            "other-op-456",
+            chal,
+            &sig_set_name
+        ));
+
+        // 7. Signature bound to PoW challenge: fails on different challenge
+        assert!(!verify_profile_signature(
+            &public_key,
+            &target_set_name,
+            site,
+            op_id,
+            "other-challenge",
+            &sig_set_name
+        ));
     }
 }

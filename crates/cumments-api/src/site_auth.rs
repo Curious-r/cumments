@@ -183,21 +183,12 @@ pub(crate) fn site_id_from_path(path: &str) -> Option<String> {
 /// verification.
 fn is_media_upload_path(path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if segments.len() == 7
+    segments.len() == 7
         && segments[0] == "api"
         && segments[1] == "v1"
         && segments[2] == "sites"
         && segments[4] == "pages"
         && segments[6] == "media"
-    {
-        return true;
-    }
-    segments.len() == 6
-        && segments[0] == "api"
-        && segments[1] == "v1"
-        && segments[2] == "sites"
-        && segments[4] == "visitors"
-        && segments[5] == "avatar"
 }
 
 /// Extracts the single `Origin` header, if any.
@@ -732,8 +723,11 @@ mod tests {
             "/api/v1/sites/my-blog/pages/hello/media/extra"
         ));
         assert!(!is_media_upload_path("/api/v1/sites/my-blog/media"));
-        assert!(is_media_upload_path(
+        assert!(!is_media_upload_path(
             "/api/v1/sites/my-blog/visitors/avatar"
+        ));
+        assert!(!is_media_upload_path(
+            "/api/v1/sites/my-blog/visitors/profile/avatar"
         ));
         assert!(!is_media_upload_path("/health"));
     }

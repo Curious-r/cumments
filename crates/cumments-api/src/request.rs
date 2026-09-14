@@ -299,6 +299,65 @@ pub struct LocationRequest {
     pub challenge_response: String,
 }
 
+/// Request DTO for setting a visitor display name (`PUT .../profile/display_name`).
+#[derive(Debug, Deserialize, Validate)]
+pub struct SetDisplayNameRequest {
+    #[validate(custom(function = "crate::validation::validate_display_name"))]
+    pub display_name: String,
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
+/// Request DTO for clearing a visitor display name (`DELETE .../profile/display_name`).
+#[derive(Debug, Deserialize, Validate)]
+pub struct ClearDisplayNameRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
+/// Request DTO for setting a visitor avatar (`PUT .../profile/avatar`).
+#[derive(Debug, Deserialize, Validate)]
+pub struct SetAvatarRequest {
+    #[validate(length(min = 1, max = 256))]
+    pub avatar: String,
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
+/// Request DTO for clearing a visitor avatar (`DELETE .../profile/avatar`).
+#[derive(Debug, Deserialize, Validate)]
+pub struct ClearAvatarRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub author_public_key: String,
+    #[validate(length(min = 1, max = 256))]
+    pub author_signature: String,
+    #[validate(length(min = 1, max = 1024))]
+    pub challenge_response: String,
+}
+
+/// Response DTO for profile mutation operations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileOperationResponse {
+    pub operation_id: String,
+    pub status: cumments_core::profile::ProfileOperationStatus,
+    pub field: cumments_core::profile::ProfileField,
+    pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -514,6 +514,14 @@ impl MatrixProfileDriver for TestDriver {
             site_id.clone(),
             display_name.to_string(),
         ));
+        let mut profiles = self.visitor_profiles.lock().await;
+        let entry = profiles
+            .entry((site_id.as_str().to_string(), author_public_key.to_string()))
+            .or_insert_with(|| VisitorProfile {
+                display_name: None,
+                avatar_url: None,
+            });
+        entry.display_name = Some(display_name.to_string());
         Ok(())
     }
 
@@ -529,6 +537,12 @@ impl MatrixProfileDriver for TestDriver {
             .lock()
             .await
             .push((author_public_key.to_string(), site_id.clone()));
+        let mut profiles = self.visitor_profiles.lock().await;
+        if let Some(entry) =
+            profiles.get_mut(&(site_id.as_str().to_string(), author_public_key.to_string()))
+        {
+            entry.display_name = None;
+        }
         Ok(())
     }
 
@@ -546,6 +560,14 @@ impl MatrixProfileDriver for TestDriver {
             site_id.clone(),
             avatar_url.to_string(),
         ));
+        let mut profiles = self.visitor_profiles.lock().await;
+        let entry = profiles
+            .entry((site_id.as_str().to_string(), author_public_key.to_string()))
+            .or_insert_with(|| VisitorProfile {
+                display_name: None,
+                avatar_url: None,
+            });
+        entry.avatar_url = Some(avatar_url.to_string());
         Ok(())
     }
 
@@ -561,6 +583,12 @@ impl MatrixProfileDriver for TestDriver {
             .lock()
             .await
             .push((author_public_key.to_string(), site_id.clone()));
+        let mut profiles = self.visitor_profiles.lock().await;
+        if let Some(entry) =
+            profiles.get_mut(&(site_id.as_str().to_string(), author_public_key.to_string()))
+        {
+            entry.avatar_url = None;
+        }
         Ok(())
     }
 }

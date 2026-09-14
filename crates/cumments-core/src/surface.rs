@@ -391,17 +391,31 @@ pub const CAPABILITIES: &[Capability] = &[
         AuditRequirement::Required,
     ),
     capability(
-        "visitor.avatar.set",
-        "Set a visitor avatar.",
+        "visitor.profile.display_name.set",
+        "Set visitor profile display name.",
         RiskTier::Medium,
-        LifecycleKind::Sync,
+        LifecycleKind::Accepted,
         AuditRequirement::Required,
     ),
     capability(
-        "visitor.avatar.delete",
-        "Delete a visitor avatar.",
+        "visitor.profile.display_name.clear",
+        "Clear visitor profile display name.",
         RiskTier::Medium,
-        LifecycleKind::Sync,
+        LifecycleKind::Accepted,
+        AuditRequirement::Required,
+    ),
+    capability(
+        "visitor.profile.avatar.set",
+        "Set visitor profile avatar.",
+        RiskTier::Medium,
+        LifecycleKind::Accepted,
+        AuditRequirement::Required,
+    ),
+    capability(
+        "visitor.profile.avatar.clear",
+        "Clear visitor profile avatar.",
+        RiskTier::Medium,
+        LifecycleKind::Accepted,
         AuditRequirement::Required,
     ),
     capability(
@@ -724,15 +738,27 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     http_operation(
         "PUT",
-        "/api/v1/sites/{site_id}/visitors/avatar",
-        "setVisitorAvatar",
-        "visitor.avatar.set",
+        "/api/v1/sites/{site_id}/visitors/profile/display_name",
+        "setVisitorDisplayName",
+        "visitor.profile.display_name.set",
     ),
     http_operation(
         "DELETE",
-        "/api/v1/sites/{site_id}/visitors/avatar",
-        "deleteVisitorAvatar",
-        "visitor.avatar.delete",
+        "/api/v1/sites/{site_id}/visitors/profile/display_name",
+        "clearVisitorDisplayName",
+        "visitor.profile.display_name.clear",
+    ),
+    http_operation(
+        "PUT",
+        "/api/v1/sites/{site_id}/visitors/profile/avatar",
+        "setVisitorAvatar",
+        "visitor.profile.avatar.set",
+    ),
+    http_operation(
+        "DELETE",
+        "/api/v1/sites/{site_id}/visitors/profile/avatar",
+        "clearVisitorAvatar",
+        "visitor.profile.avatar.clear",
     ),
     http_operation(
         "GET",
@@ -894,6 +920,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 68);
+        assert_eq!(HTTP_OPERATIONS.len(), 70);
     }
 }
