@@ -49,15 +49,15 @@ impl MediaReference {
     }
 
     /// Parse a `MediaReference` from a string slice, validating prefix and UUID format.
+    ///
+    /// Canonicalizes the textual representation to lowercase hyphenated format,
+    /// so case variants of the same UUID resolve to identical `MediaReference` values.
     pub fn parse(s: &str) -> Result<Self, MediaReferenceParseError> {
         let rest = s
             .strip_prefix(MEDIA_REFERENCE_PREFIX)
             .ok_or(MediaReferenceParseError::MissingPrefix)?;
         let uuid = Uuid::parse_str(rest)?;
-        Ok(Self {
-            uuid,
-            canonical: s.to_owned(),
-        })
+        Ok(Self::new(uuid))
     }
 
     /// Returns the underlying UUID component.
@@ -144,6 +144,40 @@ mod tests {
         assert_eq!(parsed.uuid(), Uuid::parse_str(id_str).unwrap());
         assert_eq!(parsed.as_ref(), full.as_str());
         assert_eq!(&*parsed, full.as_str());
+    }
+
+    #[test]
+    fn uppercase_and_lowercase_inputs_canonicalize_identically() {
+        let lower_input = "cumments-media:550e8400-e29b-41d4-a716-446655440000";
+        let upper_input = "cumments-media:550E8400-E29B-41D4-A716-446655440000";
+        let mixed_input = "cumments-media:550e8400-E29B-41d4-A716-446655440000";
+
+        let lower_ref = MediaReference::parse(lower_input).expect("parse lower");
+        let upper_ref = MediaReference::parse(upper_input).expect("parse upper");
+        let mixed_ref = MediaReference::parse(mixed_input).expect("parse mixed");
+
+        // Canonical equality
+        assert_eq!(lower_ref, upper_ref);
+        assert_eq!(upper_ref, mixed_ref);
+
+        // Display and as_str always produce lowercase canonical form
+        assert_eq!(lower_ref.as_str(), lower_input);
+        assert_eq!(upper_ref.as_str(), lower_input);
+        assert_eq!(mixed_ref.as_str(), lower_input);
+
+        assert_eq!(lower_ref.to_string(), lower_input);
+        assert_eq!(upper_ref.to_string(), lower_input);
+        assert_eq!(mixed_ref.to_string(), lower_input);
+
+        // Serialization always produces lowercase canonical form
+        let json_from_upper = serde_json::to_string(&upper_ref).expect("serialize");
+        assert_eq!(json_from_upper, format!("\"{lower_input}\""));
+
+        // Deserialization canonicalizes uppercase
+        let deserialized: MediaReference =
+            serde_json::from_str(&format!("\"{upper_input}\"")).expect("deserialize");
+        assert_eq!(deserialized, lower_ref);
+        assert_eq!(deserialized.as_str(), lower_input);
     }
 
     #[test]
