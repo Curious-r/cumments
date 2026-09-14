@@ -17,9 +17,9 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
 use cumments_core::media_reference::MediaReferenceSource;
-use cumments_core::models::{PageSlug, SiteId};
+use cumments_core::models::{PageSlug, SiteId, VisitorProfile};
 use cumments_core::ports::{
-    MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
+    MatrixDriver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
 };
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
@@ -38,7 +38,10 @@ fn test_db_url(name: &str) -> String {
     format!("sqlite://{}", path.display())
 }
 
-fn create_processor(store: Arc<DbStore>) -> EventProcessor {
+fn create_processor_with_driver(
+    store: Arc<DbStore>,
+    driver: Option<Arc<dyn MatrixDriver>>,
+) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
     EventProcessor::new(EventProcessorDeps {
         site_store: store.clone(),
@@ -56,7 +59,7 @@ fn create_processor(store: Arc<DbStore>) -> EventProcessor {
         site_service: Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as Arc<dyn SiteStore>
         )),
-        driver: None,
+        driver,
         operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
@@ -65,6 +68,10 @@ fn create_processor(store: Arc<DbStore>) -> EventProcessor {
         server_name: Some("hs".to_string()),
         media_reference_store: Some(store.clone()),
     })
+}
+
+fn create_processor(store: Arc<DbStore>) -> EventProcessor {
+    create_processor_with_driver(store, None)
 }
 
 #[tokio::test]
@@ -272,18 +279,27 @@ async fn explicit_external_discovery_creates_external_mapping() {
         .await
         .expect("ensure site");
 
-    let processor = create_processor(store.clone());
-    let reconciler = processor
-        .avatar_reconciler()
-        .expect("avatar reconciler present");
-
+    let driver = Arc::new(common::TestDriver::new());
+    let author_pubkey = "author-ext-discovery-1";
     let ext_mxc = "mxc://hs/explicit-external-avatar-999";
 
-    // Explicit external discovery path
-    let media_ref = reconciler
-        .reconcile_external_avatar(&site_id, ext_mxc)
+    // Simulate an authoritative Matrix profile reading (external writer set avatar on global profile)
+    driver.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), author_pubkey.to_string()),
+        VisitorProfile {
+            display_name: Some("External Author".to_string()),
+            avatar_url: Some(ext_mxc.to_string()),
+        },
+    );
+
+    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+
+    // 1. Authoritative external Matrix profile observation feeds into actual reconciliation workflow
+    let media_ref = processor
+        .reconcile_visitor_profile(&site_id, author_pubkey)
         .await
-        .expect("reconcile external avatar");
+        .expect("reconcile visitor profile")
+        .expect("avatar reference returned");
 
     assert!(media_ref.as_str().starts_with("cumments-media:"));
 
@@ -297,11 +313,84 @@ async fn explicit_external_discovery_creates_external_mapping() {
     assert_eq!(record.mxc_uri, ext_mxc);
     assert!(
         record.is_external,
-        "explicit external discovery must record is_external = true"
+        "authoritative external Matrix profile observation must record is_external = true"
     );
     assert_eq!(record.source(), MediaReferenceSource::External);
 
-    // Ownership table must be completely untouched
+    // 2. Repeated external profile observation reuses the exact same reference
+    let media_ref_repeated = processor
+        .reconcile_visitor_profile(&site_id, author_pubkey)
+        .await
+        .expect("repeat reconcile")
+        .expect("same reference");
+    assert_eq!(media_ref, media_ref_repeated);
+
+    // 3. Explicit external profile avatar reconciliation entrypoint also creates/reuses external mapping
+    let direct_ext_mxc = "mxc://hs/explicit-direct-external-avatar-888";
+    let direct_ref = processor
+        .reconcile_external_profile_avatar(&site_id, direct_ext_mxc)
+        .await
+        .expect("reconcile direct external");
+    let direct_rec = store
+        .get_record(&site_id, &direct_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(direct_rec.is_external);
+    assert_eq!(direct_rec.source(), MediaReferenceSource::External);
+
+    // 4. Case A: Cumments-owned media observed via profile read is NOT external
+    let cumments_mxc = "mxc://hs/cumments-owned-profile-avatar";
+    store
+        .record_media_upload(
+            cumments_mxc,
+            "cumments-author-key",
+            site_id.as_str(),
+            Some("post-1"),
+        )
+        .await
+        .expect("record upload");
+    driver.visitor_profiles.lock().await.insert(
+        (
+            site_id.as_str().to_string(),
+            "cumments-author-key".to_string(),
+        ),
+        VisitorProfile {
+            display_name: Some("Cumments User".to_string()),
+            avatar_url: Some(cumments_mxc.to_string()),
+        },
+    );
+    let cumments_ref = processor
+        .reconcile_visitor_profile(&site_id, "cumments-author-key")
+        .await
+        .expect("reconcile cumments user profile")
+        .expect("cumments avatar ref");
+    let cumments_rec = store
+        .get_record(&site_id, &cumments_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !cumments_rec.is_external,
+        "profile avatar with authoritative local upload record must be is_external = false"
+    );
+    assert_eq!(cumments_rec.source(), MediaReferenceSource::Cumments);
+
+    // 5. Profile with no avatar returns None without error
+    driver.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), "no-avatar-user".to_string()),
+        VisitorProfile {
+            display_name: Some("No Avatar".to_string()),
+            avatar_url: None,
+        },
+    );
+    let no_avatar_ref = processor
+        .reconcile_visitor_profile(&site_id, "no-avatar-user")
+        .await
+        .expect("reconcile no avatar profile");
+    assert!(no_avatar_ref.is_none());
+
+    // 6. Ownership table must be completely untouched by external reconciliation
     let is_owned = store
         .media_upload_owned_by(ext_mxc, "@someone:hs", site_id.as_str(), "page")
         .await
@@ -309,6 +398,14 @@ async fn explicit_external_discovery_creates_external_mapping() {
     assert!(
         !is_owned,
         "external discovery must never touch media_uploads"
+    );
+    let is_direct_owned = store
+        .media_upload_owned_by(direct_ext_mxc, "@someone:hs", site_id.as_str(), "page")
+        .await
+        .expect("check upload owned");
+    assert!(
+        !is_direct_owned,
+        "direct external discovery must never touch media_uploads"
     );
 }
 
@@ -330,7 +427,8 @@ async fn existing_provenance_stability_across_mixed_observations() {
         .await
         .expect("register room");
 
-    let processor = create_processor(store.clone());
+    let driver = Arc::new(common::TestDriver::new());
+    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
     let reconciler = processor.avatar_reconciler().unwrap();
 
     // 1. Existing false + later external observation -> remains false
@@ -357,6 +455,29 @@ async fn existing_provenance_stability_across_mixed_observations() {
         "existing is_external = false must not be flipped by subsequent external observation"
     );
     assert_eq!(rec1.source(), MediaReferenceSource::Cumments);
+
+    // Later external profile read of same MXC also returns same ref and does NOT flip is_external
+    driver.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), "alice-key".to_string()),
+        VisitorProfile {
+            display_name: Some("Alice".to_string()),
+            avatar_url: Some(cumments_mxc.to_string()),
+        },
+    );
+    let profile_observed_ref = processor
+        .reconcile_visitor_profile(&site_id, "alice-key")
+        .await
+        .expect("reconcile profile")
+        .expect("ref returned");
+    assert_eq!(cumments_ref, profile_observed_ref);
+
+    let rec1_after_profile = store
+        .get_record(&site_id, &cumments_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!rec1_after_profile.is_external);
+    assert_eq!(rec1_after_profile.source(), MediaReferenceSource::Cumments);
 
     // Subsequent room member ingestion also preserves is_external = false
     processor
@@ -394,6 +515,25 @@ async fn existing_provenance_stability_across_mixed_observations() {
     let rec2 = store.get_record(&site_id, &ext_ref).await.unwrap().unwrap();
     assert!(rec2.is_external);
     assert_eq!(rec2.source(), MediaReferenceSource::External);
+
+    // Later profile observation of the same MXC preserves is_external = true
+    driver.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), "bob-key".to_string()),
+        VisitorProfile {
+            display_name: Some("Bob".to_string()),
+            avatar_url: Some(ext_mxc.to_string()),
+        },
+    );
+    let ext_profile_ref = processor
+        .reconcile_visitor_profile(&site_id, "bob-key")
+        .await
+        .expect("reconcile profile")
+        .expect("ref returned");
+    assert_eq!(ext_ref, ext_profile_ref);
+
+    let rec2_after_profile = store.get_record(&site_id, &ext_ref).await.unwrap().unwrap();
+    assert!(rec2_after_profile.is_external);
+    assert_eq!(rec2_after_profile.source(), MediaReferenceSource::External);
 
     // Later normal m.room.member observation of the same MXC
     processor
@@ -571,8 +711,25 @@ async fn repeated_ingestion_and_restart_durability() {
 
     assert_eq!(
         store.find_reference(&site_id, mxc_uri).await.unwrap(),
-        Some(media_ref)
+        Some(media_ref.clone())
     );
+
+    // Profile observation on restarted processor also yields the same reference
+    let driver_v2 = Arc::new(common::TestDriver::new());
+    driver_v2.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), "alice-author-key".to_string()),
+        VisitorProfile {
+            display_name: Some("Alice".to_string()),
+            avatar_url: Some(mxc_uri.to_string()),
+        },
+    );
+    let processor_v2_with_driver = create_processor_with_driver(store.clone(), Some(driver_v2));
+    let profile_reloaded_ref = processor_v2_with_driver
+        .reconcile_visitor_profile(&site_id, "alice-author-key")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(media_ref, profile_reloaded_ref);
 
     // Ensure media_uploads remains empty throughout
     let final_unused = store

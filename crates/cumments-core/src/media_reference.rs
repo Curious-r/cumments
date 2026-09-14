@@ -191,6 +191,19 @@ impl ExternalAvatarReconciler {
             .await
     }
 
+    /// Explicit external profile avatar reconciliation entrypoint.
+    ///
+    /// Reconciles an avatar MXC observed from an external Matrix profile into a durable [`MediaReference`].
+    /// - If previously unseen, creates a new mapping marked `MediaReferenceSource::External` (`is_external = true`).
+    /// - If already known, reuses the existing mapping without modifying its provenance.
+    pub async fn reconcile_external_profile_avatar(
+        &self,
+        site_id: &crate::models::SiteId,
+        mxc_uri: &str,
+    ) -> anyhow::Result<MediaReference> {
+        self.reconcile_external_avatar(site_id, mxc_uri).await
+    }
+
     /// Alias for [`Self::reconcile_external_avatar`].
     pub async fn reconcile_avatar(
         &self,

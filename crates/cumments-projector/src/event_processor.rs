@@ -22,12 +22,12 @@ use cumments_core::{
         validate_governance_user_id,
     },
     identity::{post_signature_message, signature_message},
-    media_reference::{ExternalAvatarReconciler, MediaReferenceSource},
+    media_reference::{ExternalAvatarReconciler, MediaReference, MediaReferenceSource},
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
         PollEnd, PollVote, ProjectionRepairInput, Reaction, RoomIdentity, RoomMember,
-        RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion, TextStyle,
+        RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion, TextStyle, VisitorProfile,
     },
     poll::PollStatus,
     ports::{
@@ -1254,6 +1254,86 @@ impl EventProcessor {
 
     pub fn avatar_reconciler(&self) -> Option<&ExternalAvatarReconciler> {
         self.avatar_reconciler.as_ref()
+    }
+
+    /// Reconciles an authoritative Matrix visitor profile reading into a durable [`MediaReference`].
+    ///
+    /// 1. Queries the homeserver via `driver.get_profile(author_public_key, site_id)`
+    ///    (`GET /_matrix/client/v3/profile/{userId}`).
+    /// 2. If an avatar MXC URI is present:
+    ///    - If an existing mapping exists for `(site_id, mxc)`, reuses it and preserves its provenance.
+    ///    - If no mapping exists:
+    ///      - If `media_uploads` contains this MXC for the site, records `MediaReferenceSource::Cumments` (`is_external = false`).
+    ///      - Otherwise, records `MediaReferenceSource::External` (`is_external = true`).
+    /// 3. Returns the resolved or newly allocated `MediaReference`, or `Ok(None)` if no avatar is set or no profile exists.
+    pub async fn reconcile_visitor_profile(
+        &self,
+        site_id: &SiteId,
+        author_public_key: &str,
+    ) -> Result<Option<MediaReference>> {
+        let Some(ref driver) = self.driver else {
+            return Ok(None);
+        };
+        let profile = driver.get_profile(author_public_key, site_id).await?;
+        let Some(profile) = profile else {
+            return Ok(None);
+        };
+        self.reconcile_observed_profile(site_id, &profile).await
+    }
+
+    /// Reconciles an observed [`VisitorProfile`] from an authoritative Matrix read into a durable [`MediaReference`].
+    pub async fn reconcile_observed_profile(
+        &self,
+        site_id: &SiteId,
+        profile: &VisitorProfile,
+    ) -> Result<Option<MediaReference>> {
+        let Some(ref media_store) = self.media_reference_store else {
+            return Ok(None);
+        };
+        let Some(ref mxc) = profile.avatar_url else {
+            return Ok(None);
+        };
+        if !mxc.starts_with("mxc://") {
+            return Ok(None);
+        }
+
+        // Fast path: if mapping already exists, preserve its existing provenance
+        if let Some(existing) = media_store.find_reference(site_id, mxc).await? {
+            return Ok(Some(existing));
+        }
+
+        // Authoritative local check: did Cumments upload this media for this site?
+        let source = if self
+            .message_store
+            .has_media_upload_for_site(site_id.as_str(), mxc)
+            .await?
+        {
+            MediaReferenceSource::Cumments
+        } else {
+            MediaReferenceSource::External
+        };
+
+        let media_ref = media_store
+            .get_or_create_reference(site_id, mxc, source)
+            .await?;
+        Ok(Some(media_ref))
+    }
+
+    /// Explicit external profile avatar reconciliation entrypoint.
+    ///
+    /// Reconciles an avatar MXC observed from an external Matrix profile into a durable [`MediaReference`].
+    pub async fn reconcile_external_profile_avatar(
+        &self,
+        site_id: &SiteId,
+        mxc_uri: &str,
+    ) -> Result<MediaReference> {
+        let reconciler = self
+            .avatar_reconciler
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("media reference store not configured"))?;
+        reconciler
+            .reconcile_external_profile_avatar(site_id, mxc_uri)
+            .await
     }
 
     pub async fn start_event_capture(&self) {
