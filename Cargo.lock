@@ -1036,6 +1036,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "cumments-core",
+ "cumments-test-utils",
  "sea-orm",
  "sea-orm-migration",
  "serde_json",

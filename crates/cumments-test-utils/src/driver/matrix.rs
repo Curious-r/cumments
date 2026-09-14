@@ -9,7 +9,8 @@
 use super::TestDriver;
 use cumments_core::{
     models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
-    ports::{MatrixDriver, StateRedactionRepairer},
+    ports::{MatrixDriver, MatrixProfileDriver, StateRedactionRepairer},
+    profile::ProfileDriverError,
 };
 
 #[async_trait::async_trait]
@@ -494,5 +495,72 @@ impl MatrixDriver for TestDriver {
 impl StateRedactionRepairer for TestDriver {
     async fn repair_state_redaction(&self, _target_event_id: &str) -> anyhow::Result<()> {
         unimplemented!("not used in this test")
+    }
+}
+
+#[async_trait::async_trait]
+impl MatrixProfileDriver for TestDriver {
+    async fn set_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        display_name: &str,
+    ) -> Result<(), ProfileDriverError> {
+        if let Some(err) = self.next_profile_error.lock().await.take() {
+            return Err(err);
+        }
+        self.set_display_name_calls.lock().await.push((
+            author_public_key.to_string(),
+            site_id.clone(),
+            display_name.to_string(),
+        ));
+        Ok(())
+    }
+
+    async fn clear_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<(), ProfileDriverError> {
+        if let Some(err) = self.next_profile_error.lock().await.take() {
+            return Err(err);
+        }
+        self.clear_display_name_calls
+            .lock()
+            .await
+            .push((author_public_key.to_string(), site_id.clone()));
+        Ok(())
+    }
+
+    async fn set_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: &str,
+    ) -> Result<(), ProfileDriverError> {
+        if let Some(err) = self.next_profile_error.lock().await.take() {
+            return Err(err);
+        }
+        self.set_avatar_calls.lock().await.push((
+            author_public_key.to_string(),
+            site_id.clone(),
+            avatar_url.to_string(),
+        ));
+        Ok(())
+    }
+
+    async fn clear_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<(), ProfileDriverError> {
+        if let Some(err) = self.next_profile_error.lock().await.take() {
+            return Err(err);
+        }
+        self.clear_avatar_calls
+            .lock()
+            .await
+            .push((author_public_key.to_string(), site_id.clone()));
+        Ok(())
     }
 }

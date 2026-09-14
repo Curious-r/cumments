@@ -9,7 +9,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cumments_core::{
     models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
-    ports::MatrixDriver,
+    ports::{MatrixDriver, MatrixProfileDriver},
+    profile::ProfileDriverError,
 };
 
 #[async_trait]
@@ -332,5 +333,45 @@ impl MatrixDriver for AppServiceMatrixDriver {
 
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         self.invite_user_impl(room_id, user_id).await
+    }
+}
+
+#[async_trait]
+impl MatrixProfileDriver for AppServiceMatrixDriver {
+    async fn set_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        display_name: &str,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        self.set_display_name_impl(author_public_key, site_id, display_name)
+            .await
+    }
+
+    async fn clear_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        self.clear_display_name_impl(author_public_key, site_id)
+            .await
+    }
+
+    async fn set_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: &str,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        self.set_avatar_impl(author_public_key, site_id, avatar_url)
+            .await
+    }
+
+    async fn clear_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        self.clear_avatar_impl(author_public_key, site_id).await
     }
 }

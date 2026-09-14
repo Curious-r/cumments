@@ -4,7 +4,8 @@ use bytes::Bytes;
 use cumments_core::{
     identity::derive_visitor_id_from_public_key,
     models::{CommentMedia, MatrixEvent, PageSlug, RoomEventPage, SiteId, VisitorProfile},
-    ports::MatrixDriver,
+    ports::{MatrixDriver, MatrixProfileDriver},
+    profile::ProfileDriverError,
 };
 use tracing::{debug, info};
 
@@ -412,6 +413,65 @@ impl MatrixDriver for LoggingMatrixDriver {
 
     async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
         info!("LOGGING: Invite {user_id} to {room_id} (no-op)");
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MatrixProfileDriver for LoggingMatrixDriver {
+    async fn set_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        display_name: &str,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        info!(
+            "LOGGING: Set display name to {:?} for {} on {} (no-op)",
+            display_name,
+            author_public_key,
+            site_id.as_str()
+        );
+        Ok(())
+    }
+
+    async fn clear_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        info!(
+            "LOGGING: Clear display name for {} on {} (no-op)",
+            author_public_key,
+            site_id.as_str()
+        );
+        Ok(())
+    }
+
+    async fn set_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: &str,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        info!(
+            "LOGGING: Set avatar to {:?} for {} on {} (no-op)",
+            avatar_url,
+            author_public_key,
+            site_id.as_str()
+        );
+        Ok(())
+    }
+
+    async fn clear_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> std::result::Result<(), ProfileDriverError> {
+        info!(
+            "LOGGING: Clear avatar for {} on {} (no-op)",
+            author_public_key,
+            site_id.as_str()
+        );
         Ok(())
     }
 }

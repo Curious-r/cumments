@@ -5,12 +5,15 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::canonical::CanonicalJson;
 use crate::media_reference::MediaReference;
 use crate::models::SiteId;
+use crate::ports::{MatrixProfileDriver, MediaReferenceResolver, ProfileStore};
 
 /// Error parsing a `ProfileField` from a string.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -156,6 +159,111 @@ impl ProfileTargetValue {
     pub fn is_clear(&self) -> bool {
         matches!(self, Self::ClearDisplayName | Self::ClearAvatar)
     }
+
+    /// Converts this mutation into its canonical JSON version-1 representation.
+    pub fn to_canonical_json(&self, site_id: &str) -> CanonicalJson {
+        match self {
+            Self::SetDisplayName(name) => CanonicalJson::array(vec![
+                CanonicalJson::string("SET_DISPLAY_NAME"),
+                CanonicalJson::string(site_id),
+                CanonicalJson::string(name),
+            ]),
+            Self::ClearDisplayName => CanonicalJson::array(vec![
+                CanonicalJson::string("CLEAR_DISPLAY_NAME"),
+                CanonicalJson::string(site_id),
+            ]),
+            Self::SetAvatar(media_ref) => CanonicalJson::array(vec![
+                CanonicalJson::string("SET_AVATAR"),
+                CanonicalJson::string(site_id),
+                CanonicalJson::string(media_ref.as_str()),
+            ]),
+            Self::ClearAvatar => CanonicalJson::array(vec![
+                CanonicalJson::string("CLEAR_AVATAR"),
+                CanonicalJson::string(site_id),
+            ]),
+        }
+    }
+
+    /// Computes the hex-encoded SHA-256 semantic fingerprint over the canonical JSON bytes.
+    pub fn semantic_fingerprint(&self, site_id: &str) -> String {
+        crate::site_auth::sha256_hex(&self.to_canonical_json(site_id).to_canonical_bytes())
+    }
+
+    /// Serializes this semantic value for SQLite storage (NULL for explicit clear).
+    pub fn to_stored(&self) -> Option<String> {
+        match self {
+            Self::ClearDisplayName | Self::ClearAvatar => None,
+            Self::SetDisplayName(name) => Some(name.clone()),
+            Self::SetAvatar(media_ref) => Some(media_ref.to_string()),
+        }
+    }
+
+    /// Deserializes a stored SQLite value (or NULL for clear) given the target field.
+    pub fn from_stored(field: ProfileField, stored: Option<&str>) -> Result<Self, String> {
+        match (field, stored) {
+            (ProfileField::DisplayName, None) => Ok(Self::ClearDisplayName),
+            (ProfileField::Avatar, None) => Ok(Self::ClearAvatar),
+            (ProfileField::DisplayName, Some(s)) => {
+                if s.starts_with('{')
+                    && let Ok(val) = serde_json::from_str::<Self>(s)
+                {
+                    return Ok(val);
+                }
+                Ok(Self::SetDisplayName(s.to_string()))
+            }
+            (ProfileField::Avatar, Some(s)) => {
+                if s.starts_with('{')
+                    && let Ok(val) = serde_json::from_str::<Self>(s)
+                {
+                    return Ok(val);
+                }
+                let media_ref = MediaReference::parse(s)
+                    .map_err(|e| format!("invalid media reference in stored profile op: {e}"))?;
+                Ok(Self::SetAvatar(media_ref))
+            }
+        }
+    }
+}
+
+/// The outcome of an atomic operation claim attempt for a profile mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileClaimOutcome {
+    /// Newly claimed operation; persisted in `Pending` status with allocated sequence number.
+    New(ProfileOperation),
+    /// Idempotent replay of an existing operation with identical author and semantic intent.
+    Replay(ProfileOperation),
+    /// Conflicting reuse of `operation_id` with different author, site, or semantic fingerprint.
+    Conflict,
+}
+
+/// Profile mutation errors categorized strictly by determinism for safe state transitions.
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum ProfileDriverError {
+    /// Deterministic failure downstream (HTTP 4xx validation or client error).
+    /// Safely transitions to `Failed`.
+    #[error("deterministic downstream failure: {0}")]
+    Deterministic(String),
+
+    /// Ambiguous outcome downstream (HTTP 5xx, network timeout, connection lost).
+    /// Must transition to `Unknown` to prevent split-brain and stale overwrites.
+    #[error("ambiguous downstream outcome: {0}")]
+    Ambiguous(String),
+}
+
+/// Result of an attempt to execute a profile mutation operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileOperationExecutionResult {
+    /// Operation successfully dispatched and confirmed downstream on Matrix.
+    Completed,
+    /// Operation deterministically failed downstream on Matrix.
+    Failed(String),
+    /// Operation dispatch outcome is ambiguous (timeout, connection drop).
+    Unknown(String),
+    /// Operation is blocked from execution because an earlier operation for this
+    /// visitor + field is still unresolved (`Pending`, `Dispatching`, `Unknown`).
+    Blocked(String),
+    /// Operation was already processed to a terminal state (`Completed`, `Failed`, `Aborted`).
+    AlreadyProcessed(ProfileOperation),
 }
 
 /// The domain representation of a durable profile mutation operation.
@@ -188,6 +296,148 @@ pub struct ProfileOperation {
     pub updated_at: DateTime<Utc>,
     /// Terminal resolution timestamp (when transitioned to Completed, Failed, or Aborted).
     pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// Durable executor for visitor profile mutations.
+///
+/// Strictly enforces same-field serialization without in-memory locks, coordinates
+/// with Matrix homeserver Client-Server profile APIs, and records terminal or
+/// ambiguous outcomes according to frozen architecture invariants.
+pub struct ProfileOperationExecutor {
+    store: Arc<dyn ProfileStore>,
+    driver: Arc<dyn MatrixProfileDriver>,
+    media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
+}
+
+impl ProfileOperationExecutor {
+    pub fn new(
+        store: Arc<dyn ProfileStore>,
+        driver: Arc<dyn MatrixProfileDriver>,
+        media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
+    ) -> Self {
+        Self {
+            store,
+            driver,
+            media_resolver,
+        }
+    }
+
+    /// Attempts to execute the specified operation by ID.
+    ///
+    /// Respects same-field serialization invariants:
+    /// - If earlier unresolved operations exist for this (visitor, field), execution is blocked.
+    /// - If currently in `Dispatching` or `Unknown`, execution is blocked.
+    /// - If terminal, returns `AlreadyProcessed`.
+    /// - If successfully claimed, transitions to `Dispatching`, calls driver, and transitions to
+    ///   `Completed`, `Failed`, or `Unknown`.
+    pub async fn execute(
+        &self,
+        operation_id: &str,
+    ) -> anyhow::Result<ProfileOperationExecutionResult> {
+        let op = match self.store.get_profile_operation(operation_id).await? {
+            Some(op) => op,
+            None => anyhow::bail!("profile operation '{operation_id}' not found"),
+        };
+
+        if op.status.is_terminal() {
+            return Ok(ProfileOperationExecutionResult::AlreadyProcessed(op));
+        }
+
+        if op.status == ProfileOperationStatus::Unknown {
+            return Ok(ProfileOperationExecutionResult::Blocked(
+                "operation is in unknown status and cannot be re-executed".to_string(),
+            ));
+        }
+
+        if op.status == ProfileOperationStatus::Dispatching {
+            return Ok(ProfileOperationExecutionResult::Blocked(
+                "operation is currently dispatching".to_string(),
+            ));
+        }
+
+        let claimed = self.store.claim_for_execution(operation_id).await?;
+        if !claimed {
+            return Ok(ProfileOperationExecutionResult::Blocked(
+                "operation is blocked by an earlier unresolved operation for this field"
+                    .to_string(),
+            ));
+        }
+
+        // Lease acquired, operation is in Dispatching. Dispatch to Matrix driver.
+        let driver_res = match &op.target_value {
+            ProfileTargetValue::SetDisplayName(name) => {
+                self.driver
+                    .set_display_name(&op.author_public_key, &op.site_id, name)
+                    .await
+            }
+            ProfileTargetValue::ClearDisplayName => {
+                self.driver
+                    .clear_display_name(&op.author_public_key, &op.site_id)
+                    .await
+            }
+            ProfileTargetValue::SetAvatar(media_ref) => {
+                let mxc = match &self.media_resolver {
+                    Some(resolver) => resolver.resolve_mxc(&op.site_id, media_ref).await?,
+                    None => None,
+                };
+                match mxc {
+                    Some(mxc_url) => {
+                        self.driver
+                            .set_avatar(&op.author_public_key, &op.site_id, &mxc_url)
+                            .await
+                    }
+                    None => {
+                        let err = format!(
+                            "unresolvable media reference '{media_ref}' for site '{}'",
+                            op.site_id.as_str()
+                        );
+                        self.store.record_failed(operation_id, &err).await?;
+                        return Ok(ProfileOperationExecutionResult::Failed(err));
+                    }
+                }
+            }
+            ProfileTargetValue::ClearAvatar => {
+                self.driver
+                    .clear_avatar(&op.author_public_key, &op.site_id)
+                    .await
+            }
+        };
+
+        match driver_res {
+            Ok(()) => {
+                self.store.record_completed(operation_id, None).await?;
+                Ok(ProfileOperationExecutionResult::Completed)
+            }
+            Err(ProfileDriverError::Deterministic(err)) => {
+                self.store.record_failed(operation_id, &err).await?;
+                Ok(ProfileOperationExecutionResult::Failed(err))
+            }
+            Err(ProfileDriverError::Ambiguous(err)) => {
+                self.store.record_unknown(operation_id, &err).await?;
+                Ok(ProfileOperationExecutionResult::Unknown(err))
+            }
+        }
+    }
+
+    /// Attempts to execute the next pending operation for the given visitor and field.
+    pub async fn execute_next(
+        &self,
+        author_public_key: &str,
+        field: ProfileField,
+    ) -> anyhow::Result<Option<ProfileOperationExecutionResult>> {
+        let next_op = self
+            .store
+            .get_next_executable_operation(author_public_key, field)
+            .await?;
+
+        match next_op {
+            Some(op) => {
+                let res = self.execute(&op.operation_id).await?;
+                Ok(Some(res))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -285,5 +535,77 @@ mod tests {
             let deserialized: ProfileTargetValue = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, target);
         }
+    }
+
+    #[test]
+    fn profile_target_value_canonical_and_fingerprint() {
+        let name_alice = ProfileTargetValue::SetDisplayName("Alice".to_string());
+        let name_bob = ProfileTargetValue::SetDisplayName("Bob".to_string());
+        let clear_name = ProfileTargetValue::ClearDisplayName;
+
+        let fp_alice = name_alice.semantic_fingerprint("blog");
+        let fp_alice_again = name_alice.semantic_fingerprint("blog");
+        let fp_alice_other_site = name_alice.semantic_fingerprint("other-blog");
+        let fp_bob = name_bob.semantic_fingerprint("blog");
+        let fp_clear = clear_name.semantic_fingerprint("blog");
+
+        assert_eq!(fp_alice, fp_alice_again);
+        assert_ne!(fp_alice, fp_alice_other_site);
+        assert_ne!(fp_alice, fp_bob);
+        assert_ne!(fp_alice, fp_clear);
+
+        let media1 = MediaReference::new_v4();
+        let media2 = MediaReference::new_v4();
+        let avatar1 = ProfileTargetValue::SetAvatar(media1);
+        let avatar2 = ProfileTargetValue::SetAvatar(media2);
+        let clear_avatar = ProfileTargetValue::ClearAvatar;
+
+        let fp_av1 = avatar1.semantic_fingerprint("blog");
+        let fp_av2 = avatar2.semantic_fingerprint("blog");
+        let fp_clear_av = clear_avatar.semantic_fingerprint("blog");
+
+        assert_ne!(fp_av1, fp_av2);
+        assert_ne!(fp_av1, fp_clear_av);
+    }
+
+    #[test]
+    fn profile_target_value_stored_roundtrip() {
+        let name_val = ProfileTargetValue::SetDisplayName("Alice".to_string());
+        let stored_name = name_val.to_stored();
+        assert_eq!(stored_name.as_deref(), Some("Alice"));
+        let recovered_name =
+            ProfileTargetValue::from_stored(ProfileField::DisplayName, stored_name.as_deref())
+                .unwrap();
+        assert_eq!(recovered_name, name_val);
+
+        let clear_name = ProfileTargetValue::ClearDisplayName;
+        assert_eq!(clear_name.to_stored(), None);
+        let recovered_clear_name =
+            ProfileTargetValue::from_stored(ProfileField::DisplayName, None).unwrap();
+        assert_eq!(recovered_clear_name, clear_name);
+
+        let media = MediaReference::new_v4();
+        let avatar_val = ProfileTargetValue::SetAvatar(media.clone());
+        let stored_avatar = avatar_val.to_stored();
+        assert_eq!(stored_avatar.as_deref(), Some(media.as_str()));
+        let recovered_avatar =
+            ProfileTargetValue::from_stored(ProfileField::Avatar, stored_avatar.as_deref())
+                .unwrap();
+        assert_eq!(recovered_avatar, avatar_val);
+
+        let clear_avatar = ProfileTargetValue::ClearAvatar;
+        assert_eq!(clear_avatar.to_stored(), None);
+        let recovered_clear_avatar =
+            ProfileTargetValue::from_stored(ProfileField::Avatar, None).unwrap();
+        assert_eq!(recovered_clear_avatar, clear_avatar);
+    }
+
+    #[test]
+    fn profile_driver_error_display() {
+        let det = ProfileDriverError::Deterministic("400 Bad Request".to_string());
+        assert!(det.to_string().contains("deterministic"));
+
+        let amb = ProfileDriverError::Ambiguous("504 Gateway Timeout".to_string());
+        assert!(amb.to_string().contains("ambiguous"));
     }
 }

@@ -2,6 +2,7 @@ use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use crate::canonical::CanonicalJson;
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry, SiteTransfer};
+use crate::media_reference::MediaReference;
 use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
@@ -13,6 +14,9 @@ use crate::models::{
     RoomUpgradeIntent, SiteId, SseOutbox, SubmissionCompletion, VisitorProfile,
 };
 use crate::poll::{PollSemanticAnswer, PollSemanticKind};
+use crate::profile::{
+    ProfileClaimOutcome, ProfileDriverError, ProfileField, ProfileOperation, ProfileTargetValue,
+};
 use crate::site_auth::{
     NewVerificationToken, Origin, SiteAuthInfo, SiteServiceError, VerificationToken,
 };
@@ -1075,7 +1079,7 @@ pub struct PollEndRequest<'a> {
 /// trait but are not covered by the write-seam invariant.
 #[async_trait]
 #[allow(clippy::too_many_arguments)] // driver methods carry the full event payload
-pub trait MatrixDriver: Send + Sync {
+pub trait MatrixDriver: Send + Sync + MatrixProfileDriver {
     /// Ensures a room exists for a specific post and is linked to a space.
     /// Uses candidate_room_id as a hint for O(1) discovery if provided.
     /// Returns the room ID.
@@ -1473,4 +1477,117 @@ pub trait VirtualUserStore: Send + Sync {
 
     /// Lists every virtual Matrix user ID recorded for one site.
     async fn list_virtual_users_for_site(&self, site_id: &SiteId) -> Result<Vec<String>>;
+}
+
+/// Capability to resolve a `MediaReference` into an `mxc://...` Matrix content URI.
+#[async_trait]
+pub trait MediaReferenceResolver: Send + Sync {
+    /// Resolves a domain `MediaReference` for the given site to a concrete `mxc://...` URI.
+    async fn resolve_mxc(
+        &self,
+        site_id: &SiteId,
+        reference: &MediaReference,
+    ) -> Result<Option<String>>;
+}
+
+/// The driver port for Matrix Client-Server API profile mutations.
+///
+/// Implements supported Matrix CS API profile mutation and clearing semantics:
+/// - Display name: `PUT /_matrix/client/v3/profile/{userId}/displayname`
+/// - Clear display name: `DELETE /_matrix/client/v3/profile/{userId}/displayname`
+/// - Avatar URL: `PUT /_matrix/client/v3/profile/{userId}/avatar_url`
+/// - Clear avatar URL: `DELETE /_matrix/client/v3/profile/{userId}/avatar_url`
+///
+/// Distinguishes deterministic (4xx) from ambiguous (5xx / network) outcomes.
+#[async_trait]
+pub trait MatrixProfileDriver: Send + Sync {
+    /// Sets the display name on the visitor virtual user's global profile.
+    async fn set_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        display_name: &str,
+    ) -> Result<(), ProfileDriverError>;
+
+    /// Clears the display name on the visitor virtual user's global profile
+    /// using DELETE semantics (`DELETE /_matrix/client/v3/profile/{userId}/displayname`).
+    async fn clear_display_name(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<(), ProfileDriverError>;
+
+    /// Sets the avatar URL on the visitor virtual user's global profile.
+    async fn set_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: &str,
+    ) -> Result<(), ProfileDriverError>;
+
+    /// Clears the avatar URL on the visitor virtual user's global profile
+    /// using DELETE semantics (`DELETE /_matrix/client/v3/profile/{userId}/avatar_url`).
+    async fn clear_avatar(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> Result<(), ProfileDriverError>;
+}
+
+/// The port for durable profile operation state tracking and same-field serialization.
+#[async_trait]
+pub trait ProfileStore: Send + Sync {
+    /// Atomically claims a profile mutation operation or returns existing claim outcome.
+    async fn claim_or_get_profile_operation(
+        &self,
+        operation_id: &str,
+        author_public_key: &str,
+        site_id: &SiteId,
+        target_value: &ProfileTargetValue,
+    ) -> Result<ProfileClaimOutcome>;
+
+    /// Fetches a profile operation by its `operation_id`.
+    async fn get_profile_operation(&self, operation_id: &str) -> Result<Option<ProfileOperation>>;
+
+    /// Atomically claims execution lease for an operation, transitioning it from
+    /// `Pending` to `Dispatching` if and only if no earlier operation for
+    /// `(author_public_key, field)` is unresolved (`Pending`, `Dispatching`, `Unknown`).
+    async fn claim_for_execution(&self, operation_id: &str) -> Result<bool>;
+
+    /// Transitions an operation to `Completed`, storing optional serialized response payload.
+    async fn record_completed(
+        &self,
+        operation_id: &str,
+        response_payload: Option<&str>,
+    ) -> Result<()>;
+
+    /// Transitions an operation to `Failed`, storing deterministic error details.
+    async fn record_failed(&self, operation_id: &str, error_detail: &str) -> Result<()>;
+
+    /// Transitions an operation to `Unknown`, storing ambiguous transport/network failure details.
+    async fn record_unknown(&self, operation_id: &str, error_detail: &str) -> Result<()>;
+
+    /// Transitions an operation to `Aborted` (e.g. pre-dispatch cancellation or admin intervention).
+    async fn record_aborted(&self, operation_id: &str, reason: &str) -> Result<()>;
+
+    /// Returns the next executable operation for `(author_public_key, field)`, if any.
+    /// Returns `Ok(None)` if the queue is blocked by an unresolved operation
+    /// (`Dispatching` or `Unknown`) or if no pending operations exist.
+    async fn get_next_executable_operation(
+        &self,
+        author_public_key: &str,
+        field: ProfileField,
+    ) -> Result<Option<ProfileOperation>>;
+
+    /// Lists all operations for `(author_public_key, field)` ordered by sequence ASC.
+    async fn list_operations_for_field(
+        &self,
+        author_public_key: &str,
+        field: ProfileField,
+    ) -> Result<Vec<ProfileOperation>>;
+
+    /// Recovers any operations stuck in `Dispatching` across process restart,
+    /// transitioning them to `Unknown` because their downstream outcome is ambiguous.
+    /// Returns the number of recovered operations.
+    async fn recover_crashed_dispatching(&self) -> Result<u64>;
 }

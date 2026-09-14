@@ -8,8 +8,9 @@ mod matrix;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
 
-use cumments_core::models::{MatrixEvent, VisitorProfile};
+use cumments_core::models::{MatrixEvent, SiteId, VisitorProfile};
 use cumments_core::poll::{PollSemanticAnswer, PollSemanticKind};
+use cumments_core::profile::ProfileDriverError;
 
 /// A recorded [`cumments_core::ports::MatrixDriver::post_poll_response`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +93,11 @@ pub struct TestDriver {
     /// Record the next N `post_poll_end` calls into `poll_ends` (homeserver
     /// accepted) but return an error (client response lost).
     pub ambiguous_poll_end_count: Mutex<usize>,
+    pub set_display_name_calls: Mutex<Vec<(String, SiteId, String)>>,
+    pub clear_display_name_calls: Mutex<Vec<(String, SiteId)>>,
+    pub set_avatar_calls: Mutex<Vec<(String, SiteId, String)>>,
+    pub clear_avatar_calls: Mutex<Vec<(String, SiteId)>>,
+    pub next_profile_error: Mutex<Option<ProfileDriverError>>,
 }
 
 impl TestDriver {
@@ -127,6 +133,11 @@ impl TestDriver {
             ambiguous_poll_response_count: Mutex::new(0),
             fail_poll_end_count: Mutex::new(0),
             ambiguous_poll_end_count: Mutex::new(0),
+            set_display_name_calls: Mutex::new(Vec::new()),
+            clear_display_name_calls: Mutex::new(Vec::new()),
+            set_avatar_calls: Mutex::new(Vec::new()),
+            clear_avatar_calls: Mutex::new(Vec::new()),
+            next_profile_error: Mutex::new(None),
         }
     }
 

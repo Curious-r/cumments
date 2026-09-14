@@ -394,14 +394,12 @@ impl AppServiceMatrixDriver {
         let resp = match avatar_url {
             Some(avatar_url) => self
                 .request(reqwest::Method::PUT, &path, Some(&virtual_user))
-                .query(&[("computer.gingershaped.msc4466.propagate_to", "all")])
                 .json(&serde_json::json!({ "avatar_url": avatar_url }))
                 .send()
                 .await
                 .map_err(|e| anyhow!("set avatar request failed: {}", e))?,
             None => self
                 .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
-                .query(&[("computer.gingershaped.msc4466.propagate_to", "all")])
                 .send()
                 .await
                 .map_err(|e| anyhow!("delete avatar request failed: {}", e))?,
@@ -417,6 +415,139 @@ impl AppServiceMatrixDriver {
             ));
         }
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub(super) async fn set_display_name_impl(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        display_name: &str,
+    ) -> std::result::Result<(), cumments_core::profile::ProfileDriverError> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await
+            .map_err(|e| cumments_core::profile::ProfileDriverError::Ambiguous(e.to_string()))?;
+        let path = format!(
+            "_matrix/client/v3/profile/{}/displayname",
+            percent_encode(&virtual_user)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .json(&serde_json::json!({ "displayname": display_name }))
+            .send()
+            .await
+            .map_err(|e| {
+                cumments_core::profile::ProfileDriverError::Ambiguous(format!(
+                    "set displayname request failed: {e}"
+                ))
+            })?;
+
+        Self::classify_profile_response(resp, &virtual_user, "set displayname").await
+    }
+
+    #[instrument(skip(self))]
+    pub(super) async fn clear_display_name_impl(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> std::result::Result<(), cumments_core::profile::ProfileDriverError> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await
+            .map_err(|e| cumments_core::profile::ProfileDriverError::Ambiguous(e.to_string()))?;
+        let path = format!(
+            "_matrix/client/v3/profile/{}/displayname",
+            percent_encode(&virtual_user)
+        );
+        let resp = self
+            .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+            .send()
+            .await
+            .map_err(|e| {
+                cumments_core::profile::ProfileDriverError::Ambiguous(format!(
+                    "clear displayname request failed: {e}"
+                ))
+            })?;
+
+        Self::classify_profile_response(resp, &virtual_user, "clear displayname").await
+    }
+
+    #[instrument(skip(self))]
+    pub(super) async fn set_avatar_impl(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+        avatar_url: &str,
+    ) -> std::result::Result<(), cumments_core::profile::ProfileDriverError> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await
+            .map_err(|e| cumments_core::profile::ProfileDriverError::Ambiguous(e.to_string()))?;
+        let path = format!(
+            "_matrix/client/v3/profile/{}/avatar_url",
+            percent_encode(&virtual_user)
+        );
+        let resp = self
+            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .json(&serde_json::json!({ "avatar_url": avatar_url }))
+            .send()
+            .await
+            .map_err(|e| {
+                cumments_core::profile::ProfileDriverError::Ambiguous(format!(
+                    "set avatar request failed: {e}"
+                ))
+            })?;
+
+        Self::classify_profile_response(resp, &virtual_user, "set avatar").await
+    }
+
+    #[instrument(skip(self))]
+    pub(super) async fn clear_avatar_impl(
+        &self,
+        author_public_key: &str,
+        site_id: &SiteId,
+    ) -> std::result::Result<(), cumments_core::profile::ProfileDriverError> {
+        let virtual_user = self
+            .resolve_virtual_user(author_public_key, site_id)
+            .await
+            .map_err(|e| cumments_core::profile::ProfileDriverError::Ambiguous(e.to_string()))?;
+        let path = format!(
+            "_matrix/client/v3/profile/{}/avatar_url",
+            percent_encode(&virtual_user)
+        );
+        let resp = self
+            .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+            .send()
+            .await
+            .map_err(|e| {
+                cumments_core::profile::ProfileDriverError::Ambiguous(format!(
+                    "clear avatar request failed: {e}"
+                ))
+            })?;
+
+        Self::classify_profile_response(resp, &virtual_user, "clear avatar").await
+    }
+
+    async fn classify_profile_response(
+        resp: reqwest::Response,
+        virtual_user: &str,
+        action: &str,
+    ) -> std::result::Result<(), cumments_core::profile::ProfileDriverError> {
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let body = resp.text().await.unwrap_or_default();
+        if status.is_client_error() {
+            Err(cumments_core::profile::ProfileDriverError::Deterministic(
+                format!("{action} for {virtual_user} failed ({status}): {body}"),
+            ))
+        } else {
+            Err(cumments_core::profile::ProfileDriverError::Ambiguous(
+                format!("{action} for {virtual_user} failed ({status}): {body}"),
+            ))
+        }
     }
 
     /// Reads the virtual user's current global profile.
@@ -542,12 +673,13 @@ mod tests {
 
     const AVATAR_PROFILE_PATH: &str =
         "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com/avatar_url";
+    const DISPLAY_NAME_PROFILE_PATH: &str =
+        "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com/displayname";
     const PROFILE_PATH: &str =
         "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com";
-    const PROPAGATE_TO_QUERY: &str = "computer.gingershaped.msc4466.propagate_to";
 
     #[tokio::test]
-    async fn set_avatar_url_updates_the_virtual_user_profile_and_propagates() {
+    async fn set_avatar_url_updates_the_virtual_user_profile() {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path(AVATAR_PROFILE_PATH))
@@ -555,7 +687,6 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
-            .and(query_param(PROPAGATE_TO_QUERY, "all"))
             .and(body_json(
                 json!({ "avatar_url": "mxc://example.com/avatar" }),
             ))
@@ -585,7 +716,6 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
-            .and(query_param(PROPAGATE_TO_QUERY, "all"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(1)
             .mount(&server)
@@ -597,6 +727,91 @@ mod tests {
             .await
             .expect("delete avatar should succeed");
         server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn profile_driver_methods_success_and_error_classification() {
+        let server = MockServer::start().await;
+
+        // PUT displayname success
+        Mock::given(method("PUT"))
+            .and(path(DISPLAY_NAME_PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .and(body_json(json!({ "displayname": "Alice" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // DELETE displayname success
+        Mock::given(method("DELETE"))
+            .and(path(DISPLAY_NAME_PROFILE_PATH))
+            .and(query_param(
+                "user_id",
+                "@_cumments_my-blog_pubkey:example.com",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let driver = test_driver(&server);
+        let site_id = SiteId::from("my-blog");
+
+        driver
+            .set_display_name_impl("pubkey", &site_id, "Alice")
+            .await
+            .expect("set display name success");
+
+        driver
+            .clear_display_name_impl("pubkey", &site_id)
+            .await
+            .expect("clear display name success");
+
+        server.verify().await;
+
+        // Test error classification: 400 Bad Request -> Deterministic
+        let server_400 = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path(DISPLAY_NAME_PROFILE_PATH))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({ "errcode": "M_INVALID_PARAM" })),
+            )
+            .expect(1)
+            .mount(&server_400)
+            .await;
+
+        let driver_400 = test_driver(&server_400);
+        let err_400 = driver_400
+            .set_display_name_impl("pubkey", &site_id, "Bad")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err_400,
+            cumments_core::profile::ProfileDriverError::Deterministic(_)
+        ));
+
+        // Test error classification: 502 Bad Gateway -> Ambiguous
+        let server_502 = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path(AVATAR_PROFILE_PATH))
+            .respond_with(ResponseTemplate::new(502).set_body_string("bad gateway"))
+            .expect(1)
+            .mount(&server_502)
+            .await;
+
+        let driver_502 = test_driver(&server_502);
+        let err_502 = driver_502
+            .clear_avatar_impl("pubkey", &site_id)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err_502,
+            cumments_core::profile::ProfileDriverError::Ambiguous(_)
+        ));
     }
 
     #[tokio::test]

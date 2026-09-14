@@ -1380,7 +1380,7 @@ impl SubmissionStore for DbStore {
 }
 
 /// The outcome of an atomic `operation_claims` insert attempt.
-enum ClaimAttempt {
+pub(crate) enum ClaimAttempt {
     /// This request inserted the claim (it was absent).
     Claimed,
     /// The operation id was already claimed; carries the stored claim.
@@ -1392,7 +1392,7 @@ impl DbStore {
     /// transaction. `INSERT ... ON CONFLICT DO NOTHING` on the unique
     /// `operation_id` index is the single gate, so two concurrent claims can
     /// never both succeed.
-    async fn try_claim_operation<C: ConnectionTrait>(
+    pub(crate) async fn try_claim_operation<C: ConnectionTrait>(
         conn: &C,
         operation: &OperationIdentity,
     ) -> Result<ClaimAttempt> {
