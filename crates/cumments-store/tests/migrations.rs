@@ -124,6 +124,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000073_profile_operation_site_scope".to_string()),
         "000073 must be registered or profile_operations site scope index is missing"
     );
+    assert!(
+        names.contains(&"m20260915_000074_profile_operation_unique_sequence".to_string()),
+        "000074 must be registered or profile_operations unique sequence index is missing"
+    );
 }
 
 #[tokio::test]
@@ -663,4 +667,84 @@ async fn profile_operations_table_enforces_unique_operation_id_and_tracks_fields
     ))
     .await
     .expect("second profile operation with incremented sequence");
+
+    // 4. Duplicate (site_id, author_public_key, field, sequence) MUST FAIL
+    let dup_seq = db
+        .execute_unprepared(&format!(
+            "INSERT INTO profile_operations \
+             (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+             VALUES ('op-prof-3', 'author-1', 'site-a', 'display_name', NULL, 'pending', 1, '{now}', '{now}')"
+        ))
+        .await;
+    assert!(
+        dup_seq.is_err(),
+        "duplicate (site_id, author_public_key, field, sequence) must be rejected"
+    );
+
+    // 5. Same sequence on different site is allowed
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-prof-4', 'author-1', 'site-b', 'display_name', NULL, 'pending', 1, '{now}', '{now}')"
+    ))
+    .await
+    .expect("same sequence on different site is allowed");
+
+    // 6. Same sequence on different field is allowed
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-prof-5', 'author-1', 'site-a', 'avatar', NULL, 'pending', 1, '{now}', '{now}')"
+    ))
+    .await
+    .expect("same sequence on different field is allowed");
+
+    // 7. Same sequence for different author is allowed
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-prof-6', 'author-2', 'site-a', 'display_name', NULL, 'pending', 1, '{now}', '{now}')"
+    ))
+    .await
+    .expect("same sequence for different author is allowed");
+}
+
+#[tokio::test]
+async fn migration_000074_prunes_duplicate_sequences_before_creating_unique_index() {
+    let url = test_db_url("profile-ops-prune-dup");
+    let db = Database::connect(&url).await.expect("connect db");
+
+    // Run migrations up to 73
+    Migrator::up(&db, Some(73)).await.expect("migrate to 73");
+
+    let t1 = "2026-09-15T10:00:00Z";
+    let t2 = "2026-09-15T10:05:00Z";
+
+    // Insert duplicate sequence operations under migration 73 (non-unique index)
+    db.execute_unprepared(&format!(
+        "INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-old', 'author-dup', 'site-x', 'display_name', NULL, 'pending', 1, '{t1}', '{t1}'); \
+         INSERT INTO profile_operations \
+         (operation_id, author_public_key, site_id, field, target_value, status, sequence, created_at, updated_at) \
+         VALUES ('op-new', 'author-dup', 'site-x', 'display_name', NULL, 'pending', 1, '{t2}', '{t2}');"
+    ))
+    .await
+    .expect("insert duplicates on migration 73");
+
+    // Now run migration 74 up
+    Migrator::up(&db, Some(1)).await.expect("migrate up to 74");
+
+    // Check that op-old was pruned and op-new was kept
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT operation_id FROM profile_operations WHERE author_public_key = 'author-dup'",
+        ))
+        .await
+        .expect("query rows");
+
+    assert_eq!(rows.len(), 1, "exactly one row should survive pruning");
+    let surviving_id: String = rows[0].try_get("", "operation_id").unwrap();
+    assert_eq!(surviving_id, "op-new");
 }

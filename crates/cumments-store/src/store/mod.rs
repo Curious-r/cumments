@@ -31,11 +31,69 @@ pub(crate) fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
     let sqlx = match err {
         sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
         | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
-        _ => return false,
+        _ => {
+            let msg = err.to_string();
+            return msg.contains("UNIQUE constraint failed")
+                || msg.contains("PRIMARY KEY constraint failed");
+        }
     };
-    sqlx.as_database_error()
-        .and_then(|db| db.code())
-        .is_some_and(|code| code == "2067" || code == "1555")
+    if let Some(db) = sqlx.as_database_error() {
+        if let Some(code) = db.code()
+            && (code == "2067" || code == "1555" || code == "19")
+        {
+            return true;
+        }
+        let msg = db.message();
+        if msg.contains("UNIQUE constraint failed") || msg.contains("PRIMARY KEY constraint failed")
+        {
+            return true;
+        }
+    }
+    let msg = err.to_string();
+    msg.contains("UNIQUE constraint failed") || msg.contains("PRIMARY KEY constraint failed")
+}
+
+/// Whether a SeaORM error is a SQLite busy or locked contention error.
+pub(crate) fn is_busy_error(err: &sea_orm::DbErr) -> bool {
+    let sqlx = match err {
+        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx))
+        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(sqlx)) => sqlx,
+        _ => {
+            let msg = err.to_string().to_lowercase();
+            return msg.contains("database is locked")
+                || msg.contains("database table is locked")
+                || msg.contains("busy");
+        }
+    };
+    if let Some(db) = sqlx.as_database_error() {
+        if let Some(code) = db.code()
+            && (code == "5" || code == "6" || code == "261" || code == "517")
+        {
+            return true;
+        }
+        let msg = db.message().to_lowercase();
+        if msg.contains("database is locked")
+            || msg.contains("database table is locked")
+            || msg.contains("busy")
+        {
+            return true;
+        }
+    }
+    let msg = err.to_string().to_lowercase();
+    msg.contains("database is locked")
+        || msg.contains("database table is locked")
+        || msg.contains("busy")
+}
+
+/// Whether an anyhow error wraps a SQLite busy or locked contention error.
+pub(crate) fn is_busy_anyhow_error(err: &anyhow::Error) -> bool {
+    if let Some(db_err) = err.downcast_ref::<sea_orm::DbErr>() {
+        return is_busy_error(db_err);
+    }
+    let msg = err.to_string().to_lowercase();
+    msg.contains("database is locked")
+        || msg.contains("database table is locked")
+        || msg.contains("busy")
 }
 
 /// A database-backed implementation of the storage ports.

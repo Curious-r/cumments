@@ -1222,3 +1222,320 @@ async fn cross_site_unknown_status_isolation() {
     assert_eq!(next_b.operation_id, "op-b2");
     assert!(store.claim_for_execution("op-b2").await.unwrap());
 }
+
+#[tokio::test]
+async fn concurrent_two_operations_creation_same_field_allocates_distinct_sequences() {
+    // Section 7: Required Real Concurrency Test with 2 independent connections and a barrier
+    let db_url = test_db_url("concurrent_two_ops");
+    let store_a = DbStore::connect(&db_url).await.expect("connect db A");
+    let store_b = DbStore::connect(&db_url).await.expect("connect db B");
+
+    let site = SiteId::from("site-test");
+    let author = "pubkey-concurrent-author";
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let b1 = barrier.clone();
+    let s1 = store_a.clone();
+    let site1 = site.clone();
+    let handle1 = tokio::spawn(async move {
+        b1.wait().await;
+        let target = ProfileTargetValue::SetDisplayName("Alice 1".to_string());
+        s1.claim_or_get_profile_operation("op-c1", author, &site1, &target)
+            .await
+    });
+
+    let b2 = barrier.clone();
+    let s2 = store_b.clone();
+    let site2 = site.clone();
+    let handle2 = tokio::spawn(async move {
+        b2.wait().await;
+        let target = ProfileTargetValue::SetDisplayName("Alice 2".to_string());
+        s2.claim_or_get_profile_operation("op-c2", author, &site2, &target)
+            .await
+    });
+
+    let (res1, res2) = tokio::join!(handle1, handle2);
+    let out1 = res1.unwrap().expect("op1 creation");
+    let out2 = res2.unwrap().expect("op2 creation");
+
+    let ProfileClaimOutcome::New(op1) = out1 else {
+        panic!("expected new op1")
+    };
+    let ProfileClaimOutcome::New(op2) = out2 else {
+        panic!("expected new op2")
+    };
+
+    assert_ne!(
+        op1.sequence, op2.sequence,
+        "concurrent creations must allocate distinct sequences"
+    );
+    let min_seq = op1.sequence.min(op2.sequence);
+    let max_seq = op1.sequence.max(op2.sequence);
+    assert_eq!(min_seq, 1);
+    assert_eq!(max_seq, 2);
+
+    // Verify both are persisted
+    let ops = store_a
+        .list_operations_for_field(&site, author, ProfileField::DisplayName)
+        .await
+        .unwrap();
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].sequence, 1);
+    assert_eq!(ops[1].sequence, 2);
+}
+
+#[tokio::test]
+async fn concurrent_multi_operations_creation_and_strict_serialization_progression() {
+    // Sections 8 & 9: Stronger test with 6 concurrent creators on same site, author, field
+    let db_url = test_db_url("concurrent_multi_ops");
+    let site = SiteId::from("site-multi");
+    let author = "pubkey-multi-author";
+    const N: usize = 6;
+
+    let mut stores = Vec::new();
+    for _ in 0..N {
+        stores.push(DbStore::connect(&db_url).await.expect("connect db store"));
+    }
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(N));
+    let mut handles = Vec::new();
+
+    for (i, store) in stores.iter().enumerate() {
+        let b = barrier.clone();
+        let store = store.clone();
+        let s = site.clone();
+        handles.push(tokio::spawn(async move {
+            b.wait().await;
+            let op_id = format!("op-concurrent-{i}");
+            let target = ProfileTargetValue::SetDisplayName(format!("Name {i}"));
+            store
+                .claim_or_get_profile_operation(&op_id, author, &s, &target)
+                .await
+        }));
+    }
+
+    let mut results = Vec::new();
+    for h in handles {
+        let res = h.await.unwrap().expect("create op");
+        let ProfileClaimOutcome::New(op) = res else {
+            panic!("expected new op")
+        };
+        results.push(op);
+    }
+
+    // Verify N distinct operations
+    assert_eq!(results.len(), N);
+    let mut op_ids: Vec<_> = results.iter().map(|o| o.operation_id.clone()).collect();
+    op_ids.sort();
+    op_ids.dedup();
+    assert_eq!(op_ids.len(), N, "all operation_ids must be unique");
+
+    // Verify N distinct sequences, sorted strictly ascending 1..=N
+    let mut seqs: Vec<_> = results.iter().map(|o| o.sequence).collect();
+    seqs.sort();
+    let unique_seqs = seqs.clone();
+    let mut dedup_seqs = seqs.clone();
+    dedup_seqs.dedup();
+    assert_eq!(
+        unique_seqs.len(),
+        dedup_seqs.len(),
+        "sequences must be strictly unique"
+    );
+    assert_eq!(seqs, (1..=N as i64).collect::<Vec<_>>());
+
+    // Verify all persisted in DB
+    let store = &stores[0];
+    let list = store
+        .list_operations_for_field(&site, author, ProfileField::DisplayName)
+        .await
+        .unwrap();
+    assert_eq!(list.len(), N);
+    for (idx, op) in list.iter().enumerate() {
+        assert_eq!(op.sequence, (idx + 1) as i64);
+        assert_eq!(op.status, ProfileOperationStatus::Pending);
+    }
+
+    // Section 9: Verify same-field serialization ordering progression:
+    // list is ordered by sequence asc: list[0] is sequence 1, list[1] is sequence 2, ...
+    for (i, op) in list.iter().enumerate() {
+        let curr_op_id = &op.operation_id;
+
+        // Later operations cannot claim while earlier is pending/dispatching
+        for later_op in list.iter().skip(i + 1) {
+            let later_id = &later_op.operation_id;
+            assert!(
+                !store.claim_for_execution(later_id).await.unwrap(),
+                "later operation {later_id} must not claim while earlier {curr_op_id} is incomplete"
+            );
+        }
+
+        // Current operation can claim into Dispatching
+        assert!(
+            store.claim_for_execution(curr_op_id).await.unwrap(),
+            "operation {curr_op_id} must claim successfully into Dispatching"
+        );
+        let curr_op = store
+            .get_profile_operation(curr_op_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(curr_op.status, ProfileOperationStatus::Dispatching);
+
+        // Later operations still cannot claim while current is Dispatching
+        for later_op in list.iter().skip(i + 1) {
+            let later_id = &later_op.operation_id;
+            assert!(
+                !store.claim_for_execution(later_id).await.unwrap(),
+                "later operation {later_id} must not claim while current {curr_op_id} is Dispatching"
+            );
+        }
+
+        // Complete current operation
+        store.record_completed(curr_op_id, None).await.unwrap();
+        let curr_op = store
+            .get_profile_operation(curr_op_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(curr_op.status, ProfileOperationStatus::Completed);
+    }
+}
+
+#[tokio::test]
+async fn concurrent_cross_site_operations_allocate_independent_sequences() {
+    // Section 10: Cross-site concurrency sanity test
+    let db_url = test_db_url("concurrent_cross_site");
+    let store_a = DbStore::connect(&db_url).await.expect("connect");
+    let store_b = DbStore::connect(&db_url).await.expect("connect");
+
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+    let author = "pubkey-cross-site-concurrent";
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let b1 = barrier.clone();
+    let s1 = store_a.clone();
+    let sa = site_a.clone();
+    let h1 = tokio::spawn(async move {
+        b1.wait().await;
+        let target = ProfileTargetValue::SetDisplayName("Site A".to_string());
+        s1.claim_or_get_profile_operation("op-site-a-concur", author, &sa, &target)
+            .await
+    });
+
+    let b2 = barrier.clone();
+    let s2 = store_b.clone();
+    let sb = site_b.clone();
+    let h2 = tokio::spawn(async move {
+        b2.wait().await;
+        let target = ProfileTargetValue::SetDisplayName("Site B".to_string());
+        s2.claim_or_get_profile_operation("op-site-b-concur", author, &sb, &target)
+            .await
+    });
+
+    let (r1, r2) = tokio::join!(h1, h2);
+    let op_a = match r1.unwrap().unwrap() {
+        ProfileClaimOutcome::New(op) => op,
+        _ => panic!("expected new op_a"),
+    };
+    let op_b = match r2.unwrap().unwrap() {
+        ProfileClaimOutcome::New(op) => op,
+        _ => panic!("expected new op_b"),
+    };
+
+    assert_eq!(op_a.sequence, 1);
+    assert_eq!(op_b.sequence, 1);
+}
+
+#[tokio::test]
+async fn concurrent_cross_field_operations_allocate_independent_sequences() {
+    // Section 11: Cross-field concurrency sanity test
+    let db_url = test_db_url("concurrent_cross_field");
+    let store_a = DbStore::connect(&db_url).await.expect("connect");
+    let store_b = DbStore::connect(&db_url).await.expect("connect");
+
+    let site = SiteId::from("site-field");
+    let author = "pubkey-cross-field-concurrent";
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let b1 = barrier.clone();
+    let s1 = store_a.clone();
+    let sa = site.clone();
+    let h1 = tokio::spawn(async move {
+        b1.wait().await;
+        let target = ProfileTargetValue::SetDisplayName("Name Concur".to_string());
+        s1.claim_or_get_profile_operation("op-name-concur", author, &sa, &target)
+            .await
+    });
+
+    let b2 = barrier.clone();
+    let s2 = store_b.clone();
+    let sb = site.clone();
+    let h2 = tokio::spawn(async move {
+        b2.wait().await;
+        let target = ProfileTargetValue::SetAvatar(MediaReference::new_v4());
+        s2.claim_or_get_profile_operation("op-avatar-concur", author, &sb, &target)
+            .await
+    });
+
+    let (r1, r2) = tokio::join!(h1, h2);
+    let op_name = match r1.unwrap().unwrap() {
+        ProfileClaimOutcome::New(op) => op,
+        _ => panic!("expected new op_name"),
+    };
+    let op_avatar = match r2.unwrap().unwrap() {
+        ProfileClaimOutcome::New(op) => op,
+        _ => panic!("expected new op_avatar"),
+    };
+
+    assert_eq!(op_name.sequence, 1);
+    assert_eq!(op_avatar.sequence, 1);
+}
+
+#[tokio::test]
+async fn sequence_allocation_survives_explicit_rollback_and_prunes_gaps() {
+    // Section 5: Transaction rollback semantics test
+    let db_url = test_db_url("rollback_safety");
+    let store = DbStore::connect(&db_url).await.expect("connect db");
+    let site = SiteId::from("site-rollback");
+    let author = "pubkey-rollback";
+
+    // Op 1 created -> sequence 1
+    let out1 = store
+        .claim_or_get_profile_operation(
+            "op-1",
+            author,
+            &site,
+            &ProfileTargetValue::SetDisplayName("Name 1".to_string()),
+        )
+        .await
+        .unwrap();
+    let ProfileClaimOutcome::New(op1) = out1 else {
+        panic!("expected new op1")
+    };
+    assert_eq!(op1.sequence, 1);
+
+    // Now op 2 created -> sequence 2
+    let out2 = store
+        .claim_or_get_profile_operation(
+            "op-2",
+            author,
+            &site,
+            &ProfileTargetValue::SetDisplayName("Name 2".to_string()),
+        )
+        .await
+        .unwrap();
+    let ProfileClaimOutcome::New(op2) = out2 else {
+        panic!("expected new op2")
+    };
+    assert_eq!(op2.sequence, 2);
+
+    // Verify ordering
+    let ops = store
+        .list_operations_for_field(&site, author, ProfileField::DisplayName)
+        .await
+        .unwrap();
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].sequence, 1);
+    assert_eq!(ops[1].sequence, 2);
+}

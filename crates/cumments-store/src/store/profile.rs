@@ -18,8 +18,8 @@ use cumments_core::profile::{
 use cumments_core::submissions::OperationIdentity;
 
 use crate::entities::profile_operations;
-use crate::store::DbStore;
 use crate::store::submissions::ClaimAttempt;
+use crate::store::{DbStore, is_busy_anyhow_error, is_busy_error, is_unique_violation};
 
 fn model_to_domain(row: &profile_operations::Model) -> Result<ProfileOperation> {
     let field = ProfileField::from(row.field);
@@ -59,90 +59,185 @@ impl ProfileStore for DbStore {
             fingerprint: fingerprint.clone(),
         };
 
-        let txn = self.db.begin().await?;
-        match Self::try_claim_operation(&txn, &operation_identity).await? {
-            ClaimAttempt::Claimed => {
-                let field_enum =
-                    crate::entities::active_enums::ProfileField::from(target_value.field());
+        const MAX_ALLOCATION_RETRIES: usize = 32;
 
-                // Calculate next monotonic sequence for (site_id, author_public_key, field)
-                let max_seq_row = profile_operations::Entity::find()
-                    .filter(profile_operations::Column::SiteId.eq(site_id.as_str()))
-                    .filter(profile_operations::Column::AuthorPublicKey.eq(author_public_key))
-                    .filter(profile_operations::Column::Field.eq(field_enum))
-                    .order_by_desc(profile_operations::Column::Sequence)
-                    .one(&txn)
-                    .await?;
-
-                let sequence = max_seq_row.map_or(1, |row| row.sequence + 1);
-                let now = Utc::now();
-
-                let active_model = profile_operations::ActiveModel {
-                    operation_id: Set(operation_id.to_string()),
-                    author_public_key: Set(author_public_key.to_string()),
-                    site_id: Set(site_id.as_str().to_string()),
-                    field: Set(field_enum),
-                    target_value: Set(target_value.to_stored()),
-                    status: Set(crate::entities::active_enums::ProfileOperationStatus::Pending),
-                    sequence: Set(sequence),
-                    response_payload: Set(None),
-                    error_detail: Set(None),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                    resolved_at: Set(None),
-                    ..Default::default()
-                };
-
-                profile_operations::Entity::insert(active_model)
-                    .exec(&txn)
-                    .await?;
-
-                txn.commit().await?;
-
-                let op = ProfileOperation {
-                    operation_id: operation_id.to_string(),
-                    author_public_key: author_public_key.to_string(),
-                    site_id: site_id.clone(),
-                    field: target_value.field(),
-                    target_value: target_value.clone(),
-                    status: ProfileOperationStatus::Pending,
-                    sequence,
-                    response_payload: None,
-                    error_detail: None,
-                    created_at: now,
-                    updated_at: now,
-                    resolved_at: None,
-                };
-
-                Ok(ProfileClaimOutcome::New(op))
-            }
-            ClaimAttempt::Existing(existing_claim) => {
-                if existing_claim.author_public_key != author_public_key
-                    || existing_claim.fingerprint != fingerprint
-                {
-                    txn.rollback().await?;
-                    return Ok(ProfileClaimOutcome::Conflict);
+        for attempt in 0..MAX_ALLOCATION_RETRIES {
+            let txn = match self.db.begin().await {
+                Ok(t) => t,
+                Err(err) if is_busy_error(&err) && attempt + 1 < MAX_ALLOCATION_RETRIES => {
+                    tokio::time::sleep(std::time::Duration::from_millis(5 * (attempt as u64 + 1)))
+                        .await;
+                    continue;
                 }
+                Err(err) => return Err(err.into()),
+            };
 
-                let existing_row = profile_operations::Entity::find()
-                    .filter(profile_operations::Column::OperationId.eq(operation_id))
-                    .one(&txn)
-                    .await?;
+            match Self::try_claim_operation(&txn, &operation_identity).await {
+                Ok(ClaimAttempt::Claimed) => {
+                    let field_enum =
+                        crate::entities::active_enums::ProfileField::from(target_value.field());
 
-                txn.commit().await?;
-
-                match existing_row {
-                    Some(row) => {
-                        let op = model_to_domain(&row)?;
-                        if op.site_id != *site_id {
-                            return Ok(ProfileClaimOutcome::Conflict);
+                    // Calculate next monotonic sequence for (site_id, author_public_key, field)
+                    let max_seq_row = match profile_operations::Entity::find()
+                        .filter(profile_operations::Column::SiteId.eq(site_id.as_str()))
+                        .filter(profile_operations::Column::AuthorPublicKey.eq(author_public_key))
+                        .filter(profile_operations::Column::Field.eq(field_enum))
+                        .order_by_desc(profile_operations::Column::Sequence)
+                        .one(&txn)
+                        .await
+                    {
+                        Ok(row) => row,
+                        Err(err) if is_busy_error(&err) && attempt + 1 < MAX_ALLOCATION_RETRIES => {
+                            let _ = txn.rollback().await;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                5 * (attempt as u64 + 1),
+                            ))
+                            .await;
+                            continue;
                         }
-                        Ok(ProfileClaimOutcome::Replay(op))
+                        Err(err) => {
+                            let _ = txn.rollback().await;
+                            return Err(err.into());
+                        }
+                    };
+
+                    let sequence = max_seq_row.map_or(1, |row| row.sequence + 1);
+                    let now = Utc::now();
+
+                    let active_model = profile_operations::ActiveModel {
+                        operation_id: Set(operation_id.to_string()),
+                        author_public_key: Set(author_public_key.to_string()),
+                        site_id: Set(site_id.as_str().to_string()),
+                        field: Set(field_enum),
+                        target_value: Set(target_value.to_stored()),
+                        status: Set(crate::entities::active_enums::ProfileOperationStatus::Pending),
+                        sequence: Set(sequence),
+                        response_payload: Set(None),
+                        error_detail: Set(None),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                        resolved_at: Set(None),
+                        ..Default::default()
+                    };
+
+                    match profile_operations::Entity::insert(active_model)
+                        .exec(&txn)
+                        .await
+                    {
+                        Ok(_) => match txn.commit().await {
+                            Ok(_) => {
+                                let op = ProfileOperation {
+                                    operation_id: operation_id.to_string(),
+                                    author_public_key: author_public_key.to_string(),
+                                    site_id: site_id.clone(),
+                                    field: target_value.field(),
+                                    target_value: target_value.clone(),
+                                    status: ProfileOperationStatus::Pending,
+                                    sequence,
+                                    response_payload: None,
+                                    error_detail: None,
+                                    created_at: now,
+                                    updated_at: now,
+                                    resolved_at: None,
+                                };
+
+                                return Ok(ProfileClaimOutcome::New(op));
+                            }
+                            Err(err)
+                                if is_busy_error(&err) && attempt + 1 < MAX_ALLOCATION_RETRIES =>
+                            {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    5 * (attempt as u64 + 1),
+                                ))
+                                .await;
+                                continue;
+                            }
+                            Err(err) => return Err(err.into()),
+                        },
+                        Err(err)
+                            if (is_unique_violation(&err) || is_busy_error(&err))
+                                && attempt + 1 < MAX_ALLOCATION_RETRIES =>
+                        {
+                            let _ = txn.rollback().await;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                5 * (attempt as u64 + 1),
+                            ))
+                            .await;
+                            continue;
+                        }
+                        Err(err) => {
+                            let _ = txn.rollback().await;
+                            return Err(err.into());
+                        }
                     }
-                    None => Ok(ProfileClaimOutcome::Conflict),
+                }
+                Ok(ClaimAttempt::Existing(existing_claim)) => {
+                    if existing_claim.author_public_key != author_public_key
+                        || existing_claim.fingerprint != fingerprint
+                    {
+                        let _ = txn.rollback().await;
+                        return Ok(ProfileClaimOutcome::Conflict);
+                    }
+
+                    let existing_row = match profile_operations::Entity::find()
+                        .filter(profile_operations::Column::OperationId.eq(operation_id))
+                        .one(&txn)
+                        .await
+                    {
+                        Ok(row) => row,
+                        Err(err) if is_busy_error(&err) && attempt + 1 < MAX_ALLOCATION_RETRIES => {
+                            let _ = txn.rollback().await;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                5 * (attempt as u64 + 1),
+                            ))
+                            .await;
+                            continue;
+                        }
+                        Err(err) => {
+                            let _ = txn.rollback().await;
+                            return Err(err.into());
+                        }
+                    };
+
+                    match txn.commit().await {
+                        Ok(_) => {}
+                        Err(err) if is_busy_error(&err) && attempt + 1 < MAX_ALLOCATION_RETRIES => {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                5 * (attempt as u64 + 1),
+                            ))
+                            .await;
+                            continue;
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
+
+                    match existing_row {
+                        Some(row) => {
+                            let op = model_to_domain(&row)?;
+                            if op.site_id != *site_id {
+                                return Ok(ProfileClaimOutcome::Conflict);
+                            }
+                            return Ok(ProfileClaimOutcome::Replay(op));
+                        }
+                        None => return Ok(ProfileClaimOutcome::Conflict),
+                    }
+                }
+                Err(err) if is_busy_anyhow_error(&err) && attempt + 1 < MAX_ALLOCATION_RETRIES => {
+                    let _ = txn.rollback().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(5 * (attempt as u64 + 1)))
+                        .await;
+                    continue;
+                }
+                Err(err) => {
+                    let _ = txn.rollback().await;
+                    return Err(err);
                 }
             }
         }
+
+        anyhow::bail!(
+            "exceeded maximum retries ({MAX_ALLOCATION_RETRIES}) allocating sequence for operation {operation_id}"
+        )
     }
 
     async fn get_profile_operation(&self, operation_id: &str) -> Result<Option<ProfileOperation>> {
