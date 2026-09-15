@@ -7,8 +7,9 @@
 //! 3. Existing provenance is stable:
 //!    - `existing false + later external observation -> remains false`
 //!    - `existing true + later normal observation -> remains true`
-//! 4. Unknown ordinary member observation without authoritative local upload indication
-//!    does NOT blindly create an `is_external = true` mapping.
+//! 4. A persisted member avatar always materializes a resolvable lookup mapping;
+//!    provenance is `is_external = false` for owned uploads and `true` otherwise,
+//!    and provenance is never treated as ownership.
 //! 5. Repeated ingestion and restart durability preserve identity without duplicates.
 //! 6. External discovery never modifies `media_uploads`.
 
@@ -19,7 +20,8 @@ use tokio::sync::broadcast;
 use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
 use cumments_core::models::{PageSlug, SiteId, VisitorProfile};
 use cumments_core::ports::{
-    MatrixDriver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
+    MatrixDriver, MediaReferenceResolver, MediaReferenceStore, MessageStore, RegistryStore,
+    RoomStore, SiteStore,
 };
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
@@ -76,13 +78,14 @@ fn create_processor(store: Arc<DbStore>) -> EventProcessor {
 }
 
 #[tokio::test]
-async fn unknown_ordinary_member_observation_does_not_create_external_reference() {
-    let db_url = test_db_url("unknown_member_no_speculative_external");
+async fn ordinary_member_observation_materializes_a_resolvable_mapping() {
+    let db_url = test_db_url("unknown_member_mapping");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
 
     let site_id = SiteId::from("my-blog");
     let page_slug = PageSlug::from("post-1");
     let room_id = "!comments:hs";
+    let unknown_mxc = "mxc://hs/unknown-avatar-alice-123";
 
     store
         .ensure_site_exists(site_id.as_str(), "!space:hs")
@@ -93,31 +96,36 @@ async fn unknown_ordinary_member_observation_does_not_create_external_reference(
         .await
         .expect("register room");
 
+    // A missing mapping before projection is normal.
+    assert!(
+        store
+            .find_reference(&site_id, unknown_mxc)
+            .await
+            .expect("find reference")
+            .is_none()
+    );
+
     let processor = create_processor(store.clone());
 
-    let unknown_mxc = "mxc://hs/unknown-avatar-alice-123";
-
-    // 1. Process an ordinary m.room.member event with an unknown avatar MXC
-    let member_event = ParsedRoomState {
-        room_id: room_id.to_string(),
-        event_id: "$evt-alice-join".to_string(),
-        sender: "@alice:hs".to_string(),
-        event_type: "m.room.member".to_string(),
-        state_key: "@alice:hs".to_string(),
-        origin_server_ts: 1000,
-        content: json!({
-            "membership": "join",
-            "displayname": "Alice",
-            "avatar_url": unknown_mxc,
-        }),
-    };
-
     processor
-        .process_room_state(member_event)
+        .process_room_state(ParsedRoomState {
+            room_id: room_id.to_string(),
+            event_id: "$evt-alice-join".to_string(),
+            sender: "@alice:hs".to_string(),
+            event_type: "m.room.member".to_string(),
+            state_key: "@alice:hs".to_string(),
+            origin_server_ts: 1000,
+            content: json!({
+                "membership": "join",
+                "displayname": "Alice",
+                "avatar_url": unknown_mxc,
+            }),
+        })
         .await
         .expect("process room state");
 
-    // 2. Room member projection must succeed as normal
+    // The member presentation projects the deterministic reference.
+    let expected = MediaReference::from_media(&site_id, unknown_mxc);
     let member = store
         .get_member(room_id, "@alice:hs")
         .await
@@ -125,19 +133,30 @@ async fn unknown_ordinary_member_observation_does_not_create_external_reference(
         .expect("member exists");
     assert_eq!(member.display_name.as_deref(), Some("Alice"));
     assert_eq!(member.avatar_url.as_deref(), Some(unknown_mxc));
+    assert_eq!(member.media_reference, Some(expected.clone()));
 
-    // 3. Crucial requirement: unknown ordinary member observation MUST NOT
-    // blindly classify an unknown mapping as external!
-    let maybe_ref = store
-        .find_reference(&site_id, unknown_mxc)
-        .await
-        .expect("find reference");
-    assert!(
-        maybe_ref.is_none(),
-        "ordinary m.room.member observation must not fabricate an external media mapping"
+    // The persisted reference stays resolvable through the lookup mapping.
+    assert_eq!(
+        store.find_reference(&site_id, unknown_mxc).await.unwrap(),
+        Some(expected.clone())
     );
+    assert_eq!(
+        store
+            .resolve_mxc(&site_id, &expected)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(unknown_mxc)
+    );
+    let record = store
+        .get_record(&site_id, &expected)
+        .await
+        .expect("get record")
+        .expect("record exists");
+    assert_eq!(record.mxc_uri, unknown_mxc);
+    assert_eq!(record.source(), MediaReferenceSource::External);
 
-    // 4. media_uploads table remains empty
+    // Provenance is not ownership: media_uploads is untouched.
     let unused_uploads = store
         .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
         .await

@@ -23,7 +23,8 @@ use cumments_core::models::{
     TextStyle,
 };
 use cumments_core::ports::{
-    MatrixDriver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
+    MatrixDriver, MediaReferenceResolver, MediaReferenceStore, MessageStore, RegistryStore,
+    RoomStore, SiteStore,
 };
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
@@ -1903,16 +1904,37 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
         .expect("member exists");
     assert_eq!(member.media_reference, Some(expected.clone()));
     assert_eq!(member.avatar_url.as_deref(), Some(mxc_uri));
+
+    // The persisted reference has a resolvable lookup mapping. Its provenance is
+    // an observation source, not a claim of ownership.
+    assert_eq!(
+        store.find_reference(&site_id, mxc_uri).await.unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        store
+            .resolve_mxc(&site_id, &expected)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(mxc_uri)
+    );
+    let record = store
+        .get_record(&site_id, &expected)
+        .await
+        .unwrap()
+        .expect("mapping materialized");
+    assert!(record.is_external);
     assert!(
         store
-            .find_reference(&site_id, mxc_uri)
+            .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
             .await
-            .expect("find reference")
-            .is_none(),
-        "an unknown avatar must not materialize a speculative mapping"
+            .unwrap()
+            .is_empty(),
+        "provenance must not create ownership"
     );
 
-    // Rebuilding the projection with the mapping still absent yields the same reference.
+    // Replaying the event after rebuilding the projection yields the same identity.
     store
         .delete_member(room_id, user_id)
         .await

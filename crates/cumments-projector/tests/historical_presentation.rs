@@ -20,8 +20,8 @@ use tokio::sync::broadcast;
 use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
 use cumments_core::models::{Content, PageSlug, RoomIdentity, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{
-    HistoricalRoomStateResolver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore,
-    SiteStore,
+    HistoricalRoomStateResolver, MediaReferenceResolver, MediaReferenceStore, MessageStore,
+    RegistryStore, RoomStore, SiteStore,
 };
 use cumments_matrix::LoggingMatrixDriver;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
@@ -1080,8 +1080,7 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
     let raw3 = get_raw_message(&store, "$msg-unknown-ref").await.unwrap();
     // The raw compatibility MXC is kept, and the media reference is derived
     // deterministically from the event's avatar even though no lookup mapping
-    // existed. No speculative provenance row is materialized for an unknown
-    // (non-Cumments) avatar.
+    // existed. The mapping is materialized so the persisted reference resolves.
     assert_eq!(
         raw3.author_avatar_url.as_deref(),
         Some("mxc://hs/speculative-external")
@@ -1091,13 +1090,29 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
         raw3.author_media_reference.as_deref(),
         Some(expected3.as_str())
     );
-    assert!(
+    assert_eq!(
         store
             .find_reference(&site_id, "mxc://hs/speculative-external")
             .await
+            .unwrap(),
+        Some(expected3.clone())
+    );
+    assert_eq!(
+        store
+            .resolve_mxc(&site_id, &expected3)
+            .await
             .unwrap()
-            .is_none(),
-        "an unknown avatar must not materialize a speculative mapping"
+            .as_deref(),
+        Some("mxc://hs/speculative-external")
+    );
+    let record3 = store
+        .get_record(&site_id, &expected3)
+        .await
+        .unwrap()
+        .expect("mapping materialized");
+    assert!(
+        record3.is_external,
+        "an observed avatar without a Cumments upload carries external provenance"
     );
 }
 

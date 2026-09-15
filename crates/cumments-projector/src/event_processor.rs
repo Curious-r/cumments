@@ -1284,6 +1284,28 @@ impl EventProcessor {
         self.reconcile_observed_profile(site_id, &profile).await
     }
 
+    /// Provenance for an observed Matrix avatar MXC.
+    ///
+    /// A Cumments-owned upload for the site is recorded as
+    /// [`MediaReferenceSource::Cumments`]; any other observed avatar is treated
+    /// as [`MediaReferenceSource::External`]. This describes the observation
+    /// source only: it is neither the media identity nor a claim of ownership.
+    async fn observed_avatar_source(
+        &self,
+        site_id: &SiteId,
+        mxc: &str,
+    ) -> Result<MediaReferenceSource> {
+        if self
+            .message_store
+            .has_media_upload_for_site(site_id.as_str(), mxc)
+            .await?
+        {
+            Ok(MediaReferenceSource::Cumments)
+        } else {
+            Ok(MediaReferenceSource::External)
+        }
+    }
+
     /// Projects an observed [`VisitorProfile`] from an authoritative Matrix
     /// read into the deterministic [`MediaReference`] for its avatar.
     pub async fn reconcile_observed_profile(
@@ -1306,15 +1328,7 @@ impl EventProcessor {
         // Materialize the lookup/provenance row when a store is configured so
         // runtime reverse lookup keeps working. It is not the source of identity.
         if let Some(ref media_store) = self.media_reference_store {
-            let source = if self
-                .message_store
-                .has_media_upload_for_site(site_id.as_str(), mxc)
-                .await?
-            {
-                MediaReferenceSource::Cumments
-            } else {
-                MediaReferenceSource::External
-            };
+            let source = self.observed_avatar_source(site_id, mxc).await?;
             media_store
                 .get_or_create_reference(site_id, mxc, source)
                 .await?;
@@ -1733,29 +1747,23 @@ impl EventProcessor {
         };
 
         // Matrix-derived projection: the historical author avatar identity is a
-        // pure function of the event's `(site_id, avatar mxc)`. It must not
-        // depend on a `media_references` lookup row, or a missing mapping would
-        // strip the avatar from the historical presentation.
+        // pure function of the event's `(site_id, avatar mxc)`, so it never
+        // depends on a `media_references` lookup row.
+        //
+        // The stored reference must stay resolvable, so the lookup mapping is
+        // materialized first. A store error propagates instead of persisting an
+        // unresolvable reference; with no configured store the reference is not
+        // persisted at all.
         if media_reference.is_none()
             && let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
             && let Ok(site_id_obj) = SiteId::new(site_id.clone())
+            && let Some(ref media_store) = self.media_reference_store
         {
+            let source = self.observed_avatar_source(&site_id_obj, mxc).await?;
+            media_store
+                .get_or_create_reference(&site_id_obj, mxc, source)
+                .await?;
             media_reference = Some(MediaReference::from_media(&site_id_obj, mxc));
-
-            // Materialize the mapping for a known Cumments upload so provenance
-            // and runtime reverse lookup stay available. This is not the source
-            // of the identity derived above, and unknown external avatars are
-            // still not speculatively materialized here.
-            if let Some(ref media_store) = self.media_reference_store
-                && self
-                    .message_store
-                    .has_media_upload_for_site(site_id_obj.as_str(), mxc)
-                    .await?
-            {
-                media_store
-                    .get_or_create_reference(&site_id_obj, mxc, MediaReferenceSource::Cumments)
-                    .await?;
-            }
         }
 
         let message = Message {
@@ -2303,12 +2311,17 @@ impl EventProcessor {
                     };
 
                 // Matrix-derived projection: the member's avatar identity is a
-                // pure function of the event's `(site_id, avatar mxc)`. It must
-                // not depend on a `media_references` lookup row, or a missing
-                // mapping would drop the avatar from the current presentation.
+                // pure function of the event's `(site_id, avatar mxc)`, so it
+                // never depends on a `media_references` lookup row.
+                //
+                // The stored reference must stay resolvable, so the lookup
+                // mapping is materialized first. A store error propagates rather
+                // than persisting an unresolvable reference; with no configured
+                // store the reference is not persisted at all.
                 let mut media_reference = existing_media_ref;
                 if media_reference.is_none()
                     && let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
+                    && let Some(ref media_store) = self.media_reference_store
                 {
                     let site_id =
                         if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
@@ -2322,26 +2335,11 @@ impl EventProcessor {
                         };
 
                     if let Some(ref site_id) = site_id {
+                        let source = self.observed_avatar_source(site_id, mxc).await?;
+                        media_store
+                            .get_or_create_reference(site_id, mxc, source)
+                            .await?;
                         media_reference = Some(MediaReference::from_media(site_id, mxc));
-
-                        // Materialize the mapping for a known Cumments upload so
-                        // provenance and runtime reverse lookup stay available;
-                        // it is not the source of the identity above, and an
-                        // ordinary member event alone does not imply ownership.
-                        if let Some(ref media_store) = self.media_reference_store
-                            && self
-                                .message_store
-                                .has_media_upload_for_site(site_id.as_str(), mxc)
-                                .await?
-                        {
-                            media_store
-                                .get_or_create_reference(
-                                    site_id,
-                                    mxc,
-                                    MediaReferenceSource::Cumments,
-                                )
-                                .await?;
-                        }
                     } else {
                         debug!(
                             room_id = %event.room_id,
