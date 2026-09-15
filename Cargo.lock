@@ -916,6 +916,7 @@ dependencies = [
  "chrono",
  "cumments-core",
  "cumments-matrix",
+ "cumments-reconciler",
  "cumments-store",
  "cumments-test-utils",
  "ed25519-dalek",

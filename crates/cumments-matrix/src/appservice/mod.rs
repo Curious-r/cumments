@@ -12,7 +12,7 @@ mod versions;
 
 use anyhow::{Result, anyhow};
 use cumments_core::ports::VirtualUserStore;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 /// Build a typed adoption-refusal error so the reconciler can quarantine the
@@ -45,7 +45,6 @@ pub struct AppServiceMatrixDriver {
     sender_localpart: String,
     virtual_user_store: Arc<dyn VirtualUserStore>,
     joined_cache: Mutex<HashSet<(String, String)>>,
-    display_name_cache: Mutex<HashMap<String, String>>,
     /// Explicit room version from configuration, if any.
     room_version_override: Option<String>,
     /// Cached `m.room_versions.default` from `/capabilities`.
@@ -78,7 +77,6 @@ impl AppServiceMatrixDriver {
             sender_localpart,
             virtual_user_store,
             joined_cache: Mutex::new(HashSet::new()),
-            display_name_cache: Mutex::new(HashMap::new()),
             room_version_override: room_version,
             default_room_version: Mutex::new(None),
             capabilities_unavailable: Mutex::new(false),

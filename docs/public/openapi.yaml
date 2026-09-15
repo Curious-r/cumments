@@ -1486,7 +1486,6 @@ paths:
               type: object
               required:
                 - geo_uri
-                - display_name
                 - author_public_key
                 - author_signature
                 - challenge_response
@@ -1498,14 +1497,6 @@ paths:
                   type: [string, "null"]
                   maxLength: 255
                   description: "Optional location description (0-255 Unicode extended grapheme clusters per UAX #29)."
-                display_name:
-                  type: string
-                  minLength: 1
-                  maxLength: 50
-                  description: |
-                    Display name written to the virtual user's Matrix
-                    profile (1-50 Unicode extended grapheme clusters per UAX #29). Presentation data; deliberately not covered by
-                    the author signature.
                 author_public_key:
                   type: string
                 author_signature:
@@ -2699,7 +2690,7 @@ components:
           description: Bounded sample of active reactors ordered by representative origin_server_ts DESC, event_id DESC. Always [] when empty.
     PostCommentRequest:
       type: object
-      required: [content, display_name, author_public_key, author_signature, challenge_response]
+      required: [content, author_public_key, author_signature, challenge_response]
       properties:
         content:
           type: string
@@ -2737,14 +2728,6 @@ components:
             voice:
               type: boolean
               default: false
-        display_name:
-          type: string
-          minLength: 1
-          maxLength: 50
-          description: |
-            Display name written to the virtual user's Matrix profile.
-            Presentation data; deliberately not covered by the author
-            signature.
         author_public_key:
           type: string
         author_signature:
@@ -2760,7 +2743,7 @@ components:
           description: PoW challenge response `prefix|nonce`; the signed `challenge_prefix` is the part before `|`.
     CreatePollRequest:
       type: object
-      required: [question, answers, kind, max_selections, display_name, author_public_key, author_signature, challenge_response]
+      required: [question, answers, kind, max_selections, author_public_key, author_signature, challenge_response]
       properties:
         question:
           type: string
@@ -2801,14 +2784,6 @@ components:
           minimum: 1
           maximum: 20
           description: Maximum selections per voter (1-20); must not exceed the number of answers.
-        display_name:
-          type: string
-          minLength: 1
-          maxLength: 50
-          description: |
-            Display name written to the virtual user's Matrix profile.
-            Presentation data; deliberately not covered by the author
-            signature.
         author_public_key:
           type: string
         author_signature:

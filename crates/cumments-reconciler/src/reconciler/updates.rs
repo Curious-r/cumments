@@ -118,16 +118,7 @@ impl UpdatesPass {
                     .register_room(&room_id, &command.site_id, &command.page_slug)
                     .await?;
 
-                // 4. Hands: Fetch original display name to maintain it
-                let display_name = self
-                    .deps
-                    .message_store
-                    .get_author_display_name(&command.event_id)
-                    .await?
-                    .flatten()
-                    .unwrap_or_else(|| "Visitor".to_string());
-
-                // 5. Hands: Allocate/reuse the transaction ID, then send m.replace
+                // 4. Hands: Allocate/reuse the transaction ID, then send m.replace
                 let txn_id = if let Some(txn_id) = pending.txn_id.as_deref() {
                     txn_id.to_owned()
                 } else {
@@ -145,7 +136,6 @@ impl UpdatesPass {
                         &room_id,
                         &command.event_id,
                         &command.content,
-                        &display_name,
                         &command.author_public_key,
                         &command.author_signature,
                         &command.author_challenge,

@@ -34,9 +34,6 @@ pub struct PostCommentCommand {
     #[serde(default)]
     pub poll: Option<PollPayload>,
 
-    /// Display name of the author. For visitors, this is provided by them.
-    pub display_name: String,
-
     /// Ed25519 public key identifying the author (base64url).
     /// Ownership is publicly verifiable from Matrix events.
     pub author_public_key: String,
@@ -165,7 +162,6 @@ mod tests {
                 max_selections: 1,
                 operation_id: "op-123".to_string(),
             }),
-            display_name: "Alice".to_string(),
             author_public_key: "pk".to_string(),
             author_signature: "sig".to_string(),
             author_challenge: "chal".to_string(),

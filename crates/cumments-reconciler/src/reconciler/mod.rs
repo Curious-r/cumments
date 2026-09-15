@@ -2,14 +2,14 @@ mod deletions;
 mod governance;
 mod media;
 pub mod pass;
-mod posts;
+pub mod posts;
 pub mod profile_operations;
 mod projection_repairs;
 mod room_retirement;
 mod rooms;
 mod site_retirement;
 mod timeouts;
-mod updates;
+pub mod updates;
 
 use anyhow::Result;
 use cumments_core::{

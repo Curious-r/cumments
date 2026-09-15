@@ -18,7 +18,6 @@ fn post_command() -> PostCommentCommand {
         media: None,
         location: None,
         poll: None,
-        display_name: "Alice".to_string(),
         author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
         author_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
         author_challenge: "1728000000.deadbeef.sig".to_string(),

@@ -45,6 +45,54 @@ pub struct RecordedPoll {
     pub txn_id: String,
 }
 
+/// A recorded [`cumments_core::ports::MatrixDriver::post_message`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedPostMessage {
+    pub room_id: String,
+    pub content: String,
+    pub media: Option<cumments_core::models::CommentMedia>,
+    pub author_public_key: String,
+    pub author_signature: String,
+    pub author_challenge: String,
+    pub site_id: SiteId,
+    pub reply_to: Option<String>,
+    pub thread_root: Option<String>,
+    pub reply_to_body: Option<String>,
+    pub reply_to_sender: Option<String>,
+    pub submission_id: Option<i64>,
+    pub txn_id: String,
+}
+
+/// A recorded [`cumments_core::ports::MatrixDriver::post_location`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedLocation {
+    pub room_id: String,
+    pub geo_uri: String,
+    pub description: Option<String>,
+    pub site_id: SiteId,
+    pub author_public_key: String,
+    pub author_signature: String,
+    pub author_challenge: String,
+    pub submission_id: Option<i64>,
+    pub reply_to: Option<String>,
+    pub thread_root: Option<String>,
+    pub txn_id: String,
+}
+
+/// A recorded [`cumments_core::ports::MatrixDriver::update_message`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedUpdate {
+    pub room_id: String,
+    pub event_id: String,
+    pub new_content: String,
+    pub author_public_key: String,
+    pub author_signature: String,
+    pub author_challenge: String,
+    pub site_id: SiteId,
+    pub submission_id: Option<i64>,
+    pub txn_id: String,
+}
+
 /// In-memory [`MatrixDriver`] double that records the calls each test
 /// asserts.
 ///
@@ -76,6 +124,9 @@ pub struct TestDriver {
     /// Recorded `post_poll` calls, richest-first so tests can assert the
     /// structured semantic payload the reconciler handed the driver.
     pub polls: Mutex<Vec<RecordedPoll>>,
+    pub posted_messages: Mutex<Vec<RecordedPostMessage>>,
+    pub posted_locations: Mutex<Vec<RecordedLocation>>,
+    pub updated_messages: Mutex<Vec<RecordedUpdate>>,
     pub avatar_updates: Mutex<Vec<(String, String, Option<String>)>>,
     pub visitor_profiles: Mutex<HashMap<(String, String), VisitorProfile>>,
     pub redactions: Mutex<Vec<(String, String, String)>>,
@@ -127,6 +178,9 @@ impl TestDriver {
             poll_responses: Mutex::new(Vec::new()),
             poll_ends: Mutex::new(Vec::new()),
             polls: Mutex::new(Vec::new()),
+            posted_messages: Mutex::new(Vec::new()),
+            posted_locations: Mutex::new(Vec::new()),
+            updated_messages: Mutex::new(Vec::new()),
             avatar_updates: Mutex::new(Vec::new()),
             visitor_profiles: Mutex::new(HashMap::new()),
             redactions: Mutex::new(Vec::new()),

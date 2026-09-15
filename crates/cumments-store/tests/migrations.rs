@@ -140,6 +140,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000077_messages_author_media_reference".to_string()),
         "000077 must be registered or messages author_media_reference column is missing"
     );
+    assert!(
+        names.contains(&"m20260915_000078_post_submissions_drop_display_name".to_string()),
+        "000078 must be registered or post_submissions drop_display_name migration is missing"
+    );
 }
 
 #[tokio::test]
@@ -508,6 +512,7 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
 
     assert!(post_columns.iter().any(|c| c == "txn_id"));
     assert!(!post_columns.iter().any(|c| c == "force_new_txn"));
+    assert!(!post_columns.iter().any(|c| c == "display_name"));
     for columns in [&delete_columns, &update_columns] {
         assert!(columns.iter().any(|c| c == "txn_id"));
         assert!(columns.iter().any(|c| c == "matrix_event_id"));

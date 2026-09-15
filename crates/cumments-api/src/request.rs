@@ -121,6 +121,7 @@ fn validate_post_content(req: &PostCommentRequest) -> Result<(), validator::Vali
 
 /// Request DTO for posting a comment.
 #[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 #[validate(schema(function = "validate_post_content"))]
 pub struct PostCommentRequest {
     #[validate(custom(function = "crate::validation::validate_comment_content"))]
@@ -129,11 +130,6 @@ pub struct PostCommentRequest {
     /// `media.url` and `content` is only the fallback filename.
     #[serde(default)]
     pub media: Option<CommentMedia>,
-    /// Display name to write to the virtual user's Matrix profile. It is
-    /// presentation data and is deliberately not covered by the author
-    /// signature; the signed payload covers only content and reply relation.
-    #[validate(custom(function = "crate::validation::validate_display_name"))]
-    pub display_name: String,
     /// Ed25519 public key of the author (base64url, 32 bytes raw).
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
@@ -164,6 +160,7 @@ pub struct DeleteCommentRequest {
 
 /// Request DTO for updating a comment.
 #[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateCommentRequest {
     #[validate(custom(function = "crate::validation::validate_comment_content_update"))]
     pub content: String,
@@ -247,6 +244,7 @@ pub struct PollAnswerRequest {
 /// semantic value (`"disclosed"` / `"undisclosed"`); `max_selections` must be
 /// between 1 and the number of answers.
 #[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct CreatePollRequest {
     #[validate(custom(function = "crate::validation::validate_poll_question"))]
     pub question: String,
@@ -255,10 +253,6 @@ pub struct CreatePollRequest {
     pub kind: cumments_core::poll::PollSemanticKind,
     #[validate(range(min = 1, max = 20))]
     pub max_selections: u64,
-    /// Display name written to the virtual user's Matrix profile. Presentation
-    /// data; deliberately not covered by the signature.
-    #[validate(custom(function = "crate::validation::validate_display_name"))]
-    pub display_name: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]
@@ -276,17 +270,13 @@ pub struct CreatePollRequest {
 /// Request DTO for posting a location. Like `PostCommentRequest`, it may
 /// carry `reply_to` / `thread_root` so locations can start or join threads.
 #[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct LocationRequest {
     #[validate(length(min = 4, max = 512))]
     pub geo_uri: String,
     #[validate(custom(function = "crate::validation::validate_location_description"))]
     #[serde(default)]
     pub description: Option<String>,
-    /// Display name to write to the virtual user's Matrix profile. It is
-    /// presentation data and is deliberately not covered by the author
-    /// signature; the signed payload covers only the geo URI.
-    #[validate(custom(function = "crate::validation::validate_display_name"))]
-    pub display_name: String,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,
     #[validate(length(min = 1, max = 256))]
@@ -397,28 +387,31 @@ mod tests {
 
     #[test]
     fn display_name_and_comment_grapheme_boundaries() {
-        // Post comment display_name 50
-        let mut post = PostCommentRequest {
-            content: "hi".to_string(),
-            media: None,
+        // SetDisplayNameRequest display_name 50
+        let mut set_name = SetDisplayNameRequest {
             display_name: "a".repeat(50),
+            author_public_key: "pk".to_string(),
+            author_signature: "sig".to_string(),
+            challenge_response: "chal|nonce".to_string(),
+        };
+        assert!(set_name.validate().is_ok());
+        set_name.display_name = "a".repeat(51);
+        assert!(set_name.validate().is_err());
+        set_name.display_name = "🇩🇪".repeat(50);
+        assert!(set_name.validate().is_ok());
+        set_name.display_name = "🇩🇪".repeat(51);
+        assert!(set_name.validate().is_err());
+
+        // Post content 5000 (allow empty when media present, but we test max)
+        let mut post = PostCommentRequest {
+            content: "a".repeat(5000),
+            media: None,
             author_public_key: "pk".to_string(),
             author_signature: "sig".to_string(),
             reply_to: None,
             thread_root: None,
             challenge_response: "chal|nonce".to_string(),
         };
-        assert!(post.validate().is_ok());
-        post.display_name = "a".repeat(51);
-        assert!(post.validate().is_err());
-        post.display_name = "🇩🇪".repeat(50);
-        assert!(post.validate().is_ok());
-        post.display_name = "🇩🇪".repeat(51);
-        assert!(post.validate().is_err());
-
-        // Post content 5000 (allow empty when media present, but we test max)
-        post.display_name = "Alice".to_string();
-        post.content = "a".repeat(5000);
         assert!(post.validate().is_ok());
         post.content = "a".repeat(5001);
         assert!(post.validate().is_err());
@@ -452,7 +445,6 @@ mod tests {
         let mut loc = LocationRequest {
             geo_uri: "geo:30,120".to_string(),
             description: Some("a".repeat(255)),
-            display_name: "Alice".to_string(),
             author_public_key: "pk".to_string(),
             author_signature: "sig".to_string(),
             reply_to: None,
@@ -474,6 +466,48 @@ mod tests {
         assert!(loc.validate().is_err());
         loc.description = None;
         assert!(loc.validate().is_ok());
+    }
+
+    #[test]
+    fn content_requests_reject_display_name_and_unknown_fields() {
+        let post_json = r#"{
+            "content": "hello",
+            "display_name": "Alice",
+            "author_public_key": "pk",
+            "author_signature": "sig",
+            "challenge_response": "chal"
+        }"#;
+        assert!(serde_json::from_str::<PostCommentRequest>(post_json).is_err());
+
+        let loc_json = r#"{
+            "geo_uri": "geo:1,2",
+            "display_name": "Alice",
+            "author_public_key": "pk",
+            "author_signature": "sig",
+            "challenge_response": "chal"
+        }"#;
+        assert!(serde_json::from_str::<LocationRequest>(loc_json).is_err());
+
+        let poll_json = r#"{
+            "question": "Q?",
+            "answers": [{"id": "1", "text": "A"}],
+            "kind": "disclosed",
+            "max_selections": 1,
+            "display_name": "Alice",
+            "author_public_key": "pk",
+            "author_signature": "sig",
+            "challenge_response": "chal"
+        }"#;
+        assert!(serde_json::from_str::<CreatePollRequest>(poll_json).is_err());
+
+        let update_json = r#"{
+            "content": "new text",
+            "display_name": "Alice",
+            "author_public_key": "pk",
+            "author_signature": "sig",
+            "challenge_response": "chal"
+        }"#;
+        assert!(serde_json::from_str::<UpdateCommentRequest>(update_json).is_err());
     }
 
     #[test]

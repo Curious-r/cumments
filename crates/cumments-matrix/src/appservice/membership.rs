@@ -10,7 +10,6 @@ use tracing::{instrument, warn};
 /// Upper bound for the joined-room cache. Membership changes are rare; when
 /// the cap is hit the cache is reset and rebuilt from homeserver state.
 const JOINED_CACHE_MAX: usize = 10_000;
-const DISPLAY_NAME_CACHE_MAX: usize = 10_000;
 
 #[derive(Deserialize)]
 struct JoinedRoomsResponse {
@@ -315,56 +314,6 @@ impl AppServiceMatrixDriver {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(cache_key);
-    }
-
-    /// Best-effort: keep the virtual user's display name in sync with the
-    /// commenter's display name so Matrix clients show it instead of
-    /// the localpart. Failures only warn; the message send still proceeds.
-    pub(super) async fn ensure_display_name(
-        &self,
-        virtual_user: &str,
-        display_name: &str,
-    ) -> Result<()> {
-        {
-            let cache = self
-                .display_name_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if cache.get(virtual_user).map(String::as_str) == Some(display_name) {
-                return Ok(());
-            }
-        }
-
-        let path = format!(
-            "_matrix/client/v3/profile/{}/displayname",
-            percent_encode(virtual_user)
-        );
-        let resp = self
-            .request(reqwest::Method::PUT, &path, Some(virtual_user))
-            .json(&serde_json::json!({ "displayname": display_name }))
-            .send()
-            .await
-            .map_err(|e| anyhow!("set displayname request failed: {}", e))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let error_body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "set displayname for {} failed ({}): {}",
-                virtual_user,
-                status,
-                error_body
-            ));
-        }
-        let mut cache = self
-            .display_name_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if cache.len() >= DISPLAY_NAME_CACHE_MAX && !cache.contains_key(virtual_user) {
-            cache.clear();
-        }
-        cache.insert(virtual_user.to_owned(), display_name.to_owned());
-        Ok(())
     }
 
     /// Sets or removes the avatar on a virtual user's global profile.

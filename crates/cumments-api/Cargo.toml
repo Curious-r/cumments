@@ -36,6 +36,7 @@ unicode-segmentation.workspace = true
 [dev-dependencies]
 cumments-store.workspace = true
 cumments-matrix.workspace = true
+cumments-reconciler.workspace = true
 cumments-test-utils.workspace = true
 base64.workspace = true
 ed25519-dalek.workspace = true

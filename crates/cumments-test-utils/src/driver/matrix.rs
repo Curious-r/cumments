@@ -19,12 +19,16 @@ impl MatrixDriver for TestDriver {
 
     async fn ensure_comment_room(
         &self,
-        _site_id: &SiteId,
-        _page_slug: &PageSlug,
+        site_id: &SiteId,
+        page_slug: &PageSlug,
         _space_id: &str,
-        _candidate_room_id: Option<&str>,
+        candidate_room_id: Option<&str>,
     ) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+        if let Some(candidate) = candidate_room_id {
+            return Ok(candidate.to_string());
+        }
+        let room_id = format!("!room-{}-{}:hs", site_id.as_str(), page_slug.as_str());
+        Ok(room_id)
     }
     async fn create_site_space(&self, site_id: &SiteId) -> anyhow::Result<String> {
         let space_id = format!("!space-{}:hs", site_id.as_str());
@@ -146,22 +150,38 @@ impl MatrixDriver for TestDriver {
     #[allow(clippy::too_many_arguments)]
     async fn post_message(
         &self,
-        _room_id: &str,
-        _content: &str,
-        _media: Option<&CommentMedia>,
-        _display_name: &str,
-        _author_public_key: &str,
-        _author_signature: &str,
-        _author_challenge: &str,
-        _site_id: &SiteId,
-        _reply_to: Option<&str>,
-        _thread_root: Option<&str>,
-        _reply_to_body: Option<&str>,
-        _reply_to_sender: Option<&str>,
-        _submission_id: Option<i64>,
-        _txn_id: &str,
+        room_id: &str,
+        content: &str,
+        media: Option<&CommentMedia>,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+        site_id: &SiteId,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
+        reply_to_body: Option<&str>,
+        reply_to_sender: Option<&str>,
+        submission_id: Option<i64>,
+        txn_id: &str,
     ) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+        let mut messages = self.posted_messages.lock().await;
+        let event_id = format!("$msg-event-{}", messages.len() + 1);
+        messages.push(crate::driver::RecordedPostMessage {
+            room_id: room_id.to_string(),
+            content: content.to_string(),
+            media: media.cloned(),
+            author_public_key: author_public_key.to_string(),
+            author_signature: author_signature.to_string(),
+            author_challenge: author_challenge.to_string(),
+            site_id: site_id.clone(),
+            reply_to: reply_to.map(str::to_string),
+            thread_root: thread_root.map(str::to_string),
+            reply_to_body: reply_to_body.map(str::to_string),
+            reply_to_sender: reply_to_sender.map(str::to_string),
+            submission_id,
+            txn_id: txn_id.to_string(),
+        });
+        Ok(event_id)
     }
     async fn react_message(
         &self,
@@ -274,36 +294,62 @@ impl MatrixDriver for TestDriver {
     #[allow(clippy::too_many_arguments)]
     async fn post_location(
         &self,
-        _room_id: &str,
-        _geo_uri: &str,
-        _description: Option<&str>,
-        _display_name: &str,
-        _site_id: &SiteId,
-        _author_public_key: &str,
-        _author_signature: &str,
-        _author_challenge: &str,
-        _submission_id: Option<i64>,
-        _reply_to: Option<&str>,
-        _thread_root: Option<&str>,
-        _txn_id: &str,
+        room_id: &str,
+        geo_uri: &str,
+        description: Option<&str>,
+        site_id: &SiteId,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+        submission_id: Option<i64>,
+        reply_to: Option<&str>,
+        thread_root: Option<&str>,
+        txn_id: &str,
     ) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+        let mut locations = self.posted_locations.lock().await;
+        let event_id = format!("$loc-event-{}", locations.len() + 1);
+        locations.push(crate::driver::RecordedLocation {
+            room_id: room_id.to_string(),
+            geo_uri: geo_uri.to_string(),
+            description: description.map(str::to_string),
+            site_id: site_id.clone(),
+            author_public_key: author_public_key.to_string(),
+            author_signature: author_signature.to_string(),
+            author_challenge: author_challenge.to_string(),
+            submission_id,
+            reply_to: reply_to.map(str::to_string),
+            thread_root: thread_root.map(str::to_string),
+            txn_id: txn_id.to_string(),
+        });
+        Ok(event_id)
     }
     #[allow(clippy::too_many_arguments)]
     async fn update_message(
         &self,
-        _room_id: &str,
-        _event_id: &str,
-        _new_content: &str,
-        _display_name: &str,
-        _author_public_key: &str,
-        _author_signature: &str,
-        _author_challenge: &str,
-        _site_id: &SiteId,
-        _submission_id: Option<i64>,
-        _txn_id: &str,
+        room_id: &str,
+        event_id: &str,
+        new_content: &str,
+        author_public_key: &str,
+        author_signature: &str,
+        author_challenge: &str,
+        site_id: &SiteId,
+        submission_id: Option<i64>,
+        txn_id: &str,
     ) -> anyhow::Result<String> {
-        unimplemented!("not used in this test")
+        let mut updates = self.updated_messages.lock().await;
+        let edit_event_id = format!("$edit-event-{}", updates.len() + 1);
+        updates.push(crate::driver::RecordedUpdate {
+            room_id: room_id.to_string(),
+            event_id: event_id.to_string(),
+            new_content: new_content.to_string(),
+            author_public_key: author_public_key.to_string(),
+            author_signature: author_signature.to_string(),
+            author_challenge: author_challenge.to_string(),
+            site_id: site_id.clone(),
+            submission_id,
+            txn_id: txn_id.to_string(),
+        });
+        Ok(edit_event_id)
     }
     #[allow(clippy::too_many_arguments)]
     async fn redact_message(

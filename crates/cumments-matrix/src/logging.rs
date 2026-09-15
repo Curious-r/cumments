@@ -126,7 +126,6 @@ impl MatrixDriver for LoggingMatrixDriver {
         room_id: &str,
         content: &str,
         media: Option<&CommentMedia>,
-        display_name: &str,
         author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
@@ -141,9 +140,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Post message to room={}. Author={} (visitor={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, submission={:?}): {}",
+            "LOGGING: Post message to room={}. (visitor={}, reply_to={:?}, reply_to_body={:?}, reply_to_sender={:?}, submission={:?}): {}",
             room_id,
-            display_name,
             visitor_id,
             reply_to,
             reply_to_body,
@@ -203,9 +201,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         let visitor_id = derive_visitor_id_from_public_key(request.author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Post poll to room={}. Author={} (visitor={}, submission={:?}, op={}): {} / {} answers (max {})",
+            "LOGGING: Post poll to room={}. (visitor={}, submission={:?}, op={}): {} / {} answers (max {})",
             request.room_id,
-            request.display_name,
             visitor_id,
             request.submission_id,
             request.operation_id,
@@ -225,7 +222,6 @@ impl MatrixDriver for LoggingMatrixDriver {
         room_id: &str,
         geo_uri: &str,
         description: Option<&str>,
-        display_name: &str,
         _site_id: &SiteId,
         _author_public_key: &str,
         _author_signature: &str,
@@ -236,9 +232,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         _txn_id: &str,
     ) -> Result<String> {
         info!(
-            "LOGGING: Post location {geo_uri} in {room_id} ({}) as {} submission {}",
+            "LOGGING: Post location {geo_uri} in {room_id} ({}) submission {}",
             description.unwrap_or(""),
-            display_name,
             submission_id.map_or_else(|| "-".to_string(), |id| id.to_string())
         );
         Ok(format!("$logging-location-{geo_uri}"))
@@ -249,7 +244,6 @@ impl MatrixDriver for LoggingMatrixDriver {
         room_id: &str,
         event_id: &str,
         new_content: &str,
-        display_name: &str,
         author_public_key: &str,
         _author_signature: &str,
         _author_challenge: &str,
@@ -260,8 +254,8 @@ impl MatrixDriver for LoggingMatrixDriver {
         let visitor_id = derive_visitor_id_from_public_key(author_public_key)
             .unwrap_or_else(|| "invalid".to_string());
         debug!(
-            "LOGGING: Update message {} in room={}. Author={} (visitor={}, submission={:?}): {}",
-            event_id, room_id, display_name, visitor_id, submission_id, new_content
+            "LOGGING: Update message {} in room={}. (visitor={}, submission={:?}): {}",
+            event_id, room_id, visitor_id, submission_id, new_content
         );
         Ok(format!("log_update_{}", event_id))
     }

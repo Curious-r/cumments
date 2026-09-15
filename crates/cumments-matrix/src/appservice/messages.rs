@@ -120,7 +120,6 @@ impl AppServiceMatrixDriver {
         room_id: &str,
         content: &str,
         media: Option<&CommentMedia>,
-        display_name: &str,
         // Public key and signature are published in the event so ownership
         // stays verifiable from Matrix alone.
         author_public_key: &str,
@@ -141,11 +140,6 @@ impl AppServiceMatrixDriver {
 
         // 2. Ensure the virtual user is in the room (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
-
-        // 2b. Keep the display name in sync (best-effort)
-        if let Err(e) = self.ensure_display_name(&virtual_user, display_name).await {
-            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
-        }
 
         // 3. Send the message as the virtual user
         let message_body = match media {
@@ -341,7 +335,6 @@ impl AppServiceMatrixDriver {
         room_id: &str,
         geo_uri: &str,
         description: Option<&str>,
-        display_name: &str,
         site_id: &SiteId,
         author_public_key: &str,
         author_signature: &str,
@@ -355,10 +348,6 @@ impl AppServiceMatrixDriver {
             .resolve_virtual_user(author_public_key, site_id)
             .await?;
         self.ensure_joined(room_id, &virtual_user).await?;
-        // Keep the display name in sync (best-effort), like text posts.
-        if let Err(e) = self.ensure_display_name(&virtual_user, display_name).await {
-            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
-        }
         let body = build_location_body(
             geo_uri,
             description,
@@ -405,12 +394,6 @@ impl AppServiceMatrixDriver {
             .resolve_virtual_user(request.author_public_key, request.site_id)
             .await?;
         self.ensure_joined(request.room_id, &virtual_user).await?;
-        if let Err(e) = self
-            .ensure_display_name(&virtual_user, request.display_name)
-            .await
-        {
-            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
-        }
         let body = build_poll_start_body(
             request.question,
             request.answers,
@@ -456,7 +439,6 @@ impl AppServiceMatrixDriver {
         room_id: &str,
         event_id: &str,
         new_content: &str,
-        display_name: &str,
         author_public_key: &str,
         author_signature: &str,
         author_challenge: &str,
@@ -471,11 +453,6 @@ impl AppServiceMatrixDriver {
 
         // 2. Ensure joined (best-effort)
         self.ensure_joined(room_id, &virtual_user).await?;
-
-        // 2b. Keep the display name in sync (best-effort)
-        if let Err(e) = self.ensure_display_name(&virtual_user, display_name).await {
-            warn!("Failed to set display name for {}: {:#}", virtual_user, e);
-        }
 
         // 3. Send m.replace as the virtual user
         let message_body = build_edit_body(
@@ -911,7 +888,6 @@ mod tests {
                 answers: &answers,
                 kind: PollSemanticKind::Disclosed,
                 max_selections: 1,
-                display_name: "Alice",
                 site_id: &site_id,
                 author_public_key: "pk",
                 author_signature: "sig",

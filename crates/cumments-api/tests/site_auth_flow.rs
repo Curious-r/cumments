@@ -1455,7 +1455,6 @@ async fn location_posts_are_queued_and_idempotent() {
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
-    let display_name = "Alice";
     let message = signature_message(&[
         Some("LOCATE"),
         Some("test-blog"),
@@ -1470,7 +1469,6 @@ async fn location_posts_are_queued_and_idempotent() {
     let body = serde_json::json!({
         "geo_uri": "geo:31.2,121.5",
         "description": "here",
-        "display_name": display_name,
         "author_public_key": public_key,
         "author_signature": signature,
         "challenge_response": challenge_response,
@@ -1550,7 +1548,6 @@ async fn comment_replay_returns_original_submission_without_consuming_pow() {
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
-    let display_name = "Alice";
     let message = post_signature_message(
         "test-blog",
         "hello",
@@ -1562,7 +1559,6 @@ async fn comment_replay_returns_original_submission_without_consuming_pow() {
     let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
     let body = serde_json::json!({
         "content": "hello world",
-        "display_name": display_name,
         "author_public_key": public_key,
         "author_signature": signature,
         "challenge_response": challenge_response,
@@ -1748,7 +1744,6 @@ async fn comment_media_must_reference_an_owned_upload() {
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
-    let display_name = "Alice";
     let media_url = "mxc://hs/cat";
     let message = post_signature_message(
         "test-blog",
@@ -1766,7 +1761,6 @@ async fn comment_media_must_reference_an_owned_upload() {
             "filename": "cat.png",
             "mimetype": "image/png",
         },
-        "display_name": display_name,
         "author_public_key": public_key,
         "author_signature": signature,
         "challenge_response": challenge_response,
@@ -2995,7 +2989,6 @@ async fn comment_stickers_must_reference_the_sites_packs() {
             "url": media_url,
             "kind": "sticker",
         },
-        "display_name": "Alice",
         "author_public_key": public_key,
         "author_signature": signature,
         "challenge_response": challenge_response,
@@ -3622,7 +3615,6 @@ async fn post_comment_accepts_all_relation_combinations_independently() {
         let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
         let mut body = serde_json::json!({
             "content": "a reply",
-            "display_name": "Alice",
             "author_public_key": public_key,
             "author_signature": signature,
             "challenge_response": challenge_response,
@@ -3714,7 +3706,6 @@ async fn post_comment_accepts_all_relation_combinations_independently() {
         let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(message.as_bytes()).to_bytes());
         let mut body = serde_json::json!({
             "content": "a reply",
-            "display_name": "Alice",
             "author_public_key": public_key,
             "author_signature": signature,
             "challenge_response": challenge_response,
@@ -3807,7 +3798,6 @@ fn signed_poll_body(
         "answers": wire_answers,
         "kind": kind.as_str(),
         "max_selections": max_selections,
-        "display_name": "Alice",
         "author_public_key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
         "author_signature": signature,
         "reply_to": reply_to,
