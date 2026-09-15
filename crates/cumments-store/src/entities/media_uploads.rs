@@ -15,11 +15,10 @@ pub struct Model {
     /// comment-scoped, `None` for site-scoped identity media (avatars).
     pub site_id: String,
     pub page_slug: Option<String>,
-    /// When a a comment submission referencing this media was queued/sent; used by
-    /// orphan cleanup.
+    /// When a comment submission referencing this media was queued/sent.
+    /// Historical upload bookkeeping only; never a reachability or age signal.
     pub used_at: Option<DateTimeUtc>,
     /// The post submission that currently references this media, if any.
-    /// Orphan cleanup skips media bound to a non-terminal submission.
     pub submission_id: Option<i64>,
     pub created_at: DateTimeUtc,
 }

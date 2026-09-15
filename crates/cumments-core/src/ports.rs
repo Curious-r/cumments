@@ -481,14 +481,20 @@ pub trait MessageStore: ProjectionSink {
     /// Marks a media URL as referenced by a a comment submission.
     async fn mark_media_used(&self, mxc_url: &str) -> Result<()>;
 
-    /// MXC URLs uploaded before `cutoff` that are still unreferenced.
-    async fn list_unused_media_before(
+    /// Upload ownership records older than `cutoff`, across all sites, that the
+    /// periodic ownership-release pass evaluates.
+    ///
+    /// Each candidate carries its `site_id` so reachability evaluation and
+    /// ownership release stay site-scoped: the same MXC may be meaningful to
+    /// different sites even though ownership is recorded once.
+    ///
+    /// Candidacy is anchored on `created_at` only. `used_at` is historical
+    /// upload bookkeeping and never influences candidacy, and active-submission
+    /// protection is applied later by the reachability evaluator.
+    async fn list_media_upload_candidates_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<String>>;
-
-    /// Removes the local upload record for an unreferenced or expired upload.
-    async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
+    ) -> Result<Vec<crate::media_reachability::MediaUploadRecord>>;
 
     /// Releases Cumments ownership for a recorded media upload by removing its
     /// bookkeeping row from `media_uploads`.

@@ -343,7 +343,7 @@ async fn ownership_separation_never_creates_media_uploads_record() {
 
     // Verify initial unused media list is empty
     let initial_unused = store
-        .list_unused_media_before(chrono::Utc::now() + chrono::Duration::hours(1))
+        .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
         .await
         .unwrap();
     assert!(initial_unused.is_empty());
@@ -362,7 +362,7 @@ async fn ownership_separation_never_creates_media_uploads_record() {
 
     // CRITICAL: media_uploads must NOT contain any record for this external avatar!
     let post_unused = store
-        .list_unused_media_before(chrono::Utc::now() + chrono::Duration::hours(1))
+        .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
         .await
         .unwrap();
     assert!(

@@ -440,6 +440,7 @@ mod tests {
             )),
             profile_store: None,
             media_resolver: None,
+            media_reference_store: store.clone(),
         });
         let pass = ClaimsPass::new(
             deps,
@@ -539,6 +540,7 @@ mod tests {
             )),
             profile_store: None,
             media_resolver: None,
+            media_reference_store: store.clone(),
         });
         let pass = GovernanceSyncPass::new(
             deps,

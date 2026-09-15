@@ -139,7 +139,7 @@ async fn unknown_ordinary_member_observation_does_not_create_external_reference(
 
     // 4. media_uploads table remains empty
     let unused_uploads = store
-        .list_unused_media_before(chrono::Utc::now() + chrono::Duration::hours(1))
+        .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
         .await
         .expect("list unused media");
     assert!(unused_uploads.is_empty());
@@ -734,7 +734,7 @@ async fn repeated_ingestion_and_restart_durability() {
 
     // Ensure media_uploads remains empty throughout
     let final_unused = store
-        .list_unused_media_before(chrono::Utc::now() + chrono::Duration::hours(1))
+        .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
         .await
         .unwrap();
     assert!(final_unused.is_empty());

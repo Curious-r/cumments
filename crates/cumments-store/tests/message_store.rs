@@ -1229,33 +1229,42 @@ async fn media_uploads_track_ownership_and_usage() {
             .is_empty()
     );
 
-    let unused = store
-        .list_unused_media_before(Utc::now() + chrono::Duration::days(1))
+    // Candidate enumeration is anchored on `created_at` and ignores `used_at`.
+    let candidates = store
+        .list_media_upload_candidates_before(Utc::now() + chrono::Duration::days(1))
         .await
-        .expect("list unused");
-    assert_eq!(unused, vec!["mxc://hs/cat".to_string()]);
+        .expect("list candidates");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].mxc_url, "mxc://hs/cat");
+    assert_eq!(candidates[0].site_id, "my-blog");
 
     store
         .mark_media_used("mxc://hs/cat")
         .await
         .expect("mark used");
-    let unused = store
-        .list_unused_media_before(Utc::now() + chrono::Duration::days(1))
+    let candidates_after_use = store
+        .list_media_upload_candidates_before(Utc::now() + chrono::Duration::days(1))
         .await
-        .expect("list unused after use");
-    assert!(unused.is_empty(), "used media must not be listed as orphan");
+        .expect("list candidates after use");
+    assert_eq!(
+        candidates_after_use.len(),
+        1,
+        "used_at is historical bookkeeping and must not gate candidacy"
+    );
 
-    // Cleanup removes the local record entirely.
-    store
-        .delete_media_upload("mxc://hs/cat")
-        .await
-        .expect("delete upload record");
+    // Releasing ownership removes only the local ownership evidence.
+    assert!(
+        store
+            .release_media_upload_ownership("my-blog", "mxc://hs/cat")
+            .await
+            .expect("release ownership")
+    );
     assert!(
         !store
             .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership after delete"),
-        "deleted upload must no longer prove ownership"
+            .expect("ownership after release"),
+        "released upload must no longer prove ownership"
     );
 }
 
@@ -1713,7 +1722,7 @@ async fn media_upload_ownership_release_preserves_submission_integrity() {
 }
 
 #[tokio::test]
-async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
+async fn media_upload_candidates_are_age_scoped_and_submission_agnostic() {
     let store = DbStore::connect(&test_db_url("media-submission"))
         .await
         .expect("connect db");
@@ -1744,34 +1753,30 @@ async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
         reply_to: None,
         thread_root: None,
     };
-    let id = store
+    store
         .save_post_submission(&command)
         .await
         .expect("save submission");
 
-    let orphan_cutoff = Utc::now() + chrono::Duration::days(1);
+    // A freshly recorded upload is too young to be a candidate.
+    let now = Utc::now();
     assert!(
         store
-            .list_unused_media_before(orphan_cutoff)
+            .list_media_upload_candidates_before(now - chrono::Duration::hours(24))
             .await
-            .expect("list unused")
+            .expect("list candidates")
             .is_empty(),
-        "media referenced by a pending submission must not be swept"
+        "uploads inside the grace period must not be candidates"
     );
 
-    store
-        .dead_letter_post_submission(id, "terminal")
+    // Older than the cutoff it is enumerated regardless of any submission
+    // binding; active-submission protection belongs to the reachability evaluator.
+    let candidates = store
+        .list_media_upload_candidates_before(now)
         .await
-        .expect("dead letter");
-    assert_eq!(
-        store
-            .list_unused_media_before(orphan_cutoff)
-            .await
-            .expect("list unused after terminal")
-            .len(),
-        1,
-        "once the submission is terminal the media is orphan-eligible again"
-    );
+        .expect("list candidates");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].mxc_url, "mxc://hs/cat");
 }
 
 #[tokio::test]
@@ -1827,17 +1832,20 @@ async fn media_upload_idempotency_replays_the_same_request() {
         .expect("record exists");
     assert_eq!(found.mxc_url, "mxc://hs/first");
 
-    store
-        .delete_media_upload("mxc://hs/first")
-        .await
-        .expect("delete upload record");
+    // Releasing ownership must not disturb the idempotency record.
+    assert!(
+        store
+            .release_media_upload_ownership("my-blog", "mxc://hs/first")
+            .await
+            .expect("release ownership")
+    );
     assert!(
         store
             .find_media_upload_idempotency("alice-key", "upload-key-123456")
             .await
-            .expect("find after delete")
-            .is_none(),
-        "deleting the upload must also drop its idempotency record"
+            .expect("find after release")
+            .is_some(),
+        "ownership release must preserve the idempotency record"
     );
 }
 

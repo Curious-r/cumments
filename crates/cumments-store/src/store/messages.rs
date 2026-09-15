@@ -1249,48 +1249,27 @@ impl MessageStore for DbStore {
         Ok(())
     }
 
-    async fn list_unused_media_before(
+    async fn list_media_upload_candidates_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<String>> {
-        // Media bound to a pending/processing/waiting submission must survive
-        // the 24h orphan window: the submission may still send it.
-        let active_submissions: Vec<i64> = post_submissions::Entity::find()
-            .select_only()
-            .column(post_submissions::Column::Id)
-            .filter(post_submissions::Column::Status.is_in([
-                "pending",
-                "processing",
-                "waiting_for_sync",
-            ]))
-            .into_tuple()
-            .all(&self.db)
-            .await?;
+    ) -> Result<Vec<MediaUploadRecord>> {
         let rows = media_uploads::Entity::find()
-            .filter(media_uploads::Column::UsedAt.is_null())
             .filter(media_uploads::Column::CreatedAt.lt(cutoff))
             .all(&self.db)
-            .await?
+            .await?;
+        Ok(rows
             .into_iter()
-            .filter(|row| {
-                row.submission_id
-                    .is_none_or(|id| !active_submissions.contains(&id))
+            .map(|m| MediaUploadRecord {
+                id: m.id,
+                mxc_url: m.mxc_url,
+                author_public_key: m.author_public_key,
+                site_id: m.site_id,
+                page_slug: m.page_slug,
+                used_at: m.used_at,
+                submission_id: m.submission_id,
+                created_at: m.created_at,
             })
-            .map(|row| row.mxc_url)
-            .collect();
-        Ok(rows)
-    }
-
-    async fn delete_media_upload(&self, mxc_url: &str) -> Result<()> {
-        media_uploads::Entity::delete_many()
-            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-            .exec(&self.db)
-            .await?;
-        media_upload_idempotency::Entity::delete_many()
-            .filter(media_upload_idempotency::Column::MxcUrl.eq(mxc_url))
-            .exec(&self.db)
-            .await?;
-        Ok(())
+            .collect())
     }
 
     async fn release_media_upload_ownership(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
