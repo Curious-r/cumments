@@ -133,6 +133,9 @@ impl MatrixDriver for TestDriver {
         author_public_key: &str,
         site_id: &SiteId,
     ) -> anyhow::Result<Option<VisitorProfile>> {
+        if *self.fail_get_profile.lock().await {
+            anyhow::bail!("simulated Matrix driver get_profile failure");
+        }
         Ok(self
             .visitor_profiles
             .lock()

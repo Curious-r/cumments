@@ -1260,6 +1260,165 @@ async fn media_uploads_track_ownership_and_usage() {
 }
 
 #[tokio::test]
+async fn media_reachability_store_queries_operate_correctly() {
+    let store = DbStore::connect(&test_db_url("media-reachability-store"))
+        .await
+        .expect("connect db");
+
+    let site_a = "site-alpha";
+    let site_b = "site-beta";
+    let mxc_1 = "mxc://hs/upload-1";
+    let mxc_2 = "mxc://hs/upload-2";
+    let mxc_b = "mxc://hs/upload-b";
+
+    // 1. Test get_media_upload and list_media_uploads_for_site
+    assert!(
+        store
+            .get_media_upload(site_a, mxc_1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .list_media_uploads_for_site(site_a)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    store
+        .record_media_upload(mxc_1, "pubkey-1", site_a, Some("slug-1"))
+        .await
+        .unwrap();
+    store
+        .record_media_upload(mxc_2, "pubkey-2", site_a, None)
+        .await
+        .unwrap();
+    store
+        .record_media_upload(mxc_b, "pubkey-b", site_b, None)
+        .await
+        .unwrap();
+
+    let upload_1 = store
+        .get_media_upload(site_a, mxc_1)
+        .await
+        .unwrap()
+        .expect("upload 1 exists");
+    assert_eq!(upload_1.mxc_url, mxc_1);
+    assert_eq!(upload_1.author_public_key, "pubkey-1");
+    assert_eq!(upload_1.site_id, site_a);
+    assert_eq!(upload_1.page_slug.as_deref(), Some("slug-1"));
+
+    // Cross-site check: site_b querying mxc_1 returns None
+    assert!(
+        store
+            .get_media_upload(site_b, mxc_1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let site_a_uploads = store.list_media_uploads_for_site(site_a).await.unwrap();
+    assert_eq!(site_a_uploads.len(), 2);
+    let site_b_uploads = store.list_media_uploads_for_site(site_b).await.unwrap();
+    assert_eq!(site_b_uploads.len(), 1);
+
+    // 2. Test has_historical_media_reference
+    let media_ref_1 = "cumments-media:11111111-1111-1111-1111-111111111111";
+    let media_ref_b = "cumments-media:22222222-2222-2222-2222-222222222222";
+
+    assert!(
+        !store
+            .has_historical_media_reference(site_a, media_ref_1)
+            .await
+            .unwrap()
+    );
+
+    // Insert message on site_a referencing media_ref_1
+    let mut msg_a = visitor_message("$msg_hist_a", "hist msg a");
+    msg_a.site_id = site_a.to_string();
+    msg_a.author.media_reference =
+        Some(cumments_core::media_reference::MediaReference::parse(media_ref_1).unwrap());
+    store.save_message(&msg_a).await.unwrap();
+
+    // Insert message on site_b referencing media_ref_b
+    let mut msg_b = visitor_message("$msg_hist_b", "hist msg b");
+    msg_b.site_id = site_b.to_string();
+    msg_b.author.media_reference =
+        Some(cumments_core::media_reference::MediaReference::parse(media_ref_b).unwrap());
+    store.save_message(&msg_b).await.unwrap();
+
+    assert!(
+        store
+            .has_historical_media_reference(site_a, media_ref_1)
+            .await
+            .unwrap()
+    );
+    // Cross-site: site_a does NOT have media_ref_b
+    assert!(
+        !store
+            .has_historical_media_reference(site_a, media_ref_b)
+            .await
+            .unwrap()
+    );
+    // site_b has media_ref_b
+    assert!(
+        store
+            .has_historical_media_reference(site_b, media_ref_b)
+            .await
+            .unwrap()
+    );
+
+    // 3. Test has_content_attachment
+    let content_mxc_a = "mxc://hs/attachment-a";
+    let content_mxc_b = "mxc://hs/attachment-b";
+
+    assert!(
+        !store
+            .has_content_attachment(site_a, content_mxc_a)
+            .await
+            .unwrap()
+    );
+
+    let mut content_msg_a = visitor_message("$msg_content_a", "content a");
+    content_msg_a.site_id = site_a.to_string();
+    content_msg_a.content = Content::Media(MediaContent {
+        kind: MediaKind::Image,
+        url: content_mxc_a.to_string(),
+        filename: None,
+        mimetype: None,
+        size: None,
+        width: None,
+        height: None,
+        thumbnail_url: None,
+        alt_text: None,
+        voice: false,
+    });
+    store.save_message(&content_msg_a).await.unwrap();
+
+    assert!(
+        store
+            .has_content_attachment(site_a, content_mxc_a)
+            .await
+            .unwrap()
+    );
+    // Cross-site: content on site_a does not make it present on site_b
+    assert!(
+        !store
+            .has_content_attachment(site_b, content_mxc_a)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .has_content_attachment(site_a, content_mxc_b)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
     let store = DbStore::connect(&test_db_url("media-submission"))
         .await

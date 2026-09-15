@@ -452,6 +452,7 @@ async fn run() -> Result<(), CliError> {
             site_service: site_service.clone(),
             profile_store: Some(db_store.clone()),
             media_resolver: Some(db_store.clone()),
+            media_reference_store: Some(db_store.clone()),
         },
         cumments_reconciler::PassWakeups {
             submission: submission_notify.clone(),

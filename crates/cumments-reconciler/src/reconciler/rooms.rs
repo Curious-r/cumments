@@ -142,6 +142,7 @@ mod tests {
             )),
             profile_store: None,
             media_resolver: None,
+            media_reference_store: None,
         });
         let pass = RoomCleanupPass::new(
             deps,

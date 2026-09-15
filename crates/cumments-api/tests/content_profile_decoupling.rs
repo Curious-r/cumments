@@ -109,6 +109,7 @@ fn reconciler_deps(store: Arc<DbStore>, driver: Arc<TestDriver>) -> Arc<Reconcil
         site_service: Arc::new(SiteService::new(store.clone())),
         profile_store: Some(store.clone()),
         media_resolver: None,
+        media_reference_store: None,
     })
 }
 

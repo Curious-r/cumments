@@ -150,6 +150,7 @@ pub struct TestDriver {
     pub next_profile_error: Mutex<Option<ProfileDriverError>>,
     pub historical_stub: Mutex<Option<Option<cumments_core::models::MemberPresentation>>>,
     pub fail_historical_resolution: Mutex<bool>,
+    pub fail_get_profile: Mutex<bool>,
 }
 
 impl TestDriver {
@@ -194,6 +195,7 @@ impl TestDriver {
             next_profile_error: Mutex::new(None),
             historical_stub: Mutex::new(None),
             fail_historical_resolution: Mutex::new(false),
+            fail_get_profile: Mutex::new(false),
         }
     }
 

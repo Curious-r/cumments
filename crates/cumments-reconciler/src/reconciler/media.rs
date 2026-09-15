@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tracing::{info, warn};
 
 /// An upload counts as orphaned once it has been unreferenced this long.
+#[allow(dead_code)]
 const ORPHAN_AGE: chrono::Duration = chrono::Duration::hours(24);
 
 /// Periodic sweep for unreferenced visitor uploads.
@@ -24,25 +25,46 @@ impl MediaCleanupPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
-        let cutoff = chrono::Utc::now() - ORPHAN_AGE;
-        let orphans = self
-            .deps
-            .message_store
-            .list_unused_media_before(cutoff)
-            .await?;
-        let mut cleaned = 0u64;
-        for url in orphans {
-            match self.deps.message_store.delete_media_upload(&url).await {
-                Ok(()) => {
-                    cleaned += 1;
-                    info!(url, "orphan media record removed");
-                }
-                Err(error) => {
-                    warn!(url, "failed to forget orphan media: {error:#}");
+        let sites = match self.deps.site_store.list_sites().await {
+            Ok(sites) => sites,
+            Err(error) => {
+                warn!("failed to list sites for media reachability sweep: {error:#}");
+                Vec::new()
+            }
+        };
+
+        if let Some(ref media_ref_store) = self.deps.media_reference_store {
+            let evaluator = cumments_core::media_reachability::MediaReachabilityEvaluator::new(
+                self.deps.driver.clone(),
+                media_ref_store.clone(),
+                self.deps.message_store.clone(),
+            );
+
+            for site in sites {
+                let site_id = SiteId::from(site.id);
+                match evaluator.evaluate_site_owned_candidates(&site_id).await {
+                    Ok(evaluations) => {
+                        for eval in evaluations {
+                            info!(
+                                mxc = %eval.candidate_mxc,
+                                site_id = %eval.site_id.as_str(),
+                                reachability = ?eval.reachability.overall,
+                                ownership = ?eval.ownership,
+                                eligible = %eval.is_cleanup_eligible(),
+                                "media reachability evaluated (read-only)"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        warn!(site_id = %site_id.as_str(), "failed to evaluate media reachability: {error:#}");
+                    }
                 }
             }
         }
-        Ok(cleaned)
+
+        // In Stage H1, media cleanup is strictly read-only and causes no destructive state transitions.
+        // No local records or Matrix media are deleted. Ownership release belongs to Stage H2.
+        Ok(0)
     }
 }
 
@@ -78,7 +100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn media_cleanup_removes_unreferenced_records_without_matrix_deletion() {
+    async fn media_cleanup_is_read_only_in_h1_without_deleting_records() {
         let store = Arc::new(
             DbStore::connect(&test_db_url("cleanup"))
                 .await
@@ -104,6 +126,7 @@ mod tests {
             )),
             profile_store: None,
             media_resolver: None,
+            media_reference_store: Some(store.clone()),
         });
         let pass = MediaCleanupPass::new(
             deps,
@@ -137,13 +160,13 @@ mod tests {
             .expect("backdate media upload");
 
         let cleaned = pass.run().await.expect("media cleanup pass run");
-        assert_eq!(cleaned, 1);
+        assert_eq!(cleaned, 0, "H1 pass must not delete records");
 
-        // Verify the local record was deleted.
+        // Verify the local record was NOT deleted (read-only guarantee).
         let remaining = store
             .list_unused_media_before(chrono::Utc::now())
             .await
             .expect("list unused");
-        assert!(remaining.is_empty());
+        assert_eq!(remaining.len(), 1, "record must remain intact in H1");
     }
 }

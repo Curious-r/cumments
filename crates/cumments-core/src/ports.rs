@@ -493,6 +493,29 @@ pub trait MessageStore: ProjectionSink {
     /// Lists every recorded media MXC URL for one site.
     async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>>;
 
+    /// Returns a media upload record for a specific site and MXC URL, if recorded.
+    async fn get_media_upload(
+        &self,
+        site_id: &str,
+        mxc_url: &str,
+    ) -> Result<Option<crate::media_reachability::MediaUploadRecord>>;
+
+    /// Lists all media upload records for a site.
+    async fn list_media_uploads_for_site(
+        &self,
+        site_id: &str,
+    ) -> Result<Vec<crate::media_reachability::MediaUploadRecord>>;
+
+    /// Whether any retained message in the site references this media reference as historical author presentation.
+    async fn has_historical_media_reference(
+        &self,
+        site_id: &str,
+        media_reference: &str,
+    ) -> Result<bool>;
+
+    /// Whether any retained content attachment or active submission in the site references this MXC URL.
+    async fn has_content_attachment(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
+
     /// Returns an unexpired upload idempotency record, if one exists.
     async fn find_media_upload_idempotency(
         &self,
