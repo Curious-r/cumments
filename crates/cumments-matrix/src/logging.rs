@@ -73,11 +73,6 @@ impl MatrixDriver for LoggingMatrixDriver {
         Ok(())
     }
 
-    async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool> {
-        info!("LOGGING: Delete media {server}/{media_id} (no-op)");
-        Ok(true)
-    }
-
     async fn upload_media(
         &self,
         bytes: Bytes,

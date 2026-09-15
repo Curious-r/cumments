@@ -52,26 +52,6 @@ struct EventRedactedBecause {
 }
 
 impl AppServiceMatrixDriver {
-    /// Deletes one media item from the homeserver, mirroring the media
-    /// proxy's best-effort sweep. Foreign servers and refused deletions
-    /// report `false` so the local record is kept.
-    pub(super) async fn delete_media_impl(&self, server: &str, media_id: &str) -> Result<bool> {
-        if server != self.server_name {
-            return Ok(false);
-        }
-        let path = format!("_matrix/media/v3/delete/{server}/{media_id}");
-        let resp = self
-            .request(reqwest::Method::DELETE, &path, None)
-            .send()
-            .await
-            .map_err(|e| anyhow!("media deletion request failed: {}", e))?;
-        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
     /// Uploads media as the author's virtual user, using the same AppService
     /// identity seam as every other Cumments-initiated write.
     #[instrument(skip(self, bytes))]

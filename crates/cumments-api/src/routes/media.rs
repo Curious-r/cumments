@@ -717,25 +717,6 @@ fn media_upload_response(
     response
 }
 
-/// Best-effort rollback of a media upload that could not be recorded
-/// locally. A failed rollback leaves an untracked orphan on the homeserver;
-/// the warning carries the URL so an operator can clean it manually.
-async fn rollback_media_upload(state: &ApiState, url: &str) {
-    let Some(rest) = url.strip_prefix("mxc://") else {
-        return;
-    };
-    let Some((server, media_id)) = rest.split_once('/') else {
-        return;
-    };
-    if let Err(error) = state.driver.delete_media(server, media_id).await {
-        warn!(
-            url,
-            %error,
-            "failed to roll back media upload after local record failure"
-        );
-    }
-}
-
 /// Visitor media upload: verifies PoW + author signature, then asks the
 /// `MatrixDriver` to upload as the author's virtual user. The driver is the
 /// only homeserver write seam.
@@ -888,7 +869,7 @@ pub(crate) async fn upload_media_handler(
     {
         Ok(outcome) => outcome,
         Err(e) => {
-            rollback_media_upload(&state, &url).await;
+            warn!(url, %e, "failed to record media upload");
             return Err(AppError::Internal(format!(
                 "failed to record media upload: {e}"
             )));
@@ -899,14 +880,10 @@ pub(crate) async fn upload_media_handler(
         cumments_core::media_upload::MediaUploadIdempotencyOutcome::Created { mxc_url } => Ok(
             media_upload_response(mxc_url, filename, mimetype, size, false),
         ),
-        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Replayed { mxc_url } => {
-            rollback_media_upload(&state, &url).await;
-            Ok(media_upload_response(
-                mxc_url, filename, mimetype, size, true,
-            ))
-        }
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Replayed { mxc_url } => Ok(
+            media_upload_response(mxc_url, filename, mimetype, size, true),
+        ),
         cumments_core::media_upload::MediaUploadIdempotencyOutcome::Reused => {
-            rollback_media_upload(&state, &url).await;
             Err(AppError::IdempotencyReused)
         }
     }

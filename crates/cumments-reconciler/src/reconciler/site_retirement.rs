@@ -52,11 +52,6 @@ impl SiteRetirementPass {
             .virtual_user_store
             .list_virtual_users_for_site(&site_id)
             .await?;
-        let media_urls = self
-            .deps
-            .message_store
-            .list_media_urls_for_site(raw_site_id)
-            .await?;
         let claim_dms = self
             .deps
             .role_claim_store
@@ -119,19 +114,8 @@ impl SiteRetirementPass {
         // undone by a later backfill.
         self.deps.site_auth_store.delete_site(raw_site_id).await?;
 
-        // Best-effort cleanup that depends on rows we just deleted: media
-        // copies on the homeserver and claim-DM memberships.
-        for url in media_urls {
-            let Some(rest) = url.strip_prefix("mxc://") else {
-                continue;
-            };
-            let Some((server, media_id)) = rest.split_once('/') else {
-                continue;
-            };
-            if let Err(error) = self.deps.driver.delete_media(server, media_id).await {
-                warn!(url, "retirement: media deletion failed: {:#}", error);
-            }
-        }
+        // Best-effort cleanup that depends on rows we just deleted: claim-DM
+        // memberships.
         for (user_id, dm_room_id) in claim_dms {
             if self
                 .deps
@@ -324,10 +308,6 @@ mod tests {
             ]
         );
 
-        assert_eq!(
-            *driver.deleted.lock().await,
-            vec![("hs".to_string(), "abc".to_string())]
-        );
         assert!(store.get_site_auth(site).await.unwrap().is_none());
         assert!(
             store

@@ -99,13 +99,6 @@ impl MatrixDriver for TestDriver {
 
     // ── Content writes and bot replies ───────────────────────────────
 
-    async fn delete_media(&self, server: &str, media_id: &str) -> anyhow::Result<bool> {
-        self.deleted
-            .lock()
-            .await
-            .push((server.to_string(), media_id.to_string()));
-        Ok(true)
-    }
     async fn upload_media(
         &self,
         bytes: bytes::Bytes,

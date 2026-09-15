@@ -487,12 +487,10 @@ pub trait MessageStore: ProjectionSink {
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<String>>;
 
-    /// Removes the local upload record (after the homeserver copy was
-    /// deleted or is unreachable).
+    /// Removes the local upload record for an unreferenced or expired upload.
     async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
 
-    /// Lists every recorded media MXC URL for one site, used by retirement
-    /// to delete the homeserver copies before the rows are dropped.
+    /// Lists every recorded media MXC URL for one site.
     async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>>;
 
     /// Returns an unexpired upload idempotency record, if one exists.
@@ -1120,12 +1118,6 @@ pub trait MatrixDriver: Send + Sync + MatrixProfileDriver {
     /// room's alias from the room directory. Missing aliases are a no-op.
     async fn remove_room_alias(&self, site_id: &SiteId, page_slug: Option<&PageSlug>)
     -> Result<()>;
-
-    /// Best-effort deletion of one media item on the homeserver. Returns
-    /// `true` when the homeserver confirmed the deletion (or the item was
-    /// already gone), so the caller can forget the local upload record;
-    /// `false` and errors mean the record should be kept for a later sweep.
-    async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool>;
 
     /// Uploads media to the homeserver as the author's virtual user and
     /// returns the `mxc://` content URI.

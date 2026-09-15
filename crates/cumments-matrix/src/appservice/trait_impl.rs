@@ -46,10 +46,6 @@ impl MatrixDriver for AppServiceMatrixDriver {
         self.remove_room_alias_impl(site_id, page_slug).await
     }
 
-    async fn delete_media(&self, server: &str, media_id: &str) -> Result<bool> {
-        self.delete_media_impl(server, media_id).await
-    }
-
     async fn upload_media(
         &self,
         bytes: bytes::Bytes,
