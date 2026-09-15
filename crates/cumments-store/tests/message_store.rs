@@ -1419,6 +1419,300 @@ async fn media_reachability_store_queries_operate_correctly() {
 }
 
 #[tokio::test]
+async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites() {
+    let store = DbStore::connect(&test_db_url("media-upload-release-isolation"))
+        .await
+        .expect("connect db");
+
+    let site_a = "site-alpha";
+    let site_b = "site-beta";
+    let mxc_a1 = "mxc://hs/upload-a1";
+    let mxc_a2 = "mxc://hs/upload-a2";
+    let mxc_b1 = "mxc://hs/upload-b1";
+
+    // Seed media_uploads with distinct records:
+    // site_a has two uploads from different authors
+    // site_b has one upload
+    store
+        .record_media_upload(mxc_a1, "author-pubkey-1", site_a, Some("post-1"))
+        .await
+        .unwrap();
+    store
+        .record_media_upload(mxc_a2, "author-pubkey-2", site_a, None)
+        .await
+        .unwrap();
+    store
+        .record_media_upload(mxc_b1, "author-pubkey-3", site_b, None)
+        .await
+        .unwrap();
+
+    // Verify all exist
+    assert!(
+        store
+            .get_media_upload(site_a, mxc_a1)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .get_media_upload(site_a, mxc_a2)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .get_media_upload(site_b, mxc_b1)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // 1. Cross-site release safety: releasing mxc_b1 under site_a must not delete site_b's record
+    let released_wrong_site = store
+        .release_media_upload_ownership(site_a, mxc_b1)
+        .await
+        .unwrap();
+    assert!(
+        !released_wrong_site,
+        "cross-site release must return false (no rows affected)"
+    );
+    assert!(
+        store
+            .get_media_upload(site_b, mxc_b1)
+            .await
+            .unwrap()
+            .is_some(),
+        "site_b's record must not be affected by release on site_a"
+    );
+
+    // 2. Exact row deletion: releasing mxc_a1 removes only mxc_a1 on site_a
+    let released_a1 = store
+        .release_media_upload_ownership(site_a, mxc_a1)
+        .await
+        .unwrap();
+    assert!(released_a1, "releasing an existing record must return true");
+
+    // Exactly that row is gone
+    assert!(
+        store
+            .get_media_upload(site_a, mxc_a1)
+            .await
+            .unwrap()
+            .is_none(),
+        "released upload must no longer be found in media_uploads"
+    );
+
+    // Unrelated upload on same site from different author remains intact
+    let upload_a2 = store
+        .get_media_upload(site_a, mxc_a2)
+        .await
+        .unwrap()
+        .expect("unrelated upload must remain");
+    assert_eq!(upload_a2.author_public_key, "author-pubkey-2");
+    assert_eq!(upload_a2.mxc_url, mxc_a2);
+
+    // Unrelated upload on other site remains intact
+    let upload_b1 = store
+        .get_media_upload(site_b, mxc_b1)
+        .await
+        .unwrap()
+        .expect("other site upload must remain");
+    assert_eq!(upload_b1.author_public_key, "author-pubkey-3");
+
+    // 3. Idempotent / harmless execution: releasing already-missing row is harmless
+    let released_a1_again = store
+        .release_media_upload_ownership(site_a, mxc_a1)
+        .await
+        .unwrap();
+    assert!(
+        !released_a1_again,
+        "subsequent release must safely return false without error"
+    );
+
+    let released_nonexistent = store
+        .release_media_upload_ownership(site_a, "mxc://hs/does-not-exist")
+        .await
+        .unwrap();
+    assert!(
+        !released_nonexistent,
+        "releasing nonexistent media must return false without error"
+    );
+
+    // 4. Test alias release_media_upload behaves identically
+    let released_a2 = store.release_media_upload(site_a, mxc_a2).await.unwrap();
+    assert!(
+        released_a2,
+        "alias release_media_upload must release the row"
+    );
+    assert!(
+        store
+            .get_media_upload(site_a, mxc_a2)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn media_upload_ownership_release_preserves_idempotency_and_media_references() {
+    use cumments_core::media_reference::MediaReferenceSource;
+    use cumments_core::ports::MediaReferenceStore;
+
+    let store = DbStore::connect(&test_db_url("media-upload-release-idempotency"))
+        .await
+        .expect("connect db");
+
+    let site_id = "site-prod";
+    let mxc_url = "mxc://hs/idempotent-asset";
+    let author_key = "author-ed25519-key";
+    let idem_key = "client-idem-key-999";
+
+    // 1. Create upload via idempotent flow
+    let input = MediaUploadIdempotencyInput {
+        key: idem_key.to_string(),
+        request_fingerprint: "fingerprint-abc".to_string(),
+    };
+
+    let outcome = store
+        .save_media_upload_idempotent(mxc_url, author_key, site_id, Some("page-slug-1"), &input)
+        .await
+        .expect("save idempotent upload");
+    assert!(matches!(
+        outcome,
+        MediaUploadIdempotencyOutcome::Created { .. }
+    ));
+
+    // Verify ownership row and idempotency row both exist
+    assert!(
+        store
+            .get_media_upload(site_id, mxc_url)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let idem_record = store
+        .find_media_upload_idempotency(author_key, idem_key)
+        .await
+        .unwrap()
+        .expect("idempotency record must exist");
+    assert_eq!(idem_record.mxc_url, mxc_url);
+
+    // 2. Also create a media_reference mapping for this media
+    let site_id_obj = SiteId::from(site_id);
+    let media_ref = store
+        .get_or_create_reference(&site_id_obj, mxc_url, MediaReferenceSource::Cumments)
+        .await
+        .expect("create media reference");
+
+    // 3. Explicitly release media upload ownership
+    let released = store
+        .release_media_upload_ownership(site_id, mxc_url)
+        .await
+        .unwrap();
+    assert!(released, "ownership record must be released");
+
+    // Ownership row is removed
+    assert!(
+        store
+            .get_media_upload(site_id, mxc_url)
+            .await
+            .unwrap()
+            .is_none(),
+        "ownership row must be gone"
+    );
+
+    // 4. CRITICAL: Idempotency record MUST remain unchanged and replayable
+    let idem_after = store
+        .find_media_upload_idempotency(author_key, idem_key)
+        .await
+        .unwrap()
+        .expect("idempotency record MUST remain intact after ownership release");
+    assert_eq!(idem_after.mxc_url, mxc_url);
+    assert_eq!(idem_after.request_fingerprint, "fingerprint-abc");
+
+    // 5. CRITICAL: media_references MUST remain untouched
+    let ref_after = store
+        .find_reference(&site_id_obj, mxc_url)
+        .await
+        .unwrap()
+        .expect("media_reference must remain untouched after ownership release");
+    assert_eq!(ref_after, media_ref);
+}
+
+#[tokio::test]
+async fn media_upload_ownership_release_preserves_submission_integrity() {
+    let url = test_db_url("media-upload-release-submission");
+    let store = DbStore::connect(&url).await.expect("connect db");
+
+    let site_id = "my-blog";
+    let page_slug = "hello";
+    let mxc_url = "mxc://hs/sub-media";
+
+    // Record upload
+    store
+        .record_media_upload(mxc_url, "author-key", site_id, Some(page_slug))
+        .await
+        .unwrap();
+
+    let command = PostCommentCommand {
+        site_id: SiteId::from(site_id),
+        page_slug: PageSlug::from(page_slug),
+        content: "with media".to_string(),
+        media: Some(CommentMedia {
+            kind: Some(MediaKind::Image),
+            url: mxc_url.to_string(),
+            filename: Some("cat.png".to_string()),
+            mimetype: Some("image/png".to_string()),
+            size: Some(42),
+            width: Some(64),
+            height: Some(64),
+            voice: false,
+        }),
+        location: None,
+        poll: None,
+        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
+        author_signature: "sig".to_string(),
+        author_challenge: "chal".to_string(),
+        reply_to: None,
+        thread_root: None,
+    };
+    let submission_id = store
+        .save_post_submission(&command)
+        .await
+        .expect("save submission");
+
+    let before = store
+        .get_media_upload(site_id, mxc_url)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.submission_id, Some(submission_id));
+
+    // Release ownership does not fail on submission-bound row
+    let released = store
+        .release_media_upload_ownership(site_id, mxc_url)
+        .await
+        .unwrap();
+    assert!(released, "must release row successfully");
+    assert!(
+        store
+            .get_media_upload(site_id, mxc_url)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The submission row itself remains completely unaffected in the store
+    let pending = store
+        .claim_pending_post_submissions(10, chrono::Utc::now() + chrono::Duration::minutes(5))
+        .await
+        .unwrap();
+    assert!(pending.iter().any(|s| s.id == submission_id));
+}
+
+#[tokio::test]
 async fn orphan_sweep_skips_media_bound_to_a_retrying_submission() {
     let store = DbStore::connect(&test_db_url("media-submission"))
         .await

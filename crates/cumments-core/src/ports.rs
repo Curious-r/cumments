@@ -490,6 +490,25 @@ pub trait MessageStore: ProjectionSink {
     /// Removes the local upload record for an unreferenced or expired upload.
     async fn delete_media_upload(&self, mxc_url: &str) -> Result<()>;
 
+    /// Releases Cumments ownership for a recorded media upload by removing its
+    /// bookkeeping row from `media_uploads`.
+    ///
+    /// Identifies the record using the site-scoped media identity `(site_id, mxc_url)`.
+    /// Returns `Ok(true)` if the record existed and was removed, or `Ok(false)`
+    /// if the record was already absent (idempotent / safe under concurrent execution).
+    ///
+    /// This operation only removes the local ownership evidence row in `media_uploads`.
+    /// It preserves `media_upload_idempotency`, `media_references`, and causes no Matrix homeserver side effects.
+    async fn release_media_upload_ownership(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
+
+    /// Releases Cumments ownership for a recorded media upload by removing its
+    /// bookkeeping row from `media_uploads`.
+    ///
+    /// Alias for [`MessageStore::release_media_upload_ownership`].
+    async fn release_media_upload(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
+        self.release_media_upload_ownership(site_id, mxc_url).await
+    }
+
     /// Lists every recorded media MXC URL for one site.
     async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>>;
 

@@ -1293,6 +1293,15 @@ impl MessageStore for DbStore {
         Ok(())
     }
 
+    async fn release_media_upload_ownership(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
+        let result = media_uploads::Entity::delete_many()
+            .filter(media_uploads::Column::SiteId.eq(site_id))
+            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected > 0)
+    }
+
     async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>> {
         let rows = media_uploads::Entity::find()
             .filter(media_uploads::Column::SiteId.eq(site_id))
