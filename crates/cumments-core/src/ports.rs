@@ -458,6 +458,10 @@ pub trait MessageStore: ProjectionSink {
     ) -> Result<bool>;
 
     /// Records a visitor upload so comment submissions can later prove ownership.
+    ///
+    /// Ownership is identified by `(site_id, mxc_url)`: recording the same MXC
+    /// for another site creates or updates that site's own row and never
+    /// overwrites the first site's ownership.
     async fn record_media_upload(
         &self,
         mxc_url: &str,
@@ -478,8 +482,11 @@ pub trait MessageStore: ProjectionSink {
     /// Whether an MXC media URL was uploaded by Cumments for this site.
     async fn has_media_upload_for_site(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
 
-    /// Marks a media URL as referenced by a a comment submission.
-    async fn mark_media_used(&self, mxc_url: &str) -> Result<()>;
+    /// Marks this site's media upload row as referenced by a comment submission.
+    ///
+    /// Scoped to `(site_id, mxc_url)` so the same MXC owned by another site is
+    /// never mutated. `used_at` stays historical upload bookkeeping.
+    async fn mark_media_used(&self, site_id: &str, mxc_url: &str) -> Result<()>;
 
     /// Upload ownership records older than `cutoff`, across all sites, that the
     /// periodic ownership-release pass evaluates.

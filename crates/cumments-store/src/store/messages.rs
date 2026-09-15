@@ -1195,15 +1195,17 @@ impl MessageStore for DbStore {
         };
         media_uploads::Entity::insert(model)
             .on_conflict(
-                sea_orm::sea_query::OnConflict::column(media_uploads::Column::MxcUrl)
-                    .update_columns([
-                        media_uploads::Column::AuthorPublicKey,
-                        media_uploads::Column::SiteId,
-                        media_uploads::Column::PageSlug,
-                        media_uploads::Column::UsedAt,
-                        media_uploads::Column::SubmissionId,
-                    ])
-                    .to_owned(),
+                sea_orm::sea_query::OnConflict::columns([
+                    media_uploads::Column::SiteId,
+                    media_uploads::Column::MxcUrl,
+                ])
+                .update_columns([
+                    media_uploads::Column::AuthorPublicKey,
+                    media_uploads::Column::PageSlug,
+                    media_uploads::Column::UsedAt,
+                    media_uploads::Column::SubmissionId,
+                ])
+                .to_owned(),
             )
             .exec(&self.db)
             .await?;
@@ -1236,12 +1238,13 @@ impl MessageStore for DbStore {
         Ok(found.is_some())
     }
 
-    async fn mark_media_used(&self, mxc_url: &str) -> Result<()> {
+    async fn mark_media_used(&self, site_id: &str, mxc_url: &str) -> Result<()> {
         media_uploads::Entity::update_many()
             .col_expr(
                 media_uploads::Column::UsedAt,
                 sea_orm::sea_query::Expr::value(Some(chrono::Utc::now())),
             )
+            .filter(media_uploads::Column::SiteId.eq(site_id))
             .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
             .filter(media_uploads::Column::UsedAt.is_null())
             .exec(&self.db)
@@ -1499,14 +1502,16 @@ impl MessageStore for DbStore {
         };
         media_uploads::Entity::insert(upload_model)
             .on_conflict(
-                sea_orm::sea_query::OnConflict::column(media_uploads::Column::MxcUrl)
-                    .update_columns([
-                        media_uploads::Column::AuthorPublicKey,
-                        media_uploads::Column::SiteId,
-                        media_uploads::Column::PageSlug,
-                        media_uploads::Column::UsedAt,
-                    ])
-                    .to_owned(),
+                sea_orm::sea_query::OnConflict::columns([
+                    media_uploads::Column::SiteId,
+                    media_uploads::Column::MxcUrl,
+                ])
+                .update_columns([
+                    media_uploads::Column::AuthorPublicKey,
+                    media_uploads::Column::PageSlug,
+                    media_uploads::Column::UsedAt,
+                ])
+                .to_owned(),
             )
             .exec(&txn)
             .await?;

@@ -1239,7 +1239,7 @@ async fn media_uploads_track_ownership_and_usage() {
     assert_eq!(candidates[0].site_id, "my-blog");
 
     store
-        .mark_media_used("mxc://hs/cat")
+        .mark_media_used("my-blog", "mxc://hs/cat")
         .await
         .expect("mark used");
     let candidates_after_use = store
@@ -1271,6 +1271,247 @@ async fn media_uploads_track_ownership_and_usage() {
             .await
             .expect("ownership after release"),
         "released upload must no longer prove ownership"
+    );
+}
+
+#[tokio::test]
+async fn media_upload_ownership_is_site_scoped_for_the_same_mxc() {
+    let store = DbStore::connect(&test_db_url("media-uploads-site-scoped"))
+        .await
+        .expect("connect db");
+
+    let mxc = "mxc://hs/shared";
+    let site_a = "site-a";
+    let site_b = "site-b";
+
+    // Both sites may own the same MXC independently.
+    store
+        .record_media_upload(mxc, "author-a", site_a, Some("post-a"))
+        .await
+        .unwrap();
+    store
+        .record_media_upload(mxc, "author-b", site_b, Some("post-b"))
+        .await
+        .unwrap();
+
+    let a = store
+        .get_media_upload(site_a, mxc)
+        .await
+        .unwrap()
+        .expect("site-a row exists");
+    let b = store
+        .get_media_upload(site_b, mxc)
+        .await
+        .unwrap()
+        .expect("site-b row exists");
+    assert_ne!(a.id, b.id, "each site has its own ownership row");
+    assert_eq!(a.site_id, site_a);
+    assert_eq!(a.author_public_key, "author-a");
+    assert_eq!(b.site_id, site_b);
+    assert_eq!(b.author_public_key, "author-b");
+
+    // Recording site-b must not overwrite site-a's ownership.
+    assert!(store.has_media_upload_for_site(site_a, mxc).await.unwrap());
+    assert!(store.has_media_upload_for_site(site_b, mxc).await.unwrap());
+    assert!(
+        store
+            .media_upload_owned_by(mxc, "author-a", site_a, "post-a")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .media_upload_owned_by(mxc, "author-b", site_a, "post-b")
+            .await
+            .unwrap(),
+        "site-a lookup must not see site-b's ownership"
+    );
+
+    // A site with no row returns nothing.
+    assert!(
+        store
+            .get_media_upload("site-c", mxc)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Re-recording updates only that site's row, keeping its id.
+    store
+        .record_media_upload(mxc, "author-a2", site_a, Some("post-a2"))
+        .await
+        .unwrap();
+    let a_after = store.get_media_upload(site_a, mxc).await.unwrap().unwrap();
+    let b_after = store.get_media_upload(site_b, mxc).await.unwrap().unwrap();
+    assert_eq!(a_after.id, a.id, "same-site recording must keep the row id");
+    assert_eq!(a_after.author_public_key, "author-a2");
+    assert_eq!(b_after.id, b.id, "site-b's row must be untouched");
+    assert_eq!(b_after.author_public_key, "author-b");
+
+    // Releasing site-a's row leaves site-b's row intact.
+    assert!(
+        store
+            .release_media_upload_ownership(site_a, mxc, a.id)
+            .await
+            .unwrap()
+    );
+    assert!(store.get_media_upload(site_a, mxc).await.unwrap().is_none());
+    let b_after_release = store
+        .get_media_upload(site_b, mxc)
+        .await
+        .unwrap()
+        .expect("site-b row must survive");
+    assert_eq!(b_after_release.id, b.id);
+}
+
+#[tokio::test]
+async fn mark_media_used_is_site_scoped() {
+    let store = DbStore::connect(&test_db_url("media-uploads-mark-used"))
+        .await
+        .expect("connect db");
+
+    let mxc = "mxc://hs/shared-used";
+    store
+        .record_media_upload(mxc, "author-a", "site-a", None)
+        .await
+        .unwrap();
+    store
+        .record_media_upload(mxc, "author-b", "site-b", None)
+        .await
+        .unwrap();
+
+    store.mark_media_used("site-a", mxc).await.unwrap();
+
+    let a = store
+        .get_media_upload("site-a", mxc)
+        .await
+        .unwrap()
+        .unwrap();
+    let b = store
+        .get_media_upload("site-b", mxc)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(a.used_at.is_some(), "site-a's row must be marked used");
+    assert!(
+        b.used_at.is_none(),
+        "marking site-a must not mutate site-b's row"
+    );
+
+    // Marking a site with no matching row is a no-op.
+    store.mark_media_used("site-c", mxc).await.unwrap();
+    assert!(
+        store
+            .get_media_upload("site-b", mxc)
+            .await
+            .unwrap()
+            .unwrap()
+            .used_at
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn media_upload_idempotency_is_site_scoped_for_the_same_mxc() {
+    let store = DbStore::connect(&test_db_url("media-uploads-idempotency-sites"))
+        .await
+        .expect("connect db");
+
+    let mxc = "mxc://hs/idem-shared";
+    let author = "author-1";
+
+    let created_a = store
+        .save_media_upload_idempotent(
+            mxc,
+            author,
+            "site-a",
+            Some("page-a"),
+            &MediaUploadIdempotencyInput {
+                key: "key-a".to_string(),
+                request_fingerprint: "fp-a".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        created_a,
+        MediaUploadIdempotencyOutcome::Created { .. }
+    ));
+
+    let created_b = store
+        .save_media_upload_idempotent(
+            mxc,
+            author,
+            "site-b",
+            Some("page-b"),
+            &MediaUploadIdempotencyInput {
+                key: "key-b".to_string(),
+                request_fingerprint: "fp-b".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(created_b, MediaUploadIdempotencyOutcome::Created { .. }),
+        "site-b must be able to record the same MXC independently"
+    );
+
+    let a = store
+        .get_media_upload("site-a", mxc)
+        .await
+        .unwrap()
+        .unwrap();
+    let b = store
+        .get_media_upload("site-b", mxc)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(a.id, b.id);
+    assert_eq!(a.site_id, "site-a");
+    assert_eq!(b.site_id, "site-b");
+    assert_eq!(a.page_slug.as_deref(), Some("page-a"));
+    assert_eq!(b.page_slug.as_deref(), Some("page-b"));
+
+    // Replaying site-a's request must not mutate site-b's ownership row.
+    let replay_a = store
+        .save_media_upload_idempotent(
+            mxc,
+            author,
+            "site-a",
+            Some("page-a"),
+            &MediaUploadIdempotencyInput {
+                key: "key-a".to_string(),
+                request_fingerprint: "fp-a".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        replay_a,
+        MediaUploadIdempotencyOutcome::Replayed { .. }
+    ));
+    let b_after = store
+        .get_media_upload("site-b", mxc)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(b_after.id, b.id);
+    assert_eq!(b_after.page_slug.as_deref(), Some("page-b"));
+
+    // Idempotency records stay independent per key.
+    assert!(
+        store
+            .find_media_upload_idempotency(author, "key-a")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .find_media_upload_idempotency(author, "key-b")
+            .await
+            .unwrap()
+            .is_some()
     );
 }
 

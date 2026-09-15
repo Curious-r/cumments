@@ -175,7 +175,13 @@ impl SubmissionStore for DbStore {
                     .await?;
                 let submission_id = inserted.last_insert_id;
                 if let Some(media) = &command.media {
-                    bind_media_submission(&txn, &media.url, submission_id).await?;
+                    bind_media_submission(
+                        &txn,
+                        command.site_id.as_str(),
+                        &media.url,
+                        submission_id,
+                    )
+                    .await?;
                 }
                 txn.commit().await?;
                 Ok(IdempotencyOutcome::Accepted { submission_id })
@@ -324,7 +330,13 @@ impl SubmissionStore for DbStore {
             .await?;
         let submission_id = result.last_insert_id;
         if let Some(media) = &command.media {
-            bind_media_submission(&self.db, &media.url, submission_id).await?;
+            bind_media_submission(
+                &self.db,
+                command.site_id.as_str(),
+                &media.url,
+                submission_id,
+            )
+            .await?;
         }
         Ok(submission_id)
     }
@@ -400,7 +412,8 @@ impl SubmissionStore for DbStore {
             .await?;
         let submission_id = result.last_insert_id;
         if let Some(media) = &command.media {
-            bind_media_submission(&txn, &media.url, submission_id).await?;
+            bind_media_submission(&txn, command.site_id.as_str(), &media.url, submission_id)
+                .await?;
         }
 
         let outcome = self
@@ -1458,9 +1471,13 @@ impl DbStore {
 }
 
 /// Records which post submission currently references a media upload, so the
-/// orphan sweep skips it while the submission is still retrying.
+/// ownership sweep skips it while the submission is still retrying.
+///
+/// Scoped to the submission's site: the same MXC owned by another site must
+/// not be bound to this submission.
 async fn bind_media_submission<C: ConnectionTrait>(
     db: &C,
+    site_id: &str,
     mxc_url: &str,
     submission_id: i64,
 ) -> Result<()> {
@@ -1469,6 +1486,7 @@ async fn bind_media_submission<C: ConnectionTrait>(
             media_uploads::Column::SubmissionId,
             sea_orm::sea_query::Expr::value(submission_id),
         )
+        .filter(media_uploads::Column::SiteId.eq(site_id))
         .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
         .exec(db)
         .await?;

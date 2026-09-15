@@ -502,6 +502,7 @@ async fn content_attachment_in_active_post_submission_yields_reachable() {
             media_uploads::Column::SubmissionId,
             sea_orm::sea_query::Expr::value(Some(inserted_sub.id)),
         )
+        .filter(media_uploads::Column::SiteId.eq(site_id.as_str()))
         .filter(media_uploads::Column::MxcUrl.eq(candidate_mxc))
         .exec(store.connection())
         .await

@@ -81,6 +81,7 @@ pub mod m20260915_000075_room_members_media_reference;
 pub mod m20260915_000076_room_members_projection_ordering;
 pub mod m20260915_000077_messages_author_media_reference;
 pub mod m20260915_000078_post_submissions_drop_display_name;
+pub mod m20260915_000079_media_uploads_site_scoped;
 
 pub struct Migrator;
 
@@ -222,6 +223,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260915_000076_room_members_projection_ordering::Migration),
             Box::new(m20260915_000077_messages_author_media_reference::Migration),
             Box::new(m20260915_000078_post_submissions_drop_display_name::Migration),
+            Box::new(m20260915_000079_media_uploads_site_scoped::Migration),
         ]
     }
 }

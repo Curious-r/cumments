@@ -7,7 +7,10 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
     /// MXC URI returned by the upload endpoint.
-    #[sea_orm(unique)]
+    ///
+    /// Deliberately not globally unique: upload ownership is scoped to
+    /// `UNIQUE(site_id, mxc_url)`, so the same MXC may be owned by several
+    /// sites at once.
     pub mxc_url: String,
     /// Visitor public key that uploaded the media.
     pub author_public_key: String,

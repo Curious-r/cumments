@@ -144,6 +144,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000078_post_submissions_drop_display_name".to_string()),
         "000078 must be registered or post_submissions drop_display_name migration is missing"
     );
+    assert!(
+        names.contains(&"m20260915_000079_media_uploads_site_scoped".to_string()),
+        "000079 must be registered or media_uploads ownership stays globally unique by MXC"
+    );
 }
 
 #[tokio::test]
@@ -648,6 +652,119 @@ async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplic
         ))
         .await;
     assert!(dup_pk.is_err(), "duplicate primary key must be rejected");
+}
+
+#[tokio::test]
+async fn media_uploads_table_permits_same_mxc_across_sites_and_rejects_duplicates_within_site() {
+    let url = test_db_url("media-uploads-site-scoped");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, None).await.expect("migrate to latest");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_uploads \
+         (mxc_url, author_public_key, site_id, page_slug, created_at) \
+         VALUES ('mxc://hs/shared', 'author-a', 'site-a', NULL, '{now}')"
+    ))
+    .await
+    .expect("first row");
+
+    // Same MXC on a different site must be allowed.
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_uploads \
+         (mxc_url, author_public_key, site_id, page_slug, created_at) \
+         VALUES ('mxc://hs/shared', 'author-b', 'site-b', NULL, '{now}')"
+    ))
+    .await
+    .expect("same mxc on different site is allowed");
+
+    // Duplicate (site_id, mxc_url) must be rejected.
+    let duplicate = db
+        .execute_unprepared(&format!(
+            "INSERT INTO media_uploads \
+             (mxc_url, author_public_key, site_id, page_slug, created_at) \
+             VALUES ('mxc://hs/shared', 'author-c', 'site-a', NULL, '{now}')"
+        ))
+        .await;
+    assert!(
+        duplicate.is_err(),
+        "duplicate (site_id, mxc_url) must be rejected by the unique constraint"
+    );
+}
+
+#[tokio::test]
+async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
+    let url = test_db_url("media-uploads-site-scoped-upgrade");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(78))
+        .await
+        .expect("migrate to 000078");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_uploads \
+         (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at) \
+         VALUES \
+         (11, 'mxc://hs/alpha', 'author-a', 'site-a', 'post-a', NULL, NULL, '{now}'), \
+         (12, 'mxc://hs/beta', 'author-b', 'site-b', NULL, '{now}', NULL, '{now}')"
+    ))
+    .await
+    .expect("insert pre-migration rows");
+
+    Migrator::up(&db, None).await.expect("apply 000079");
+
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT id, mxc_url, author_public_key, site_id, page_slug, used_at \
+             FROM media_uploads ORDER BY id",
+        ))
+        .await
+        .expect("query migrated rows");
+    assert_eq!(rows.len(), 2, "both ownership rows must be preserved");
+
+    let first_id: i64 = rows[0].try_get("", "id").unwrap();
+    let first_site: String = rows[0].try_get("", "site_id").unwrap();
+    let first_mxc: String = rows[0].try_get("", "mxc_url").unwrap();
+    let first_slug: Option<String> = rows[0].try_get("", "page_slug").unwrap();
+    assert_eq!(
+        (first_id, first_site.as_str(), first_mxc.as_str()),
+        (11, "site-a", "mxc://hs/alpha")
+    );
+    assert_eq!(first_slug.as_deref(), Some("post-a"));
+
+    let second_id: i64 = rows[1].try_get("", "id").unwrap();
+    let second_site: String = rows[1].try_get("", "site_id").unwrap();
+    let second_mxc: String = rows[1].try_get("", "mxc_url").unwrap();
+    let second_used_at: Option<String> = rows[1].try_get("", "used_at").unwrap();
+    assert_eq!(
+        (second_id, second_site.as_str(), second_mxc.as_str()),
+        (12, "site-b", "mxc://hs/beta")
+    );
+    assert!(
+        second_used_at.is_some(),
+        "used_at must be preserved verbatim"
+    );
+
+    // After the migration the composite constraint is in force.
+    let duplicate = db
+        .execute_unprepared(&format!(
+            "INSERT INTO media_uploads \
+             (mxc_url, author_public_key, site_id, page_slug, created_at) \
+             VALUES ('mxc://hs/alpha', 'author-z', 'site-a', NULL, '{now}')"
+        ))
+        .await;
+    assert!(
+        duplicate.is_err(),
+        "duplicate (site_id, mxc_url) must be rejected after the migration"
+    );
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_uploads \
+         (mxc_url, author_public_key, site_id, page_slug, created_at) \
+         VALUES ('mxc://hs/alpha', 'author-z', 'site-c', NULL, '{now}')"
+    ))
+    .await
+    .expect("same mxc on another site is allowed after the migration");
 }
 
 #[tokio::test]

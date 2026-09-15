@@ -152,6 +152,7 @@ async fn bind_active_submission(store: &Arc<DbStore>, site: &str, mxc: &str) {
             media_uploads::Column::SubmissionId,
             sea_orm::sea_query::Expr::value(Some(inserted.id)),
         )
+        .filter(media_uploads::Column::SiteId.eq(site))
         .filter(media_uploads::Column::MxcUrl.eq(mxc))
         .exec(store.connection())
         .await
@@ -455,6 +456,44 @@ async fn cross_site_reference_neither_blocks_nor_overreaches() {
 }
 
 #[tokio::test]
+async fn two_sites_owning_the_same_mxc_are_released_independently() {
+    let (store, driver) = setup("same-mxc-two-sites").await;
+    let shared = "mxc://hs/owned-by-both";
+
+    // site-a owns the MXC but does not reference it: releasable.
+    old_unreachable_upload(&store, "site-a", shared, "author-a").await;
+
+    // site-b owns the same MXC and keeps it reachable through the profile.
+    record_owned_upload(&store, "site-b", shared, "author-b").await;
+    map_reference(&store, "site-b", shared).await;
+    backdate_upload(&store, shared, chrono::Duration::hours(25)).await;
+    set_avatar_profile(&driver, "site-b", "author-b", shared).await;
+
+    let released = cleanup_pass(&store, &driver)
+        .run()
+        .await
+        .expect("run cleanup pass");
+
+    assert_eq!(released, 1, "only site-a's ownership is eligible");
+    assert!(
+        store
+            .get_media_upload("site-a", shared)
+            .await
+            .unwrap()
+            .is_none(),
+        "site-a's unreachable ownership must be released"
+    );
+    assert!(
+        store
+            .get_media_upload("site-b", shared)
+            .await
+            .unwrap()
+            .is_some(),
+        "site-b's reachable ownership of the same MXC must survive"
+    );
+}
+
+#[tokio::test]
 async fn used_at_is_not_a_release_signal() {
     let (store, driver) = setup("used-at").await;
 
@@ -462,7 +501,7 @@ async fn used_at_is_not_a_release_signal() {
     // gates the decision.
     let used = "mxc://hs/marked-used";
     old_unreachable_upload(&store, "site-a", used, "author-1").await;
-    store.mark_media_used(used).await.unwrap();
+    store.mark_media_used("site-a", used).await.unwrap();
 
     // An upload with `used_at` still NULL but a live profile reference is kept.
     let live = "mxc://hs/never-used";
