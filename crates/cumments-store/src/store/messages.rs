@@ -1272,8 +1272,14 @@ impl MessageStore for DbStore {
             .collect())
     }
 
-    async fn release_media_upload_ownership(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
+    async fn release_media_upload_ownership(
+        &self,
+        site_id: &str,
+        mxc_url: &str,
+        expected_id: i64,
+    ) -> Result<bool> {
         let result = media_uploads::Entity::delete_many()
+            .filter(media_uploads::Column::Id.eq(expected_id))
             .filter(media_uploads::Column::SiteId.eq(site_id))
             .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
             .exec(&self.db)

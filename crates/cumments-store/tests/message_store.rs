@@ -1253,9 +1253,15 @@ async fn media_uploads_track_ownership_and_usage() {
     );
 
     // Releasing ownership removes only the local ownership evidence.
+    let cat_id = store
+        .get_media_upload("my-blog", "mxc://hs/cat")
+        .await
+        .unwrap()
+        .expect("upload exists")
+        .id;
     assert!(
         store
-            .release_media_upload_ownership("my-blog", "mxc://hs/cat")
+            .release_media_upload_ownership("my-blog", "mxc://hs/cat", cat_id)
             .await
             .expect("release ownership")
     );
@@ -1478,9 +1484,30 @@ async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites(
             .is_some()
     );
 
-    // 1. Cross-site release safety: releasing mxc_b1 under site_a must not delete site_b's record
+    // Capture the enumerated identities the release primitive must match.
+    let a1_id = store
+        .get_media_upload(site_a, mxc_a1)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let a2_id = store
+        .get_media_upload(site_a, mxc_a2)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let b1_id = store
+        .get_media_upload(site_b, mxc_b1)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+
+    // 1. Cross-site release safety: the id matches site_b's record, but the
+    // expected site does not, so nothing may be deleted.
     let released_wrong_site = store
-        .release_media_upload_ownership(site_a, mxc_b1)
+        .release_media_upload_ownership(site_a, mxc_b1, b1_id)
         .await
         .unwrap();
     assert!(
@@ -1498,7 +1525,7 @@ async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites(
 
     // 2. Exact row deletion: releasing mxc_a1 removes only mxc_a1 on site_a
     let released_a1 = store
-        .release_media_upload_ownership(site_a, mxc_a1)
+        .release_media_upload_ownership(site_a, mxc_a1, a1_id)
         .await
         .unwrap();
     assert!(released_a1, "releasing an existing record must return true");
@@ -1530,9 +1557,10 @@ async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites(
         .expect("other site upload must remain");
     assert_eq!(upload_b1.author_public_key, "author-pubkey-3");
 
-    // 3. Idempotent / harmless execution: releasing already-missing row is harmless
+    // 3. Idempotent / harmless execution: releasing an already-missing row with
+    // its stale identity is harmless.
     let released_a1_again = store
-        .release_media_upload_ownership(site_a, mxc_a1)
+        .release_media_upload_ownership(site_a, mxc_a1, a1_id)
         .await
         .unwrap();
     assert!(
@@ -1541,7 +1569,7 @@ async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites(
     );
 
     let released_nonexistent = store
-        .release_media_upload_ownership(site_a, "mxc://hs/does-not-exist")
+        .release_media_upload_ownership(site_a, "mxc://hs/does-not-exist", i64::MAX)
         .await
         .unwrap();
     assert!(
@@ -1550,7 +1578,10 @@ async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites(
     );
 
     // 4. Test alias release_media_upload behaves identically
-    let released_a2 = store.release_media_upload(site_a, mxc_a2).await.unwrap();
+    let released_a2 = store
+        .release_media_upload(site_a, mxc_a2, a2_id)
+        .await
+        .unwrap();
     assert!(
         released_a2,
         "alias release_media_upload must release the row"
@@ -1561,6 +1592,74 @@ async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites(
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn media_upload_ownership_release_is_bound_to_the_enumerated_record() {
+    let store = DbStore::connect(&test_db_url("media-upload-release-identity"))
+        .await
+        .expect("connect db");
+
+    let site = "site-alpha";
+    let mxc = "mxc://hs/recycled-mxc";
+
+    store
+        .record_media_upload(mxc, "author-1", site, Some("post-1"))
+        .await
+        .unwrap();
+    let evaluated_id = store
+        .get_media_upload(site, mxc)
+        .await
+        .unwrap()
+        .expect("enumerated row exists")
+        .id;
+
+    // The exact recorded identity is released.
+    assert!(
+        store
+            .release_media_upload_ownership(site, mxc, evaluated_id)
+            .await
+            .unwrap(),
+        "the matching enumerated row must be released"
+    );
+
+    // Race shape: the evaluated row disappears, then a different row takes over
+    // the same logical identity before the release primitive runs again.
+    store
+        .record_media_upload(mxc, "author-2", site, Some("post-2"))
+        .await
+        .unwrap();
+    let replacement = store
+        .get_media_upload(site, mxc)
+        .await
+        .unwrap()
+        .expect("replacement row exists");
+    assert_ne!(replacement.id, evaluated_id);
+
+    assert!(
+        !store
+            .release_media_upload_ownership(site, mxc, evaluated_id)
+            .await
+            .unwrap(),
+        "a stale id must not release a different row"
+    );
+    assert!(
+        store.get_media_upload(site, mxc).await.unwrap().is_some(),
+        "the replacement row must survive a stale release"
+    );
+
+    // The correct id under the wrong site must not reach the row either.
+    assert!(
+        !store
+            .release_media_upload_ownership("site-beta", mxc, replacement.id)
+            .await
+            .unwrap(),
+        "a mismatched site must not release the row"
+    );
+    assert!(
+        store.get_media_upload(site, mxc).await.unwrap().is_some(),
+        "the row must survive a release attempted under a different site"
     );
 }
 
@@ -1615,9 +1714,15 @@ async fn media_upload_ownership_release_preserves_idempotency_and_media_referenc
         .await
         .expect("create media reference");
 
-    // 3. Explicitly release media upload ownership
+    // 3. Explicitly release media upload ownership, bound to the enumerated row.
+    let upload_id = store
+        .get_media_upload(site_id, mxc_url)
+        .await
+        .unwrap()
+        .expect("ownership row exists")
+        .id;
     let released = store
-        .release_media_upload_ownership(site_id, mxc_url)
+        .release_media_upload_ownership(site_id, mxc_url, upload_id)
         .await
         .unwrap();
     assert!(released, "ownership record must be released");
@@ -1701,7 +1806,7 @@ async fn media_upload_ownership_release_preserves_submission_integrity() {
 
     // Release ownership does not fail on submission-bound row
     let released = store
-        .release_media_upload_ownership(site_id, mxc_url)
+        .release_media_upload_ownership(site_id, mxc_url, before.id)
         .await
         .unwrap();
     assert!(released, "must release row successfully");
@@ -1833,9 +1938,15 @@ async fn media_upload_idempotency_replays_the_same_request() {
     assert_eq!(found.mxc_url, "mxc://hs/first");
 
     // Releasing ownership must not disturb the idempotency record.
+    let first_id = store
+        .get_media_upload("my-blog", "mxc://hs/first")
+        .await
+        .unwrap()
+        .expect("ownership row exists")
+        .id;
     assert!(
         store
-            .release_media_upload_ownership("my-blog", "mxc://hs/first")
+            .release_media_upload_ownership("my-blog", "mxc://hs/first", first_id)
             .await
             .expect("release ownership")
     );

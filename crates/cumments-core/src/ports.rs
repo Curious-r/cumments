@@ -499,20 +499,36 @@ pub trait MessageStore: ProjectionSink {
     /// Releases Cumments ownership for a recorded media upload by removing its
     /// bookkeeping row from `media_uploads`.
     ///
-    /// Identifies the record using the site-scoped media identity `(site_id, mxc_url)`.
-    /// Returns `Ok(true)` if the record existed and was removed, or `Ok(false)`
-    /// if the record was already absent (idempotent / safe under concurrent execution).
+    /// The delete is bound to the exact enumerated record: it only removes the
+    /// row whose `id`, `site_id`, and `mxc_url` all match. This makes release a
+    /// compare-and-release, so a stale evaluation can never remove a different
+    /// row that later took on the same logical identity.
+    ///
+    /// Returns `Ok(true)` if the matching record existed and was removed, or
+    /// `Ok(false)` if it was already absent or no longer matches (idempotent /
+    /// safe under concurrent execution).
     ///
     /// This operation only removes the local ownership evidence row in `media_uploads`.
     /// It preserves `media_upload_idempotency`, `media_references`, and causes no Matrix homeserver side effects.
-    async fn release_media_upload_ownership(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
+    async fn release_media_upload_ownership(
+        &self,
+        site_id: &str,
+        mxc_url: &str,
+        expected_id: i64,
+    ) -> Result<bool>;
 
     /// Releases Cumments ownership for a recorded media upload by removing its
     /// bookkeeping row from `media_uploads`.
     ///
     /// Alias for [`MessageStore::release_media_upload_ownership`].
-    async fn release_media_upload(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
-        self.release_media_upload_ownership(site_id, mxc_url).await
+    async fn release_media_upload(
+        &self,
+        site_id: &str,
+        mxc_url: &str,
+        expected_id: i64,
+    ) -> Result<bool> {
+        self.release_media_upload_ownership(site_id, mxc_url, expected_id)
+            .await
     }
 
     /// Lists every recorded media MXC URL for one site.

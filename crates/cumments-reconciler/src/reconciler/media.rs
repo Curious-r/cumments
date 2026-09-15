@@ -53,7 +53,11 @@ impl MediaCleanupPass {
             match self
                 .deps
                 .message_store
-                .release_media_upload_ownership(&candidate.site_id, &candidate.mxc_url)
+                .release_media_upload_ownership(
+                    &candidate.site_id,
+                    &candidate.mxc_url,
+                    candidate.id,
+                )
                 .await
             {
                 Ok(true) => {
