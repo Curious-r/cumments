@@ -16,10 +16,9 @@ use cumments_core::{
     matrix_error::MatrixError,
     models::{PageSlug, QuarantinedRoom, SiteId},
     ports::{
-        GovernanceStore, MatrixDriver, MediaReferenceResolver, MediaReferenceStore, MessageStore,
-        ProfileStore, ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore,
-        SiteAuthStore, SiteStore, SiteTransferStore, StateRedactionRepairer, SubmissionStore,
-        VirtualUserStore,
+        GovernanceStore, MatrixDriver, MediaReferenceResolver, MessageStore, ProfileStore,
+        ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteAuthStore, SiteStore,
+        SiteTransferStore, StateRedactionRepairer, SubmissionStore, VirtualUserStore,
     },
     site_service::SiteService,
 };
@@ -145,7 +144,6 @@ pub struct ReconcilerDeps {
     pub site_service: Arc<SiteService>,
     pub profile_store: Option<Arc<dyn ProfileStore>>,
     pub media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
-    pub media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
 }
 
 /// The event sources that wake the reconcile passes. Each pass subscribes to

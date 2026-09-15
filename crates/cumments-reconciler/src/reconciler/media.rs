@@ -7,7 +7,6 @@
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
-use tracing::{info, warn};
 
 /// An upload counts as orphaned once it has been unreferenced this long.
 #[allow(dead_code)]
@@ -15,6 +14,7 @@ const ORPHAN_AGE: chrono::Duration = chrono::Duration::hours(24);
 
 /// Periodic sweep for unreferenced visitor uploads.
 pub struct MediaCleanupPass {
+    #[allow(dead_code)]
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,
 }
@@ -25,45 +25,9 @@ impl MediaCleanupPass {
     }
 
     async fn reconcile(&self) -> Result<u64> {
-        let sites = match self.deps.site_store.list_sites().await {
-            Ok(sites) => sites,
-            Err(error) => {
-                warn!("failed to list sites for media reachability sweep: {error:#}");
-                Vec::new()
-            }
-        };
-
-        if let Some(ref media_ref_store) = self.deps.media_reference_store {
-            let evaluator = cumments_core::media_reachability::MediaReachabilityEvaluator::new(
-                self.deps.driver.clone(),
-                media_ref_store.clone(),
-                self.deps.message_store.clone(),
-            );
-
-            for site in sites {
-                let site_id = SiteId::from(site.id);
-                match evaluator.evaluate_site_owned_candidates(&site_id).await {
-                    Ok(evaluations) => {
-                        for eval in evaluations {
-                            info!(
-                                mxc = %eval.candidate_mxc,
-                                site_id = %eval.site_id.as_str(),
-                                reachability = ?eval.reachability.overall,
-                                ownership = ?eval.ownership,
-                                eligible = %eval.is_cleanup_eligible(),
-                                "media reachability evaluated (read-only)"
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        warn!(site_id = %site_id.as_str(), "failed to evaluate media reachability: {error:#}");
-                    }
-                }
-            }
-        }
-
-        // In Stage H1, media cleanup is strictly read-only and causes no destructive state transitions.
-        // No local records or Matrix media are deleted. Ownership release belongs to Stage H2.
+        // In Stage H1, media cleanup is intentionally read-only and no-op.
+        // Logical reachability evaluation is decoupled from cleanup orchestration,
+        // which belongs to Stage H2.
         Ok(0)
     }
 }
@@ -126,7 +90,6 @@ mod tests {
             )),
             profile_store: None,
             media_resolver: None,
-            media_reference_store: Some(store.clone()),
         });
         let pass = MediaCleanupPass::new(
             deps,
