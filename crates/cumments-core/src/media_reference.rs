@@ -52,8 +52,12 @@ fn update_length_prefixed(hasher: &mut Sha256, field: &str) {
 }
 
 impl MediaReference {
-    /// Create a `MediaReference` from an existing UUID.
-    pub fn new(uuid: Uuid) -> Self {
+    /// Wrap an existing UUID in the canonical representation.
+    ///
+    /// Internal: a reference must either be derived from a media identity via
+    /// [`MediaReference::from_media`] or parsed from its canonical form, so
+    /// callers cannot mint an arbitrary identity from an arbitrary UUID.
+    fn new(uuid: Uuid) -> Self {
         Self {
             uuid,
             canonical: format!("{MEDIA_REFERENCE_PREFIX}{uuid}"),
@@ -133,12 +137,6 @@ impl FromStr for MediaReference {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
-    }
-}
-
-impl From<Uuid> for MediaReference {
-    fn from(uuid: Uuid) -> Self {
-        Self::new(uuid)
     }
 }
 
@@ -434,5 +432,16 @@ mod tests {
             reference.as_str(),
             "cumments-media:e8b56568-c68c-8e48-8355-c563e07a9c00"
         );
+    }
+
+    #[test]
+    fn parsing_recovers_the_deterministic_reference() {
+        // Parsing remains the only way to reconstruct a reference from its
+        // canonical form now that arbitrary UUID wrapping is internal.
+        let derived = MediaReference::from_media(&SiteId::from("site-a"), "mxc://hs/asset");
+        let parsed = MediaReference::parse("cumments-media:e8b56568-c68c-8e48-8355-c563e07a9c00")
+            .expect("parse canonical reference");
+        assert_eq!(parsed, derived);
+        assert_eq!(parsed.uuid(), derived.uuid());
     }
 }
