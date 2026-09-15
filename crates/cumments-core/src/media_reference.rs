@@ -191,8 +191,9 @@ impl From<bool> for MediaReferenceSource {
 /// external profile observation) into durable [`MediaReference`] identities.
 ///
 /// Invariants:
-/// - Allocates a stable [`MediaReference`] for previously unseen MXC URIs on this site,
-///   marked `is_external = true` (`MediaReferenceSource::External`).
+/// - Derives the [`MediaReference`] for an observed MXC URI directly from
+///   `(site_id, mxc_uri)` and materializes a mapping marked `is_external = true`
+///   (`MediaReferenceSource::External`) when needed.
 /// - Idempotently reuses an existing mapping without modifying its provenance.
 /// - Never alters Matrix profile authority (read-only with respect to homeserver profile state).
 /// - Never creates or modifies upload ownership records (`media_uploads`).
@@ -215,9 +216,14 @@ impl ExternalAvatarReconciler {
         site_id: &crate::models::SiteId,
         mxc_uri: &str,
     ) -> anyhow::Result<MediaReference> {
+        // The identity is derived from the observed Matrix fact; the store call
+        // only materializes the lookup/provenance row, so missing lookup state
+        // never prevents representing the observed avatar.
+        let reference = MediaReference::from_media(site_id, mxc_uri);
         self.store
             .get_or_create_reference(site_id, mxc_uri, MediaReferenceSource::External)
-            .await
+            .await?;
+        Ok(reference)
     }
 
     /// Explicit external profile avatar reconciliation entrypoint.

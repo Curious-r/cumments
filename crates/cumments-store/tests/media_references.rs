@@ -243,6 +243,11 @@ async fn external_discovery_reconciles_and_preserves_provenance() {
         .reconcile_external_avatar(&site, external_mxc)
         .await
         .unwrap();
+    assert_eq!(
+        ref1,
+        MediaReference::from_media(&site, external_mxc),
+        "external reconciliation must return the deterministic derivation"
+    );
 
     let record1 = store.get_record(&site, &ref1).await.unwrap().unwrap();
     assert!(

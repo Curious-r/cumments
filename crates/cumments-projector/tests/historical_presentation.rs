@@ -10,14 +10,14 @@
 //! 7. Missing resolver fails message processing explicitly.
 //! 8. Logging driver returns unsupported error and message processing fails explicitly.
 //! 9. Valid "no usable presentation" is distinct from resolver failure.
-//! 10. Durable MediaReference resolution handles existing references, local uploads, and degraded unknown avatars without speculative IDs.
+//! 10. Historical media references are derived deterministically from the event's avatar MXC for existing references, local uploads, and unknown avatars alike.
 //! 11. Rebuild determinism: chronological vs reverse replay produces identical stored snapshots.
 
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::MediaReferenceSource;
+use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
 use cumments_core::models::{Content, PageSlug, RoomIdentity, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{
     HistoricalRoomStateResolver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore,
@@ -929,7 +929,7 @@ async fn no_usable_presentation_is_distinct_from_resolver_failure() {
 }
 
 #[tokio::test]
-async fn durable_media_reference_resolution_and_degraded_unknown_avatar() {
+async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
     let db_url = test_db_url("media_ref_resolution");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
     let homeserver = MockHomeserver::start().await;
@@ -1078,12 +1078,27 @@ async fn durable_media_reference_resolution_and_degraded_unknown_avatar() {
         .expect("process msg 3");
 
     let raw3 = get_raw_message(&store, "$msg-unknown-ref").await.unwrap();
-    // Keeps raw compatibility MXC, but does NOT invent speculative MediaReference!
+    // The raw compatibility MXC is kept, and the media reference is derived
+    // deterministically from the event's avatar even though no lookup mapping
+    // existed. No speculative provenance row is materialized for an unknown
+    // (non-Cumments) avatar.
     assert_eq!(
         raw3.author_avatar_url.as_deref(),
         Some("mxc://hs/speculative-external")
     );
-    assert_eq!(raw3.author_media_reference, None);
+    let expected3 = MediaReference::from_media(&site_id, "mxc://hs/speculative-external");
+    assert_eq!(
+        raw3.author_media_reference.as_deref(),
+        Some(expected3.as_str())
+    );
+    assert!(
+        store
+            .find_reference(&site_id, "mxc://hs/speculative-external")
+            .await
+            .unwrap()
+            .is_none(),
+        "an unknown avatar must not materialize a speculative mapping"
+    );
 }
 
 #[tokio::test]

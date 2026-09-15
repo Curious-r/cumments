@@ -17,13 +17,13 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::MediaReferenceSource;
+use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, SiteId, TextContent,
     TextStyle,
 };
 use cumments_core::ports::{
-    MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
+    MatrixDriver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
 };
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
@@ -43,8 +43,16 @@ fn test_db_url(name: &str) -> String {
 }
 
 fn create_processor(store: Arc<DbStore>) -> EventProcessor {
+    create_processor_with_driver(store, None)
+}
+
+fn create_processor_with_driver(
+    store: Arc<DbStore>,
+    driver: Option<Arc<dyn MatrixDriver>>,
+) -> EventProcessor {
     let (tx, _rx) = broadcast::channel(16);
     EventProcessor::new(EventProcessorDeps {
+        driver,
         site_store: store.clone(),
         registry_store: store.clone(),
         message_store: store.clone(),
@@ -60,7 +68,6 @@ fn create_processor(store: Arc<DbStore>) -> EventProcessor {
         site_service: Arc::new(cumments_core::site_service::SiteService::new(
             store.clone() as Arc<dyn SiteStore>
         )),
-        driver: None,
         operator_mxids: Vec::new(),
         backfill_tx: None,
         event_bus: tx,
@@ -1835,4 +1842,94 @@ async fn monotonic_projection_ordering_and_rebuild_via_event_processor() {
     );
     assert_eq!(member_after_newer.event_id.as_deref(), Some("$newer_event"));
     assert_eq!(member_after_newer.origin_server_ts, 3000);
+}
+
+#[tokio::test]
+async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() {
+    let db_url = test_db_url("member_avatar_no_mapping");
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+
+    let site_id = SiteId::from("test-site");
+    let page_slug = PageSlug::from("test-page");
+    let room_id = "!comments:hs";
+    let user_id = "@carol:hs";
+    let mxc_uri = "mxc://hs/carol-avatar";
+
+    store
+        .ensure_site_exists(site_id.as_str(), "!space:hs")
+        .await
+        .expect("ensure site");
+    store
+        .register_room(room_id, &site_id, &page_slug)
+        .await
+        .expect("register room");
+
+    // Neither a lookup mapping nor an upload record exists for this avatar.
+    assert!(
+        store
+            .find_reference(&site_id, mxc_uri)
+            .await
+            .expect("find reference")
+            .is_none()
+    );
+
+    let driver = Arc::new(common::TestDriver::new());
+    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+
+    let join = || ParsedRoomState {
+        room_id: room_id.to_string(),
+        event_id: "$join-carol".to_string(),
+        sender: user_id.to_string(),
+        event_type: "m.room.member".to_string(),
+        state_key: user_id.to_string(),
+        origin_server_ts: 1000,
+        content: json!({
+            "membership": "join",
+            "displayname": "Carol",
+            "avatar_url": mxc_uri,
+        }),
+    };
+
+    processor
+        .process_room_state(join())
+        .await
+        .expect("process join");
+
+    let expected = MediaReference::from_media(&site_id, mxc_uri);
+    let member = store
+        .get_member(room_id, user_id)
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(member.media_reference, Some(expected.clone()));
+    assert_eq!(member.avatar_url.as_deref(), Some(mxc_uri));
+    assert!(
+        store
+            .find_reference(&site_id, mxc_uri)
+            .await
+            .expect("find reference")
+            .is_none(),
+        "an unknown avatar must not materialize a speculative mapping"
+    );
+
+    // Rebuilding the projection with the mapping still absent yields the same reference.
+    store
+        .delete_member(room_id, user_id)
+        .await
+        .expect("wipe member projection");
+    processor
+        .process_room_state(join())
+        .await
+        .expect("replay join");
+
+    let rebuilt = store
+        .get_member(room_id, user_id)
+        .await
+        .expect("get member")
+        .expect("member exists");
+    assert_eq!(rebuilt.media_reference, Some(expected));
+
+    // Projection is one-way: no Matrix profile write was attempted.
+    assert!(driver.set_avatar_calls.lock().await.is_empty());
+    assert!(driver.clear_avatar_calls.lock().await.is_empty());
 }

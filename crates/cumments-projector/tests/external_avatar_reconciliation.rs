@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::MediaReferenceSource;
+use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
 use cumments_core::models::{PageSlug, SiteId, VisitorProfile};
 use cumments_core::ports::{
     MatrixDriver, MediaReferenceStore, MessageStore, RegistryStore, RoomStore, SiteStore,
@@ -738,4 +738,64 @@ async fn repeated_ingestion_and_restart_durability() {
         .await
         .unwrap();
     assert!(final_unused.is_empty());
+}
+
+#[tokio::test]
+async fn global_profile_projection_derives_reference_without_mapping() {
+    let db_url = test_db_url("profile_projection_no_mapping");
+    let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
+
+    let site_id = SiteId::from("my-blog");
+    store
+        .ensure_site_exists(site_id.as_str(), "!space:hs")
+        .await
+        .expect("ensure site");
+
+    let author = "author-projection-1";
+    let mxc = "mxc://hs/global-profile-avatar";
+
+    let driver = Arc::new(common::TestDriver::new());
+    driver.visitor_profiles.lock().await.insert(
+        (site_id.as_str().to_string(), author.to_string()),
+        VisitorProfile {
+            display_name: Some("Projected".to_string()),
+            avatar_url: Some(mxc.to_string()),
+        },
+    );
+
+    // No lookup mapping exists before the profile is projected.
+    assert!(
+        store
+            .find_reference(&site_id, mxc)
+            .await
+            .expect("find reference")
+            .is_none()
+    );
+
+    let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
+    let reference = processor
+        .reconcile_visitor_profile(&site_id, author)
+        .await
+        .expect("reconcile profile")
+        .expect("avatar reference");
+
+    // The projected identity is the deterministic derivation, not a stored row.
+    assert_eq!(reference, MediaReference::from_media(&site_id, mxc));
+
+    // The projection materializes the mapping for reverse lookup and provenance.
+    let record = store
+        .get_record(&site_id, &reference)
+        .await
+        .expect("get record")
+        .expect("mapping materialized");
+    assert_eq!(record.mxc_uri, mxc);
+    assert_eq!(record.source(), MediaReferenceSource::External);
+    assert!(
+        record.is_external,
+        "an unknown global profile avatar carries external provenance"
+    );
+
+    // Projection stays one-way: no Matrix profile write was attempted.
+    assert!(driver.set_avatar_calls.lock().await.is_empty());
+    assert!(driver.clear_avatar_calls.lock().await.is_empty());
 }

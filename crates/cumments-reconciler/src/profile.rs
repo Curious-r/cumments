@@ -68,7 +68,8 @@ impl ExternalProfileReconciler {
         self.reconcile_observed_profile(site_id, &profile).await
     }
 
-    /// Reconciles an observed [`VisitorProfile`] from an authoritative Matrix read into a durable [`MediaReference`].
+    /// Projects an observed [`VisitorProfile`] from an authoritative Matrix
+    /// read into the deterministic [`MediaReference`] for its avatar.
     pub async fn reconcile_observed_profile(
         &self,
         site_id: &SiteId,
@@ -81,12 +82,13 @@ impl ExternalProfileReconciler {
             return Ok(None);
         }
 
-        // Fast path: if mapping already exists, preserve its existing provenance
-        if let Some(existing) = self.media_store.find_reference(site_id, mxc).await? {
-            return Ok(Some(existing));
-        }
+        // Matrix-derived projection: the identity is a pure function of the
+        // observed `(site_id, avatar mxc)`. A missing `media_references` row
+        // must not prevent representing the profile avatar.
+        let reference = MediaReference::from_media(site_id, mxc);
 
-        // Authoritative local check: did Cumments upload this media for this site?
+        // Materialize the lookup/provenance row so runtime reverse lookup keeps
+        // working. It is not the source of the identity derived above.
         let source = if self
             .message_store
             .has_media_upload_for_site(site_id.as_str(), mxc)
@@ -94,15 +96,14 @@ impl ExternalProfileReconciler {
         {
             MediaReferenceSource::Cumments
         } else {
-            // Authoritative external observation from Matrix global profile
+            // Authoritative external observation from the Matrix global profile
             MediaReferenceSource::External
         };
-
-        let media_ref = self
-            .media_store
+        self.media_store
             .get_or_create_reference(site_id, mxc, source)
             .await?;
-        Ok(Some(media_ref))
+
+        Ok(Some(reference))
     }
 
     /// Explicit external profile avatar reconciliation entrypoint.
