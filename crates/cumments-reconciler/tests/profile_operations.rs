@@ -11,7 +11,6 @@
 
 use std::sync::Arc;
 
-use cumments_core::media_reference::MediaReferenceSource;
 use cumments_core::models::SiteId;
 use cumments_core::ports::{MediaReferenceStore, ProfileStore, SiteStore};
 use cumments_core::profile::{
@@ -310,7 +309,7 @@ async fn multiple_fields_progress_independently() {
         .expect("ensure site");
 
     let media_ref = store
-        .get_or_create_reference(&site, "mxc://hs/avatar1", MediaReferenceSource::External)
+        .get_or_create_reference(&site, "mxc://hs/avatar1")
         .await
         .unwrap();
 

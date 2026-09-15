@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use cumments_core::media_reference::{
-    ExternalAvatarReconciler, MediaReference, MediaReferenceSource,
-};
+use cumments_core::media_reference::MediaReference;
 use cumments_core::models::SiteId;
 use cumments_core::ports::{MediaReferenceResolver, MediaReferenceStore};
 use cumments_store::DbStore;
@@ -30,10 +28,7 @@ async fn basic_mapping_and_idempotent_lookup() {
     assert!(initial.is_none());
 
     // First get_or_create allocates a new MediaReference
-    let ref1 = store
-        .get_or_create_reference(&site, mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let ref1 = store.get_or_create_reference(&site, mxc).await.unwrap();
     assert!(ref1.as_str().starts_with("cumments-media:"));
 
     // find_reference now returns ref1
@@ -41,22 +36,8 @@ async fn basic_mapping_and_idempotent_lookup() {
     assert_eq!(found.as_ref(), Some(&ref1));
 
     // Repeated get_or_create returns identical MediaReference
-    let ref2 = store
-        .get_or_create_reference(&site, mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let ref2 = store.get_or_create_reference(&site, mxc).await.unwrap();
     assert_eq!(ref1, ref2);
-
-    // Repeated call with External source still returns the existing reference and preserves provenance
-    let ref3 = store
-        .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
-        .await
-        .unwrap();
-    assert_eq!(ref1, ref3);
-
-    let rec = store.get_record(&site, &ref1).await.unwrap().unwrap();
-    assert_eq!(rec.source(), MediaReferenceSource::Cumments);
-    assert!(!rec.is_external);
 }
 
 #[tokio::test]
@@ -67,10 +48,7 @@ async fn reverse_lookup_resolves_original_mxc() {
     let site = SiteId::from("blog");
     let mxc = "mxc://homeserver.example.org/avatar-abc";
 
-    let reference = store
-        .get_or_create_reference(&site, mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let reference = store.get_or_create_reference(&site, mxc).await.unwrap();
 
     // Reverse lookup via resolve_mxc
     let resolved = store.resolve_mxc(&site, &reference).await.unwrap();
@@ -81,7 +59,6 @@ async fn reverse_lookup_resolves_original_mxc() {
     assert_eq!(record.media_reference, reference);
     assert_eq!(record.site_id, site);
     assert_eq!(record.mxc_uri, mxc);
-    assert!(!record.is_external);
 
     // Record lookup by MXC
     let record_by_mxc = store.get_record_by_mxc(&site, mxc).await.unwrap().unwrap();
@@ -100,11 +77,11 @@ async fn site_isolation_creates_independent_mappings() {
     let shared_mxc = "mxc://matrix.org/shared-media-object";
 
     let ref_a = store
-        .get_or_create_reference(&site_a, shared_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_a, shared_mxc)
         .await
         .unwrap();
     let ref_b = store
-        .get_or_create_reference(&site_b, shared_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_b, shared_mxc)
         .await
         .unwrap();
 
@@ -153,9 +130,7 @@ async fn concurrent_get_or_create_converges_to_single_mapping() {
     let barrier1 = barrier.clone();
     let handle1 = tokio::spawn(async move {
         barrier1.wait().await;
-        store1_task
-            .get_or_create_reference(&site1, mxc, MediaReferenceSource::Cumments)
-            .await
+        store1_task.get_or_create_reference(&site1, mxc).await
     });
 
     let store2_task = store2.clone();
@@ -163,9 +138,7 @@ async fn concurrent_get_or_create_converges_to_single_mapping() {
     let barrier2 = barrier.clone();
     let handle2 = tokio::spawn(async move {
         barrier2.wait().await;
-        store2_task
-            .get_or_create_reference(&site2, mxc, MediaReferenceSource::Cumments)
-            .await
+        store2_task.get_or_create_reference(&site2, mxc).await
     });
 
     let res1 = handle1.await.unwrap().unwrap();
@@ -195,19 +168,13 @@ async fn restart_durability_preserves_media_identity() {
 
     let initial_ref = {
         let store = DbStore::connect(&db_url).await.expect("connect session 1");
-        store
-            .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
-            .await
-            .unwrap()
+        store.get_or_create_reference(&site, mxc).await.unwrap()
     };
 
     // Reopen database with fresh connection pool
     {
         let store = DbStore::connect(&db_url).await.expect("connect session 2");
-        let reloaded_ref = store
-            .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
-            .await
-            .unwrap();
+        let reloaded_ref = store.get_or_create_reference(&site, mxc).await.unwrap();
 
         assert_eq!(
             initial_ref, reloaded_ref,
@@ -216,101 +183,7 @@ async fn restart_durability_preserves_media_identity() {
 
         let resolved = store.resolve_mxc(&site, &reloaded_ref).await.unwrap();
         assert_eq!(resolved.as_deref(), Some(mxc));
-
-        let record = store
-            .get_record(&site, &reloaded_ref)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(record.is_external);
     }
-}
-
-#[tokio::test]
-async fn external_discovery_reconciles_and_preserves_provenance() {
-    let store = Arc::new(
-        DbStore::connect(&test_db_url("external_discovery"))
-            .await
-            .expect("connect db"),
-    );
-    let reconciler = ExternalAvatarReconciler::new(store.clone());
-
-    let site = SiteId::from("blog");
-    let external_mxc = "mxc://homeserver.org/external-avatar-999";
-
-    // 1. Reconcile explicit external avatar
-    let ref1 = reconciler
-        .reconcile_external_avatar(&site, external_mxc)
-        .await
-        .unwrap();
-    assert_eq!(
-        ref1,
-        MediaReference::from_media(&site, external_mxc),
-        "external reconciliation must return the deterministic derivation"
-    );
-
-    let record1 = store.get_record(&site, &ref1).await.unwrap().unwrap();
-    assert!(
-        record1.is_external,
-        "externally discovered avatar must be marked is_external = true"
-    );
-    assert_eq!(record1.source(), MediaReferenceSource::External);
-
-    // 2. Repeated discovery reuses existing mapping
-    let ref2 = reconciler
-        .reconcile_global_profile_avatar(&site, Some(external_mxc))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(ref1, ref2);
-
-    // 3. If an upload was created first (is_external = false), external discovery does NOT flip it
-    let upload_mxc = "mxc://homeserver.org/upload-avatar-111";
-    let upload_ref = store
-        .get_or_create_reference(&site, upload_mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
-
-    let upload_record = store.get_record(&site, &upload_ref).await.unwrap().unwrap();
-    assert!(!upload_record.is_external);
-    assert_eq!(upload_record.source(), MediaReferenceSource::Cumments);
-
-    // Subsequent external reconciliation of the same MXC returns existing ref and preserves is_external = false
-    let reconciled_upload = reconciler
-        .reconcile_avatar(&site, upload_mxc)
-        .await
-        .unwrap();
-    assert_eq!(upload_ref, reconciled_upload);
-
-    let preserved_record = store.get_record(&site, &upload_ref).await.unwrap().unwrap();
-    assert!(
-        !preserved_record.is_external,
-        "existing is_external provenance must not be arbitrarily flipped"
-    );
-    assert_eq!(preserved_record.source(), MediaReferenceSource::Cumments);
-
-    // 4. Missing or empty avatars return Ok(None)
-    assert!(
-        reconciler
-            .reconcile_global_profile_avatar(&site, None)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        reconciler
-            .reconcile_global_profile_avatar(&site, Some(""))
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        reconciler
-            .reconcile_global_profile_avatar(&site, Some("https://example.com/not-mxc"))
-            .await
-            .unwrap()
-            .is_none()
-    );
 }
 
 #[tokio::test]
@@ -323,24 +196,15 @@ async fn creation_derives_the_reference_from_site_and_mxc() {
     let mxc = "mxc://matrix.org/deterministic-media";
 
     // First creation uses exactly the deterministic derivation.
-    let created = store
-        .get_or_create_reference(&site_a, mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let created = store.get_or_create_reference(&site_a, mxc).await.unwrap();
     assert_eq!(created, MediaReference::from_media(&site_a, mxc));
 
     // Re-creation returns the stored value, which is the same derivation.
-    let again = store
-        .get_or_create_reference(&site_a, mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let again = store.get_or_create_reference(&site_a, mxc).await.unwrap();
     assert_eq!(again, created);
 
     // The same MXC under another site derives a different, independent reference.
-    let other_site = store
-        .get_or_create_reference(&site_b, mxc, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let other_site = store.get_or_create_reference(&site_b, mxc).await.unwrap();
     assert_eq!(other_site, MediaReference::from_media(&site_b, mxc));
     assert_ne!(other_site, created);
     assert!(store.get_record(&site_a, &created).await.unwrap().is_some());
@@ -359,11 +223,7 @@ async fn creation_derives_the_reference_from_site_and_mxc() {
 
     // A different MXC on the same site derives a different reference.
     let distinct = store
-        .get_or_create_reference(
-            &site_a,
-            "mxc://matrix.org/other-media",
-            MediaReferenceSource::Cumments,
-        )
+        .get_or_create_reference(&site_a, "mxc://matrix.org/other-media")
         .await
         .unwrap();
     assert_eq!(
@@ -371,44 +231,6 @@ async fn creation_derives_the_reference_from_site_and_mxc() {
         MediaReference::from_media(&site_a, "mxc://matrix.org/other-media")
     );
     assert_ne!(distinct, created);
-
-    // Provenance is recorded exactly as requested.
-    let record = store.get_record(&site_a, &created).await.unwrap().unwrap();
-    assert!(!record.is_external);
-    assert_eq!(record.source(), MediaReferenceSource::Cumments);
-}
-
-#[tokio::test]
-async fn external_reconciliation_uses_the_deterministic_derivation() {
-    let store = Arc::new(
-        DbStore::connect(&test_db_url("deterministic_external"))
-            .await
-            .expect("connect db"),
-    );
-    let reconciler = ExternalAvatarReconciler::new(store.clone());
-
-    let site = SiteId::from("blog");
-    let mxc = "mxc://homeserver.org/external-deterministic";
-
-    let reconciled = reconciler
-        .reconcile_external_avatar(&site, mxc)
-        .await
-        .unwrap();
-    assert_eq!(reconciled, MediaReference::from_media(&site, mxc));
-
-    // The store derives the same value independently, and provenance is kept.
-    let stored = store
-        .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
-        .await
-        .unwrap();
-    assert_eq!(stored, reconciled);
-
-    let record = store.get_record(&site, &reconciled).await.unwrap().unwrap();
-    assert!(
-        record.is_external,
-        "external provenance must be preserved by deterministic derivation"
-    );
-    assert_eq!(record.source(), MediaReferenceSource::External);
 }
 
 #[tokio::test]
@@ -444,8 +266,6 @@ async fn ownership_separation_never_creates_media_uploads_record() {
             .await
             .expect("connect db"),
     );
-    let reconciler = ExternalAvatarReconciler::new(store.clone());
-
     let site = SiteId::from("blog");
     let external_mxc = "mxc://homeserver.org/external-avatar-pure";
 
@@ -456,9 +276,9 @@ async fn ownership_separation_never_creates_media_uploads_record() {
         .unwrap();
     assert!(initial_unused.is_empty());
 
-    // Reconcile external avatar
-    let media_ref = reconciler
-        .reconcile_avatar(&site, external_mxc)
+    // Materialize a mapping for an observed Matrix avatar MXC.
+    let media_ref = store
+        .get_or_create_reference(&site, external_mxc)
         .await
         .unwrap();
     assert!(media_ref.as_str().starts_with("cumments-media:"));
@@ -466,16 +286,15 @@ async fn ownership_separation_never_creates_media_uploads_record() {
     // Verify media_references has the record
     let record = store.get_record(&site, &media_ref).await.unwrap().unwrap();
     assert_eq!(record.mxc_uri, external_mxc);
-    assert!(record.is_external);
 
-    // CRITICAL: media_uploads must NOT contain any record for this external avatar!
+    // CRITICAL: media_uploads must NOT contain any record for this observed avatar!
     let post_unused = store
         .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
         .await
         .unwrap();
     assert!(
         post_unused.is_empty(),
-        "external avatar discovery must never create or touch media_uploads ownership records"
+        "projecting a Matrix avatar must never create or touch media_uploads ownership records"
     );
 }
 
@@ -507,10 +326,7 @@ async fn profile_executor_integration_with_media_reference_store() {
 
     // 1. Create a media reference mapping in DbStore
     let mxc_url = "mxc://homeserver.example.org/avatar-file-789";
-    let media_ref = store
-        .get_or_create_reference(&site, mxc_url, MediaReferenceSource::Cumments)
-        .await
-        .unwrap();
+    let media_ref = store.get_or_create_reference(&site, mxc_url).await.unwrap();
 
     // 2. Submit a SetAvatar profile operation with this MediaReference
     let op_avatar = ProfileTargetValue::SetAvatar(media_ref.clone());
@@ -551,23 +367,23 @@ async fn site_retirement_removes_only_that_sites_media_references() {
     // Several durable mappings for site-a — including one whose MXC is also
     // mapped by site-b — plus site-b's own mappings.
     let a1 = store
-        .get_or_create_reference(&site_a, "mxc://hs/a1", MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_a, "mxc://hs/a1")
         .await
         .unwrap();
     let a2 = store
-        .get_or_create_reference(&site_a, "mxc://hs/a2", MediaReferenceSource::External)
+        .get_or_create_reference(&site_a, "mxc://hs/a2")
         .await
         .unwrap();
     let a3 = store
-        .get_or_create_reference(&site_a, "mxc://hs/shared", MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_a, "mxc://hs/shared")
         .await
         .unwrap();
     let b1 = store
-        .get_or_create_reference(&site_b, "mxc://hs/b1", MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_b, "mxc://hs/b1")
         .await
         .unwrap();
     let b_shared = store
-        .get_or_create_reference(&site_b, "mxc://hs/shared", MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_b, "mxc://hs/shared")
         .await
         .unwrap();
 

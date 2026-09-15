@@ -203,6 +203,10 @@ async fn submission_txn_migrations_are_registered() {
         names.contains(&"m20260915_000079_media_uploads_site_scoped".to_string()),
         "000079 must be registered or media_uploads ownership stays globally unique by MXC"
     );
+    assert!(
+        names.contains(&"m20260915_000080_media_references_drop_is_external".to_string()),
+        "000080 must be registered or media_references keeps the removed provenance flag"
+    );
 }
 
 #[tokio::test]
@@ -670,8 +674,8 @@ async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplic
     // 1. Insert on site-a
     db.execute_unprepared(&format!(
         "INSERT INTO media_references \
-         (media_reference, site_id, mxc_uri, is_external, created_at) \
-         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-a', 'mxc://hs/1', 0, '{now}')"
+         (media_reference, site_id, mxc_uri, created_at) \
+         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-a', 'mxc://hs/1', '{now}')"
     ))
     .await
     .expect("first media reference");
@@ -679,8 +683,8 @@ async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplic
     // 2. Same MXC URI on site-b with a different media_reference MUST SUCCEED (not globally unique)
     db.execute_unprepared(&format!(
         "INSERT INTO media_references \
-         (media_reference, site_id, mxc_uri, is_external, created_at) \
-         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440001', 'site-b', 'mxc://hs/1', 0, '{now}')"
+         (media_reference, site_id, mxc_uri, created_at) \
+         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440001', 'site-b', 'mxc://hs/1', '{now}')"
     ))
     .await
     .expect("same mxc on different site is allowed");
@@ -689,8 +693,8 @@ async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplic
     let dup_site_mxc = db
         .execute_unprepared(&format!(
             "INSERT INTO media_references \
-             (media_reference, site_id, mxc_uri, is_external, created_at) \
-             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440002', 'site-a', 'mxc://hs/1', 0, '{now}')"
+             (media_reference, site_id, mxc_uri, created_at) \
+             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440002', 'site-a', 'mxc://hs/1', '{now}')"
         ))
         .await;
     assert!(
@@ -702,11 +706,91 @@ async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplic
     let dup_pk = db
         .execute_unprepared(&format!(
             "INSERT INTO media_references \
-             (media_reference, site_id, mxc_uri, is_external, created_at) \
-             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-c', 'mxc://hs/2', 0, '{now}')"
+             (media_reference, site_id, mxc_uri, created_at) \
+             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-c', 'mxc://hs/2', '{now}')"
         ))
         .await;
     assert!(dup_pk.is_err(), "duplicate primary key must be rejected");
+}
+
+#[tokio::test]
+async fn media_references_drop_is_external_preserves_mappings() {
+    let url = test_db_url("media-references-drop-is-external");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(79))
+        .await
+        .expect("migrate to 000079");
+
+    // Entity-first migrations build `media_references` from the current model,
+    // so re-add the legacy provenance column to simulate an upgraded database.
+    db.execute_unprepared(
+        "ALTER TABLE media_references ADD COLUMN is_external BOOLEAN NOT NULL DEFAULT 0",
+    )
+    .await
+    .expect("simulate legacy is_external column");
+    assert!(
+        column_names(&db, "media_references")
+            .await
+            .iter()
+            .any(|c| c == "is_external"),
+        "the simulated pre-migration schema must carry is_external"
+    );
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_references \
+         (media_reference, site_id, mxc_uri, is_external, created_at) \
+         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-a', 'mxc://hs/keep', 1, '{now}')"
+    ))
+    .await
+    .expect("insert pre-migration mapping");
+
+    Migrator::up(&db, None).await.expect("apply 000080");
+
+    let columns = column_names(&db, "media_references").await;
+    assert!(
+        !columns.iter().any(|c| c == "is_external"),
+        "is_external must be dropped: {columns:?}"
+    );
+
+    // The existing mapping survives unchanged.
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT media_reference, site_id, mxc_uri FROM media_references".to_string(),
+        ))
+        .await
+        .expect("query migrated mappings");
+    assert_eq!(rows.len(), 1, "the mapping row must be preserved");
+    assert_eq!(
+        rows[0].try_get::<String>("", "media_reference").unwrap(),
+        "cumments-media:550e8400-e29b-41d4-a716-446655440000"
+    );
+    assert_eq!(rows[0].try_get::<String>("", "site_id").unwrap(), "site-a");
+    assert_eq!(
+        rows[0].try_get::<String>("", "mxc_uri").unwrap(),
+        "mxc://hs/keep"
+    );
+
+    // Site-scoped uniqueness is unchanged: duplicate within the site fails,
+    // the same MXC on another site is allowed.
+    assert!(
+        db.execute_unprepared(&format!(
+            "INSERT INTO media_references \
+             (media_reference, site_id, mxc_uri, created_at) \
+             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440001', 'site-a', 'mxc://hs/keep', '{now}')"
+        ))
+        .await
+        .is_err(),
+        "duplicate (site_id, mxc_uri) must be rejected"
+    );
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_references \
+         (media_reference, site_id, mxc_uri, created_at) \
+         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440002', 'site-b', 'mxc://hs/keep', '{now}')"
+    ))
+    .await
+    .expect("same mxc on another site is allowed");
 }
 
 #[tokio::test]

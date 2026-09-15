@@ -22,7 +22,7 @@ use cumments_core::{
         validate_governance_user_id,
     },
     identity::{post_signature_message, signature_message},
-    media_reference::{ExternalAvatarReconciler, MediaReference, MediaReferenceSource},
+    media_reference::MediaReference,
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
@@ -84,7 +84,6 @@ pub struct EventProcessor {
     /// events are persisted to the SSE outbox instead of broadcast directly.
     event_capture: Mutex<Option<Vec<ProjectorEvent>>>,
     media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
-    avatar_reconciler: Option<ExternalAvatarReconciler>,
     historical_state_resolver: Option<Arc<dyn HistoricalRoomStateResolver>>,
 }
 
@@ -1219,10 +1218,6 @@ impl BotCommandRouter {
 impl EventProcessor {
     pub fn new(deps: EventProcessorDeps) -> Self {
         let command_router = BotCommandRouter::new(&deps);
-        let avatar_reconciler = deps
-            .media_reference_store
-            .as_ref()
-            .map(|s| ExternalAvatarReconciler::new(s.clone()));
         Self {
             site_store: deps.site_store,
             registry_store: deps.registry_store,
@@ -1246,7 +1241,6 @@ impl EventProcessor {
             command_router,
             event_capture: Mutex::new(None),
             media_reference_store: deps.media_reference_store,
-            avatar_reconciler,
             historical_state_resolver: deps.historical_state_resolver,
         }
     }
@@ -1255,20 +1249,13 @@ impl EventProcessor {
         self.media_reference_store.as_ref()
     }
 
-    pub fn avatar_reconciler(&self) -> Option<&ExternalAvatarReconciler> {
-        self.avatar_reconciler.as_ref()
-    }
-
-    /// Reconciles an authoritative Matrix visitor profile reading into a durable [`MediaReference`].
+    /// Projects an authoritative Matrix visitor profile reading into a [`MediaReference`].
     ///
-    /// 1. Queries the homeserver via `driver.get_profile(author_public_key, site_id)`
-    ///    (`GET /_matrix/client/v3/profile/{userId}`).
-    /// 2. If an avatar MXC URI is present:
-    ///    - If an existing mapping exists for `(site_id, mxc)`, reuses it and preserves its provenance.
-    ///    - If no mapping exists:
-    ///      - If `media_uploads` contains this MXC for the site, records `MediaReferenceSource::Cumments` (`is_external = false`).
-    ///      - Otherwise, records `MediaReferenceSource::External` (`is_external = true`).
-    /// 3. Returns the resolved or newly allocated `MediaReference`, or `Ok(None)` if no avatar is set or no profile exists.
+    /// 1. Reads the homeserver profile via `driver.get_profile(author_public_key, site_id)`.
+    /// 2. If an avatar MXC URI is present, derives the deterministic
+    ///    `MediaReference` for `(site_id, mxc)` and ensures the lookup mapping.
+    /// 3. Returns the projected reference, or `Ok(None)` if no avatar is set or no
+    ///    profile exists.
     pub async fn reconcile_visitor_profile(
         &self,
         site_id: &SiteId,
@@ -1282,28 +1269,6 @@ impl EventProcessor {
             return Ok(None);
         };
         self.reconcile_observed_profile(site_id, &profile).await
-    }
-
-    /// Provenance for an observed Matrix avatar MXC.
-    ///
-    /// A Cumments-owned upload for the site is recorded as
-    /// [`MediaReferenceSource::Cumments`]; any other observed avatar is treated
-    /// as [`MediaReferenceSource::External`]. This describes the observation
-    /// source only: it is neither the media identity nor a claim of ownership.
-    async fn observed_avatar_source(
-        &self,
-        site_id: &SiteId,
-        mxc: &str,
-    ) -> Result<MediaReferenceSource> {
-        if self
-            .message_store
-            .has_media_upload_for_site(site_id.as_str(), mxc)
-            .await?
-        {
-            Ok(MediaReferenceSource::Cumments)
-        } else {
-            Ok(MediaReferenceSource::External)
-        }
     }
 
     /// Projects an observed [`VisitorProfile`] from an authoritative Matrix
@@ -1325,33 +1290,13 @@ impl EventProcessor {
         // must not prevent representing the profile avatar.
         let reference = MediaReference::from_media(site_id, mxc);
 
-        // Materialize the lookup/provenance row when a store is configured so
-        // runtime reverse lookup keeps working. It is not the source of identity.
+        // Materialize the lookup mapping when a store is configured so runtime
+        // reverse lookup keeps working. It is not the source of identity.
         if let Some(ref media_store) = self.media_reference_store {
-            let source = self.observed_avatar_source(site_id, mxc).await?;
-            media_store
-                .get_or_create_reference(site_id, mxc, source)
-                .await?;
+            media_store.get_or_create_reference(site_id, mxc).await?;
         }
 
         Ok(Some(reference))
-    }
-
-    /// Explicit external profile avatar reconciliation entrypoint.
-    ///
-    /// Reconciles an avatar MXC observed from an external Matrix profile into a durable [`MediaReference`].
-    pub async fn reconcile_external_profile_avatar(
-        &self,
-        site_id: &SiteId,
-        mxc_uri: &str,
-    ) -> Result<MediaReference> {
-        let reconciler = self
-            .avatar_reconciler
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("media reference store not configured"))?;
-        reconciler
-            .reconcile_external_profile_avatar(site_id, mxc_uri)
-            .await
     }
 
     pub async fn start_event_capture(&self) {
@@ -1759,9 +1704,9 @@ impl EventProcessor {
             && let Ok(site_id_obj) = SiteId::new(site_id.clone())
             && let Some(ref media_store) = self.media_reference_store
         {
-            let source = self.observed_avatar_source(&site_id_obj, mxc).await?;
+            // Ensure the lookup mapping so the persisted reference resolves.
             media_store
-                .get_or_create_reference(&site_id_obj, mxc, source)
+                .get_or_create_reference(&site_id_obj, mxc)
                 .await?;
             media_reference = Some(MediaReference::from_media(&site_id_obj, mxc));
         }
@@ -2335,10 +2280,8 @@ impl EventProcessor {
                         };
 
                     if let Some(ref site_id) = site_id {
-                        let source = self.observed_avatar_source(site_id, mxc).await?;
-                        media_store
-                            .get_or_create_reference(site_id, mxc, source)
-                            .await?;
+                        // Ensure the lookup mapping so the persisted reference resolves.
+                        media_store.get_or_create_reference(site_id, mxc).await?;
                         media_reference = Some(MediaReference::from_media(site_id, mxc));
                     } else {
                         debug!(

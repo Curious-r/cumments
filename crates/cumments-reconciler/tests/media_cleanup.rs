@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
+use cumments_core::media_reference::MediaReference;
 use cumments_core::media_upload::MediaUploadIdempotencyInput;
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageStatus, SiteId,
@@ -90,7 +90,7 @@ async fn record_owned_upload(store: &Arc<DbStore>, site: &str, mxc: &str, author
 
 async fn map_reference(store: &Arc<DbStore>, site: &str, mxc: &str) -> MediaReference {
     store
-        .get_or_create_reference(&SiteId::from(site), mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&SiteId::from(site), mxc)
         .await
         .expect("map reference")
 }

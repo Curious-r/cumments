@@ -8,7 +8,7 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, Statement, Value,
 };
 
-use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
+use cumments_core::media_reference::MediaReference;
 use cumments_core::models::SiteId;
 use cumments_core::ports::{MediaReferenceRecord, MediaReferenceResolver, MediaReferenceStore};
 
@@ -22,7 +22,6 @@ fn model_to_record(model: media_references::Model) -> Result<MediaReferenceRecor
         media_reference,
         site_id: SiteId::from(model.site_id),
         mxc_uri: model.mxc_uri,
-        is_external: model.is_external,
         created_at: model.created_at,
     })
 }
@@ -68,7 +67,6 @@ impl MediaReferenceStore for DbStore {
         &self,
         site_id: &SiteId,
         mxc_uri: &str,
-        source: MediaReferenceSource,
     ) -> Result<MediaReference> {
         // Fast path: if mapping already exists, return it without write lock
         if let Some(existing) = self.find_reference(site_id, mxc_uri).await? {
@@ -83,12 +81,12 @@ impl MediaReferenceStore for DbStore {
 
         let sql = if backend == DatabaseBackend::Sqlite {
             "INSERT OR IGNORE INTO media_references \
-             (media_reference, site_id, mxc_uri, is_external, created_at) \
-             VALUES (?, ?, ?, ?, ?)"
+             (media_reference, site_id, mxc_uri, created_at) \
+             VALUES (?, ?, ?, ?)"
         } else {
             "INSERT INTO media_references \
-             (media_reference, site_id, mxc_uri, is_external, created_at) \
-             VALUES (?, ?, ?, ?, ?) \
+             (media_reference, site_id, mxc_uri, created_at) \
+             VALUES (?, ?, ?, ?) \
              ON CONFLICT (site_id, mxc_uri) DO NOTHING"
         };
 
@@ -101,7 +99,6 @@ impl MediaReferenceStore for DbStore {
                     Value::from(new_reference.as_str().to_string()),
                     Value::from(site_id.as_str().to_string()),
                     Value::from(mxc_uri.to_string()),
-                    Value::from(source.is_external()),
                     Value::from(now),
                 ],
             ))

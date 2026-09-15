@@ -16,8 +16,6 @@ pub struct Model {
     pub site_id: String,
     /// Underlying Matrix homeserver MXC URI (`mxc://server/media_id`).
     pub mxc_uri: String,
-    /// Whether this media reference was discovered via external Matrix avatar.
-    pub is_external: bool,
     /// Timestamp when this reference mapping was created.
     pub created_at: DateTimeUtc,
 }

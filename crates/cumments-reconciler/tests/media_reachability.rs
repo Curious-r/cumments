@@ -15,7 +15,6 @@ use std::sync::Arc;
 use cumments_core::media_reachability::{
     MediaOwnership, MediaReachabilityEvaluator, ReachabilityState,
 };
-use cumments_core::media_reference::MediaReferenceSource;
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageStatus, SiteId,
     TextContent, TextStyle, VisitorProfile,
@@ -97,7 +96,7 @@ async fn current_profile_referenced_yields_reachable() {
         .await
         .unwrap();
     let media_ref = store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -146,7 +145,7 @@ async fn current_profile_replaced_or_unset_yields_unreachable() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -205,7 +204,7 @@ async fn current_profile_lookup_failure_yields_unknown() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -241,7 +240,7 @@ async fn historical_presentation_referenced_yields_reachable() {
         .await
         .unwrap();
     let media_ref = store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -314,7 +313,7 @@ async fn content_attachment_in_message_body_yields_reachable() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -370,7 +369,7 @@ async fn content_attachment_in_revision_yields_reachable() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -432,7 +431,7 @@ async fn content_attachment_in_sticker_pack_yields_reachable() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -475,7 +474,7 @@ async fn content_attachment_in_active_post_submission_yields_reachable() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -531,7 +530,7 @@ async fn combined_all_absent_yields_unreachable_and_cleanup_eligible() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -571,7 +570,7 @@ async fn combined_one_unknown_others_absent_yields_unknown_and_not_eligible() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -636,7 +635,7 @@ async fn external_media_is_not_owned_and_never_eligible() {
     let ext_mxc = "mxc://hs/external-discovered-avatar";
     // External mapping created, NO media_uploads record
     let media_ref = store
-        .get_or_create_reference(&site_id, ext_mxc, MediaReferenceSource::External)
+        .get_or_create_reference(&site_id, ext_mxc)
         .await
         .unwrap();
 
@@ -682,7 +681,7 @@ async fn cross_site_isolation_preserves_independent_reachability() {
         .await
         .unwrap();
     store
-        .get_or_create_reference(&site_a, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_a, candidate_mxc)
         .await
         .unwrap();
 
@@ -743,7 +742,7 @@ async fn read_only_guarantee_preserves_all_durable_state() {
         .await
         .unwrap();
     let media_ref = store
-        .get_or_create_reference(&site_id, candidate_mxc, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 

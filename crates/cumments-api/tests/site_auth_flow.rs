@@ -349,7 +349,6 @@ async fn visitor_profile_returns_the_current_profile_and_visitor_id() {
         .get_or_create_reference(
             &SiteId::new("test-blog".to_string()).unwrap(),
             "mxc://hs/avatar",
-            cumments_core::media_reference::MediaReferenceSource::Cumments,
         )
         .await
         .expect("create media ref");

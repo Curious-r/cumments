@@ -16,7 +16,7 @@ use cumments_api::{
     rate_limit::RateLimiter,
     request::ProfileOperationResponse,
 };
-use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
+use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{SiteId, VisitorProfile};
 use cumments_core::ports::{MediaReferenceStore, ProfileStore, SiteAuthStore};
 use cumments_core::profile::{
@@ -449,11 +449,7 @@ async fn set_and_clear_avatar_success() {
 
     // Map a media reference beforehand
     let media_ref = store
-        .get_or_create_reference(
-            &site_id,
-            "mxc://hs/avatar123",
-            MediaReferenceSource::Cumments,
-        )
+        .get_or_create_reference(&site_id, "mxc://hs/avatar123")
         .await
         .unwrap();
 
@@ -551,11 +547,7 @@ async fn set_avatar_rejects_unknown_cross_site_and_raw_mxc() {
 
     // Map media under site-a only
     let media_site_a = store
-        .get_or_create_reference(
-            &site_a,
-            "mxc://hs/site-a-avatar",
-            MediaReferenceSource::Cumments,
-        )
+        .get_or_create_reference(&site_a, "mxc://hs/site-a-avatar")
         .await
         .unwrap();
 
@@ -1003,7 +995,7 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
         .await
         .unwrap();
     let media_ref = store
-        .get_or_create_reference(&site_id, "mxc://hs/pic-ser", MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id, "mxc://hs/pic-ser")
         .await
         .unwrap();
 
@@ -1207,11 +1199,7 @@ async fn get_profile_is_read_only_and_does_not_expose_raw_mxc() {
 
     // Now map it in the store
     let media_ref = store
-        .get_or_create_reference(
-            &site_id,
-            "mxc://hs/unmapped-mxc",
-            MediaReferenceSource::Cumments,
-        )
+        .get_or_create_reference(&site_id, "mxc://hs/unmapped-mxc")
         .await
         .unwrap();
 

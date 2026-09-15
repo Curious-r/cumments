@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
+use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, SiteId, TextContent,
     TextStyle,
@@ -628,7 +628,6 @@ async fn media_reference_mapping_and_projection_rebuild_determinism() {
         .expect("get record")
         .expect("record exists");
     assert_eq!(record.mxc_uri, mxc_uri);
-    assert!(!record.is_external);
 
     // 2. Member leaves: media_reference is preserved on leave
     processor
@@ -694,15 +693,15 @@ async fn media_reference_mapping_and_projection_rebuild_determinism() {
 }
 
 #[tokio::test]
-async fn external_provenance_preserved_on_room_member_observation() {
-    let db_url = test_db_url("external_provenance_preserved");
+async fn existing_mapping_is_reused_on_room_member_observation() {
+    let db_url = test_db_url("existing_mapping_reused");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
 
     let site_id = SiteId::from("test-site");
     let page_slug = PageSlug::from("test-page");
     let room_id = "!comments:hs";
-    let user_id = "@external_user:hs";
-    let ext_mxc = "mxc://hs/ext-avatar-999";
+    let user_id = "@observed_user:hs";
+    let mxc = "mxc://hs/observed-avatar-999";
 
     store
         .ensure_site_exists(site_id.as_str(), "!space:hs")
@@ -713,34 +712,26 @@ async fn external_provenance_preserved_on_room_member_observation() {
         .await
         .expect("register room");
 
-    // Pre-create external mapping (discovered through external profile reconciler)
-    let ext_ref = store
-        .get_or_create_reference(&site_id, ext_mxc, MediaReferenceSource::External)
+    // Materialize the lookup mapping first.
+    let existing_ref = store
+        .get_or_create_reference(&site_id, mxc)
         .await
-        .expect("create external reference");
-
-    let record_before = store
-        .get_record(&site_id, &ext_ref)
-        .await
-        .expect("get record")
-        .expect("exists");
-    assert!(record_before.is_external);
+        .expect("materialize mapping");
 
     let processor = create_processor(store.clone());
 
-    // Observe ordinary m.room.member event using this external avatar
     processor
         .process_room_state(ParsedRoomState {
             room_id: room_id.to_string(),
-            event_id: "$join-ext".to_string(),
+            event_id: "$join-observed".to_string(),
             sender: user_id.to_string(),
             event_type: "m.room.member".to_string(),
             state_key: user_id.to_string(),
             origin_server_ts: 1000,
             content: json!({
                 "membership": "join",
-                "displayname": "External User",
-                "avatar_url": ext_mxc,
+                "displayname": "Observed User",
+                "avatar_url": mxc,
             }),
         })
         .await
@@ -751,18 +742,7 @@ async fn external_provenance_preserved_on_room_member_observation() {
         .await
         .expect("get member")
         .expect("member exists");
-    assert_eq!(member.media_reference, Some(ext_ref.clone()));
-
-    // Provenance must remain is_external = true
-    let record_after = store
-        .get_record(&site_id, &ext_ref)
-        .await
-        .expect("get record")
-        .expect("exists");
-    assert!(
-        record_after.is_external,
-        "existing external provenance must be preserved across room member observation"
-    );
+    assert_eq!(member.media_reference, Some(existing_ref));
 }
 
 #[tokio::test]
@@ -1905,8 +1885,7 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
     assert_eq!(member.media_reference, Some(expected.clone()));
     assert_eq!(member.avatar_url.as_deref(), Some(mxc_uri));
 
-    // The persisted reference has a resolvable lookup mapping. Its provenance is
-    // an observation source, not a claim of ownership.
+    // The persisted reference has a resolvable lookup mapping.
     assert_eq!(
         store.find_reference(&site_id, mxc_uri).await.unwrap(),
         Some(expected.clone())
@@ -1919,19 +1898,21 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
             .as_deref(),
         Some(mxc_uri)
     );
-    let record = store
-        .get_record(&site_id, &expected)
-        .await
-        .unwrap()
-        .expect("mapping materialized");
-    assert!(record.is_external);
+    assert!(
+        store
+            .get_record(&site_id, &expected)
+            .await
+            .unwrap()
+            .is_some(),
+        "the lookup mapping must be materialized"
+    );
     assert!(
         store
             .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
             .await
             .unwrap()
             .is_empty(),
-        "provenance must not create ownership"
+        "projection must not create ownership"
     );
 
     // Replaying the event after rebuilding the projection yields the same identity.

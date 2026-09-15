@@ -1906,7 +1906,6 @@ async fn media_upload_ownership_release_is_bound_to_the_enumerated_record() {
 
 #[tokio::test]
 async fn media_upload_ownership_release_preserves_idempotency_and_media_references() {
-    use cumments_core::media_reference::MediaReferenceSource;
     use cumments_core::ports::MediaReferenceStore;
 
     let store = DbStore::connect(&test_db_url("media-upload-release-idempotency"))
@@ -1951,7 +1950,7 @@ async fn media_upload_ownership_release_preserves_idempotency_and_media_referenc
     // 2. Also create a media_reference mapping for this media
     let site_id_obj = SiteId::from(site_id);
     let media_ref = store
-        .get_or_create_reference(&site_id_obj, mxc_url, MediaReferenceSource::Cumments)
+        .get_or_create_reference(&site_id_obj, mxc_url)
         .await
         .expect("create media reference");
 

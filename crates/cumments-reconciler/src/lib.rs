@@ -1,7 +1,6 @@
 pub mod profile;
 mod reconciler;
 
-pub use cumments_core::media_reference::ExternalAvatarReconciler;
 pub use profile::ExternalProfileReconciler;
 pub use reconciler::MediaCleanupPass;
 pub use reconciler::pass::{PassConfig, ReconcilePass};

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::{MediaReference, MediaReferenceSource};
+use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{Content, PageSlug, RoomIdentity, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{
     HistoricalRoomStateResolver, MediaReferenceResolver, MediaReferenceStore, MessageStore,
@@ -953,11 +953,7 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
 
     // 1. Message 1: Existing MediaReference in media_references table
     let existing_ref = store
-        .get_or_create_reference(
-            &site_id,
-            "mxc://hs/existing-avatar",
-            MediaReferenceSource::Cumments,
-        )
+        .get_or_create_reference(&site_id, "mxc://hs/existing-avatar")
         .await
         .expect("create reference");
 
@@ -1105,14 +1101,13 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
             .as_deref(),
         Some("mxc://hs/speculative-external")
     );
-    let record3 = store
-        .get_record(&site_id, &expected3)
-        .await
-        .unwrap()
-        .expect("mapping materialized");
     assert!(
-        record3.is_external,
-        "an observed avatar without a Cumments upload carries external provenance"
+        store
+            .get_record(&site_id, &expected3)
+            .await
+            .unwrap()
+            .is_some(),
+        "the lookup mapping must be materialized"
     );
 }
 

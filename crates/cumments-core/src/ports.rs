@@ -2,7 +2,7 @@ use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use crate::canonical::CanonicalJson;
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry, SiteTransfer};
-use crate::media_reference::{MediaReference, MediaReferenceSource};
+use crate::media_reference::MediaReference;
 use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
@@ -1563,17 +1563,8 @@ pub struct MediaReferenceRecord {
     pub site_id: SiteId,
     /// Underlying Matrix homeserver MXC URI (`mxc://...`).
     pub mxc_uri: String,
-    /// Whether this media was discovered via external Matrix avatar.
-    pub is_external: bool,
     /// Timestamp when this reference mapping was created.
     pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl MediaReferenceRecord {
-    /// Returns the provenance source of this media reference.
-    pub fn source(&self) -> MediaReferenceSource {
-        MediaReferenceSource::from(self.is_external)
-    }
 }
 
 /// Capability to resolve a `MediaReference` into an `mxc://...` Matrix content URI.
@@ -1602,15 +1593,16 @@ pub trait MediaReferenceStore: MediaReferenceResolver + Send + Sync {
         mxc_uri: &str,
     ) -> Result<Option<MediaReference>>;
 
-    /// Gets an existing `MediaReference` or atomically creates a new one for the given site and MXC URI.
+    /// Gets an existing `MediaReference` or atomically materializes the
+    /// deterministic one for the given site and MXC URI.
     ///
-    /// If newly created, records the source/provenance of this media mapping.
-    /// Concurrent calls for the same `(site_id, mxc_uri)` converge on the same `MediaReference`.
+    /// The identity is always [`MediaReference::from_media`]; the mapping only
+    /// backs runtime reverse lookup. Concurrent calls for the same
+    /// `(site_id, mxc_uri)` converge on the same `MediaReference`.
     async fn get_or_create_reference(
         &self,
         site_id: &SiteId,
         mxc_uri: &str,
-        source: MediaReferenceSource,
     ) -> Result<MediaReference>;
 
     /// Gets the full mapping record for the given site and reference, if it exists.
