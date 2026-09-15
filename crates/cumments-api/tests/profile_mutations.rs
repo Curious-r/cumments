@@ -564,7 +564,7 @@ async fn set_avatar_rejects_unknown_cross_site_and_raw_mxc() {
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
 
     // 1. Unknown MediaReference under site-a
-    let unmapped_ref = MediaReference::new_v4();
+    let unmapped_ref = MediaReference::from_media(&site_a, "mxc://hs/unmapped-avatar");
     let ch = state.pow.generate_challenge();
     let ch_resp = solve_pow(&ch);
     let sig_unmapped = sign(

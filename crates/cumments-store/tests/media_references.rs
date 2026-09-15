@@ -176,6 +176,11 @@ async fn concurrent_get_or_create_converges_to_single_mapping() {
         res1, res2,
         "concurrent get_or_create calls must converge to identical MediaReference"
     );
+    assert_eq!(
+        res1,
+        MediaReference::from_media(&site, mxc),
+        "the converged reference must be the deterministic derivation"
+    );
 
     // Verify exactly one record exists in database
     let found = store1.find_reference(&site, mxc).await.unwrap().unwrap();
@@ -304,13 +309,111 @@ async fn external_discovery_reconciles_and_preserves_provenance() {
 }
 
 #[tokio::test]
+async fn creation_derives_the_reference_from_site_and_mxc() {
+    let store = DbStore::connect(&test_db_url("deterministic_derivation"))
+        .await
+        .expect("connect db");
+    let site_a = SiteId::from("site-alpha");
+    let site_b = SiteId::from("site-beta");
+    let mxc = "mxc://matrix.org/deterministic-media";
+
+    // First creation uses exactly the deterministic derivation.
+    let created = store
+        .get_or_create_reference(&site_a, mxc, MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+    assert_eq!(created, MediaReference::from_media(&site_a, mxc));
+
+    // Re-creation returns the stored value, which is the same derivation.
+    let again = store
+        .get_or_create_reference(&site_a, mxc, MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+    assert_eq!(again, created);
+
+    // The same MXC under another site derives a different, independent reference.
+    let other_site = store
+        .get_or_create_reference(&site_b, mxc, MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+    assert_eq!(other_site, MediaReference::from_media(&site_b, mxc));
+    assert_ne!(other_site, created);
+    assert!(store.get_record(&site_a, &created).await.unwrap().is_some());
+    assert!(
+        store
+            .get_record(&site_b, &other_site)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        store.resolve_mxc(&site_a, &other_site).await.unwrap(),
+        None,
+        "site-scoped mappings must stay independent"
+    );
+
+    // A different MXC on the same site derives a different reference.
+    let distinct = store
+        .get_or_create_reference(
+            &site_a,
+            "mxc://matrix.org/other-media",
+            MediaReferenceSource::Cumments,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        distinct,
+        MediaReference::from_media(&site_a, "mxc://matrix.org/other-media")
+    );
+    assert_ne!(distinct, created);
+
+    // Provenance is recorded exactly as requested.
+    let record = store.get_record(&site_a, &created).await.unwrap().unwrap();
+    assert!(!record.is_external);
+    assert_eq!(record.source(), MediaReferenceSource::Cumments);
+}
+
+#[tokio::test]
+async fn external_reconciliation_uses_the_deterministic_derivation() {
+    let store = Arc::new(
+        DbStore::connect(&test_db_url("deterministic_external"))
+            .await
+            .expect("connect db"),
+    );
+    let reconciler = ExternalAvatarReconciler::new(store.clone());
+
+    let site = SiteId::from("blog");
+    let mxc = "mxc://homeserver.org/external-deterministic";
+
+    let reconciled = reconciler
+        .reconcile_external_avatar(&site, mxc)
+        .await
+        .unwrap();
+    assert_eq!(reconciled, MediaReference::from_media(&site, mxc));
+
+    // The store derives the same value independently, and provenance is kept.
+    let stored = store
+        .get_or_create_reference(&site, mxc, MediaReferenceSource::External)
+        .await
+        .unwrap();
+    assert_eq!(stored, reconciled);
+
+    let record = store.get_record(&site, &reconciled).await.unwrap().unwrap();
+    assert!(
+        record.is_external,
+        "external provenance must be preserved by deterministic derivation"
+    );
+    assert_eq!(record.source(), MediaReferenceSource::External);
+}
+
+#[tokio::test]
 async fn missing_resolution_is_read_only_and_returns_none() {
     let store = DbStore::connect(&test_db_url("missing_resolution"))
         .await
         .expect("connect db");
     let site = SiteId::from("blog");
 
-    let unmapped_ref = MediaReference::new_v4();
+    let unmapped_ref = MediaReference::from_media(&site, "mxc://example.org/never-mapped");
 
     // resolve_mxc must return Ok(None) and NOT allocate a mapping
     let resolved = store.resolve_mxc(&site, &unmapped_ref).await.unwrap();

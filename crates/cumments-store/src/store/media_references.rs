@@ -75,7 +75,9 @@ impl MediaReferenceStore for DbStore {
             return Ok(existing);
         }
 
-        let new_reference = MediaReference::new_v4();
+        // The reference is a pure function of the site-scoped media identity, so
+        // concurrent creators derive the same value and the insert converges.
+        let new_reference = MediaReference::from_media(site_id, mxc_uri);
         let now = Utc::now();
         let backend = self.db.get_database_backend();
 

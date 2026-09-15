@@ -5,13 +5,19 @@
 //!
 //! `MediaReference` encapsulates the media-domain identity without coupling to
 //! underlying Matrix homeserver storage details such as `mxc://...` URIs.
+//!
+//! A reference is derived deterministically from the site-scoped Matrix media
+//! identity `(site_id, mxc_uri)`; see [`MediaReference::from_media`].
 
 use std::fmt;
 use std::ops::Deref;
 use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+use crate::models::SiteId;
 
 /// Prefix required for the canonical textual representation of a `MediaReference`.
 pub const MEDIA_REFERENCE_PREFIX: &str = "cumments-media:";
@@ -34,8 +40,19 @@ pub struct MediaReference {
     canonical: String,
 }
 
+/// Length-prefix one field into the digest.
+///
+/// Each field is preceded by its big-endian `u64` byte length, the same
+/// unambiguous framing used by
+/// [`crate::submissions::deterministic_transaction_id`]. Without the prefix the
+/// pair `("a", "bc")` and `("ab", "c")` would hash identically.
+fn update_length_prefixed(hasher: &mut Sha256, field: &str) {
+    hasher.update((field.len() as u64).to_be_bytes());
+    hasher.update(field.as_bytes());
+}
+
 impl MediaReference {
-    /// Create a new `MediaReference` from an existing UUID.
+    /// Create a `MediaReference` from an existing UUID.
     pub fn new(uuid: Uuid) -> Self {
         Self {
             uuid,
@@ -43,9 +60,23 @@ impl MediaReference {
         }
     }
 
-    /// Generate a fresh random v4 `MediaReference`.
-    pub fn new_v4() -> Self {
-        Self::new(Uuid::new_v4())
+    /// Derive the deterministic `MediaReference` for a site-scoped Matrix media
+    /// identity.
+    ///
+    /// The identifier is UUID v8 over the first 128 bits of
+    /// `SHA-256(len(site_id) || site_id || len(mxc_uri) || mxc_uri)`, so the same
+    /// `(site_id, mxc_uri)` always yields the same reference on every run and
+    /// platform, while a different site yields a different reference for the
+    /// same MXC. The UUID version and variant bits are set by [`Uuid::new_v8`].
+    pub fn from_media(site_id: &SiteId, mxc_uri: &str) -> Self {
+        let mut hasher = Sha256::new();
+        update_length_prefixed(&mut hasher, site_id.as_str());
+        update_length_prefixed(&mut hasher, mxc_uri);
+        let digest = hasher.finalize();
+
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        Self::new(Uuid::new_v8(bytes))
     }
 
     /// Parse a `MediaReference` from a string slice, validating prefix and UUID format.
@@ -313,7 +344,7 @@ mod tests {
 
     #[test]
     fn serde_json_roundtrip() {
-        let reference = MediaReference::new_v4();
+        let reference = MediaReference::from_media(&SiteId::from("blog"), "mxc://hs/roundtrip");
         let serialized = serde_json::to_string(&reference).expect("serialize");
         let expected_json = format!("\"{}\"", reference.as_str());
         assert_eq!(serialized, expected_json);
@@ -326,5 +357,82 @@ mod tests {
     fn serde_json_rejects_invalid() {
         assert!(serde_json::from_str::<MediaReference>("\"invalid\"").is_err());
         assert!(serde_json::from_str::<MediaReference>("\"cumments-media:invalid\"").is_err());
+    }
+
+    #[test]
+    fn from_media_is_deterministic_for_the_same_site_and_mxc() {
+        let site = SiteId::from("site-a");
+        let first = MediaReference::from_media(&site, "mxc://hs/asset");
+        let second = MediaReference::from_media(&site, "mxc://hs/asset");
+        assert_eq!(first, second);
+        assert_eq!(first.as_str(), second.as_str());
+
+        // An equal site id constructed independently yields the same identity.
+        let other_site = SiteId::from("site-a");
+        assert_eq!(
+            first,
+            MediaReference::from_media(&other_site, "mxc://hs/asset")
+        );
+    }
+
+    #[test]
+    fn from_media_separates_sites_for_the_same_mxc() {
+        let mxc = "mxc://hs/shared";
+        let site_a = MediaReference::from_media(&SiteId::from("site-a"), mxc);
+        let site_b = MediaReference::from_media(&SiteId::from("site-b"), mxc);
+        assert_ne!(site_a, site_b);
+    }
+
+    #[test]
+    fn from_media_separates_mxcs_on_the_same_site() {
+        let site = SiteId::from("site-a");
+        let first = MediaReference::from_media(&site, "mxc://hs/one");
+        let second = MediaReference::from_media(&site, "mxc://hs/two");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn from_media_produces_uuid_v8_with_rfc_variant() {
+        let reference = MediaReference::from_media(&SiteId::from("site-a"), "mxc://hs/asset");
+        assert_eq!(reference.uuid().get_version_num(), 8, "must be UUID v8");
+        assert_eq!(
+            reference.uuid().get_variant(),
+            uuid::Variant::RFC4122,
+            "must use the RFC 4122 variant"
+        );
+    }
+
+    #[test]
+    fn from_media_serializes_and_reparses_identically() {
+        let reference = MediaReference::from_media(&SiteId::from("site-a"), "mxc://hs/asset");
+        let canonical = reference.as_str();
+        assert!(canonical.starts_with(MEDIA_REFERENCE_PREFIX));
+
+        let json = serde_json::to_string(&reference).expect("serialize");
+        assert_eq!(json, format!("\"{canonical}\""));
+
+        let parsed = MediaReference::parse(canonical).expect("parse canonical");
+        assert_eq!(parsed, reference);
+        let deserialized: MediaReference = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized, reference);
+    }
+
+    #[test]
+    fn from_media_length_prefixing_is_unambiguous() {
+        // Naive delimiter-free concatenation would collide: "a" + "bc" == "ab" + "c".
+        let left = MediaReference::from_media(&SiteId::from("a"), "bc");
+        let right = MediaReference::from_media(&SiteId::from("ab"), "c");
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn from_media_matches_the_fixed_reference_vector() {
+        // Locks the derivation: changing the encoding, hash, or UUID derivation
+        // for `(site-a, mxc://hs/asset)` must fail this test.
+        let reference = MediaReference::from_media(&SiteId::from("site-a"), "mxc://hs/asset");
+        assert_eq!(
+            reference.as_str(),
+            "cumments-media:e8b56568-c68c-8e48-8355-c563e07a9c00"
+        );
     }
 }

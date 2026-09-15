@@ -592,7 +592,8 @@ mod tests {
         assert_eq!(clear_name.field(), ProfileField::DisplayName);
         assert!(clear_name.is_clear());
 
-        let media_ref = MediaReference::new_v4();
+        let media_ref =
+            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/avatar");
         let set_avatar = ProfileTargetValue::SetAvatar(media_ref.clone());
         assert_eq!(set_avatar.field(), ProfileField::Avatar);
         assert!(!set_avatar.is_clear());
@@ -626,8 +627,10 @@ mod tests {
         assert_ne!(fp_alice, fp_bob);
         assert_ne!(fp_alice, fp_clear);
 
-        let media1 = MediaReference::new_v4();
-        let media2 = MediaReference::new_v4();
+        let media1 =
+            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/avatar-one");
+        let media2 =
+            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/avatar-two");
         let avatar1 = ProfileTargetValue::SetAvatar(media1);
         let avatar2 = ProfileTargetValue::SetAvatar(media2);
         let clear_avatar = ProfileTargetValue::ClearAvatar;
@@ -656,7 +659,8 @@ mod tests {
             ProfileTargetValue::from_stored(ProfileField::DisplayName, None).unwrap();
         assert_eq!(recovered_clear_name, clear_name);
 
-        let media = MediaReference::new_v4();
+        let media =
+            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/stored");
         let avatar_val = ProfileTargetValue::SetAvatar(media.clone());
         let stored_avatar = avatar_val.to_stored();
         assert_eq!(stored_avatar.as_deref(), Some(media.as_str()));
@@ -695,7 +699,8 @@ mod tests {
 
         let target_set_name = ProfileTargetValue::SetDisplayName("Alice".to_string());
         let target_clear_name = ProfileTargetValue::ClearDisplayName;
-        let media_ref = MediaReference::new_v4();
+        let media_ref =
+            MediaReference::from_media(&crate::models::SiteId::from(site), "mxc://hs/signed");
         let target_set_avatar = ProfileTargetValue::SetAvatar(media_ref.clone());
         let target_clear_avatar = ProfileTargetValue::ClearAvatar;
 

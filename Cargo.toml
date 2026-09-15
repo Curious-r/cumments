@@ -48,7 +48,7 @@ sha2 = "0.11.0"
 subtle = "2.6.1"
 thiserror = "2.0.20"
 url = "2.5.4"
-uuid = { version = "1.24", features = ["v4"] }
+uuid = { version = "1.24", features = ["v4", "v8"] }
 validator = { version = "0.21", features = ["derive"] }
 unicode-segmentation = "1.13"
 wiremock = "0.6"

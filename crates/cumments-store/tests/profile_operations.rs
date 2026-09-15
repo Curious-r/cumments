@@ -133,7 +133,7 @@ async fn independent_fields_do_not_block_each_other() {
     let author = "pubkey-visitor-multi-field";
 
     let op_name = ProfileTargetValue::SetDisplayName("Alice".to_string());
-    let media = MediaReference::new_v4();
+    let media = MediaReference::from_media(&site, "mxc://ex/independent-avatar");
     let op_avatar = ProfileTargetValue::SetAvatar(media);
 
     store
@@ -418,7 +418,7 @@ async fn profile_operation_executor_end_to_end() {
     assert_eq!(driver.clear_display_name_calls.lock().await.len(), 1);
 
     // 3. Set Avatar
-    let media = MediaReference::new_v4();
+    let media = MediaReference::from_media(&site, "mxc://ex/e2e-avatar");
     let op_avatar = ProfileTargetValue::SetAvatar(media.clone());
     store
         .claim_or_get_profile_operation("e2e-avatar", author, &site, &op_avatar)
@@ -578,14 +578,14 @@ async fn resolver_failure_never_strands_operation_in_dispatching() {
     let site = SiteId::from("blog");
     let author = "pubkey-resolver-fail";
 
-    let media1 = MediaReference::new_v4();
+    let media1 = MediaReference::from_media(&site, "mxc://ex/resolver-fail-1");
     let op_avatar_1 = ProfileTargetValue::SetAvatar(media1);
     store
         .claim_or_get_profile_operation("avatar-fail-1", author, &site, &op_avatar_1)
         .await
         .unwrap();
 
-    let media2 = MediaReference::new_v4();
+    let media2 = MediaReference::from_media(&site, "mxc://ex/resolver-fail-2");
     let op_avatar_2 = ProfileTargetValue::SetAvatar(media2);
     store
         .claim_or_get_profile_operation("avatar-fail-2", author, &site, &op_avatar_2)
@@ -651,7 +651,7 @@ async fn resolver_unresolvable_media_records_failed_and_unblocks_next() {
     let site = SiteId::from("blog");
     let author = "pubkey-resolver-missing";
 
-    let media = MediaReference::new_v4();
+    let media = MediaReference::from_media(&site, "mxc://ex/unresolvable-avatar");
     let op_avatar_1 = ProfileTargetValue::SetAvatar(media);
     store
         .claim_or_get_profile_operation("avatar-missing-1", author, &site, &op_avatar_1)
@@ -849,7 +849,7 @@ async fn concurrent_claims_on_different_fields_both_succeed() {
     let author = "pubkey-multi-concurrent";
 
     let op_name = ProfileTargetValue::SetDisplayName("Name".to_string());
-    let media = MediaReference::new_v4();
+    let media = MediaReference::from_media(&site, "mxc://ex/concurrent-diff-avatar");
     let op_avatar = ProfileTargetValue::SetAvatar(media);
 
     store1
@@ -1003,7 +1003,7 @@ async fn cross_site_different_fields_independence() {
     let site_b = SiteId::from("site-b");
     let author = "pubkey-shared-user";
 
-    let ref_b = MediaReference::new_v4();
+    let ref_b = MediaReference::from_media(&site_b, "mxc://ex/cross-site-avatar");
     let op_a_target = ProfileTargetValue::SetDisplayName("Site A Name".to_string());
     let op_b_target = ProfileTargetValue::SetAvatar(ref_b);
 
@@ -1473,7 +1473,10 @@ async fn concurrent_cross_field_operations_allocate_independent_sequences() {
     let sb = site.clone();
     let h2 = tokio::spawn(async move {
         b2.wait().await;
-        let target = ProfileTargetValue::SetAvatar(MediaReference::new_v4());
+        let target = ProfileTargetValue::SetAvatar(MediaReference::from_media(
+            &sb,
+            "mxc://ex/concurrent-avatar",
+        ));
         s2.claim_or_get_profile_operation("op-avatar-concur", author, &sb, &target)
             .await
     });
