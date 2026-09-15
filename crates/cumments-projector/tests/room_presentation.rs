@@ -7,25 +7,20 @@
 //! 4. Leave after update (`join -> join -> leave`) preserves the updated presentation.
 //! 5. Leave then join (`join -> leave -> join`) tracks the new presentation on rejoin.
 //! 6. Consecutive join events (`join -> join`) are not treated as rejoins.
-//! 7. Member-event processing resolves avatar through durable MediaReference mapping.
-//! 8. Projection rebuild deterministically reuses stable MediaReference mappings.
-//! 9. Existing external provenance is preserved during member observation.
-//! 10. Message author enrichment does not require `membership == join`.
-//! 11. Historical author snapshot remains a fallback when no usable room presentation exists.
+//! 7. Member-event processing retains the avatar MXC in the presentation.
+//! 8. Projection rebuild deterministically reconstructs the same presentation.
+//! 9. Message author enrichment does not require `membership == join`.
+//! 10. Historical author snapshot remains a fallback when no usable room presentation exists.
 
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, Message, MessageStatus, PageSlug, SiteId, TextContent,
     TextStyle,
 };
-use cumments_core::ports::{
-    MatrixDriver, MediaReferenceResolver, MediaReferenceStore, MessageStore, RegistryStore,
-    RoomStore, SiteStore,
-};
+use cumments_core::ports::{MatrixDriver, MessageStore, RegistryStore, RoomStore, SiteStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
 use cumments_store::DbStore;
@@ -75,7 +70,6 @@ fn create_processor_with_driver(
         governance_notify: Arc::new(Notify::new()),
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
-        media_reference_store: Some(store.clone()),
         historical_state_resolver: None,
     })
 }
@@ -117,7 +111,6 @@ fn create_test_message(
             kind: AuthorKind::Visitor,
             display_name: snapshot_name.map(str::to_string),
             avatar_url: snapshot_avatar.map(str::to_string),
-            media_reference: None,
             public_key: Some("test_pubkey_1234567890".to_string()),
             mxid: None,
         },
@@ -563,8 +556,8 @@ async fn leave_then_join_rejoin_lifecycle() {
 }
 
 #[tokio::test]
-async fn media_reference_mapping_and_projection_rebuild_determinism() {
-    let db_url = test_db_url("media_ref_rebuild_determinism");
+async fn member_avatar_mxc_and_projection_rebuild_determinism() {
+    let db_url = test_db_url("member_avatar_rebuild_determinism");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
 
     let site_id = SiteId::from("test-site");
@@ -616,20 +609,7 @@ async fn media_reference_mapping_and_projection_rebuild_determinism() {
     assert_eq!(member.display_name.as_deref(), Some("Dave"));
     assert_eq!(member.avatar_url.as_deref(), Some(mxc_uri));
 
-    let allocated_ref = member
-        .media_reference
-        .expect("room_member must have media_reference");
-    assert!(allocated_ref.as_str().starts_with("cumments-media:"));
-
-    // Verify durable media_references record
-    let record = store
-        .get_record(&site_id, &allocated_ref)
-        .await
-        .expect("get record")
-        .expect("record exists");
-    assert_eq!(record.mxc_uri, mxc_uri);
-
-    // 2. Member leaves: media_reference is preserved on leave
+    // 2. Member leaves: avatar presentation is preserved on leave
     processor
         .process_room_state(ParsedRoomState {
             room_id: room_id.to_string(),
@@ -653,10 +633,8 @@ async fn media_reference_mapping_and_projection_rebuild_determinism() {
     assert_eq!(member_left.membership, "leave");
     assert_eq!(member_left.display_name.as_deref(), Some("Dave"));
     assert_eq!(member_left.avatar_url.as_deref(), Some(mxc_uri));
-    assert_eq!(member_left.media_reference, Some(allocated_ref.clone()));
 
-    // 3. Simulate projection reset / rebuild: wipe room_members
-    // but keep durable media_references intact.
+    // 3. Simulate projection reset / rebuild: wipe room_members and replay.
     store
         .delete_member(room_id, user_id)
         .await
@@ -686,14 +664,14 @@ async fn media_reference_mapping_and_projection_rebuild_determinism() {
         .expect("get dave")
         .expect("dave exists");
     assert_eq!(
-        rebuilt_member.media_reference,
-        Some(allocated_ref),
-        "projection rebuild must reuse the exact same stable MediaReference"
+        rebuilt_member.avatar_url.as_deref(),
+        Some(mxc_uri),
+        "projection rebuild must reconstruct the member avatar"
     );
 }
 
 #[tokio::test]
-async fn existing_mapping_is_reused_on_room_member_observation() {
+async fn member_observation_retains_avatar_mxc() {
     let db_url = test_db_url("existing_mapping_reused");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
 
@@ -711,12 +689,6 @@ async fn existing_mapping_is_reused_on_room_member_observation() {
         .register_room(room_id, &site_id, &page_slug)
         .await
         .expect("register room");
-
-    // Materialize the lookup mapping first.
-    let existing_ref = store
-        .get_or_create_reference(&site_id, mxc)
-        .await
-        .expect("materialize mapping");
 
     let processor = create_processor(store.clone());
 
@@ -742,7 +714,7 @@ async fn existing_mapping_is_reused_on_room_member_observation() {
         .await
         .expect("get member")
         .expect("member exists");
-    assert_eq!(member.media_reference, Some(existing_ref));
+    assert_eq!(member.avatar_url.as_deref(), Some(mxc));
 }
 
 #[tokio::test]
@@ -1463,7 +1435,7 @@ async fn equal_timestamps_ordering_is_deterministic_by_event_id() {
 
 #[tokio::test]
 async fn duplicate_member_event_delivery_is_idempotent() {
-    let (processor, store, media_store) = setup_test_environment().await;
+    let (processor, store, _media_store) = setup_test_environment().await;
     let room_id = "!room-ordering-7:hs";
     let user_id = "@user7:hs";
     let mxc_uri = "mxc://hs/user7-avatar";
@@ -1501,16 +1473,11 @@ async fn duplicate_member_event_delivery_is_idempotent() {
     assert_eq!(member_2.avatar_url.as_deref(), Some(mxc_uri));
     assert_eq!(member_2.origin_server_ts, 1500);
     assert_eq!(member_2.event_id.as_deref(), Some("$event-repeat"));
-
-    // Media reference store must have at most 1 reference (no duplicates created)
-    let site_id = SiteId::from("example.com");
-    let ref_found = media_store.find_reference(&site_id, mxc_uri).await.unwrap();
-    assert!(ref_found.is_none()); // because no local upload record exists, none created
 }
 
 #[tokio::test]
-async fn ignored_older_event_does_not_create_media_reference() {
-    let (processor, store, media_store) = setup_test_environment().await;
+async fn ignored_older_event_does_not_rewind_member_projection() {
+    let (processor, store, _media_store) = setup_test_environment().await;
     let room_id = "!room-ordering-8:hs";
     let user_id = "@user8:hs";
     let site_id = "example.com";
@@ -1563,12 +1530,11 @@ async fn ignored_older_event_does_not_create_media_reference() {
         .await
         .expect("process older join");
 
-    // Since older event was ignored, no MediaReference mapping should have been created!
-    let mapping = media_store.find_reference(&site, old_mxc).await.unwrap();
-    assert!(
-        mapping.is_none(),
-        "ignored older event must not create MediaReference"
-    );
+    // The older event was ignored: the newer presentation is retained.
+    let member = store.get_member(room_id, user_id).await.unwrap().unwrap();
+    assert_eq!(member.display_name.as_deref(), Some("Newer User"));
+    assert_eq!(member.avatar_url, None);
+    assert_eq!(member.origin_server_ts, 2000);
 }
 
 #[tokio::test]
@@ -1826,8 +1792,8 @@ async fn monotonic_projection_ordering_and_rebuild_via_event_processor() {
 }
 
 #[tokio::test]
-async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() {
-    let db_url = test_db_url("member_avatar_no_mapping");
+async fn member_avatar_projection_is_repeatable_and_read_only() {
+    let db_url = test_db_url("member_avatar_repeatable");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
 
     let site_id = SiteId::from("test-site");
@@ -1844,15 +1810,6 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
         .register_room(room_id, &site_id, &page_slug)
         .await
         .expect("register room");
-
-    // Neither a lookup mapping nor an upload record exists for this avatar.
-    assert!(
-        store
-            .find_reference(&site_id, mxc_uri)
-            .await
-            .expect("find reference")
-            .is_none()
-    );
 
     let driver = Arc::new(common::TestDriver::new());
     let processor = create_processor_with_driver(store.clone(), Some(driver.clone()));
@@ -1876,36 +1833,12 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
         .await
         .expect("process join");
 
-    let expected = MediaReference::from_media(&site_id, mxc_uri);
     let member = store
         .get_member(room_id, user_id)
         .await
         .expect("get member")
         .expect("member exists");
-    assert_eq!(member.media_reference, Some(expected.clone()));
     assert_eq!(member.avatar_url.as_deref(), Some(mxc_uri));
-
-    // The persisted reference has a resolvable lookup mapping.
-    assert_eq!(
-        store.find_reference(&site_id, mxc_uri).await.unwrap(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        store
-            .resolve_mxc(&site_id, &expected)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some(mxc_uri)
-    );
-    assert!(
-        store
-            .get_record(&site_id, &expected)
-            .await
-            .unwrap()
-            .is_some(),
-        "the lookup mapping must be materialized"
-    );
     assert!(
         store
             .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
@@ -1915,7 +1848,7 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
         "projection must not create ownership"
     );
 
-    // Replaying the event after rebuilding the projection yields the same identity.
+    // Replaying the event after rebuilding the projection yields the same avatar.
     store
         .delete_member(room_id, user_id)
         .await
@@ -1930,7 +1863,7 @@ async fn member_avatar_without_lookup_mapping_derives_deterministic_reference() 
         .await
         .expect("get member")
         .expect("member exists");
-    assert_eq!(rebuilt.media_reference, Some(expected));
+    assert_eq!(rebuilt.avatar_url.as_deref(), Some(mxc_uri));
 
     // Projection is one-way: no Matrix profile write was attempted.
     assert!(driver.set_avatar_calls.lock().await.is_empty());

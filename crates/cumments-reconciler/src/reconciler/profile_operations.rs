@@ -3,7 +3,7 @@
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::ports::{MediaReferenceResolver, ProfileStore};
+use cumments_core::ports::ProfileStore;
 use cumments_core::profile::{ProfileOperationExecutionResult, ProfileOperationExecutor};
 use tracing::{error, info, warn};
 
@@ -24,11 +24,7 @@ impl ProfileOperationsPass {
             .as_ref()
             .expect("profile_store must be configured for ProfileOperationsPass")
             .clone();
-        let executor = ProfileOperationExecutor::new(
-            profile_store.clone(),
-            deps.driver.clone(),
-            deps.media_resolver.clone(),
-        );
+        let executor = ProfileOperationExecutor::new(profile_store.clone(), deps.driver.clone());
         Self {
             executor,
             store: profile_store,
@@ -40,10 +36,9 @@ impl ProfileOperationsPass {
     pub fn with_deps(
         store: Arc<dyn ProfileStore>,
         driver: Arc<dyn cumments_core::ports::MatrixDriver>,
-        media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
         config: PassConfig,
     ) -> Self {
-        let executor = ProfileOperationExecutor::new(store.clone(), driver, media_resolver);
+        let executor = ProfileOperationExecutor::new(store.clone(), driver);
         Self {
             executor,
             store,
@@ -55,12 +50,10 @@ impl ProfileOperationsPass {
     pub fn for_test(
         store: Arc<dyn ProfileStore>,
         driver: Arc<dyn cumments_core::ports::MatrixDriver>,
-        media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
     ) -> Self {
         Self::with_deps(
             store,
             driver,
-            media_resolver,
             PassConfig {
                 name: "profile_operations",
                 interval: std::time::Duration::from_secs(60),

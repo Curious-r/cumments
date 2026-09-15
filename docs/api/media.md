@@ -54,11 +54,11 @@ signature covers the media URL instead of text content).
 
 ## Visitor avatar
 
-Visitor avatar mutations are managed through dedicated profile endpoints operating on site-scoped [`MediaReference`](/api/visitors#set-visitor-avatar) identifiers rather than direct compound upload endpoints.
+Visitor avatar mutations are managed through dedicated profile endpoints operating on the Matrix media URI itself rather than direct compound upload endpoints.
 
 To set an avatar:
-1. Upload media or reference existing site media to obtain a `MediaReference` (`med_...`).
-2. Submit a `PUT /api/v1/sites/{site_id}/visitors/profile/avatar` request with the `MediaReference`.
+1. Upload media through the media upload endpoint to obtain its `mxc://` content URI.
+2. Submit a `PUT /api/v1/sites/{site_id}/visitors/profile/avatar` request with that MXC URI.
 
 To clear an avatar:
 - Submit a `DELETE /api/v1/sites/{site_id}/visitors/profile/avatar` request.

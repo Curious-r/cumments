@@ -87,7 +87,6 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
         "verification_tokens",
         "site_verified_origins",
         "media_uploads",
-        "media_references",
         "virtual_users",
     ] {
         exec(

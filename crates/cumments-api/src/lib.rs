@@ -45,9 +45,9 @@ use axum::{
 use cumments_core::{
     ephemeral::{EphemeralEvent, EphemeralState},
     ports::{
-        GovernanceStore, MatrixDriver, MediaReferenceStore, MessageStore, ProfileStore,
-        ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteAuthStore, SiteStore,
-        SiteTransferStore, StickerPackStore, SubmissionStore, VirtualUserStore,
+        GovernanceStore, MatrixDriver, MessageStore, ProfileStore, ProjectionRepairStore,
+        RegistryStore, RoleClaimStore, RoomStore, SiteAuthStore, SiteStore, SiteTransferStore,
+        StickerPackStore, SubmissionStore, VirtualUserStore,
     },
     projector_events::ProjectorEvent,
     site_auth::SiteAuthPolicy,
@@ -83,7 +83,6 @@ pub trait ApiStore:
     + SiteTransferStore
     + VirtualUserStore
     + ProfileStore
-    + MediaReferenceStore
     + Send
     + Sync
 {
@@ -102,7 +101,6 @@ impl<
         + SiteTransferStore
         + VirtualUserStore
         + ProfileStore
-        + MediaReferenceStore
         + Send
         + Sync,
 > ApiStore for T
@@ -589,7 +587,6 @@ mod tests {
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
                 public_key: Some("pk".to_string()),
                 mxid: None,
             },

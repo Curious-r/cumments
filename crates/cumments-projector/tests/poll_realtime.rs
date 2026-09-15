@@ -63,7 +63,6 @@ async fn processor(store: Arc<DbStore>) -> EventProcessor {
         governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: Arc::new(tokio::sync::Notify::new()),
         server_name: Some("hs".to_string()),
-        media_reference_store: Some(store.clone()),
         historical_state_resolver: Some(Arc::new(
             cumments_test_utils::TestDriver::with_historical_stub(None),
         )),
@@ -563,7 +562,6 @@ async fn already_projected_poll_does_not_emit_poll_created_on_rebuild() {
             kind: AuthorKind::Matrix,
             display_name: Some("Creator".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: None,
             mxid: Some("@creator:hs".to_string()),
         },

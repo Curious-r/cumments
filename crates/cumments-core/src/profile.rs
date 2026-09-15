@@ -11,9 +11,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::CanonicalJson;
-use crate::media_reference::MediaReference;
 use crate::models::SiteId;
-use crate::ports::{MatrixProfileDriver, MediaReferenceResolver, ProfileStore};
+use crate::ports::{MatrixProfileDriver, ProfileStore};
 
 /// Error parsing a `ProfileField` from a string.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -142,7 +141,8 @@ impl FromStr for ProfileOperationStatus {
 pub enum ProfileTargetValue {
     SetDisplayName(String),
     ClearDisplayName,
-    SetAvatar(MediaReference),
+    /// Sets the virtual user's Matrix avatar to this `mxc://` URI.
+    SetAvatar(String),
     ClearAvatar,
 }
 
@@ -172,10 +172,10 @@ impl ProfileTargetValue {
                 CanonicalJson::string("CLEAR_DISPLAY_NAME"),
                 CanonicalJson::string(site_id),
             ]),
-            Self::SetAvatar(media_ref) => CanonicalJson::array(vec![
+            Self::SetAvatar(mxc_uri) => CanonicalJson::array(vec![
                 CanonicalJson::string("SET_AVATAR"),
                 CanonicalJson::string(site_id),
-                CanonicalJson::string(media_ref.as_str()),
+                CanonicalJson::string(mxc_uri),
             ]),
             Self::ClearAvatar => CanonicalJson::array(vec![
                 CanonicalJson::string("CLEAR_AVATAR"),
@@ -194,7 +194,7 @@ impl ProfileTargetValue {
         match self {
             Self::ClearDisplayName | Self::ClearAvatar => None,
             Self::SetDisplayName(name) => Some(name.clone()),
-            Self::SetAvatar(media_ref) => Some(media_ref.to_string()),
+            Self::SetAvatar(mxc_uri) => Some(mxc_uri.clone()),
         }
     }
 
@@ -217,9 +217,7 @@ impl ProfileTargetValue {
                 {
                     return Ok(val);
                 }
-                let media_ref = MediaReference::parse(s)
-                    .map_err(|e| format!("invalid media reference in stored profile op: {e}"))?;
-                Ok(Self::SetAvatar(media_ref))
+                Ok(Self::SetAvatar(s.to_string()))
             }
         }
     }
@@ -276,13 +274,9 @@ pub fn clear_display_name_signature_message(site_id: &str, operation_id: &str) -
     profile_signature_message(&ProfileTargetValue::ClearDisplayName, site_id, operation_id)
 }
 
-pub fn set_avatar_signature_message(
-    site_id: &str,
-    operation_id: &str,
-    media_ref: &MediaReference,
-) -> String {
+pub fn set_avatar_signature_message(site_id: &str, operation_id: &str, mxc_uri: &str) -> String {
     profile_signature_message(
-        &ProfileTargetValue::SetAvatar(media_ref.clone()),
+        &ProfileTargetValue::SetAvatar(mxc_uri.to_string()),
         site_id,
         operation_id,
     )
@@ -373,20 +367,11 @@ pub struct ProfileOperation {
 pub struct ProfileOperationExecutor {
     store: Arc<dyn ProfileStore>,
     driver: Arc<dyn MatrixProfileDriver>,
-    media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
 }
 
 impl ProfileOperationExecutor {
-    pub fn new(
-        store: Arc<dyn ProfileStore>,
-        driver: Arc<dyn MatrixProfileDriver>,
-        media_resolver: Option<Arc<dyn MediaReferenceResolver>>,
-    ) -> Self {
-        Self {
-            store,
-            driver,
-            media_resolver,
-        }
+    pub fn new(store: Arc<dyn ProfileStore>, driver: Arc<dyn MatrixProfileDriver>) -> Self {
+        Self { store, driver }
     }
 
     /// Attempts to execute the specified operation by ID.
@@ -442,29 +427,9 @@ impl ProfileOperationExecutor {
                     .clear_display_name(&op.author_public_key, &op.site_id)
                     .await
             }
-            ProfileTargetValue::SetAvatar(media_ref) => {
-                let resolved_mxc = match &self.media_resolver {
-                    Some(resolver) => resolver.resolve_mxc(&op.site_id, media_ref).await,
-                    None => Ok(None),
-                };
-                let mxc_url = match resolved_mxc {
-                    Ok(Some(mxc_url)) => mxc_url,
-                    Ok(None) => {
-                        let err = format!(
-                            "unresolvable media reference '{media_ref}' for site '{}'",
-                            op.site_id.as_str()
-                        );
-                        self.store.record_failed(operation_id, &err).await?;
-                        return Ok(ProfileOperationExecutionResult::Failed(err));
-                    }
-                    Err(e) => {
-                        let err = format!("failed to resolve media reference '{media_ref}': {e}");
-                        self.store.record_unknown(operation_id, &err).await?;
-                        return Ok(ProfileOperationExecutionResult::Unknown(err));
-                    }
-                };
+            ProfileTargetValue::SetAvatar(mxc_uri) => {
                 self.driver
-                    .set_avatar(&op.author_public_key, &op.site_id, &mxc_url)
+                    .set_avatar(&op.author_public_key, &op.site_id, mxc_uri)
                     .await
             }
             ProfileTargetValue::ClearAvatar => {
@@ -592,9 +557,7 @@ mod tests {
         assert_eq!(clear_name.field(), ProfileField::DisplayName);
         assert!(clear_name.is_clear());
 
-        let media_ref =
-            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/avatar");
-        let set_avatar = ProfileTargetValue::SetAvatar(media_ref.clone());
+        let set_avatar = ProfileTargetValue::SetAvatar("mxc://hs/avatar".to_string());
         assert_eq!(set_avatar.field(), ProfileField::Avatar);
         assert!(!set_avatar.is_clear());
 
@@ -627,12 +590,8 @@ mod tests {
         assert_ne!(fp_alice, fp_bob);
         assert_ne!(fp_alice, fp_clear);
 
-        let media1 =
-            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/avatar-one");
-        let media2 =
-            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/avatar-two");
-        let avatar1 = ProfileTargetValue::SetAvatar(media1);
-        let avatar2 = ProfileTargetValue::SetAvatar(media2);
+        let avatar1 = ProfileTargetValue::SetAvatar("mxc://hs/avatar-one".to_string());
+        let avatar2 = ProfileTargetValue::SetAvatar("mxc://hs/avatar-two".to_string());
         let clear_avatar = ProfileTargetValue::ClearAvatar;
 
         let fp_av1 = avatar1.semantic_fingerprint("blog");
@@ -659,11 +618,9 @@ mod tests {
             ProfileTargetValue::from_stored(ProfileField::DisplayName, None).unwrap();
         assert_eq!(recovered_clear_name, clear_name);
 
-        let media =
-            MediaReference::from_media(&crate::models::SiteId::from("blog"), "mxc://hs/stored");
-        let avatar_val = ProfileTargetValue::SetAvatar(media.clone());
+        let avatar_val = ProfileTargetValue::SetAvatar("mxc://hs/stored".to_string());
         let stored_avatar = avatar_val.to_stored();
-        assert_eq!(stored_avatar.as_deref(), Some(media.as_str()));
+        assert_eq!(stored_avatar.as_deref(), Some("mxc://hs/stored"));
         let recovered_avatar =
             ProfileTargetValue::from_stored(ProfileField::Avatar, stored_avatar.as_deref())
                 .unwrap();
@@ -699,9 +656,8 @@ mod tests {
 
         let target_set_name = ProfileTargetValue::SetDisplayName("Alice".to_string());
         let target_clear_name = ProfileTargetValue::ClearDisplayName;
-        let media_ref =
-            MediaReference::from_media(&crate::models::SiteId::from(site), "mxc://hs/signed");
-        let target_set_avatar = ProfileTargetValue::SetAvatar(media_ref.clone());
+        let mxc_uri = "mxc://hs/signed";
+        let target_set_avatar = ProfileTargetValue::SetAvatar(mxc_uri.to_string());
         let target_clear_avatar = ProfileTargetValue::ClearAvatar;
 
         // 1. Signature messages follow the canonical envelope structure
@@ -725,7 +681,7 @@ mod tests {
             )
         );
 
-        let msg_set_avatar = set_avatar_signature_message(site, op_id, &media_ref);
+        let msg_set_avatar = set_avatar_signature_message(site, op_id, mxc_uri);
         let expected_av_fp = target_set_avatar.semantic_fingerprint(site);
         assert_eq!(
             msg_set_avatar,

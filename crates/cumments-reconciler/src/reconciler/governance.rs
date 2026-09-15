@@ -439,8 +439,6 @@ mod tests {
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
             )),
             profile_store: None,
-            media_resolver: None,
-            media_reference_store: store.clone(),
         });
         let pass = ClaimsPass::new(
             deps,
@@ -539,8 +537,6 @@ mod tests {
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
             )),
             profile_store: None,
-            media_resolver: None,
-            media_reference_store: store.clone(),
         });
         let pass = GovernanceSyncPass::new(
             deps,

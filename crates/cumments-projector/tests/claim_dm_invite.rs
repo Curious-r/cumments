@@ -63,7 +63,6 @@ fn processor(store: Arc<DbStore>, driver: Arc<common::TestDriver>) -> EventProce
         governance_notify: Arc::new(tokio::sync::Notify::new()),
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
-        media_reference_store: Some(store.clone()),
         historical_state_resolver: Some(driver),
     })
 }

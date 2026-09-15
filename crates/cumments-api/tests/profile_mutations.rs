@@ -16,9 +16,8 @@ use cumments_api::{
     rate_limit::RateLimiter,
     request::ProfileOperationResponse,
 };
-use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{SiteId, VisitorProfile};
-use cumments_core::ports::{MediaReferenceStore, ProfileStore, SiteAuthStore};
+use cumments_core::ports::{ProfileStore, SiteAuthStore};
 use cumments_core::profile::{
     ProfileField, ProfileOperationStatus, ProfileTargetValue, clear_avatar_signature_message,
     clear_display_name_signature_message, set_avatar_signature_message,
@@ -441,17 +440,12 @@ async fn display_name_rejects_invalid_pow() {
 async fn set_and_clear_avatar_success() {
     let driver = Arc::new(TestDriver::new());
     let (state, store) = test_state_with_driver("avatar-crud", driver.clone()).await;
-    let site_id = SiteId::new("my-site".to_string()).unwrap();
     store
         .register_site("my-site", &token_hash("claim"), false)
         .await
         .unwrap();
 
-    // Map a media reference beforehand
-    let media_ref = store
-        .get_or_create_reference(&site_id, "mxc://hs/avatar123")
-        .await
-        .unwrap();
+    let avatar_mxc = "mxc://hs/avatar123";
 
     let router = cumments_api::build_router(state.clone());
     let signing_key = SigningKey::from_bytes(&[6u8; 32]);
@@ -463,7 +457,7 @@ async fn set_and_clear_avatar_success() {
     let op1 = "op-avatar-set";
     let sig1 = sign(
         &signing_key,
-        &set_avatar_signature_message("my-site", op1, &media_ref),
+        &set_avatar_signature_message("my-site", op1, avatar_mxc),
     );
 
     let res = router
@@ -473,7 +467,7 @@ async fn set_and_clear_avatar_success() {
             "/api/v1/sites/my-site/visitors/profile/avatar",
             &[("idempotency-key", op1)],
             &serde_json::json!({
-                "avatar": media_ref.to_string(),
+                "avatar": avatar_mxc,
                 "author_public_key": public_key,
                 "author_signature": sig1,
                 "challenge_response": ch_resp1,
@@ -488,12 +482,12 @@ async fn set_and_clear_avatar_success() {
     assert_eq!(body.operation_id, op1);
     assert_eq!(body.status, ProfileOperationStatus::Completed);
     assert_eq!(body.field, ProfileField::Avatar);
-    assert_eq!(body.value.as_deref(), Some(media_ref.as_str()));
+    assert_eq!(body.value.as_deref(), Some(avatar_mxc));
 
-    // Verify driver called with resolved MXC
+    // Verify driver called with the submitted MXC (no lookup involved)
     let avatar_calls = driver.set_avatar_calls.lock().await;
     assert_eq!(avatar_calls.len(), 1);
-    assert_eq!(avatar_calls[0].2, "mxc://hs/avatar123");
+    assert_eq!(avatar_calls[0].2, avatar_mxc);
 
     // 2. Clear Avatar
     let ch2 = state.pow.generate_challenge();
@@ -531,23 +525,11 @@ async fn set_and_clear_avatar_success() {
 }
 
 #[tokio::test]
-async fn set_avatar_rejects_unknown_cross_site_and_raw_mxc() {
+async fn set_avatar_rejects_non_mxc_values() {
     let driver = Arc::new(TestDriver::new());
     let (state, store) = test_state_with_driver("avatar-rejects", driver.clone()).await;
-    let site_a = SiteId::new("site-a".to_string()).unwrap();
-    let _site_b = SiteId::new("site-b".to_string()).unwrap();
     store
         .register_site("site-a", &token_hash("claim-a"), false)
-        .await
-        .unwrap();
-    store
-        .register_site("site-b", &token_hash("claim-b"), false)
-        .await
-        .unwrap();
-
-    // Map media under site-a only
-    let media_site_a = store
-        .get_or_create_reference(&site_a, "mxc://hs/site-a-avatar")
         .await
         .unwrap();
 
@@ -555,77 +537,37 @@ async fn set_avatar_rejects_unknown_cross_site_and_raw_mxc() {
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
 
-    // 1. Unknown MediaReference under site-a
-    let unmapped_ref = MediaReference::from_media(&site_a, "mxc://hs/unmapped-avatar");
-    let ch = state.pow.generate_challenge();
-    let ch_resp = solve_pow(&ch);
-    let sig_unmapped = sign(
-        &signing_key,
-        &set_avatar_signature_message("site-a", "op-unmapped", &unmapped_ref),
-    );
-
-    let res = router
-        .clone()
-        .oneshot(request(
-            Method::PUT,
-            "/api/v1/sites/site-a/visitors/profile/avatar",
-            &[("idempotency-key", "op-unmapped")],
-            &serde_json::json!({
-                "avatar": unmapped_ref.to_string(),
-                "author_public_key": public_key,
-                "author_signature": sig_unmapped,
-                "challenge_response": ch_resp,
-            })
-            .to_string(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::NOT_FOUND);
-
-    // 2. Cross-site MediaReference: media_site_a attempted on site-b
-    let ch_b = state.pow.generate_challenge();
-    let ch_resp_b = solve_pow(&ch_b);
-    let sig_cross = sign(
-        &signing_key,
-        &set_avatar_signature_message("site-b", "op-cross", &media_site_a),
-    );
-
-    let res_cross = router
-        .clone()
-        .oneshot(request(
-            Method::PUT,
-            "/api/v1/sites/site-b/visitors/profile/avatar",
-            &[("idempotency-key", "op-cross")],
-            &serde_json::json!({
-                "avatar": media_site_a.to_string(),
-                "author_public_key": public_key,
-                "author_signature": sig_cross,
-                "challenge_response": ch_resp_b,
-            })
-            .to_string(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res_cross.status(), StatusCode::NOT_FOUND);
-
-    // 3. Raw MXC URI directly in avatar field is rejected by syntax validation
-    let res_raw = router
-        .clone()
-        .oneshot(request(
-            Method::PUT,
-            "/api/v1/sites/site-a/visitors/profile/avatar",
-            &[("idempotency-key", "op-raw")],
-            &serde_json::json!({
-                "avatar": "mxc://hs/raw-uri",
-                "author_public_key": public_key,
-                "author_signature": "fake",
-                "challenge_response": "pref|1",
-            })
-            .to_string(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res_raw.status(), StatusCode::BAD_REQUEST);
+    // Anything that is not a Matrix `mxc://` URI is rejected before dispatch.
+    for (op, avatar) in [
+        ("op-raw-https", "https://example.com/avatar.png"),
+        (
+            "op-raw-ref",
+            "cumments-media:550e8400-e29b-41d4-a716-446655440000",
+        ),
+        ("op-raw-empty", ""),
+    ] {
+        let res = router
+            .clone()
+            .oneshot(request(
+                Method::PUT,
+                "/api/v1/sites/site-a/visitors/profile/avatar",
+                &[("idempotency-key", op)],
+                &serde_json::json!({
+                    "avatar": avatar,
+                    "author_public_key": public_key,
+                    "author_signature": "fake",
+                    "challenge_response": "pref|1",
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "non-MXC avatar {avatar:?} must be rejected"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -994,10 +936,6 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
         .register_site("my-site", &token_hash("claim"), false)
         .await
         .unwrap();
-    let media_ref = store
-        .get_or_create_reference(&site_id, "mxc://hs/pic-ser")
-        .await
-        .unwrap();
 
     let router = cumments_api::build_router(state.clone());
     let signing_key = SigningKey::from_bytes(&[13u8; 32]);
@@ -1049,7 +987,7 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
     let op3 = "op-avatar-independent";
     let sig3 = sign(
         &signing_key,
-        &set_avatar_signature_message("my-site", op3, &media_ref),
+        &set_avatar_signature_message("my-site", op3, "mxc://hs/pic-ser"),
     );
 
     let res_avatar = router
@@ -1059,7 +997,7 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
             "/api/v1/sites/my-site/visitors/profile/avatar",
             &[("idempotency-key", op3)],
             &serde_json::json!({
-                "avatar": media_ref.to_string(),
+                "avatar": "mxc://hs/pic-ser",
                 "author_public_key": public_key,
                 "author_signature": sig3,
                 "challenge_response": ch_resp3,
@@ -1144,7 +1082,6 @@ async fn different_sites_same_key_same_field_do_not_block_each_other() {
 async fn get_profile_is_read_only_and_does_not_expose_raw_mxc() {
     let driver = Arc::new(TestDriver::new());
     let (state, store) = test_state_with_driver("get-prof-readonly", driver.clone()).await;
-    let site_id = SiteId::new("my-site".to_string()).unwrap();
     store
         .register_site("my-site", &token_hash("claim"), false)
         .await
@@ -1177,44 +1114,11 @@ async fn get_profile_is_read_only_and_does_not_expose_raw_mxc() {
     let prof: serde_json::Value = body_json(res).await;
 
     assert_eq!(prof["display_name"], "Homeserver User");
-    // Since "mxc://hs/unmapped-mxc" has no mapping in media_references, avatar and avatar_url MUST be null
-    assert!(
-        prof["avatar"].is_null(),
-        "raw MXC must never be exposed as MediaReference"
-    );
-    assert!(
-        prof["avatar_url"].is_null(),
-        "raw MXC must never be exposed as URL"
-    );
-
-    // Verify NO MediaReference was allocated or inserted into the store
-    let lookup = store
-        .find_reference(&site_id, "mxc://hs/unmapped-mxc")
-        .await
-        .unwrap();
-    assert!(
-        lookup.is_none(),
-        "GET /profile must be read-only and not create mappings"
-    );
-
-    // Now map it in the store
-    let media_ref = store
-        .get_or_create_reference(&site_id, "mxc://hs/unmapped-mxc")
-        .await
-        .unwrap();
-
-    // Call GET /profile again
-    let res2 = router
-        .clone()
-        .oneshot(request(Method::GET, &uri, &[], "{}"))
-        .await
-        .unwrap();
-    assert_eq!(res2.status(), StatusCode::OK);
-    let prof2: serde_json::Value = body_json(res2).await;
-    assert_eq!(prof2["display_name"], "Homeserver User");
-    assert_eq!(prof2["avatar"], media_ref.as_str());
-    // Since media proxy is disabled in this test state, avatar_url is null (never raw MXC!)
-    assert!(prof2["avatar_url"].is_null());
+    // The profile response never carries an opaque media reference.
+    assert!(prof.get("avatar").is_none());
+    // The media proxy is disabled in this test state, so no proxy URL is produced
+    // and the raw MXC is never exposed.
+    assert!(prof["avatar_url"].is_null());
 }
 
 #[tokio::test]

@@ -4,18 +4,17 @@
 //! reachability evaluation proves it `Unreachable`, its `media_uploads`
 //! ownership row is released. `Reachable` and `Unknown` uploads keep their
 //! ownership. The pass never touches Matrix media, room or profile state, and
-//! never deletes `media_references` or `media_upload_idempotency` records.
+//! never deletes `media_upload_idempotency` records.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use cumments_core::media_reference::MediaReference;
 use cumments_core::media_upload::MediaUploadIdempotencyInput;
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageStatus, SiteId,
+    AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageStatus,
     VisitorProfile,
 };
-use cumments_core::ports::{MediaReferenceStore, MessageStore, SiteStore};
+use cumments_core::ports::{MessageStore, SiteStore};
 use cumments_reconciler::{MediaCleanupPass, PassConfig, ReconcilePass, ReconcilerDeps};
 use cumments_store::entities::active_enums::SubmissionStatus;
 use cumments_store::entities::{media_uploads, post_submissions};
@@ -65,8 +64,6 @@ fn build_deps(store: &Arc<DbStore>, driver: &Arc<TestDriver>) -> Arc<ReconcilerD
             store.clone() as Arc<dyn SiteStore>
         )),
         profile_store: None,
-        media_resolver: None,
-        media_reference_store: store.clone(),
     })
 }
 
@@ -88,13 +85,6 @@ async fn record_owned_upload(store: &Arc<DbStore>, site: &str, mxc: &str, author
         .expect("record upload");
 }
 
-async fn map_reference(store: &Arc<DbStore>, site: &str, mxc: &str) -> MediaReference {
-    store
-        .get_or_create_reference(&SiteId::from(site), mxc)
-        .await
-        .expect("map reference")
-}
-
 /// Backdates an upload record's `created_at`, the age anchor for the pass.
 async fn backdate_upload(store: &Arc<DbStore>, mxc: &str, age: chrono::Duration) {
     let created = chrono::Utc::now() - age;
@@ -113,7 +103,6 @@ async fn backdate_upload(store: &Arc<DbStore>, mxc: &str, age: chrono::Duration)
 /// reachability source pointing at it (so it evaluates to `Unreachable`).
 async fn old_unreachable_upload(store: &Arc<DbStore>, site: &str, mxc: &str, author: &str) {
     record_owned_upload(store, site, mxc, author).await;
-    map_reference(store, site, mxc).await;
     backdate_upload(store, mxc, chrono::Duration::hours(25)).await;
 }
 
@@ -168,7 +157,6 @@ fn media_message(event_id: &str, site: &str, mxc: &str) -> Message {
             kind: AuthorKind::Visitor,
             display_name: Some("Someone".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: Some("other-author".to_string()),
             mxid: None,
         },
@@ -277,7 +265,6 @@ async fn too_young_unreachable_upload_retains_ownership() {
     let mxc = "mxc://hs/fresh";
     // Unreachable but recorded just now, so it is inside the grace period.
     record_owned_upload(&store, "site-a", mxc, "author-1").await;
-    map_reference(&store, "site-a", mxc).await;
 
     let released = cleanup_pass(&store, &driver)
         .run()
@@ -300,7 +287,6 @@ async fn active_submission_protects_otherwise_unreachable_upload() {
     let (store, driver) = setup("active-submission").await;
     let mxc = "mxc://hs/pending-upload";
     record_owned_upload(&store, "site-a", mxc, "author-1").await;
-    map_reference(&store, "site-a", mxc).await;
     bind_active_submission(&store, "site-a", mxc).await;
     backdate_upload(&store, mxc, chrono::Duration::hours(25)).await;
 
@@ -321,45 +307,6 @@ async fn active_submission_protects_otherwise_unreachable_upload() {
 }
 
 #[tokio::test]
-async fn unevaluable_candidate_does_not_block_other_releases() {
-    let (store, driver) = setup("continue-past-unknown").await;
-
-    // The first candidate is old, mapped and unreachable: it must be released.
-    old_unreachable_upload(&store, "site-a", "mxc://hs/releasable", "author-1").await;
-
-    // The second candidate is old but has no media_references mapping, so the
-    // evaluator can only return `Unknown` for it. That per-candidate failure
-    // must not abort the pass before the releasable candidate is processed.
-    record_owned_upload(&store, "site-a", "mxc://hs/unmapped", "author-2").await;
-    backdate_upload(&store, "mxc://hs/unmapped", chrono::Duration::hours(25)).await;
-
-    let released = cleanup_pass(&store, &driver)
-        .run()
-        .await
-        .expect("run cleanup pass");
-
-    assert_eq!(
-        released, 1,
-        "the evaluable candidate must still be released"
-    );
-    assert!(
-        store
-            .get_media_upload("site-a", "mxc://hs/releasable")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        store
-            .get_media_upload("site-a", "mxc://hs/unmapped")
-            .await
-            .unwrap()
-            .is_some(),
-        "the unevaluable candidate must keep its ownership record"
-    );
-}
-
-#[tokio::test]
 async fn release_targets_only_the_matching_ownership_row() {
     let (store, driver) = setup("matching-row").await;
     old_unreachable_upload(&store, "site-a", "mxc://hs/target", "author-1").await;
@@ -367,7 +314,6 @@ async fn release_targets_only_the_matching_ownership_row() {
     // Another upload on the same site stays reachable through the profile.
     let keeper = "mxc://hs/keeper";
     record_owned_upload(&store, "site-a", keeper, "author-2").await;
-    map_reference(&store, "site-a", keeper).await;
     backdate_upload(&store, keeper, chrono::Duration::hours(25)).await;
     set_avatar_profile(&driver, "site-a", "author-2", keeper).await;
 
@@ -403,7 +349,6 @@ async fn cross_site_reference_neither_blocks_nor_overreaches() {
     old_unreachable_upload(&store, "site-a", shared, "author-a").await;
 
     // site-b also knows the same MXC: it has a mapping and a content reference.
-    map_reference(&store, "site-b", shared).await;
     store
         .save_message(&media_message("$msg_b", "site-b", shared))
         .await
@@ -412,7 +357,6 @@ async fn cross_site_reference_neither_blocks_nor_overreaches() {
     // site-b separately owns a reachable upload that must survive.
     let site_b_owned = "mxc://hs/site-b-avatar";
     record_owned_upload(&store, "site-b", site_b_owned, "author-b").await;
-    map_reference(&store, "site-b", site_b_owned).await;
     backdate_upload(&store, site_b_owned, chrono::Duration::hours(25)).await;
     set_avatar_profile(&driver, "site-b", "author-b", site_b_owned).await;
 
@@ -429,14 +373,6 @@ async fn cross_site_reference_neither_blocks_nor_overreaches() {
             .unwrap()
             .is_none(),
         "site-a's ownership of the shared MXC must be released"
-    );
-    assert!(
-        store
-            .find_reference(&SiteId::from("site-b"), shared)
-            .await
-            .unwrap()
-            .is_some(),
-        "site-b's mapping of the shared MXC must be preserved"
     );
     assert!(
         store
@@ -465,7 +401,6 @@ async fn two_sites_owning_the_same_mxc_are_released_independently() {
 
     // site-b owns the same MXC and keeps it reachable through the profile.
     record_owned_upload(&store, "site-b", shared, "author-b").await;
-    map_reference(&store, "site-b", shared).await;
     backdate_upload(&store, shared, chrono::Duration::hours(25)).await;
     set_avatar_profile(&driver, "site-b", "author-b", shared).await;
 
@@ -553,11 +488,7 @@ async fn release_preserves_references_idempotency_and_matrix_state() {
         )
         .await
         .expect("record idempotent upload");
-    let media_ref = map_reference(&store, site, mxc).await;
     backdate_upload(&store, mxc, chrono::Duration::hours(25)).await;
-
-    let site_id = SiteId::from(site);
-    let pre_reference = store.get_record(&site_id, &media_ref).await.unwrap();
 
     let released = cleanup_pass(&store, &driver)
         .run()
@@ -565,13 +496,6 @@ async fn release_preserves_references_idempotency_and_matrix_state() {
         .expect("run cleanup pass");
 
     assert_eq!(released, 1);
-
-    // media_references are untouched.
-    assert_eq!(
-        store.get_record(&site_id, &media_ref).await.unwrap(),
-        pre_reference,
-        "media_references must never be modified by ownership release"
-    );
 
     // media_upload_idempotency records are untouched.
     let idempotency = store

@@ -57,7 +57,6 @@ fn visitor_message(event_id: &str, body: &str) -> Message {
             kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string()),
             mxid: None,
         },
@@ -177,7 +176,6 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
             user_id: message.sender_mxid.clone(),
             display_name: Some("新版名字".to_string()),
             avatar_url: Some("mxc://hs/new-avatar".to_string()),
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: 1000,
             event_id: Some("$join".to_string()),
@@ -208,7 +206,6 @@ async fn author_profile_reads_live_member_state_and_falls_back_on_leave() {
             user_id: message.sender_mxid,
             display_name: None,
             avatar_url: None,
-            media_reference: None,
             membership: "leave".to_string(),
             origin_server_ts: 2000,
             event_id: Some("$leave".to_string()),
@@ -1580,48 +1577,46 @@ async fn media_reachability_store_queries_operate_correctly() {
     let site_b_uploads = store.list_media_uploads_for_site(site_b).await.unwrap();
     assert_eq!(site_b_uploads.len(), 1);
 
-    // 2. Test has_historical_media_reference
-    let media_ref_1 = "cumments-media:11111111-1111-1111-1111-111111111111";
-    let media_ref_b = "cumments-media:22222222-2222-2222-2222-222222222222";
+    // 2. Test has_historical_author_avatar
+    let hist_mxc_a = "mxc://hs/hist-avatar-a";
+    let hist_mxc_b = "mxc://hs/hist-avatar-b";
 
     assert!(
         !store
-            .has_historical_media_reference(site_a, media_ref_1)
+            .has_historical_author_avatar(site_a, hist_mxc_a)
             .await
             .unwrap()
     );
 
-    // Insert message on site_a referencing media_ref_1
+    // Insert message on site_a carrying hist_mxc_a as the historical author avatar
     let mut msg_a = visitor_message("$msg_hist_a", "hist msg a");
     msg_a.site_id = site_a.to_string();
-    msg_a.author.media_reference =
-        Some(cumments_core::media_reference::MediaReference::parse(media_ref_1).unwrap());
+    msg_a.author.avatar_url = Some(hist_mxc_a.to_string());
     store.save_message(&msg_a).await.unwrap();
 
-    // Insert message on site_b referencing media_ref_b
+    // Insert message on site_b carrying hist_mxc_b as the historical author avatar
     let mut msg_b = visitor_message("$msg_hist_b", "hist msg b");
     msg_b.site_id = site_b.to_string();
-    msg_b.author.media_reference =
-        Some(cumments_core::media_reference::MediaReference::parse(media_ref_b).unwrap());
+    msg_b.author.avatar_url = Some(hist_mxc_b.to_string());
     store.save_message(&msg_b).await.unwrap();
 
     assert!(
         store
-            .has_historical_media_reference(site_a, media_ref_1)
+            .has_historical_author_avatar(site_a, hist_mxc_a)
             .await
             .unwrap()
     );
-    // Cross-site: site_a does NOT have media_ref_b
+    // Cross-site: site_a does NOT have site_b's historical avatar
     assert!(
         !store
-            .has_historical_media_reference(site_a, media_ref_b)
+            .has_historical_author_avatar(site_a, hist_mxc_b)
             .await
             .unwrap()
     );
-    // site_b has media_ref_b
+    // site_b has hist_mxc_b
     assert!(
         store
-            .has_historical_media_reference(site_b, media_ref_b)
+            .has_historical_author_avatar(site_b, hist_mxc_b)
             .await
             .unwrap()
     );
@@ -1905,9 +1900,7 @@ async fn media_upload_ownership_release_is_bound_to_the_enumerated_record() {
 }
 
 #[tokio::test]
-async fn media_upload_ownership_release_preserves_idempotency_and_media_references() {
-    use cumments_core::ports::MediaReferenceStore;
-
+async fn media_upload_ownership_release_preserves_idempotency() {
     let store = DbStore::connect(&test_db_url("media-upload-release-idempotency"))
         .await
         .expect("connect db");
@@ -1947,13 +1940,6 @@ async fn media_upload_ownership_release_preserves_idempotency_and_media_referenc
         .expect("idempotency record must exist");
     assert_eq!(idem_record.mxc_url, mxc_url);
 
-    // 2. Also create a media_reference mapping for this media
-    let site_id_obj = SiteId::from(site_id);
-    let media_ref = store
-        .get_or_create_reference(&site_id_obj, mxc_url)
-        .await
-        .expect("create media reference");
-
     // 3. Explicitly release media upload ownership, bound to the enumerated row.
     let upload_id = store
         .get_media_upload(site_id, mxc_url)
@@ -1985,14 +1971,6 @@ async fn media_upload_ownership_release_preserves_idempotency_and_media_referenc
         .expect("idempotency record MUST remain intact after ownership release");
     assert_eq!(idem_after.mxc_url, mxc_url);
     assert_eq!(idem_after.request_fingerprint, "fingerprint-abc");
-
-    // 5. CRITICAL: media_references MUST remain untouched
-    let ref_after = store
-        .find_reference(&site_id_obj, mxc_url)
-        .await
-        .unwrap()
-        .expect("media_reference must remain untouched after ownership release");
-    assert_eq!(ref_after, media_ref);
 }
 
 #[tokio::test]

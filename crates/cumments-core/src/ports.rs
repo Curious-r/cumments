@@ -2,7 +2,6 @@ use crate::audit::{CommandAuditEntry, NewCommandAuditEntry};
 use crate::canonical::CanonicalJson;
 use crate::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use crate::governance::{NewRoleClaim, RoleClaim, RoleEntry, SiteTransfer};
-use crate::media_reference::MediaReference;
 use crate::media_upload::{
     MediaUploadIdempotency, MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome,
 };
@@ -516,7 +515,7 @@ pub trait MessageStore: ProjectionSink {
     /// safe under concurrent execution).
     ///
     /// This operation only removes the local ownership evidence row in `media_uploads`.
-    /// It preserves `media_upload_idempotency`, `media_references`, and causes no Matrix homeserver side effects.
+    /// It preserves `media_upload_idempotency` and causes no Matrix homeserver side effects.
     async fn release_media_upload_ownership(
         &self,
         site_id: &str,
@@ -554,12 +553,9 @@ pub trait MessageStore: ProjectionSink {
         site_id: &str,
     ) -> Result<Vec<crate::media_reachability::MediaUploadRecord>>;
 
-    /// Whether any retained message in the site references this media reference as historical author presentation.
-    async fn has_historical_media_reference(
-        &self,
-        site_id: &str,
-        media_reference: &str,
-    ) -> Result<bool>;
+    /// Whether any retained message in the site carries this MXC as the
+    /// historical author avatar presentation.
+    async fn has_historical_author_avatar(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
 
     /// Whether any retained content attachment or active submission in the site references this MXC URL.
     async fn has_content_attachment(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
@@ -1552,72 +1548,6 @@ pub trait VirtualUserStore: Send + Sync {
         let _ = (virtual_user_id, site_id);
         Ok(None)
     }
-}
-
-/// Detailed record of a durable media reference mapping.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MediaReferenceRecord {
-    /// The stable opaque domain identity (`cumments-media:<uuid>`).
-    pub media_reference: MediaReference,
-    /// Site scope of this media reference mapping.
-    pub site_id: SiteId,
-    /// Underlying Matrix homeserver MXC URI (`mxc://...`).
-    pub mxc_uri: String,
-    /// Timestamp when this reference mapping was created.
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Capability to resolve a `MediaReference` into an `mxc://...` Matrix content URI.
-#[async_trait]
-pub trait MediaReferenceResolver: Send + Sync {
-    /// Resolves a domain `MediaReference` for the given site to a concrete `mxc://...` URI.
-    async fn resolve_mxc(
-        &self,
-        site_id: &SiteId,
-        reference: &MediaReference,
-    ) -> Result<Option<String>>;
-}
-
-/// Port for durable media-domain identity mappings.
-///
-/// Maps stable [`MediaReference`] domain identities to and from underlying
-/// Matrix transport MXC URIs within explicit site boundaries.
-#[async_trait]
-pub trait MediaReferenceStore: MediaReferenceResolver + Send + Sync {
-    /// Finds an existing `MediaReference` for the given site and MXC URI.
-    ///
-    /// Returns `Ok(Some(reference))` if mapped, `Ok(None)` if absent, or `Err(...)` on store failure.
-    async fn find_reference(
-        &self,
-        site_id: &SiteId,
-        mxc_uri: &str,
-    ) -> Result<Option<MediaReference>>;
-
-    /// Gets an existing `MediaReference` or atomically materializes the
-    /// deterministic one for the given site and MXC URI.
-    ///
-    /// The identity is always [`MediaReference::from_media`]; the mapping only
-    /// backs runtime reverse lookup. Concurrent calls for the same
-    /// `(site_id, mxc_uri)` converge on the same `MediaReference`.
-    async fn get_or_create_reference(
-        &self,
-        site_id: &SiteId,
-        mxc_uri: &str,
-    ) -> Result<MediaReference>;
-
-    /// Gets the full mapping record for the given site and reference, if it exists.
-    async fn get_record(
-        &self,
-        site_id: &SiteId,
-        reference: &MediaReference,
-    ) -> Result<Option<MediaReferenceRecord>>;
-
-    /// Gets the full mapping record for the given site and MXC URI, if it exists.
-    async fn get_record_by_mxc(
-        &self,
-        site_id: &SiteId,
-        mxc_uri: &str,
-    ) -> Result<Option<MediaReferenceRecord>>;
 }
 
 /// The driver port for Matrix Client-Server API profile mutations.

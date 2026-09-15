@@ -8,7 +8,6 @@ pub mod command_audit_logs;
 pub mod comments;
 pub mod delete_submissions;
 pub mod idempotency_keys;
-pub mod media_references;
 pub mod media_upload_idempotency;
 pub mod media_uploads;
 pub mod message_revisions;

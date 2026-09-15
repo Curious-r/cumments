@@ -160,7 +160,6 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
             kind: AuthorKind::Visitor,
             display_name: None,
             avatar_url: None,
-            media_reference: None,
             public_key: None,
             mxid: None,
         },

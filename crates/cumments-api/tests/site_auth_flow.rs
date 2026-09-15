@@ -19,8 +19,8 @@ use cumments_core::models::{
     TextStyle, VisitorProfile,
 };
 use cumments_core::ports::{
-    GovernanceStore, MediaReferenceStore, MessageStore, RegistryStore, RoleClaimStore,
-    SiteAuthStore, SiteStore, SiteTransferStore, StickerPackStore, SubmissionStore,
+    GovernanceStore, MessageStore, RegistryStore, RoleClaimStore, SiteAuthStore, SiteStore,
+    SiteTransferStore, StickerPackStore, SubmissionStore,
 };
 use cumments_core::site_auth::{
     Origin, SiteAuthPolicy, SiteVerificationPolicy, site_request_signature, token_hash,
@@ -345,14 +345,6 @@ async fn visitor_profile_returns_the_current_profile_and_visitor_id() {
         .await
         .expect("register site");
 
-    let media_ref = store
-        .get_or_create_reference(
-            &SiteId::new("test-blog".to_string()).unwrap(),
-            "mxc://hs/avatar",
-        )
-        .await
-        .expect("create media ref");
-
     let router = cumments_api::build_router(state.clone());
     let uri = format!("/api/v1/sites/test-blog/visitors/profile?author_public_key={public_key}");
     let response = router
@@ -365,7 +357,8 @@ async fn visitor_profile_returns_the_current_profile_and_visitor_id() {
         serde_json::from_str(&body_text(response).await).expect("parse profile");
     assert_eq!(body["visitor_id"], visitor_id);
     assert_eq!(body["display_name"], "Alice");
-    assert_eq!(body["avatar"], media_ref.as_str());
+    // The profile response never carries an opaque media reference.
+    assert!(body.get("avatar").is_none());
     // The media proxy is disabled in tests, so avatar_url is null (never exposes raw MXC).
     assert!(body["avatar_url"].is_null());
 }
@@ -1631,7 +1624,6 @@ async fn redacted_comment_reads_as_tombstone_and_rejects_new_reaction() {
             kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: Some("visitor-key".to_string()),
             mxid: None,
         },
@@ -1954,7 +1946,6 @@ async fn reaction_retries_do_not_require_idempotency_key_and_reuse_matrix_txn() 
                 kind: AuthorKind::Matrix,
                 display_name: None,
                 avatar_url: None,
-                media_reference: None,
                 public_key: None,
                 mxid: Some("@alice:hs".to_string()),
             },
@@ -3092,7 +3083,6 @@ async fn reaction_remove_is_idempotent_and_uses_deterministic_txn() {
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
                 public_key: Some("owner-key".to_string()),
                 mxid: None,
             },
@@ -3285,7 +3275,6 @@ async fn thread_query_and_single_get_expose_the_semantic_read_model() {
             kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: Some("visitor-key".to_string()),
             mxid: None,
         },
@@ -3559,7 +3548,6 @@ async fn post_comment_accepts_all_relation_combinations_independently() {
             kind: AuthorKind::Visitor,
             display_name: Some("Alice".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: Some("visitor-key".to_string()),
             mxid: None,
         },
@@ -4655,7 +4643,6 @@ async fn seed_poll(store: &DbStore, poll_id: &str, options: &[(&str, &str)], max
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
                 public_key: Some("poll-author-key".to_string()),
                 mxid: None,
             },
@@ -5926,7 +5913,6 @@ async fn seed_poll_with_creator(
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
                 public_key: Some(creator_public_key.to_string()),
                 mxid: None,
             },
@@ -6989,7 +6975,6 @@ async fn poll_read_disclosed_open_undisclosed_open_and_ended_visibility() {
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
                 public_key: Some("creator-key".to_string()),
                 mxid: None,
             },

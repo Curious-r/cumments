@@ -4,10 +4,9 @@
 //! 1. Logical reachability evaluation across Current Global Profile, Historical Author Presentation,
 //!    and Content Attachments (messages, revisions, sticker packs, active submissions).
 //! 2. Independent ownership determination (CummentsOwned vs NotOwned).
-//! 3. Conservative safety: lookup failures and unmapped uploads produce `Unknown` (never `Unreachable`).
+//! 3. Conservative safety: lookup failures produce `Unknown` (never `Unreachable`).
 //! 4. Cross-site isolation: references in site-B never make candidates in site-A reachable.
-//! 5. External media protection: external MediaReferences never enter owned candidates,
-//!    and even when unreachable, are never proposed as cleanup eligible.
+//! 5. Media without a Cumments upload ownership record is never proposed as cleanup eligible.
 //! 6. Non-destructive guarantee: evaluations do not mutate local or Matrix state.
 
 use std::sync::Arc;
@@ -19,7 +18,7 @@ use cumments_core::models::{
     AuthorKind, AuthorSnapshot, Content, MediaContent, MediaKind, Message, MessageStatus, SiteId,
     TextContent, TextStyle, VisitorProfile,
 };
-use cumments_core::ports::{MediaReferenceStore, MessageStore, SiteStore};
+use cumments_core::ports::{MessageStore, SiteStore};
 use cumments_store::entities::active_enums::SubmissionStatus;
 use cumments_store::entities::{media_uploads, message_revisions, post_submissions, sticker_packs};
 use cumments_store::sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -40,11 +39,8 @@ async fn setup_env(test_name: &str) -> (Arc<DbStore>, Arc<TestDriver>, MediaReac
     let db_url = test_db_url(test_name);
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
     let driver = Arc::new(TestDriver::new());
-    let evaluator = MediaReachabilityEvaluator::new(
-        driver.clone(),
-        store.clone() as Arc<dyn MediaReferenceStore>,
-        store.clone() as Arc<dyn MessageStore>,
-    );
+    let evaluator =
+        MediaReachabilityEvaluator::new(driver.clone(), store.clone() as Arc<dyn MessageStore>);
     (store, driver, evaluator)
 }
 
@@ -95,10 +91,6 @@ async fn current_profile_referenced_yields_reachable() {
         .record_media_upload(candidate_mxc, author_pubkey, site_id.as_str(), None)
         .await
         .unwrap();
-    let media_ref = store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // 2. Authoritative Matrix profile has candidate avatar
     driver.visitor_profiles.lock().await.insert(
@@ -111,7 +103,6 @@ async fn current_profile_referenced_yields_reachable() {
 
     let result = evaluator.evaluate_candidate(&site_id, candidate_mxc).await;
     assert_eq!(result.ownership, MediaOwnership::CummentsOwned);
-    assert_eq!(result.media_reference, Some(media_ref));
     assert_eq!(
         result.reachability.current_profile,
         ReachabilityState::Reachable
@@ -142,10 +133,6 @@ async fn current_profile_replaced_or_unset_yields_unreachable() {
 
     store
         .record_media_upload(candidate_mxc, author_pubkey, site_id.as_str(), None)
-        .await
-        .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -203,10 +190,6 @@ async fn current_profile_lookup_failure_yields_unknown() {
         .record_media_upload(candidate_mxc, author_pubkey, site_id.as_str(), None)
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // Simulate homeserver failure
     *driver.fail_get_profile.lock().await = true;
@@ -239,10 +222,6 @@ async fn historical_presentation_referenced_yields_reachable() {
         .record_media_upload(candidate_mxc, author_pubkey, site_id.as_str(), None)
         .await
         .unwrap();
-    let media_ref = store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // Current profile has changed to something else
     driver.visitor_profiles.lock().await.insert(
@@ -253,7 +232,7 @@ async fn historical_presentation_referenced_yields_reachable() {
         },
     );
 
-    // Save historical message with author_media_reference
+    // Save historical message with the candidate as author avatar
     let message = test_message(
         "$hist_event_1",
         site_id.as_str(),
@@ -262,7 +241,6 @@ async fn historical_presentation_referenced_yields_reachable() {
             kind: AuthorKind::Visitor,
             display_name: Some("Charlie".to_string()),
             avatar_url: Some(candidate_mxc.to_string()),
-            media_reference: Some(media_ref.clone()),
             public_key: Some(author_pubkey.to_string()),
             mxid: None,
         },
@@ -312,10 +290,6 @@ async fn content_attachment_in_message_body_yields_reachable() {
         )
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // Message references candidate_mxc in its content
     let message = test_message(
@@ -326,7 +300,6 @@ async fn content_attachment_in_message_body_yields_reachable() {
             kind: AuthorKind::Visitor,
             display_name: Some("David".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: Some("other-pubkey".to_string()),
             mxid: None,
         },
@@ -368,10 +341,6 @@ async fn content_attachment_in_revision_yields_reachable() {
         .record_media_upload(candidate_mxc, "author-pubkey", site_id.as_str(), None)
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // Base message is text
     let message = test_message(
@@ -382,7 +351,6 @@ async fn content_attachment_in_revision_yields_reachable() {
             kind: AuthorKind::Visitor,
             display_name: None,
             avatar_url: None,
-            media_reference: None,
             public_key: None,
             mxid: None,
         },
@@ -430,10 +398,6 @@ async fn content_attachment_in_sticker_pack_yields_reachable() {
         .record_media_upload(candidate_mxc, "author-pubkey", site_id.as_str(), None)
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // Insert sticker pack referencing candidate_mxc
     let pack = sticker_packs::ActiveModel {
@@ -471,10 +435,6 @@ async fn content_attachment_in_active_post_submission_yields_reachable() {
     let candidate_mxc = "mxc://hs/upload-in-submission";
     store
         .record_media_upload(candidate_mxc, "author-pubkey", site_id.as_str(), None)
-        .await
-        .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
         .await
         .unwrap();
 
@@ -529,10 +489,6 @@ async fn combined_all_absent_yields_unreachable_and_cleanup_eligible() {
         .record_media_upload(candidate_mxc, "author-pubkey", site_id.as_str(), None)
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     let result = evaluator.evaluate_candidate(&site_id, candidate_mxc).await;
     assert_eq!(result.ownership, MediaOwnership::CummentsOwned);
@@ -569,10 +525,6 @@ async fn combined_one_unknown_others_absent_yields_unknown_and_not_eligible() {
         .record_media_upload(candidate_mxc, "author-pubkey", site_id.as_str(), None)
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     // Profile lookup fails -> Unknown
     *driver.fail_get_profile.lock().await = true;
@@ -598,33 +550,7 @@ async fn combined_one_unknown_others_absent_yields_unknown_and_not_eligible() {
 }
 
 #[tokio::test]
-async fn unmapped_upload_yields_cumments_owned_and_unknown_reachability() {
-    let (store, _driver, evaluator) = setup_env("unmapped_upload").await;
-    let site_id = SiteId::from("site-a");
-    store
-        .ensure_site_exists(site_id.as_str(), "!space:hs")
-        .await
-        .unwrap();
-
-    let candidate_mxc = "mxc://hs/unmapped-upload";
-    // Upload recorded, but NO media_references mapping created
-    store
-        .record_media_upload(candidate_mxc, "author-pubkey", site_id.as_str(), None)
-        .await
-        .unwrap();
-
-    let result = evaluator.evaluate_candidate(&site_id, candidate_mxc).await;
-    assert_eq!(result.ownership, MediaOwnership::CummentsOwned);
-    assert_eq!(result.media_reference, None);
-    assert_eq!(result.reachability.overall, ReachabilityState::Unknown);
-    assert!(
-        !result.is_cleanup_eligible(),
-        "Unmapped upload must produce Unknown and never be cleanup eligible"
-    );
-}
-
-#[tokio::test]
-async fn external_media_is_not_owned_and_never_eligible() {
+async fn media_without_upload_record_is_not_owned_and_never_eligible() {
     let (store, _driver, evaluator) = setup_env("external_media").await;
     let site_id = SiteId::from("site-a");
     store
@@ -632,30 +558,25 @@ async fn external_media_is_not_owned_and_never_eligible() {
         .await
         .unwrap();
 
+    // Observed MXC with no Cumments upload ownership record.
     let ext_mxc = "mxc://hs/external-discovered-avatar";
-    // External mapping created, NO media_uploads record
-    let media_ref = store
-        .get_or_create_reference(&site_id, ext_mxc)
-        .await
-        .unwrap();
 
     let result = evaluator.evaluate_candidate(&site_id, ext_mxc).await;
     assert_eq!(result.ownership, MediaOwnership::NotOwned);
-    assert_eq!(result.media_reference, Some(media_ref));
     assert_eq!(result.reachability.overall, ReachabilityState::Unreachable);
     assert!(
         !result.is_cleanup_eligible(),
-        "External unreachable media must NEVER be cleanup eligible"
+        "Media without an upload ownership record must never be cleanup eligible"
     );
 
-    // Also verify evaluate_site_owned_candidates never includes external media
+    // Non-owned media never enters the owned-upload candidate set.
     let owned_candidates = evaluator
         .evaluate_site_owned_candidates(&site_id)
         .await
         .unwrap();
     assert!(
         owned_candidates.is_empty(),
-        "External media must never enter the owned-upload candidate set"
+        "Non-owned media must never enter the owned-upload candidate set"
     );
 }
 
@@ -680,10 +601,6 @@ async fn cross_site_isolation_preserves_independent_reachability() {
         .record_media_upload(candidate_mxc, "author-a", site_a.as_str(), None)
         .await
         .unwrap();
-    store
-        .get_or_create_reference(&site_a, candidate_mxc)
-        .await
-        .unwrap();
 
     // site-b references candidate_mxc in a comment!
     let message_on_b = test_message(
@@ -694,7 +611,6 @@ async fn cross_site_isolation_preserves_independent_reachability() {
             kind: AuthorKind::Visitor,
             display_name: Some("User B".to_string()),
             avatar_url: None,
-            media_reference: None,
             public_key: None,
             mxid: None,
         },
@@ -741,16 +657,11 @@ async fn read_only_guarantee_preserves_all_durable_state() {
         .record_media_upload(candidate_mxc, "author-1", site_id.as_str(), None)
         .await
         .unwrap();
-    let media_ref = store
-        .get_or_create_reference(&site_id, candidate_mxc)
-        .await
-        .unwrap();
 
     let pre_uploads = store
         .list_media_urls_for_site(site_id.as_str())
         .await
         .unwrap();
-    let pre_ref = store.get_record(&site_id, &media_ref).await.unwrap();
 
     // Run evaluation multiple times
     let _ = evaluator.evaluate_candidate(&site_id, candidate_mxc).await;
@@ -763,11 +674,9 @@ async fn read_only_guarantee_preserves_all_durable_state() {
         .list_media_urls_for_site(site_id.as_str())
         .await
         .unwrap();
-    let post_ref = store.get_record(&site_id, &media_ref).await.unwrap();
 
     assert_eq!(
         pre_uploads, post_uploads,
         "media_uploads must not be mutated"
     );
-    assert_eq!(pre_ref, post_ref, "media_references must not be mutated");
 }

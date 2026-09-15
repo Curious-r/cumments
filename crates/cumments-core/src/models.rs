@@ -221,7 +221,6 @@ impl AuthorKind {
 pub struct MemberPresentation {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
-    pub media_reference: Option<MediaReference>,
 }
 
 /// Author identity profile, captured when the message was projected.
@@ -241,8 +240,6 @@ pub struct AuthorSnapshot {
     pub kind: AuthorKind,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub media_reference: Option<MediaReference>,
     pub public_key: Option<String>,
     pub mxid: Option<String>,
 }
@@ -771,7 +768,6 @@ pub struct RoomMember {
     pub user_id: String,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
-    pub media_reference: Option<MediaReference>,
     /// Matrix membership: `join`, `invite`, `leave`, `ban`.
     pub membership: String,
     /// Matrix `origin_server_ts` of the member event that established this projection state.
@@ -905,7 +901,6 @@ pub struct SseOutbox {
     pub created_at: DateTime<Utc>,
 }
 
-pub use crate::media_reference::MediaReference;
 pub use crate::profile::{
     ProfileField, ProfileOperation, ProfileOperationStatus, ProfileTargetValue,
 };

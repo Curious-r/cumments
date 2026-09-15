@@ -10,7 +10,6 @@ pub struct Model {
     pub user_id: String,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
-    pub media_reference: Option<String>,
     /// Matrix membership: `join`, `invite`, `leave`, `ban`.
     pub membership: String,
     #[sea_orm(default_value = 0)]

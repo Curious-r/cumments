@@ -2,7 +2,6 @@ use super::DbStore;
 use crate::entities::{room_members, room_state_events, room_state_snapshots};
 use anyhow::Result;
 use async_trait::async_trait;
-use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{RoomMember, RoomMetadata, RoomStateEvent, RoomStateSnapshot};
 use cumments_core::ports::RoomStore;
 use sea_orm::sea_query::{Alias, Expr};
@@ -32,7 +31,6 @@ impl RoomStore for DbStore {
             user_id: Set(member.user_id.clone()),
             display_name: Set(member.display_name.clone()),
             avatar_url: Set(member.avatar_url.clone()),
-            media_reference: Set(member.media_reference.as_ref().map(|r| r.to_string())),
             membership: Set(member.membership.clone()),
             origin_server_ts: Set(member.origin_server_ts),
             event_id: Set(member.event_id.clone()),
@@ -47,7 +45,6 @@ impl RoomStore for DbStore {
                 .update_columns([
                     room_members::Column::DisplayName,
                     room_members::Column::AvatarUrl,
-                    room_members::Column::MediaReference,
                     room_members::Column::Membership,
                     room_members::Column::OriginServerTs,
                     room_members::Column::EventId,
@@ -95,10 +92,6 @@ impl RoomStore for DbStore {
             user_id: m.user_id,
             display_name: m.display_name,
             avatar_url: m.avatar_url,
-            media_reference: m
-                .media_reference
-                .as_deref()
-                .and_then(|s| MediaReference::parse(s).ok()),
             membership: m.membership,
             origin_server_ts: m.origin_server_ts,
             event_id: m.event_id,

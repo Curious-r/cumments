@@ -10,7 +10,6 @@ pub mod identity;
 pub mod management;
 pub mod matrix_error;
 pub mod media_reachability;
-pub mod media_reference;
 pub mod media_upload;
 pub mod models;
 pub mod operator;

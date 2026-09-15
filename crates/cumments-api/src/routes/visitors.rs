@@ -15,7 +15,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cumments_core::identity::{derive_visitor_id_from_public_key, parse_public_key};
-use cumments_core::media_reference::MediaReference;
 use cumments_core::models::SiteId;
 use cumments_core::profile::{
     ProfileClaimOutcome, ProfileOperationExecutor, ProfileOperationStatus, ProfileTargetValue,
@@ -31,9 +30,9 @@ use validator::Validate;
 /// Public self-service read of the visitor's current global profile (display
 /// name and avatar) for this site. The virtual user is derived from
 /// `site_id + public_key`. Authoritative runtime state is read from the
-/// Matrix global profile. If an avatar is present and durably mapped,
-/// its `MediaReference` is returned. Never exposes raw Matrix MXC URIs in
-/// public JSON. Performs no database write transactions.
+/// Matrix global profile. The avatar is returned only as a signed browser-facing
+/// media-proxy URL; raw Matrix MXC URIs are never exposed in public JSON.
+/// Performs no database write transactions.
 pub(crate) async fn visitor_profile_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -79,30 +78,20 @@ pub(crate) async fn visitor_profile_handler(
         .await
         .map_err(|e| AppError::Internal(format!("failed to read visitor profile: {e}")))?;
 
-    let (avatar, avatar_url) = match profile.as_ref().and_then(|p| p.avatar_url.as_ref()) {
+    let avatar_url = match profile.as_ref().and_then(|p| p.avatar_url.as_ref()) {
         Some(mxc) if mxc.starts_with("mxc://") => {
-            let record = state
-                .store
-                .find_reference(&site_id_val, mxc)
-                .await
-                .map_err(|e| {
-                    AppError::Internal(format!("failed to lookup media reference: {e}"))
-                })?;
-            let media_ref = record.map(|r| r.to_string());
             let media_base = media_url_base(&state, &headers, Some(addr));
-            let presentation_url = state
+            state
                 .media_proxy
                 .as_ref()
-                .and_then(|proxy| proxy.proxify_avatar(mxc, &media_base));
-            (media_ref, presentation_url)
+                .and_then(|proxy| proxy.proxify_avatar(mxc, &media_base))
         }
-        _ => (None, None),
+        _ => None,
     };
 
     Ok(Json(json!({
         "visitor_id": visitor_id,
         "display_name": profile.as_ref().and_then(|p| p.display_name.clone()),
-        "avatar": avatar,
         "avatar_url": avatar_url,
     })))
 }
@@ -168,9 +157,13 @@ pub(crate) async fn set_visitor_avatar_handler(
     let req: SetAvatarRequest = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?;
     req.validate().map_err(AppError::Validation)?;
-    let media_ref = MediaReference::parse(&req.avatar)
-        .map_err(|e| AppError::BadRequest(format!("invalid media reference: {e}")))?;
-    let target = ProfileTargetValue::SetAvatar(media_ref);
+    let mxc_uri = req.avatar.trim();
+    if !mxc_uri.starts_with("mxc://") {
+        return Err(AppError::BadRequest(
+            "avatar must be a Matrix mxc:// URI".to_string(),
+        ));
+    }
+    let target = ProfileTargetValue::SetAvatar(mxc_uri.to_string());
     process_profile_mutation(
         &state,
         &headers,
@@ -247,21 +240,6 @@ async fn process_profile_mutation(
         ));
     }
 
-    // Avatar MediaReference validation: must resolve through media reference store for this site
-    if let ProfileTargetValue::SetAvatar(ref media_ref) = target_value {
-        let resolved = state
-            .store
-            .resolve_mxc(&site_id, media_ref)
-            .await
-            .map_err(|e| AppError::Internal(format!("failed to resolve media reference: {e}")))?;
-        if resolved.is_none() {
-            return Err(AppError::NotFound(format!(
-                "Media reference '{media_ref}' not found for site '{}'",
-                site_id.as_str()
-            )));
-        }
-    }
-
     // Verify Ed25519 signature over canonical semantic profile mutation envelope
     if !verify_profile_signature(
         author_public_key,
@@ -299,11 +277,7 @@ async fn process_profile_mutation(
         ProfileClaimOutcome::Conflict => return Err(AppError::IdempotencyReused),
     };
 
-    let executor = ProfileOperationExecutor::new(
-        state.store.clone(),
-        state.driver.clone(),
-        Some(state.store.clone()),
-    );
+    let executor = ProfileOperationExecutor::new(state.store.clone(), state.driver.clone());
 
     // If new or pending on replay, attempt execution
     if !replayed || op.status == ProfileOperationStatus::Pending {

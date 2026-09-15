@@ -16,18 +16,16 @@ Response:
 {
   "visitor_id": "a1b2c3d4e5f60718a1b2c3d4e5f60718",
   "display_name": "Alice",
-  "avatar": "cumments-media:550e8400-e29b-41d4-a716-446655440000",
   "avatar_url": "https://comments.example.net/api/v1/media/..."
 }
 ```
 
 - `display_name` is the current profile display name, or `null` when unset.
-- `avatar` is the site-scoped `MediaReference` identifier (`cumments-media:<uuid>`), or `null` when unset or unmapped.
-- `avatar_url` is a signed proxy URL (96×96 crop variant when the media proxy is enabled), or `null` when unset or unmapped. Raw `mxc://` transport addresses are never exposed.
+- `avatar_url` is a signed proxy URL (96×96 crop variant when the media proxy is enabled), or `null` when unset or when the media proxy is disabled. Raw `mxc://` transport addresses are never exposed.
 - Unknown virtual users and homeservers configured not to disclose profiles
   (`403`, MSC4170) both return an **empty profile** (`null` fields) with
   `200`, so clients treat "no profile" as a normal state.
-- Reading profiles is strictly read-only and performs no database writes or media reference allocations.
+- Reading profiles is strictly read-only and performs no database writes.
 
 The endpoint is public: the Ed25519 public key is the identity, it is high-entropy and not enumerable. Requests are rate limited per client IP (default 120/hour, configurable via `rate_limit.visitor_profile`).
 
@@ -83,14 +81,14 @@ Headers: `Idempotency-Key: <key>`
 Body:
 ```json
 {
-  "avatar": "cumments-media:550e8400-e29b-41d4-a716-446655440000",
+  "avatar": "mxc://hs/550e8400e29b41d4a716446655440000",
   "author_public_key": "<base64url-public-key>",
   "author_signature": "<base64url-signature>",
   "challenge_response": "<prefix|nonce>"
 }
 ```
 
-`avatar` must be a valid, site-scoped `MediaReference` previously uploaded or ingested. Raw `mxc://` URIs are rejected.
+`avatar` is the Matrix media URI (`mxc://server/media_id`) to write to the virtual user's global profile. Values that are not `mxc://` URIs are rejected with `400`.
 
 The author signature covers:
 `["SET_AVATAR", site_id, operation_id, semantic_fingerprint]`

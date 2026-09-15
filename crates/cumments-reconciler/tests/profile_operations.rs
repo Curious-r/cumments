@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use cumments_core::models::SiteId;
-use cumments_core::ports::{MediaReferenceStore, ProfileStore, SiteStore};
+use cumments_core::ports::{ProfileStore, SiteStore};
 use cumments_core::profile::{
     ProfileClaimOutcome, ProfileDriverError, ProfileOperationStatus, ProfileTargetValue,
 };
@@ -41,7 +41,7 @@ async fn automatic_progression_after_terminal_predecessor() {
         .expect("ensure site");
 
     let driver = Arc::new(TestDriver::new());
-    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
     let author = "pubkey-visitor-1";
     let target_a = ProfileTargetValue::SetDisplayName("Alice".to_string());
@@ -112,7 +112,7 @@ async fn failure_predecessor_allows_subsequent_to_proceed() {
         .expect("ensure site");
 
     let driver = Arc::new(TestDriver::new());
-    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
     let author = "pubkey-visitor-failure";
     let target_a = ProfileTargetValue::SetDisplayName("BadName".to_string());
@@ -167,7 +167,7 @@ async fn unknown_predecessor_blocks_subsequent_indefinitely() {
         .expect("ensure site");
 
     let driver = Arc::new(TestDriver::new());
-    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
     let author = "pubkey-visitor-unknown";
     let target_a = ProfileTargetValue::SetDisplayName("TimeoutName".to_string());
@@ -240,7 +240,7 @@ async fn restart_durability() {
             .expect("ensure site");
 
         let driver = Arc::new(TestDriver::new());
-        let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+        let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
         let target_1 = ProfileTargetValue::SetDisplayName("First".to_string());
         let target_2 = ProfileTargetValue::SetDisplayName("Second".to_string());
@@ -283,7 +283,7 @@ async fn restart_durability() {
         store.recover_crashed_dispatching().await.expect("recover");
 
         let driver = Arc::new(TestDriver::new());
-        let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+        let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
         // Reconciler runs and picks up op-2
         let handled = pass.reconcile().await.expect("reconcile on restart");
@@ -308,17 +308,12 @@ async fn multiple_fields_progress_independently() {
         .await
         .expect("ensure site");
 
-    let media_ref = store
-        .get_or_create_reference(&site, "mxc://hs/avatar1")
-        .await
-        .unwrap();
-
     let driver = Arc::new(TestDriver::new());
-    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), Some(store.clone()));
+    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
     let author = "pubkey-visitor-multi";
     let name_target = ProfileTargetValue::SetDisplayName("Alice".to_string());
-    let avatar_target = ProfileTargetValue::SetAvatar(media_ref);
+    let avatar_target = ProfileTargetValue::SetAvatar("mxc://hs/avatar1".to_string());
 
     // Enqueue DisplayName and Avatar operations
     store
@@ -406,12 +401,10 @@ async fn duplicate_workers_prevent_double_dispatch() {
     let pass1 = Arc::new(ProfileOperationsPass::for_test(
         store.clone(),
         driver.clone(),
-        None,
     ));
     let pass2 = Arc::new(ProfileOperationsPass::for_test(
         store.clone(),
         driver.clone(),
-        None,
     ));
 
     let author_a = "pubkey-a";
@@ -487,7 +480,7 @@ async fn worker_sweep_respects_site_scope_when_another_site_is_blocked() {
         .expect("ensure site b");
 
     let driver = Arc::new(TestDriver::new());
-    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone(), None);
+    let pass = ProfileOperationsPass::for_test(store.clone(), driver.clone());
 
     let author = "pubkey-sweep-shared";
     let target_a1 = ProfileTargetValue::SetDisplayName("Name A1".to_string());

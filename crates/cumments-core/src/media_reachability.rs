@@ -12,9 +12,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::media_reference::MediaReference;
 use crate::models::SiteId;
-use crate::ports::{MatrixDriver, MediaReferenceStore, MessageStore};
+use crate::ports::{MatrixDriver, MessageStore};
 
 /// Logical reachability state of a media resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,7 +122,6 @@ pub struct MediaUploadRecord {
 pub struct MediaEvaluationResult {
     pub candidate_mxc: String,
     pub site_id: SiteId,
-    pub media_reference: Option<MediaReference>,
     pub ownership: MediaOwnership,
     pub reachability: MediaReachability,
 }
@@ -141,19 +139,13 @@ impl MediaEvaluationResult {
 /// of Matrix media resources without mutating durable state.
 pub struct MediaReachabilityEvaluator {
     driver: Arc<dyn MatrixDriver>,
-    media_reference_store: Arc<dyn MediaReferenceStore>,
     message_store: Arc<dyn MessageStore>,
 }
 
 impl MediaReachabilityEvaluator {
-    pub fn new(
-        driver: Arc<dyn MatrixDriver>,
-        media_reference_store: Arc<dyn MediaReferenceStore>,
-        message_store: Arc<dyn MessageStore>,
-    ) -> Self {
+    pub fn new(driver: Arc<dyn MatrixDriver>, message_store: Arc<dyn MessageStore>) -> Self {
         Self {
             driver,
-            media_reference_store,
             message_store,
         }
     }
@@ -176,7 +168,6 @@ impl MediaReachabilityEvaluator {
                 return MediaEvaluationResult {
                     candidate_mxc: mxc_url.to_string(),
                     site_id: site_id.clone(),
-                    media_reference: None,
                     ownership: MediaOwnership::NotOwned,
                     reachability: MediaReachability::unknown(),
                 };
@@ -191,38 +182,7 @@ impl MediaReachabilityEvaluator {
             None => (MediaOwnership::NotOwned, None),
         };
 
-        // 2. Resolve MediaReference mapping
-        let media_reference = match self
-            .media_reference_store
-            .find_reference(site_id, mxc_url)
-            .await
-        {
-            Ok(maybe_ref) => maybe_ref,
-            Err(err) => {
-                tracing::warn!(%err, site_id = %site_id.as_str(), mxc = %mxc_url, "failed to query media reference mapping");
-                return MediaEvaluationResult {
-                    candidate_mxc: mxc_url.to_string(),
-                    site_id: site_id.clone(),
-                    media_reference: None,
-                    ownership,
-                    reachability: MediaReachability::unknown(),
-                };
-            }
-        };
-
-        // If a Cumments-owned upload has no media_references mapping,
-        // reachability must be Unknown (never Unreachable) for conservative safety.
-        if ownership == MediaOwnership::CummentsOwned && media_reference.is_none() {
-            return MediaEvaluationResult {
-                candidate_mxc: mxc_url.to_string(),
-                site_id: site_id.clone(),
-                media_reference: None,
-                ownership,
-                reachability: MediaReachability::unknown(),
-            };
-        }
-
-        // 3. Source A: Current Global Profile
+        // 2. Source A: Current Global Profile
         let current_profile = match author_public_key {
             Some(ref pubkey) => match self.driver.get_profile(pubkey, site_id).await {
                 Ok(Some(profile)) => {
@@ -241,26 +201,21 @@ impl MediaReachabilityEvaluator {
             None => ReachabilityState::Unreachable,
         };
 
-        // 4. Source B: Historical Author Presentation
-        let historical_presentation = match media_reference {
-            Some(ref mr) => {
-                match self
-                    .message_store
-                    .has_historical_media_reference(site_id.as_str(), mr.as_str())
-                    .await
-                {
-                    Ok(true) => ReachabilityState::Reachable,
-                    Ok(false) => ReachabilityState::Unreachable,
-                    Err(err) => {
-                        tracing::warn!(%err, site_id = %site_id.as_str(), reference = %mr, "failed to query historical author media references");
-                        ReachabilityState::Unknown
-                    }
-                }
+        // 3. Source B: Historical Author Presentation
+        let historical_presentation = match self
+            .message_store
+            .has_historical_author_avatar(site_id.as_str(), mxc_url)
+            .await
+        {
+            Ok(true) => ReachabilityState::Reachable,
+            Ok(false) => ReachabilityState::Unreachable,
+            Err(err) => {
+                tracing::warn!(%err, site_id = %site_id.as_str(), mxc = %mxc_url, "failed to query historical author avatars");
+                ReachabilityState::Unknown
             }
-            None => ReachabilityState::Unreachable,
         };
 
-        // 5. Source C: Content Attachments
+        // 4. Source C: Content Attachments
         let content_attachment = match self
             .message_store
             .has_content_attachment(site_id.as_str(), mxc_url)
@@ -280,7 +235,6 @@ impl MediaReachabilityEvaluator {
         MediaEvaluationResult {
             candidate_mxc: mxc_url.to_string(),
             site_id: site_id.clone(),
-            media_reference,
             ownership,
             reachability,
         }

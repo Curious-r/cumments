@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use cumments_core::media_reference::MediaReference;
 use cumments_core::models::SiteId;
-use cumments_core::ports::{MediaReferenceResolver, ProfileStore};
+use cumments_core::ports::ProfileStore;
 use cumments_core::profile::{
     ProfileClaimOutcome, ProfileDriverError, ProfileField, ProfileOperationExecutionResult,
     ProfileOperationExecutor, ProfileOperationStatus, ProfileTargetValue,
@@ -18,23 +17,6 @@ fn test_db_url(name: &str) -> String {
     ));
     let _ = std::fs::remove_file(&path);
     format!("sqlite://{}", path.display())
-}
-
-struct MockMediaResolver;
-
-#[async_trait::async_trait]
-impl MediaReferenceResolver for MockMediaResolver {
-    async fn resolve_mxc(
-        &self,
-        site_id: &SiteId,
-        reference: &MediaReference,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(Some(format!(
-            "mxc://example.com/{}/{}",
-            site_id.as_str(),
-            reference.uuid()
-        )))
-    }
 }
 
 #[tokio::test]
@@ -133,7 +115,7 @@ async fn independent_fields_do_not_block_each_other() {
     let author = "pubkey-visitor-multi-field";
 
     let op_name = ProfileTargetValue::SetDisplayName("Alice".to_string());
-    let media = MediaReference::from_media(&site, "mxc://ex/independent-avatar");
+    let media = "mxc://ex/independent-avatar".to_string();
     let op_avatar = ProfileTargetValue::SetAvatar(media);
 
     store
@@ -367,13 +349,8 @@ async fn profile_operation_executor_end_to_end() {
             .expect("connect db"),
     );
     let driver = Arc::new(TestDriver::new());
-    let resolver = Arc::new(MockMediaResolver);
 
-    let executor = ProfileOperationExecutor::new(
-        store.clone(),
-        driver.clone(),
-        Some(resolver as Arc<dyn MediaReferenceResolver>),
-    );
+    let executor = ProfileOperationExecutor::new(store.clone(), driver.clone());
 
     let site = SiteId::from("blog");
     let author = "pubkey-e2e";
@@ -418,8 +395,7 @@ async fn profile_operation_executor_end_to_end() {
     assert_eq!(driver.clear_display_name_calls.lock().await.len(), 1);
 
     // 3. Set Avatar
-    let media = MediaReference::from_media(&site, "mxc://ex/e2e-avatar");
-    let op_avatar = ProfileTargetValue::SetAvatar(media.clone());
+    let op_avatar = ProfileTargetValue::SetAvatar("mxc://ex/e2e-avatar".to_string());
     store
         .claim_or_get_profile_operation("e2e-avatar", author, &site, &op_avatar)
         .await
@@ -430,7 +406,7 @@ async fn profile_operation_executor_end_to_end() {
     let avatar_calls = driver.set_avatar_calls.lock().await;
     assert_eq!(avatar_calls.len(), 1);
     assert_eq!(avatar_calls[0].0, author);
-    assert!(avatar_calls[0].2.contains(&media.uuid().to_string()));
+    assert_eq!(avatar_calls[0].2, "mxc://ex/e2e-avatar");
     drop(avatar_calls);
 
     // 4. Clear Avatar
@@ -452,7 +428,7 @@ async fn executor_deterministic_vs_ambiguous_error_handling() {
             .expect("connect db"),
     );
     let driver = Arc::new(TestDriver::new());
-    let executor = ProfileOperationExecutor::new(store.clone(), driver.clone(), None);
+    let executor = ProfileOperationExecutor::new(store.clone(), driver.clone());
 
     let site = SiteId::from("blog");
     let author = "pubkey-error-test";
@@ -537,158 +513,6 @@ async fn executor_deterministic_vs_ambiguous_error_handling() {
         .unwrap()
         .unwrap();
     assert_eq!(op_blocked.status, ProfileOperationStatus::Pending);
-}
-
-struct FailingMediaResolver {
-    error: Option<String>,
-}
-
-#[async_trait::async_trait]
-impl MediaReferenceResolver for FailingMediaResolver {
-    async fn resolve_mxc(
-        &self,
-        _site_id: &SiteId,
-        _reference: &MediaReference,
-    ) -> anyhow::Result<Option<String>> {
-        match &self.error {
-            Some(err) => anyhow::bail!("{err}"),
-            None => Ok(None),
-        }
-    }
-}
-
-#[tokio::test]
-async fn resolver_failure_never_strands_operation_in_dispatching() {
-    let store = Arc::new(
-        DbStore::connect(&test_db_url("resolver_failure_safety"))
-            .await
-            .expect("connect db"),
-    );
-    let driver = Arc::new(TestDriver::new());
-    let failing_resolver = Arc::new(FailingMediaResolver {
-        error: Some("infrastructure error: media backend unreachable".to_string()),
-    });
-
-    let executor = ProfileOperationExecutor::new(
-        store.clone(),
-        driver.clone(),
-        Some(failing_resolver as Arc<dyn MediaReferenceResolver>),
-    );
-
-    let site = SiteId::from("blog");
-    let author = "pubkey-resolver-fail";
-
-    let media1 = MediaReference::from_media(&site, "mxc://ex/resolver-fail-1");
-    let op_avatar_1 = ProfileTargetValue::SetAvatar(media1);
-    store
-        .claim_or_get_profile_operation("avatar-fail-1", author, &site, &op_avatar_1)
-        .await
-        .unwrap();
-
-    let media2 = MediaReference::from_media(&site, "mxc://ex/resolver-fail-2");
-    let op_avatar_2 = ProfileTargetValue::SetAvatar(media2);
-    store
-        .claim_or_get_profile_operation("avatar-fail-2", author, &site, &op_avatar_2)
-        .await
-        .unwrap();
-
-    // Execute op 1 with failing resolver
-    let res1 = executor.execute("avatar-fail-1").await.unwrap();
-    assert!(
-        matches!(res1, ProfileOperationExecutionResult::Unknown(ref msg) if msg.contains("media backend unreachable")),
-        "expected Unknown result, got {res1:?}"
-    );
-
-    // Matrix driver was NEVER called because resolution failed beforehand
-    assert_eq!(driver.set_avatar_calls.lock().await.len(), 0);
-
-    // CRITICAL INVARIANT: Operation must NOT be left in Dispatching! It must be Unknown.
-    let op1 = store
-        .get_profile_operation("avatar-fail-1")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(op1.status, ProfileOperationStatus::Unknown);
-    assert!(op1.resolved_at.is_none());
-    assert!(
-        op1.error_detail
-            .as_deref()
-            .unwrap()
-            .contains("media backend unreachable")
-    );
-
-    // Subsequent operation on the same field MUST be blocked by Unknown status
-    let res2 = executor.execute("avatar-fail-2").await.unwrap();
-    assert!(
-        matches!(res2, ProfileOperationExecutionResult::Blocked(_)),
-        "expected Blocked result, got {res2:?}"
-    );
-
-    let op2 = store
-        .get_profile_operation("avatar-fail-2")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(op2.status, ProfileOperationStatus::Pending);
-}
-
-#[tokio::test]
-async fn resolver_unresolvable_media_records_failed_and_unblocks_next() {
-    let store = Arc::new(
-        DbStore::connect(&test_db_url("resolver_unresolvable"))
-            .await
-            .expect("connect db"),
-    );
-    let driver = Arc::new(TestDriver::new());
-    let missing_resolver = Arc::new(FailingMediaResolver { error: None });
-
-    let executor = ProfileOperationExecutor::new(
-        store.clone(),
-        driver.clone(),
-        Some(missing_resolver as Arc<dyn MediaReferenceResolver>),
-    );
-
-    let site = SiteId::from("blog");
-    let author = "pubkey-resolver-missing";
-
-    let media = MediaReference::from_media(&site, "mxc://ex/unresolvable-avatar");
-    let op_avatar_1 = ProfileTargetValue::SetAvatar(media);
-    store
-        .claim_or_get_profile_operation("avatar-missing-1", author, &site, &op_avatar_1)
-        .await
-        .unwrap();
-
-    let op_avatar_2 = ProfileTargetValue::ClearAvatar;
-    store
-        .claim_or_get_profile_operation("avatar-clear-2", author, &site, &op_avatar_2)
-        .await
-        .unwrap();
-
-    // Execute op 1: resolver returns Ok(None) -> deterministic business failure (Failed)
-    let res1 = executor.execute("avatar-missing-1").await.unwrap();
-    assert!(
-        matches!(res1, ProfileOperationExecutionResult::Failed(ref msg) if msg.contains("unresolvable")),
-        "expected Failed result, got {res1:?}"
-    );
-
-    let op1 = store
-        .get_profile_operation("avatar-missing-1")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(op1.status, ProfileOperationStatus::Failed);
-    assert!(op1.resolved_at.is_some());
-
-    // Because Failed is terminal, subsequent operation can execute successfully!
-    let res2 = executor.execute("avatar-clear-2").await.unwrap();
-    assert_eq!(res2, ProfileOperationExecutionResult::Completed);
-
-    let op2 = store
-        .get_profile_operation("avatar-clear-2")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(op2.status, ProfileOperationStatus::Completed);
 }
 
 #[tokio::test]
@@ -849,7 +673,7 @@ async fn concurrent_claims_on_different_fields_both_succeed() {
     let author = "pubkey-multi-concurrent";
 
     let op_name = ProfileTargetValue::SetDisplayName("Name".to_string());
-    let media = MediaReference::from_media(&site, "mxc://ex/concurrent-diff-avatar");
+    let media = "mxc://ex/concurrent-diff-avatar".to_string();
     let op_avatar = ProfileTargetValue::SetAvatar(media);
 
     store1
@@ -1003,7 +827,7 @@ async fn cross_site_different_fields_independence() {
     let site_b = SiteId::from("site-b");
     let author = "pubkey-shared-user";
 
-    let ref_b = MediaReference::from_media(&site_b, "mxc://ex/cross-site-avatar");
+    let ref_b = "mxc://ex/cross-site-avatar".to_string();
     let op_a_target = ProfileTargetValue::SetDisplayName("Site A Name".to_string());
     let op_b_target = ProfileTargetValue::SetAvatar(ref_b);
 
@@ -1473,10 +1297,7 @@ async fn concurrent_cross_field_operations_allocate_independent_sequences() {
     let sb = site.clone();
     let h2 = tokio::spawn(async move {
         b2.wait().await;
-        let target = ProfileTargetValue::SetAvatar(MediaReference::from_media(
-            &sb,
-            "mxc://ex/concurrent-avatar",
-        ));
+        let target = ProfileTargetValue::SetAvatar("mxc://ex/concurrent-avatar".to_string());
         s2.claim_or_get_profile_operation("op-avatar-concur", author, &sb, &target)
             .await
     });

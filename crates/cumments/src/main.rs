@@ -356,7 +356,6 @@ async fn run() -> Result<(), CliError> {
                 .homeserver
                 .as_ref()
                 .and_then(|h| h.domain.clone()),
-            media_reference_store: Some(db_store.clone()),
             historical_state_resolver,
         },
     ));
@@ -451,8 +450,6 @@ async fn run() -> Result<(), CliError> {
             driver: driver.clone(),
             site_service: site_service.clone(),
             profile_store: Some(db_store.clone()),
-            media_resolver: Some(db_store.clone()),
-            media_reference_store: db_store.clone(),
         },
         cumments_reconciler::PassWakeups {
             submission: submission_notify.clone(),

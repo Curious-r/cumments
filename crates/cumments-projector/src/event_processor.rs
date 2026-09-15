@@ -22,18 +22,17 @@ use cumments_core::{
         validate_governance_user_id,
     },
     identity::{post_signature_message, signature_message},
-    media_reference::MediaReference,
     models::{
         AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, Message,
         MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
         PollEnd, PollVote, ProjectionRepairInput, Reaction, RoomIdentity, RoomMember,
-        RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion, TextStyle, VisitorProfile,
+        RoomStateEvent, RoomStatus, SiteId, SubmissionCompletion, TextStyle,
     },
     poll::PollStatus,
     ports::{
         CommandAuditStore, GovernanceStore, HistoricalRoomStateResolver, MatrixDriver,
-        MediaReferenceStore, MessageStore, ProjectionRepairStore, RegistryStore, RoleClaimStore,
-        RoomStore, SiteStore, StickerPackStore, SubmissionStore,
+        MessageStore, ProjectionRepairStore, RegistryStore, RoleClaimStore, RoomStore, SiteStore,
+        StickerPackStore, SubmissionStore,
     },
     projector_events::ProjectorEvent,
     protocol::CLAIM_MESSAGE_PREFIX,
@@ -83,7 +82,6 @@ pub struct EventProcessor {
     /// Set by the AppService router while an event is projected. Captured
     /// events are persisted to the SSE outbox instead of broadcast directly.
     event_capture: Mutex<Option<Vec<ProjectorEvent>>>,
-    media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
     historical_state_resolver: Option<Arc<dyn HistoricalRoomStateResolver>>,
 }
 
@@ -116,7 +114,6 @@ pub struct EventProcessorDeps {
     pub governance_notify: Arc<Notify>,
     pub projection_notify: Arc<Notify>,
     pub server_name: Option<String>,
-    pub media_reference_store: Option<Arc<dyn MediaReferenceStore>>,
     pub historical_state_resolver: Option<Arc<dyn HistoricalRoomStateResolver>>,
 }
 
@@ -1240,63 +1237,8 @@ impl EventProcessor {
             ),
             command_router,
             event_capture: Mutex::new(None),
-            media_reference_store: deps.media_reference_store,
             historical_state_resolver: deps.historical_state_resolver,
         }
-    }
-
-    pub fn media_reference_store(&self) -> Option<&Arc<dyn MediaReferenceStore>> {
-        self.media_reference_store.as_ref()
-    }
-
-    /// Projects an authoritative Matrix visitor profile reading into a [`MediaReference`].
-    ///
-    /// 1. Reads the homeserver profile via `driver.get_profile(author_public_key, site_id)`.
-    /// 2. If an avatar MXC URI is present, derives the deterministic
-    ///    `MediaReference` for `(site_id, mxc)` and ensures the lookup mapping.
-    /// 3. Returns the projected reference, or `Ok(None)` if no avatar is set or no
-    ///    profile exists.
-    pub async fn reconcile_visitor_profile(
-        &self,
-        site_id: &SiteId,
-        author_public_key: &str,
-    ) -> Result<Option<MediaReference>> {
-        let Some(ref driver) = self.driver else {
-            return Ok(None);
-        };
-        let profile = driver.get_profile(author_public_key, site_id).await?;
-        let Some(profile) = profile else {
-            return Ok(None);
-        };
-        self.reconcile_observed_profile(site_id, &profile).await
-    }
-
-    /// Projects an observed [`VisitorProfile`] from an authoritative Matrix
-    /// read into the deterministic [`MediaReference`] for its avatar.
-    pub async fn reconcile_observed_profile(
-        &self,
-        site_id: &SiteId,
-        profile: &VisitorProfile,
-    ) -> Result<Option<MediaReference>> {
-        let Some(ref mxc) = profile.avatar_url else {
-            return Ok(None);
-        };
-        if !mxc.starts_with("mxc://") {
-            return Ok(None);
-        }
-
-        // Matrix-derived projection: the identity is a pure function of the
-        // observed `(site_id, avatar mxc)`. A missing `media_references` row
-        // must not prevent representing the profile avatar.
-        let reference = MediaReference::from_media(site_id, mxc);
-
-        // Materialize the lookup mapping when a store is configured so runtime
-        // reverse lookup keeps working. It is not the source of identity.
-        if let Some(ref media_store) = self.media_reference_store {
-            media_store.get_or_create_reference(site_id, mxc).await?;
-        }
-
-        Ok(Some(reference))
     }
 
     pub async fn start_event_capture(&self) {
@@ -1686,30 +1628,10 @@ impl EventProcessor {
             .resolve_member_presentation(&event.room_id, &event.event_id, &event.sender)
             .await?;
 
-        let (display_name, avatar_url, mut media_reference) = match presentation {
-            Some(p) => (p.display_name, p.avatar_url, p.media_reference),
-            None => (None, None, None),
+        let (display_name, avatar_url) = match presentation {
+            Some(p) => (p.display_name, p.avatar_url),
+            None => (None, None),
         };
-
-        // Matrix-derived projection: the historical author avatar identity is a
-        // pure function of the event's `(site_id, avatar mxc)`, so it never
-        // depends on a `media_references` lookup row.
-        //
-        // The stored reference must stay resolvable, so the lookup mapping is
-        // materialized first. A store error propagates instead of persisting an
-        // unresolvable reference; with no configured store the reference is not
-        // persisted at all.
-        if media_reference.is_none()
-            && let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
-            && let Ok(site_id_obj) = SiteId::new(site_id.clone())
-            && let Some(ref media_store) = self.media_reference_store
-        {
-            // Ensure the lookup mapping so the persisted reference resolves.
-            media_store
-                .get_or_create_reference(&site_id_obj, mxc)
-                .await?;
-            media_reference = Some(MediaReference::from_media(&site_id_obj, mxc));
-        }
 
         let message = Message {
             event_id: event.event_id.clone(),
@@ -1723,7 +1645,6 @@ impl EventProcessor {
                 },
                 display_name,
                 avatar_url,
-                media_reference,
                 public_key: event.author_public_key.clone(),
                 mxid: if is_matrix_native {
                     Some(event.sender.clone())
@@ -2238,58 +2159,18 @@ impl EventProcessor {
                 // An author departure (`membership: leave`) or ban (`membership: ban`)
                 // does NOT erase or rewind the latest usable room presentation.
                 // When departure or ban events omit profile fields, preserve the
-                // last known usable profile (including MediaReference) from existing projection.
-                let (display_name, avatar_url, existing_media_ref) =
-                    if membership == "leave" || membership == "ban" {
-                        let dn = event_display_name
-                            .or_else(|| existing.as_ref().and_then(|m| m.display_name.clone()));
-                        let (av, mr) = match event_avatar_url {
-                            Some(url) => (Some(url), None),
-                            None => (
-                                existing.as_ref().and_then(|m| m.avatar_url.clone()),
-                                existing.as_ref().and_then(|m| m.media_reference.clone()),
-                            ),
-                        };
-                        (dn, av, mr)
-                    } else {
-                        (event_display_name, event_avatar_url, None)
+                // last known usable profile from the existing projection.
+                let (display_name, avatar_url) = if membership == "leave" || membership == "ban" {
+                    let dn = event_display_name
+                        .or_else(|| existing.as_ref().and_then(|m| m.display_name.clone()));
+                    let av = match event_avatar_url {
+                        Some(url) => Some(url),
+                        None => existing.as_ref().and_then(|m| m.avatar_url.clone()),
                     };
-
-                // Matrix-derived projection: the member's avatar identity is a
-                // pure function of the event's `(site_id, avatar mxc)`, so it
-                // never depends on a `media_references` lookup row.
-                //
-                // The stored reference must stay resolvable, so the lookup
-                // mapping is materialized first. A store error propagates rather
-                // than persisting an unresolvable reference; with no configured
-                // store the reference is not persisted at all.
-                let mut media_reference = existing_media_ref;
-                if media_reference.is_none()
-                    && let Some(mxc) = avatar_url.as_deref().filter(|m| m.starts_with("mxc://"))
-                    && let Some(ref media_store) = self.media_reference_store
-                {
-                    let site_id =
-                        if let Some(identity) = self.resolve_room_identity(&event.room_id).await? {
-                            SiteId::new(identity.site_id).ok()
-                        } else if let Some(site) =
-                            self.site_store.get_site_by_space_id(&event.room_id).await?
-                        {
-                            SiteId::new(site.id).ok()
-                        } else {
-                            None
-                        };
-
-                    if let Some(ref site_id) = site_id {
-                        // Ensure the lookup mapping so the persisted reference resolves.
-                        media_store.get_or_create_reference(site_id, mxc).await?;
-                        media_reference = Some(MediaReference::from_media(site_id, mxc));
-                    } else {
-                        debug!(
-                            room_id = %event.room_id,
-                            "Skipping avatar media reference observation for room without site context"
-                        );
-                    }
-                }
+                    (dn, av)
+                } else {
+                    (event_display_name, event_avatar_url)
+                };
 
                 self.room_store
                     .save_member(&RoomMember {
@@ -2298,7 +2179,6 @@ impl EventProcessor {
                         user_id: event.state_key.clone(),
                         display_name,
                         avatar_url,
-                        media_reference,
                         membership,
                         origin_server_ts: event.origin_server_ts,
                         event_id: Some(event.event_id.clone()),
@@ -3116,7 +2996,6 @@ impl EventProcessor {
                                 .get("avatar_url")
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string),
-                            media_reference: None,
                             membership: stripped
                                 .get("membership")
                                 .and_then(|v| v.as_str())
@@ -3286,7 +3165,6 @@ mod tests {
             user_id: "@alice:hs".to_string(),
             display_name: display_name.map(str::to_string),
             avatar_url: avatar_url.map(str::to_string),
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: 0,
             event_id: None,

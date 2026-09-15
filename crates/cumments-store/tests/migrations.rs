@@ -168,10 +168,6 @@ async fn submission_txn_migrations_are_registered() {
         "000068 must be registered or operation identity is not server-wide unique"
     );
     assert!(
-        names.contains(&"m20260915_000071_media_references".to_string()),
-        "000071 must be registered or media_references table is missing"
-    );
-    assert!(
         names.contains(&"m20260915_000072_profile_operations".to_string()),
         "000072 must be registered or profile_operations table is missing"
     );
@@ -184,16 +180,8 @@ async fn submission_txn_migrations_are_registered() {
         "000074 must be registered or profile_operations unique sequence index is missing"
     );
     assert!(
-        names.contains(&"m20260915_000075_room_members_media_reference".to_string()),
-        "000075 must be registered or room_members media_reference column is missing"
-    );
-    assert!(
         names.contains(&"m20260915_000076_room_members_projection_ordering".to_string()),
         "000076 must be registered or room_members projection ordering columns are missing"
-    );
-    assert!(
-        names.contains(&"m20260915_000077_messages_author_media_reference".to_string()),
-        "000077 must be registered or messages author_media_reference column is missing"
     );
     assert!(
         names.contains(&"m20260915_000078_post_submissions_drop_display_name".to_string()),
@@ -202,10 +190,6 @@ async fn submission_txn_migrations_are_registered() {
     assert!(
         names.contains(&"m20260915_000079_media_uploads_site_scoped".to_string()),
         "000079 must be registered or media_uploads ownership stays globally unique by MXC"
-    );
-    assert!(
-        names.contains(&"m20260915_000080_media_references_drop_is_external".to_string()),
-        "000080 must be registered or media_references keeps the removed provenance flag"
     );
 }
 
@@ -665,135 +649,6 @@ async fn terminology_rename_migration_converges_legacy_schema() {
 }
 
 #[tokio::test]
-async fn media_references_table_permits_same_mxc_across_sites_and_rejects_duplicates_within_site() {
-    let url = test_db_url("media-references");
-    let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, None).await.expect("migrate to latest");
-
-    let now = chrono::Utc::now().to_rfc3339();
-    // 1. Insert on site-a
-    db.execute_unprepared(&format!(
-        "INSERT INTO media_references \
-         (media_reference, site_id, mxc_uri, created_at) \
-         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-a', 'mxc://hs/1', '{now}')"
-    ))
-    .await
-    .expect("first media reference");
-
-    // 2. Same MXC URI on site-b with a different media_reference MUST SUCCEED (not globally unique)
-    db.execute_unprepared(&format!(
-        "INSERT INTO media_references \
-         (media_reference, site_id, mxc_uri, created_at) \
-         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440001', 'site-b', 'mxc://hs/1', '{now}')"
-    ))
-    .await
-    .expect("same mxc on different site is allowed");
-
-    // 3. Duplicate (site_id, mxc_uri) on site-a MUST FAIL
-    let dup_site_mxc = db
-        .execute_unprepared(&format!(
-            "INSERT INTO media_references \
-             (media_reference, site_id, mxc_uri, created_at) \
-             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440002', 'site-a', 'mxc://hs/1', '{now}')"
-        ))
-        .await;
-    assert!(
-        dup_site_mxc.is_err(),
-        "duplicate (site_id, mxc_uri) must be rejected by unique constraint"
-    );
-
-    // 4. Duplicate media_reference (primary key) MUST FAIL
-    let dup_pk = db
-        .execute_unprepared(&format!(
-            "INSERT INTO media_references \
-             (media_reference, site_id, mxc_uri, created_at) \
-             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-c', 'mxc://hs/2', '{now}')"
-        ))
-        .await;
-    assert!(dup_pk.is_err(), "duplicate primary key must be rejected");
-}
-
-#[tokio::test]
-async fn media_references_drop_is_external_preserves_mappings() {
-    let url = test_db_url("media-references-drop-is-external");
-    let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(79))
-        .await
-        .expect("migrate to 000079");
-
-    // Entity-first migrations build `media_references` from the current model,
-    // so re-add the legacy provenance column to simulate an upgraded database.
-    db.execute_unprepared(
-        "ALTER TABLE media_references ADD COLUMN is_external BOOLEAN NOT NULL DEFAULT 0",
-    )
-    .await
-    .expect("simulate legacy is_external column");
-    assert!(
-        column_names(&db, "media_references")
-            .await
-            .iter()
-            .any(|c| c == "is_external"),
-        "the simulated pre-migration schema must carry is_external"
-    );
-
-    let now = chrono::Utc::now().to_rfc3339();
-    db.execute_unprepared(&format!(
-        "INSERT INTO media_references \
-         (media_reference, site_id, mxc_uri, is_external, created_at) \
-         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440000', 'site-a', 'mxc://hs/keep', 1, '{now}')"
-    ))
-    .await
-    .expect("insert pre-migration mapping");
-
-    Migrator::up(&db, None).await.expect("apply 000080");
-
-    let columns = column_names(&db, "media_references").await;
-    assert!(
-        !columns.iter().any(|c| c == "is_external"),
-        "is_external must be dropped: {columns:?}"
-    );
-
-    // The existing mapping survives unchanged.
-    let rows = db
-        .query_all_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "SELECT media_reference, site_id, mxc_uri FROM media_references".to_string(),
-        ))
-        .await
-        .expect("query migrated mappings");
-    assert_eq!(rows.len(), 1, "the mapping row must be preserved");
-    assert_eq!(
-        rows[0].try_get::<String>("", "media_reference").unwrap(),
-        "cumments-media:550e8400-e29b-41d4-a716-446655440000"
-    );
-    assert_eq!(rows[0].try_get::<String>("", "site_id").unwrap(), "site-a");
-    assert_eq!(
-        rows[0].try_get::<String>("", "mxc_uri").unwrap(),
-        "mxc://hs/keep"
-    );
-
-    // Site-scoped uniqueness is unchanged: duplicate within the site fails,
-    // the same MXC on another site is allowed.
-    assert!(
-        db.execute_unprepared(&format!(
-            "INSERT INTO media_references \
-             (media_reference, site_id, mxc_uri, created_at) \
-             VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440001', 'site-a', 'mxc://hs/keep', '{now}')"
-        ))
-        .await
-        .is_err(),
-        "duplicate (site_id, mxc_uri) must be rejected"
-    );
-    db.execute_unprepared(&format!(
-        "INSERT INTO media_references \
-         (media_reference, site_id, mxc_uri, created_at) \
-         VALUES ('cumments-media:550e8400-e29b-41d4-a716-446655440002', 'site-b', 'mxc://hs/keep', '{now}')"
-    ))
-    .await
-    .expect("same mxc on another site is allowed");
-}
-
-#[tokio::test]
 async fn media_uploads_table_permits_same_mxc_across_sites_and_rejects_duplicates_within_site() {
     let url = test_db_url("media-uploads-site-scoped");
     let db = Database::connect(&url).await.expect("connect db");
@@ -835,7 +690,7 @@ async fn media_uploads_table_permits_same_mxc_across_sites_and_rejects_duplicate
 async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
     let url = test_db_url("media-uploads-site-scoped-upgrade");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(78))
+    Migrator::up(&db, Some(75))
         .await
         .expect("migrate to 000078");
 
@@ -934,7 +789,7 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
 async fn media_uploads_site_scoped_migration_preserves_unrelated_schema_objects() {
     let url = test_db_url("media-uploads-schema-objects");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(78))
+    Migrator::up(&db, Some(75))
         .await
         .expect("migrate to 000078");
 
@@ -976,7 +831,7 @@ async fn media_uploads_site_scoped_migration_preserves_unrelated_schema_objects(
 async fn media_uploads_site_scoped_migration_replaces_global_unique() {
     let url = test_db_url("media-uploads-global-unique");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(78))
+    Migrator::up(&db, Some(75))
         .await
         .expect("migrate to 000078");
 
@@ -1183,8 +1038,10 @@ async fn migration_000074_fails_on_duplicate_sequences_and_preserves_all_operati
     let url = test_db_url("profile-ops-dup-fail");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Run migrations up to 73
-    Migrator::up(&db, Some(73)).await.expect("migrate to 73");
+    // Run migrations up to 000073
+    Migrator::up(&db, Some(72))
+        .await
+        .expect("migrate to 000073");
 
     let t1 = "2026-09-15T10:00:00Z";
     let t2 = "2026-09-15T10:05:00Z";
@@ -1240,8 +1097,10 @@ async fn migration_000074_succeeds_on_valid_data_and_rollback_is_symmetric() {
     let url = test_db_url("profile-ops-rollback-sym");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Run migrations up to 73
-    Migrator::up(&db, Some(73)).await.expect("migrate to 73");
+    // Run migrations up to 000073
+    Migrator::up(&db, Some(72))
+        .await
+        .expect("migrate to 000073");
 
     let t1 = "2026-09-15T10:00:00Z";
     let t2 = "2026-09-15T10:05:00Z";
@@ -1297,66 +1156,20 @@ async fn migration_000074_succeeds_on_valid_data_and_rollback_is_symmetric() {
 }
 
 #[tokio::test]
-async fn migration_000075_room_members_media_reference_and_rollback_is_symmetric() {
-    let url = test_db_url("migration-000075-media-ref");
-    let db = Database::connect(&url).await.expect("connect db");
-
-    // Migrate up to 75
-    Migrator::up(&db, Some(75)).await.expect("migrate to 75");
-
-    // Insert a room member with media_reference
-    let now = chrono::Utc::now().to_rfc3339();
-    db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-         VALUES ('!r:hs', '@u:hs', 'User', 'mxc://hs/pic', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', '{now}');"
-    ))
-    .await
-    .expect("insert with media_reference under migration 75");
-
-    // Rollback migration 75 (down 1 step)
-    Migrator::down(&db, Some(1))
-        .await
-        .expect("rollback migration 75");
-
-    // Under rolled back state, media_reference column does not exist
-    let res = db
-        .execute_unprepared(&format!(
-            "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-             VALUES ('!r2:hs', '@u2:hs', 'User2', 'mxc://hs/pic2', 'cumments-media:00000000-0000-4000-8000-000000000002', 'join', '{now}');"
-        ))
-        .await;
-    assert!(
-        res.is_err(),
-        "inserting media_reference must fail after rollback of migration 75"
-    );
-
-    // Re-apply migration 75
-    Migrator::up(&db, Some(1))
-        .await
-        .expect("re-apply migration 75");
-
-    // Re-applying adds the column back via alter_table
-    db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-         VALUES ('!r3:hs', '@u3:hs', 'User3', 'mxc://hs/pic3', 'cumments-media:00000000-0000-4000-8000-000000000003', 'join', '{now}');"
-    ))
-    .await
-    .expect("inserting media_reference succeeds after re-applying migration 75");
-}
-
-#[tokio::test]
 async fn migration_000076_room_members_projection_ordering_and_rollback_is_symmetric() {
     let url = test_db_url("migration-000076-ordering");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Migrate up to 76
-    Migrator::up(&db, Some(76)).await.expect("migrate to 76");
+    // Migrate up to 000076
+    Migrator::up(&db, Some(74))
+        .await
+        .expect("migrate to 000076");
 
     // Insert a room member with origin_server_ts and event_id
     let now = chrono::Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, origin_server_ts, event_id, updated_at) \
-         VALUES ('!r:hs', '@u:hs', 'User', 'mxc://hs/pic', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', 1000, '$event1', '{now}');"
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, membership, origin_server_ts, event_id, updated_at) \
+         VALUES ('!r:hs', '@u:hs', 'User', 'mxc://hs/pic', 'join', 1000, '$event1', '{now}');"
     ))
     .await
     .expect("insert with ordering fields under migration 76");
@@ -1369,8 +1182,8 @@ async fn migration_000076_room_members_projection_ordering_and_rollback_is_symme
     // Under rolled back state, origin_server_ts and event_id do not exist
     let res = db
         .execute_unprepared(&format!(
-            "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, origin_server_ts, event_id, updated_at) \
-             VALUES ('!r2:hs', '@u2:hs', 'User2', 'mxc://hs/pic2', 'cumments-media:00000000-0000-4000-8000-000000000002', 'join', 2000, '$event2', '{now}');"
+            "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, membership, origin_server_ts, event_id, updated_at) \
+             VALUES ('!r2:hs', '@u2:hs', 'User2', 'mxc://hs/pic2', 'join', 2000, '$event2', '{now}');"
         ))
         .await;
     assert!(
@@ -1385,8 +1198,8 @@ async fn migration_000076_room_members_projection_ordering_and_rollback_is_symme
 
     // Re-applying adds the columns back
     db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, origin_server_ts, event_id, updated_at) \
-         VALUES ('!r3:hs', '@u3:hs', 'User3', 'mxc://hs/pic3', 'cumments-media:00000000-0000-4000-8000-000000000003', 'join', 3000, '$event3', '{now}');"
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, membership, origin_server_ts, event_id, updated_at) \
+         VALUES ('!r3:hs', '@u3:hs', 'User3', 'mxc://hs/pic3', 'join', 3000, '$event3', '{now}');"
     ))
     .await
     .expect("inserting ordering columns succeeds after re-applying migration 76");
@@ -1397,8 +1210,10 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
     let url = test_db_url("migration-000076-discard-rebuild");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Migrate up to 75 (before migration 76)
-    Migrator::up(&db, Some(75)).await.expect("migrate to 75");
+    // Migrate up to 000073 (before migration 000076)
+    Migrator::up(&db, Some(73))
+        .await
+        .expect("migrate to 000073");
 
     let t1_str = "2026-09-15T10:00:00.123Z";
     let t1_ms: i64 = 1789466400123;
@@ -1430,9 +1245,9 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
 
     // 2. Pre-076 disposable room_members rows
     db.execute_unprepared(&format!(
-        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, media_reference, membership, updated_at) \
-         VALUES ('!r1:hs', '@alice:hs', 'Alice', 'mxc://hs/alice', 'cumments-media:00000000-0000-4000-8000-000000000001', 'join', '{t1_str}'), \
-                ('!r1:hs', '@bob:hs', 'Bob', 'mxc://hs/bob', 'cumments-media:00000000-0000-4000-8000-000000000002', 'leave', '{t2_str}');"
+        "INSERT INTO room_members (room_id, user_id, display_name, avatar_url, membership, updated_at) \
+         VALUES ('!r1:hs', '@alice:hs', 'Alice', 'mxc://hs/alice', 'join', '{t1_str}'), \
+                ('!r1:hs', '@bob:hs', 'Bob', 'mxc://hs/bob', 'leave', '{t2_str}');"
     ))
     .await
     .expect("insert legacy room members");
@@ -1511,7 +1326,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@alice:hs".to_string(),
             display_name: Some("Alice".to_string()),
             avatar_url: Some("mxc://hs/alice".to_string()),
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: t1_ms,
             event_id: Some("$join_alice".to_string()),
@@ -1527,7 +1341,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@bob:hs".to_string(),
             display_name: Some("Bob".to_string()),
             avatar_url: Some("mxc://hs/bob".to_string()),
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: t1_ms,
             event_id: Some("$join_bob".to_string()),
@@ -1541,7 +1354,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@bob:hs".to_string(),
             display_name: Some("Bob".to_string()),
             avatar_url: Some("mxc://hs/bob".to_string()),
-            media_reference: None,
             membership: "leave".to_string(),
             origin_server_ts: t2_ms,
             event_id: Some("$leave_bob".to_string()),
@@ -1581,7 +1393,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@alice:hs".to_string(),
             display_name: Some("Old Alice".to_string()),
             avatar_url: None,
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: t1_ms - 1000,
             event_id: Some("$old_alice".to_string()),
@@ -1606,7 +1417,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@alice:hs".to_string(),
             display_name: Some("Smaller Alice".to_string()),
             avatar_url: None,
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: t1_ms,
             event_id: Some("$a_alice".to_string()),
@@ -1630,7 +1440,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@alice:hs".to_string(),
             display_name: Some("Larger Alice".to_string()),
             avatar_url: Some("mxc://hs/alice-larger".to_string()),
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: t1_ms,
             event_id: Some("$z_alice".to_string()),
@@ -1658,7 +1467,6 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
             user_id: "@alice:hs".to_string(),
             display_name: Some("Alice Updated".to_string()),
             avatar_url: Some("mxc://hs/alice-updated".to_string()),
-            media_reference: None,
             membership: "join".to_string(),
             origin_server_ts: t_newer,
             event_id: Some("$newer_alice".to_string()),
@@ -1678,17 +1486,4 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
     );
     assert_eq!(alice_after_newer.origin_server_ts, t_newer);
     assert_eq!(alice_after_newer.event_id.as_deref(), Some("$newer_alice"));
-}
-
-#[tokio::test]
-async fn messages_table_has_author_media_reference_column() {
-    let url = test_db_url("messages-author-media-ref");
-    let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, None).await.expect("migrate to latest");
-
-    let cols = column_names(&db, "messages").await;
-    assert!(
-        cols.contains(&"author_media_reference".to_string()),
-        "messages table must include author_media_reference column"
-    );
 }

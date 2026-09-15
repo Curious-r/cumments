@@ -17,11 +17,9 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
-use cumments_core::media_reference::MediaReference;
 use cumments_core::models::{Content, PageSlug, RoomIdentity, SiteId, TextContent, TextStyle};
 use cumments_core::ports::{
-    HistoricalRoomStateResolver, MediaReferenceResolver, MediaReferenceStore, MessageStore,
-    RegistryStore, RoomStore, SiteStore,
+    HistoricalRoomStateResolver, MessageStore, RegistryStore, RoomStore, SiteStore,
 };
 use cumments_matrix::LoggingMatrixDriver;
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
@@ -76,7 +74,6 @@ fn create_processor_with_resolver(
         governance_notify: Arc::new(Notify::new()),
         projection_notify: Arc::new(Notify::new()),
         server_name: Some("hs".to_string()),
-        media_reference_store: Some(store.clone()),
         historical_state_resolver: resolver,
     })
 }
@@ -925,11 +922,10 @@ async fn no_usable_presentation_is_distinct_from_resolver_failure() {
         .expect("raw message exists");
     assert_eq!(raw.author_display_name, None);
     assert_eq!(raw.author_avatar_url, None);
-    assert_eq!(raw.author_media_reference, None);
 }
 
 #[tokio::test]
-async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
+async fn historical_presentation_retains_author_avatar_mxc() {
     let db_url = test_db_url("media_ref_resolution");
     let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
     let homeserver = MockHomeserver::start().await;
@@ -951,12 +947,7 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
     let processor =
         create_processor_with_resolver(store.clone(), Some(homeserver.historical_resolver()));
 
-    // 1. Message 1: Existing MediaReference in media_references table
-    let existing_ref = store
-        .get_or_create_reference(&site_id, "mxc://hs/existing-avatar")
-        .await
-        .expect("create reference");
-
+    // 1. Message 1: historical member avatar MXC is retained verbatim.
     homeserver
         .mount_context(
             room_id,
@@ -992,8 +983,8 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
 
     let raw1 = get_raw_message(&store, "$msg-existing-ref").await.unwrap();
     assert_eq!(
-        raw1.author_media_reference.as_deref(),
-        Some(existing_ref.as_str())
+        raw1.author_avatar_url.as_deref(),
+        Some("mxc://hs/existing-avatar")
     );
 
     // 2. Message 2: Authoritative local upload in media_uploads table
@@ -1041,11 +1032,13 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
         .expect("process msg 2");
 
     let raw2 = get_raw_message(&store, "$msg-uploaded-ref").await.unwrap();
-    assert!(raw2.author_media_reference.is_some());
-    let ref2 = raw2.author_media_reference.unwrap();
-    assert!(ref2.starts_with("cumments-media:"));
+    assert_eq!(
+        raw2.author_avatar_url.as_deref(),
+        Some("mxc://hs/uploaded-avatar")
+    );
 
-    // 3. Message 3: Unknown provenance MXC (no local upload record, not in media_references)
+    // 3. Message 3: MXC with no local upload record is still retained as the
+    // historical author avatar.
     homeserver
         .mount_context(
             room_id,
@@ -1074,40 +1067,9 @@ async fn durable_media_reference_resolution_and_deterministic_unknown_avatar() {
         .expect("process msg 3");
 
     let raw3 = get_raw_message(&store, "$msg-unknown-ref").await.unwrap();
-    // The raw compatibility MXC is kept, and the media reference is derived
-    // deterministically from the event's avatar even though no lookup mapping
-    // existed. The mapping is materialized so the persisted reference resolves.
     assert_eq!(
         raw3.author_avatar_url.as_deref(),
         Some("mxc://hs/speculative-external")
-    );
-    let expected3 = MediaReference::from_media(&site_id, "mxc://hs/speculative-external");
-    assert_eq!(
-        raw3.author_media_reference.as_deref(),
-        Some(expected3.as_str())
-    );
-    assert_eq!(
-        store
-            .find_reference(&site_id, "mxc://hs/speculative-external")
-            .await
-            .unwrap(),
-        Some(expected3.clone())
-    );
-    assert_eq!(
-        store
-            .resolve_mxc(&site_id, &expected3)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("mxc://hs/speculative-external")
-    );
-    assert!(
-        store
-            .get_record(&site_id, &expected3)
-            .await
-            .unwrap()
-            .is_some(),
-        "the lookup mapping must be materialized"
     );
 }
 

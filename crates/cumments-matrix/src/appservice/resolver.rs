@@ -167,7 +167,6 @@ impl AppServiceMatrixDriver {
             Ok(Some(MemberPresentation {
                 display_name,
                 avatar_url,
-                media_reference: None,
             }))
         }
     }
@@ -232,7 +231,6 @@ mod tests {
             Some(MemberPresentation {
                 display_name: Some("Alice at Event 1".to_string()),
                 avatar_url: Some("mxc://hs/alice1".to_string()),
-                media_reference: None,
             })
         );
         server.verify().await;
@@ -280,7 +278,6 @@ mod tests {
             Some(MemberPresentation {
                 display_name: Some("Alice Left".to_string()),
                 avatar_url: Some("mxc://hs/alice-left".to_string()),
-                media_reference: None,
             })
         );
         server.verify().await;
@@ -328,7 +325,6 @@ mod tests {
             Some(MemberPresentation {
                 display_name: Some("Banned Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
             })
         );
         server.verify().await;
@@ -480,7 +476,6 @@ mod tests {
             Some(MemberPresentation {
                 display_name: Some("Alice Direct".to_string()),
                 avatar_url: Some("mxc://hs/alice-direct".to_string()),
-                media_reference: None,
             })
         );
         server.verify().await;

@@ -108,8 +108,6 @@ fn reconciler_deps(store: Arc<DbStore>, driver: Arc<TestDriver>) -> Arc<Reconcil
         driver: driver.clone(),
         site_service: Arc::new(SiteService::new(store.clone())),
         profile_store: Some(store.clone()),
-        media_resolver: None,
-        media_reference_store: store.clone(),
     })
 }
 
@@ -667,7 +665,6 @@ async fn comment_editing_never_mutates_profile_or_reverts_author_display_name() 
                 kind: AuthorKind::Visitor,
                 display_name: Some("Alice".to_string()),
                 avatar_url: None,
-                media_reference: None,
                 public_key: Some(public_key.clone()),
                 mxid: None,
             },

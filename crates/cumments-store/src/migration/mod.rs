@@ -73,16 +73,12 @@ pub mod m20260827_000067_drop_poll_end_authorized;
 pub mod m20260827_000068_operation_claims;
 pub mod m20260827_000069_operation_claim_decoupling;
 pub mod m20260827_000070_operation_executions;
-pub mod m20260915_000071_media_references;
 pub mod m20260915_000072_profile_operations;
 pub mod m20260915_000073_profile_operation_site_scope;
 pub mod m20260915_000074_profile_operation_unique_sequence;
-pub mod m20260915_000075_room_members_media_reference;
 pub mod m20260915_000076_room_members_projection_ordering;
-pub mod m20260915_000077_messages_author_media_reference;
 pub mod m20260915_000078_post_submissions_drop_display_name;
 pub mod m20260915_000079_media_uploads_site_scoped;
-pub mod m20260915_000080_media_references_drop_is_external;
 
 pub struct Migrator;
 
@@ -216,16 +212,12 @@ impl MigratorTrait for Migrator {
             Box::new(m20260827_000068_operation_claims::Migration),
             Box::new(m20260827_000069_operation_claim_decoupling::Migration),
             Box::new(m20260827_000070_operation_executions::Migration),
-            Box::new(m20260915_000071_media_references::Migration),
             Box::new(m20260915_000072_profile_operations::Migration),
             Box::new(m20260915_000073_profile_operation_site_scope::Migration),
             Box::new(m20260915_000074_profile_operation_unique_sequence::Migration),
-            Box::new(m20260915_000075_room_members_media_reference::Migration),
             Box::new(m20260915_000076_room_members_projection_ordering::Migration),
-            Box::new(m20260915_000077_messages_author_media_reference::Migration),
             Box::new(m20260915_000078_post_submissions_drop_display_name::Migration),
             Box::new(m20260915_000079_media_uploads_site_scoped::Migration),
-            Box::new(m20260915_000080_media_references_drop_is_external::Migration),
         ]
     }
 }

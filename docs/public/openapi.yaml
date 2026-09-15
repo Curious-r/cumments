@@ -1059,7 +1059,7 @@ paths:
               format: binary
       responses:
         "200":
-          description: Uploaded media reference
+          description: Uploaded media URI
           headers:
             Idempotent-Replayed:
               description: "true when this is a replay of an accepted request"
@@ -1733,9 +1733,9 @@ paths:
       operationId: setVisitorAvatar
       description: |
         Sets the avatar on the visitor's virtual user global Matrix profile using
-        an existing site-scoped MediaReference (`cumments-media:<uuid>`).
+        the Matrix media URI (`mxc://server/media_id`) itself.
         Requires the `Idempotency-Key` header; replays return the operation state
-        with `Idempotent-Replayed: true`. The request body carries the MediaReference,
+        with `Idempotent-Replayed: true`. The request body carries the MXC URI,
         author public key, challenge response, and an Ed25519 signature over
         `["SET_AVATAR", site_id, operation_id, semantic_fingerprint]`.
       parameters:
@@ -2407,7 +2407,7 @@ components:
           enum: [ok]
     VisitorProfile:
       type: object
-      required: [visitor_id, display_name, avatar, avatar_url]
+      required: [visitor_id, display_name, avatar_url]
       properties:
         visitor_id:
           type: string
@@ -2415,14 +2415,11 @@ components:
         display_name:
           type: [string, "null"]
           description: Current Matrix profile display name, or null when unset.
-        avatar:
-          type: [string, "null"]
-          description: MediaReference string identifier (`cumments-media:<uuid>`), or null when unset or unmapped.
         avatar_url:
           type: [string, "null"]
           description: |
             Signed proxy URL (96×96 crop variant when the media proxy is
-            enabled), or null when unset or unmapped. Never exposes raw MXC.
+            enabled), or null when unset. Never exposes raw MXC.
     ChallengeResponse:
       type: object
       required: [prefix, difficulty]
@@ -2891,8 +2888,9 @@ components:
         avatar:
           type: string
           minLength: 1
-          maxLength: 256
-          description: MediaReference string identifier (`cumments-media:<uuid>`).
+          maxLength: 1024
+          pattern: "^mxc://"
+          description: Matrix media URI (`mxc://server/media_id`) to set as the avatar.
         author_public_key:
           type: string
         author_signature:

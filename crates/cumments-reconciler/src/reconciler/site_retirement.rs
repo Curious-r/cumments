@@ -269,8 +269,6 @@ mod tests {
                 store.clone() as Arc<dyn cumments_core::ports::SiteStore>
             )),
             profile_store: None,
-            media_resolver: None,
-            media_reference_store: store.clone(),
         });
         let pass = SiteRetirementPass::new(
             deps,

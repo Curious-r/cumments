@@ -10,7 +10,6 @@ pub mod audit;
 pub mod backfill;
 pub mod governance;
 pub mod identity;
-pub mod media_references;
 pub mod messages;
 pub mod profile;
 pub mod projection_repairs;

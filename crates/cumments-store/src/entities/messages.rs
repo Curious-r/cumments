@@ -16,7 +16,6 @@ pub struct Model {
     pub author_kind: String,
     pub author_display_name: Option<String>,
     pub author_avatar_url: Option<String>,
-    pub author_media_reference: Option<String>,
     pub author_public_key: Option<String>,
     /// Serialized `Content` (the read-model payload).
     pub content_json: String,

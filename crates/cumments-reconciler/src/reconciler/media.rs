@@ -29,7 +29,6 @@ impl MediaCleanupPass {
     async fn reconcile(&self) -> Result<u64> {
         let evaluator = MediaReachabilityEvaluator::new(
             self.deps.driver.clone(),
-            self.deps.media_reference_store.clone(),
             self.deps.message_store.clone(),
         );
 
