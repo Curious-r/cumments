@@ -427,3 +427,127 @@ async fn profile_executor_integration_with_media_reference_store() {
     assert_eq!(avatar_calls[0].0, author);
     assert_eq!(avatar_calls[0].2, mxc_url);
 }
+
+#[tokio::test]
+async fn site_retirement_removes_only_that_sites_media_references() {
+    use cumments_core::ports::SiteAuthStore;
+    use cumments_store::sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+    let store = DbStore::connect(&test_db_url("media-references-retirement"))
+        .await
+        .expect("connect db");
+
+    let site_a = SiteId::from("site-a");
+    let site_b = SiteId::from("site-b");
+
+    // Several durable mappings for site-a — including one whose MXC is also
+    // mapped by site-b — plus site-b's own mappings.
+    let a1 = store
+        .get_or_create_reference(&site_a, "mxc://hs/a1", MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+    let a2 = store
+        .get_or_create_reference(&site_a, "mxc://hs/a2", MediaReferenceSource::External)
+        .await
+        .unwrap();
+    let a3 = store
+        .get_or_create_reference(&site_a, "mxc://hs/shared", MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+    let b1 = store
+        .get_or_create_reference(&site_b, "mxc://hs/b1", MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+    let b_shared = store
+        .get_or_create_reference(&site_b, "mxc://hs/shared", MediaReferenceSource::Cumments)
+        .await
+        .unwrap();
+
+    store.delete_site("site-a").await.expect("delete site");
+
+    // Every site-a mapping is gone.
+    assert!(
+        store
+            .find_reference(&site_a, "mxc://hs/a1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .find_reference(&site_a, "mxc://hs/a2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .find_reference(&site_a, "mxc://hs/shared")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // site-b keeps its own mappings, including the MXC shared with the retired site.
+    assert_eq!(
+        store.find_reference(&site_b, "mxc://hs/b1").await.unwrap(),
+        Some(b1.clone())
+    );
+    assert_eq!(
+        store
+            .find_reference(&site_b, "mxc://hs/shared")
+            .await
+            .unwrap(),
+        Some(b_shared.clone())
+    );
+
+    // Inspect the actual remaining rows: only site-b's two mappings survive.
+    let rows = store
+        .connection()
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT site_id, mxc_uri FROM media_references ORDER BY site_id, mxc_uri".to_string(),
+        ))
+        .await
+        .expect("query remaining references");
+    let remaining: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.try_get::<String>("", "site_id").unwrap(),
+                row.try_get::<String>("", "mxc_uri").unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        remaining,
+        vec![
+            ("site-b".to_string(), "mxc://hs/b1".to_string()),
+            ("site-b".to_string(), "mxc://hs/shared".to_string()),
+        ],
+        "only the surviving site's media_references may remain"
+    );
+
+    // The retired site's allocations are gone but the untouched ones remain valid.
+    assert!(store.get_record(&site_a, &a1).await.unwrap().is_none());
+    assert!(store.get_record(&site_a, &a2).await.unwrap().is_none());
+    assert!(store.get_record(&site_a, &a3).await.unwrap().is_none());
+    assert_eq!(
+        store
+            .get_record(&site_b, &b1)
+            .await
+            .unwrap()
+            .unwrap()
+            .mxc_uri,
+        "mxc://hs/b1"
+    );
+    assert_eq!(
+        store
+            .get_record(&site_b, &b_shared)
+            .await
+            .unwrap()
+            .unwrap()
+            .mxc_uri,
+        "mxc://hs/shared"
+    );
+}
