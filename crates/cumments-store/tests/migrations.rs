@@ -45,6 +45,61 @@ async fn column_not_null(db: &sea_orm::DatabaseConnection, table: &str, column: 
         .unwrap_or(false)
 }
 
+async fn schema_objects(db: &sea_orm::DatabaseConnection, kind: &str, table: &str) -> Vec<String> {
+    let sql =
+        format!("SELECT name FROM sqlite_master WHERE type = '{kind}' AND tbl_name = '{table}'");
+    let rows = db
+        .query_all_raw(Statement::from_string(DbBackend::Sqlite, sql))
+        .await
+        .expect("query sqlite_master");
+    rows.iter()
+        .filter_map(|row| row.try_get::<String>("", "name").ok())
+        .collect()
+}
+
+async fn table_indexes(db: &sea_orm::DatabaseConnection, table: &str) -> Vec<(String, bool)> {
+    let sql = format!("PRAGMA index_list('{table}')");
+    let rows = db
+        .query_all_raw(Statement::from_string(DbBackend::Sqlite, sql))
+        .await
+        .expect("query index list");
+    rows.iter()
+        .filter_map(|row| {
+            let name = row.try_get::<String>("", "name").ok()?;
+            let unique = row.try_get::<i64>("", "unique").ok()? != 0;
+            Some((name, unique))
+        })
+        .collect()
+}
+
+async fn index_columns(db: &sea_orm::DatabaseConnection, index: &str) -> Vec<String> {
+    let sql = format!("PRAGMA index_info('{index}')");
+    let rows = db
+        .query_all_raw(Statement::from_string(DbBackend::Sqlite, sql))
+        .await
+        .expect("query index info");
+    let mut columns: Vec<(i64, String)> = rows
+        .iter()
+        .filter_map(|row| {
+            let seqno = row.try_get::<i64>("", "seqno").ok()?;
+            let name = row.try_get::<String>("", "name").ok()?;
+            Some((seqno, name))
+        })
+        .collect();
+    columns.sort_by_key(|(seqno, _)| *seqno);
+    columns.into_iter().map(|(_, name)| name).collect()
+}
+
+async fn unique_index_columns(db: &sea_orm::DatabaseConnection, table: &str) -> Vec<Vec<String>> {
+    let mut result = Vec::new();
+    for (name, unique) in table_indexes(db, table).await {
+        if unique {
+            result.push(index_columns(db, &name).await);
+        }
+    }
+    result
+}
+
 #[tokio::test]
 async fn submission_txn_migrations_are_registered() {
     let names = migration_names();
@@ -765,6 +820,202 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
     ))
     .await
     .expect("same mxc on another site is allowed after the migration");
+
+    // The explicit author index must survive the table rebuild.
+    assert!(
+        schema_objects(&db, "index", "media_uploads")
+            .await
+            .iter()
+            .any(|name| name == "idx_media_uploads_author"),
+        "idx_media_uploads_author must be preserved by the migration"
+    );
+
+    // Uniqueness now covers (site_id, mxc_url) and no longer mxc_url alone.
+    let unique_columns = unique_index_columns(&db, "media_uploads").await;
+    assert!(
+        unique_columns
+            .iter()
+            .any(|columns| columns == &vec!["site_id".to_string(), "mxc_url".to_string()]),
+        "a unique index on (site_id, mxc_url) must exist: {unique_columns:?}"
+    );
+    assert!(
+        !unique_columns
+            .iter()
+            .any(|columns| columns == &vec!["mxc_url".to_string()]),
+        "the global UNIQUE(mxc_url) must be gone: {unique_columns:?}"
+    );
+}
+
+#[tokio::test]
+async fn media_uploads_site_scoped_migration_preserves_unrelated_schema_objects() {
+    let url = test_db_url("media-uploads-schema-objects");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(78))
+        .await
+        .expect("migrate to 000078");
+
+    // Unrelated objects that must not be silently dropped by the rebuild.
+    db.execute_unprepared("CREATE INDEX idx_media_uploads_probe ON media_uploads (site_id)")
+        .await
+        .expect("create probe index");
+    db.execute_unprepared(
+        "CREATE TRIGGER trg_media_uploads_probe AFTER UPDATE ON media_uploads \
+         BEGIN SELECT 1; END",
+    )
+    .await
+    .expect("create probe trigger");
+
+    Migrator::up(&db, None).await.expect("apply 000079");
+
+    let indexes = schema_objects(&db, "index", "media_uploads").await;
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "idx_media_uploads_author"),
+        "the pre-existing author index must be preserved: {indexes:?}"
+    );
+    assert!(
+        indexes.iter().any(|name| name == "idx_media_uploads_probe"),
+        "an unrelated index must not be dropped: {indexes:?}"
+    );
+
+    let triggers = schema_objects(&db, "trigger", "media_uploads").await;
+    assert!(
+        triggers
+            .iter()
+            .any(|name| name == "trg_media_uploads_probe"),
+        "an unrelated trigger must not be dropped: {triggers:?}"
+    );
+}
+
+#[tokio::test]
+async fn media_uploads_site_scoped_migration_replaces_global_unique() {
+    let url = test_db_url("media-uploads-global-unique");
+    let db = Database::connect(&url).await.expect("connect db");
+    Migrator::up(&db, Some(78))
+        .await
+        .expect("migrate to 000078");
+
+    // Reshape media_uploads into the legacy globally-unique schema.
+    db.execute_unprepared(
+        "CREATE TABLE media_uploads_legacy (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mxc_url TEXT NOT NULL UNIQUE,
+            author_public_key TEXT NOT NULL,
+            site_id TEXT NOT NULL,
+            page_slug TEXT,
+            used_at TEXT,
+            submission_id INTEGER,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .await
+    .expect("create legacy table");
+    db.execute_unprepared(
+        "INSERT INTO media_uploads_legacy \
+         (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at) \
+         SELECT id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at \
+         FROM media_uploads",
+    )
+    .await
+    .expect("copy legacy rows");
+    db.execute_unprepared("DROP TABLE media_uploads")
+        .await
+        .expect("drop new table");
+    db.execute_unprepared("ALTER TABLE media_uploads_legacy RENAME TO media_uploads")
+        .await
+        .expect("rename legacy table");
+    db.execute_unprepared(
+        "CREATE INDEX idx_media_uploads_author ON media_uploads (author_public_key)",
+    )
+    .await
+    .expect("recreate author index");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_uploads \
+         (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at) \
+         VALUES (7, 'mxc://hs/legacy', 'author-a', 'site-a', 'post-a', NULL, NULL, '{now}')"
+    ))
+    .await
+    .expect("insert legacy row");
+
+    // Under the legacy schema the same MXC cannot exist on another site.
+    assert!(
+        db.execute_unprepared(&format!(
+            "INSERT INTO media_uploads \
+             (mxc_url, author_public_key, site_id, page_slug, created_at) \
+             VALUES ('mxc://hs/legacy', 'author-b', 'site-b', NULL, '{now}')"
+        ))
+        .await
+        .is_err(),
+        "the legacy schema must reject the same MXC on another site"
+    );
+
+    Migrator::up(&db, None).await.expect("apply 000079");
+
+    // The row survives with its identity intact.
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT id, mxc_url, site_id, page_slug FROM media_uploads".to_string(),
+        ))
+        .await
+        .expect("query migrated row");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].try_get::<i64>("", "id").unwrap(), 7);
+    assert_eq!(
+        rows[0].try_get::<String>("", "mxc_url").unwrap(),
+        "mxc://hs/legacy"
+    );
+    assert_eq!(rows[0].try_get::<String>("", "site_id").unwrap(), "site-a");
+    assert_eq!(
+        rows[0]
+            .try_get::<Option<String>>("", "page_slug")
+            .unwrap()
+            .as_deref(),
+        Some("post-a")
+    );
+
+    // The global constraint is replaced by the site-scoped one.
+    db.execute_unprepared(&format!(
+        "INSERT INTO media_uploads \
+         (mxc_url, author_public_key, site_id, page_slug, created_at) \
+         VALUES ('mxc://hs/legacy', 'author-b', 'site-b', NULL, '{now}')"
+    ))
+    .await
+    .expect("same mxc on another site is allowed after the migration");
+    assert!(
+        db.execute_unprepared(&format!(
+            "INSERT INTO media_uploads \
+             (mxc_url, author_public_key, site_id, page_slug, created_at) \
+             VALUES ('mxc://hs/legacy', 'author-c', 'site-a', NULL, '{now}')"
+        ))
+        .await
+        .is_err(),
+        "duplicate (site_id, mxc_url) must be rejected after the migration"
+    );
+
+    assert!(
+        schema_objects(&db, "index", "media_uploads")
+            .await
+            .iter()
+            .any(|name| name == "idx_media_uploads_author"),
+        "idx_media_uploads_author must be preserved"
+    );
+    let unique_columns = unique_index_columns(&db, "media_uploads").await;
+    assert!(
+        unique_columns
+            .iter()
+            .any(|columns| columns == &vec!["site_id".to_string(), "mxc_url".to_string()]),
+        "a unique index on (site_id, mxc_url) must exist: {unique_columns:?}"
+    );
+    assert!(
+        !unique_columns
+            .iter()
+            .any(|columns| columns == &vec!["mxc_url".to_string()]),
+        "the global UNIQUE(mxc_url) must be gone: {unique_columns:?}"
+    );
 }
 
 #[tokio::test]
