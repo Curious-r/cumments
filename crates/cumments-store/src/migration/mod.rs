@@ -50,7 +50,6 @@ pub mod m20260814_000044_post_submission_fresh_txn;
 pub mod m20260815_000045_post_submission_txn_id;
 pub mod m20260815_000046_unified_submission_txn_ids;
 pub mod m20260815_000047_role_claim_dm_room;
-pub mod m20260815_000048_media_upload_submission;
 pub mod m20260815_000049_command_audit_log;
 pub mod m20260816_000050_sticker_packs;
 pub mod m20260816_000051_media_uploads_post_slug_nullable;
@@ -189,7 +188,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000045_post_submission_txn_id::Migration),
             Box::new(m20260815_000046_unified_submission_txn_ids::Migration),
             Box::new(m20260815_000047_role_claim_dm_room::Migration),
-            Box::new(m20260815_000048_media_upload_submission::Migration),
             Box::new(m20260815_000049_command_audit_log::Migration),
             Box::new(m20260816_000050_sticker_packs::Migration),
             Box::new(m20260816_000051_media_uploads_post_slug_nullable::Migration),

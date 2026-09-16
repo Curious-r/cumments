@@ -52,6 +52,12 @@ second copy; keys are retained for 24 hours like comment write keys. The
 returned `url` is then used in a POST comment request with `media` (the
 signature covers the media URL instead of text content).
 
+The upload also records the MXC against the uploading visitor, site, and page.
+A comment may only reference media recorded for the same author, site, and
+page; that record is local write admission, not ownership of the Matrix
+object. The homeserver owns Matrix media retention and deletion, and Cumments
+never deletes media from it.
+
 ## Visitor avatar
 
 Visitor avatar mutations are managed through dedicated profile endpoints operating on the Matrix media URI itself rather than direct compound upload endpoints.

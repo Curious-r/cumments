@@ -1,7 +1,7 @@
 use super::DbStore;
 use crate::entities::{
-    active_enums::SubmissionStatus, delete_submissions, idempotency_keys, media_uploads,
-    operation_claims, operation_executions, post_submissions, update_submissions,
+    active_enums::SubmissionStatus, delete_submissions, idempotency_keys, operation_claims,
+    operation_executions, post_submissions, update_submissions,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -174,15 +174,6 @@ impl SubmissionStore for DbStore {
                     .exec(&txn)
                     .await?;
                 let submission_id = inserted.last_insert_id;
-                if let Some(media) = &command.media {
-                    bind_media_submission(
-                        &txn,
-                        command.site_id.as_str(),
-                        &media.url,
-                        submission_id,
-                    )
-                    .await?;
-                }
                 txn.commit().await?;
                 Ok(IdempotencyOutcome::Accepted { submission_id })
             }
@@ -329,15 +320,6 @@ impl SubmissionStore for DbStore {
             .exec(&self.db)
             .await?;
         let submission_id = result.last_insert_id;
-        if let Some(media) = &command.media {
-            bind_media_submission(
-                &self.db,
-                command.site_id.as_str(),
-                &media.url,
-                submission_id,
-            )
-            .await?;
-        }
         Ok(submission_id)
     }
 
@@ -411,11 +393,6 @@ impl SubmissionStore for DbStore {
             .exec(&txn)
             .await?;
         let submission_id = result.last_insert_id;
-        if let Some(media) = &command.media {
-            bind_media_submission(&txn, command.site_id.as_str(), &media.url, submission_id)
-                .await?;
-        }
-
         let outcome = self
             .save_idempotency_record(&txn, idempotency, submission_id)
             .await?;
@@ -1468,29 +1445,6 @@ impl DbStore {
             OperationClaimOutcome::Conflict
         }
     }
-}
-
-/// Records which post submission currently references a media upload, so the
-/// ownership sweep skips it while the submission is still retrying.
-///
-/// Scoped to the submission's site: the same MXC owned by another site must
-/// not be bound to this submission.
-async fn bind_media_submission<C: ConnectionTrait>(
-    db: &C,
-    site_id: &str,
-    mxc_url: &str,
-    submission_id: i64,
-) -> Result<()> {
-    media_uploads::Entity::update_many()
-        .col_expr(
-            media_uploads::Column::SubmissionId,
-            sea_orm::sea_query::Expr::value(submission_id),
-        )
-        .filter(media_uploads::Column::SiteId.eq(site_id))
-        .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-        .exec(db)
-        .await?;
-    Ok(())
 }
 
 impl DbStore {

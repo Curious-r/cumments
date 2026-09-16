@@ -10,7 +10,7 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast;
 
 use cumments_core::models::{PageSlug, SiteId};
-use cumments_core::ports::{MatrixDriver, MessageStore, RegistryStore, RoomStore, SiteStore};
+use cumments_core::ports::{MatrixDriver, RegistryStore, RoomStore, SiteStore};
 use cumments_projector::event_processor::{EventProcessor, EventProcessorDeps};
 use cumments_projector::parsed::ParsedRoomState;
 use cumments_store::DbStore;
@@ -115,25 +115,13 @@ async fn member_observation_retains_avatar_mxc() {
         .expect("get member")
         .expect("member exists");
     assert_eq!(member.avatar_url.as_deref(), Some(mxc));
-
-    // Projection never creates upload ownership evidence.
-    let unused_uploads = store
-        .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
-        .await
-        .unwrap();
-    assert!(unused_uploads.is_empty());
 }
 
 #[tokio::test]
 async fn native_and_cumments_users_follow_the_same_projection_path() {
-    let (store, site_id, room_id) = setup_room("unified_projection").await;
+    let (store, _site_id, room_id) = setup_room("unified_projection").await;
 
-    // A Cumments-owned upload record exists for one avatar only.
     let owned_mxc = "mxc://hs/cumments-uploaded-avatar";
-    store
-        .record_media_upload(owned_mxc, "owned-key", site_id.as_str(), Some("post-1"))
-        .await
-        .expect("record upload");
     let plain_mxc = "mxc://hs/native-user-avatar";
 
     let processor = create_processor(store.clone());
@@ -159,20 +147,6 @@ async fn native_and_cumments_users_follow_the_same_projection_path() {
         .unwrap();
     assert_eq!(owned.avatar_url.as_deref(), Some(owned_mxc));
     assert_eq!(native.avatar_url.as_deref(), Some(plain_mxc));
-
-    // Ownership evidence is unchanged: only the uploaded avatar is owned.
-    assert!(
-        store
-            .has_media_upload_for_site(site_id.as_str(), owned_mxc)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !store
-            .has_media_upload_for_site(site_id.as_str(), plain_mxc)
-            .await
-            .unwrap()
-    );
 }
 
 #[tokio::test]

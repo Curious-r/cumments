@@ -245,17 +245,6 @@ impl PostsPass {
                         }
                     }
                 };
-                // The media is now referenced by a real room event; record the
-                // historical usage timestamp. This is bookkeeping only and does
-                // not drive reachability or ownership release.
-                if let Some(media) = &command.media {
-                    let _ = self
-                        .deps
-                        .message_store
-                        .mark_media_used(command.site_id.as_str(), &media.url)
-                        .await;
-                }
-
                 // 5. Closed-loop: Mark as waiting for sync instead of completed
                 self.deps
                     .submission_store

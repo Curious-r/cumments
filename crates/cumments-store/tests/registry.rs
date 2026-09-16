@@ -6,6 +6,7 @@ use cumments_core::{
     ports::{MessageStore, RegistryStore, SiteAuthStore},
 };
 use cumments_store::DbStore;
+use sea_orm::{ConnectionTrait, Statement};
 
 fn test_db_url(name: &str) -> String {
     let path = std::path::Path::new("/tmp").join(format!(
@@ -142,9 +143,8 @@ async fn mark_room_retired_stops_active_lookup_and_lists_retired() {
 
 #[tokio::test]
 async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
-    let store = DbStore::connect(&test_db_url("delete-room"))
-        .await
-        .expect("connect db");
+    let db_url = test_db_url("delete-room");
+    let store = DbStore::connect(&db_url).await.expect("connect db");
     let site_id = SiteId::new("my-blog".to_string()).expect("site id");
     let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
     store
@@ -185,14 +185,21 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
         raw_content: serde_json::json!({}),
     };
     store.save_message(&message).await.expect("save message");
-    store
-        .record_media_upload("mxc://hs/cat", "key", "my-blog", Some("hello"))
-        .await
-        .expect("record comment media");
-    store
-        .record_media_upload("mxc://hs/avatar", "key", "my-blog", None)
-        .await
-        .expect("record avatar media");
+    for (mxc, page) in [("mxc://hs/cat", Some("hello")), ("mxc://hs/avatar", None)] {
+        store
+            .save_media_upload_idempotent(
+                mxc,
+                "key",
+                "my-blog",
+                page,
+                &cumments_core::media_upload::MediaUploadIdempotencyInput {
+                    key: format!("upload-{mxc}"),
+                    request_fingerprint: mxc.to_string(),
+                },
+            )
+            .await
+            .expect("record upload");
+    }
 
     store
         .delete_room_local("!room:hs")
@@ -219,16 +226,28 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
         !store
             .media_upload_owned_by("mxc://hs/cat", "key", "my-blog", "hello")
             .await
-            .expect("media ownership query"),
-        "post media rows must be cleared"
+            .expect("media upload query"),
+        "page-scoped upload rows must be cleared with the room"
     );
-    let remaining = store
-        .list_media_urls_for_site("my-blog")
+
+    // The site-scoped avatar upload (page_slug NULL) must survive.
+    let db = sea_orm::Database::connect(&db_url)
         .await
-        .expect("remaining media");
+        .expect("connect raw db");
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT mxc_url FROM media_uploads WHERE site_id = 'my-blog' ORDER BY mxc_url",
+        ))
+        .await
+        .expect("query remaining uploads");
+    let remaining: Vec<String> = rows
+        .iter()
+        .map(|row| row.try_get("", "mxc_url").expect("mxc_url"))
+        .collect();
     assert_eq!(
         remaining,
         vec!["mxc://hs/avatar".to_string()],
-        "avatar media (page_slug NULL) is site-scoped and must survive"
+        "avatar upload (page_slug NULL) is site-scoped and must survive"
     );
 }

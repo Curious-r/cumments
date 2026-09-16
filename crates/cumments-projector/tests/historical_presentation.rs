@@ -987,17 +987,7 @@ async fn historical_presentation_retains_author_avatar_mxc() {
         Some("mxc://hs/existing-avatar")
     );
 
-    // 2. Message 2: Authoritative local upload in media_uploads table
-    store
-        .record_media_upload(
-            "mxc://hs/uploaded-avatar",
-            "author-pubkey-1",
-            site_id.as_str(),
-            None,
-        )
-        .await
-        .expect("record upload");
-
+    // 2. Message 2: a locally uploaded avatar MXC is retained verbatim too.
     homeserver
         .mount_context(
             room_id,

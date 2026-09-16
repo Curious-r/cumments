@@ -43,7 +43,7 @@ The SQLite database deliberately contains three kinds of state:
 |---|---|---|
 | Fact projection | messages, edit revisions, reactions, poll responses, room members/state events, governance role snapshots, sticker packs | Derived from visible Matrix facts and rebuildable by backfill. Deleted content is sanitized rather than retained forever. |
 | Derived views | current content, `edited_at`, reaction/poll summaries, live author profile | Always recomputable from fact rows and Matrix state. |
-| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, upgrade intents, projection repair requests, backfill cursors/tombstones, media-upload ownership | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
+| Control plane | submissions, idempotency keys, role claims/tokens/secrets, command audit, quarantine decisions, upgrade intents, projection repair requests, backfill cursors/tombstones, media-upload records | Locally durable and auditable, but not promised to be recoverable from Matrix after loss. |
 
 A few columns cross layers for operational reasons: for example,
 `messages.submission_id` correlates a projected Matrix fact with a local
@@ -71,7 +71,6 @@ spectrum of how much machinery they need:
 | Role claims (token-DM) | Light state machine | Claim row plus sender/token match (`pending` → `activated` → `applied`) |
 | Moderation sync | Pure convergence | Matrix power levels are full state, so read → diff → write is naturally idempotent |
 | Site retirement | One-shot marker, retry until converged | `lifecycle_status` plus idempotent rename / alias removal / leave (404-tolerant) |
-| Orphan media cleanup | Periodic sweep | Unreferenced-upload marker |
 
 The deciding question for each is how strong the once-only guarantee must be:
 write-side idempotency keys for work that must not duplicate, natural
@@ -112,11 +111,13 @@ frame carries a deterministic `id`, and clients should ignore IDs they have alre
 - Rate limiters and the reconcile loop assume a single instance. Distributed
   deployments would need a shared limiter store and leader election /
   partitioning — a documented platform limitation.
-- Claims, retirement and orphan-media cleanup share the *concept* of a
-  background action but not its shape (a row machine, an entity lifecycle and
-  a table sweep, respectively). A generic action ledger is therefore deferred
-  until a second genuine per-action row machine appears — sharing a concept
-  does not imply sharing a table.
+- Claims and retirement share the *concept* of a background action but not its
+  shape (a row machine and an entity lifecycle, respectively). A generic action
+  ledger is therefore deferred until a second genuine per-action row machine
+  appears — sharing a concept does not imply sharing a table.
+- Matrix media lifetime is the homeserver's responsibility. Cumments keeps
+  `mxc://` references and a local upload record used for comment write
+  admission, but it never deletes or garbage-collects Matrix media.
 
 ## System overview
 

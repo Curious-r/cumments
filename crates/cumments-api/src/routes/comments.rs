@@ -622,7 +622,7 @@ pub(crate) async fn post_comment_handler(
             .store
             .media_upload_owned_by(&media.url, &req.author_public_key, &site_id, &page_slug)
             .await
-            .map_err(|e| AppError::Internal(format!("failed to verify media ownership: {e}")))?
+            .map_err(|e| AppError::Internal(format!("failed to verify media upload: {e}")))?
         {
             return Err(AppError::BadRequest(
                 "media must reference an upload made by this author for this site and post"

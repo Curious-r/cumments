@@ -2,11 +2,10 @@ use chrono::Utc;
 use cumments_core::commands::{DeleteCommentCommand, PostCommentCommand, UpdateCommentCommand};
 use cumments_core::media_upload::{MediaUploadIdempotencyInput, MediaUploadIdempotencyOutcome};
 use cumments_core::models::{
-    AuthorKind, AuthorSnapshot, CommentMedia, Content, EditProjectionOutcome, MediaContent,
-    MediaKind, Message, MessageRedactionOutcome, MessageRevision, MessageSaveOutcome,
-    MessageStatus, PageSlug, PollContent, PollEnd, PollOption, PollResponseSummary, PollVote,
-    Reaction, RoomMember, SiteId, SubmissionCompletion, TextContent, TextStyle, ThreadSummary,
-    UnknownContent,
+    AuthorKind, AuthorSnapshot, Content, EditProjectionOutcome, MediaContent, MediaKind, Message,
+    MessageRedactionOutcome, MessageRevision, MessageSaveOutcome, MessageStatus, PageSlug,
+    PollContent, PollEnd, PollOption, PollResponseSummary, PollVote, Reaction, RoomMember, SiteId,
+    SubmissionCompletion, TextContent, TextStyle, ThreadSummary, UnknownContent,
 };
 use cumments_core::poll::{PollSemanticKind, PollStatus};
 use cumments_core::ports::{
@@ -1172,13 +1171,19 @@ async fn unknown_content_survives_roundtrip() {
 }
 
 #[tokio::test]
-async fn media_uploads_track_ownership_and_usage() {
-    let store = DbStore::connect(&test_db_url("media-uploads"))
+async fn comment_media_authorization_requires_the_uploading_author() {
+    let store = DbStore::connect(&test_db_url("media-upload-authorization"))
         .await
         .expect("connect db");
 
     store
-        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", Some("hello"))
+        .save_media_upload_idempotent(
+            "mxc://hs/cat",
+            "alice-key",
+            "my-blog",
+            Some("hello"),
+            &upload_input("upload-auth-key"),
+        )
         .await
         .expect("record upload");
 
@@ -1186,920 +1191,79 @@ async fn media_uploads_track_ownership_and_usage() {
         store
             .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check")
+            .expect("ownership check"),
+        "the uploading author must be authorized to use the media"
     );
     assert!(
         !store
             .media_upload_owned_by("mxc://hs/cat", "bob-key", "my-blog", "hello")
             .await
-            .expect("other author rejected")
+            .expect("ownership check"),
+        "another visitor's upload must not authorize this author"
     );
     assert!(
         !store
-            .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "other")
+            .media_upload_owned_by("mxc://hs/cat", "alice-key", "other-blog", "hello")
             .await
-            .expect("other post rejected")
+            .expect("ownership check"),
+        "another site's upload must not authorize this author"
     );
     assert!(
         !store
-            .media_upload_owned_by("mxc://hs/other", "alice-key", "my-blog", "hello")
+            .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "other-page")
             .await
-            .expect("unknown url rejected")
-    );
-
-    // Re-recording the same URL keeps a single row and re-arms ownership.
-    store
-        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", Some("hello"))
-        .await
-        .expect("re-record upload");
-
-    let site_urls = store
-        .list_media_urls_for_site("my-blog")
-        .await
-        .expect("list site media");
-    assert_eq!(site_urls, vec!["mxc://hs/cat".to_string()]);
-    assert!(
-        store
-            .list_media_urls_for_site("other-blog")
-            .await
-            .expect("other site media")
-            .is_empty()
-    );
-
-    // Candidate enumeration is anchored on `created_at` and ignores `used_at`.
-    let candidates = store
-        .list_media_upload_candidates_before(Utc::now() + chrono::Duration::days(1))
-        .await
-        .expect("list candidates");
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].mxc_url, "mxc://hs/cat");
-    assert_eq!(candidates[0].site_id, "my-blog");
-
-    store
-        .mark_media_used("my-blog", "mxc://hs/cat")
-        .await
-        .expect("mark used");
-    let candidates_after_use = store
-        .list_media_upload_candidates_before(Utc::now() + chrono::Duration::days(1))
-        .await
-        .expect("list candidates after use");
-    assert_eq!(
-        candidates_after_use.len(),
-        1,
-        "used_at is historical bookkeeping and must not gate candidacy"
-    );
-
-    // Releasing ownership removes only the local ownership evidence.
-    let cat_id = store
-        .get_media_upload("my-blog", "mxc://hs/cat")
-        .await
-        .unwrap()
-        .expect("upload exists")
-        .id;
-    assert!(
-        store
-            .release_media_upload_ownership("my-blog", "mxc://hs/cat", cat_id)
-            .await
-            .expect("release ownership")
-    );
-    assert!(
-        !store
-            .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "hello")
-            .await
-            .expect("ownership after release"),
-        "released upload must no longer prove ownership"
+            .expect("ownership check"),
+        "another page's upload must not authorize this author"
     );
 }
 
 #[tokio::test]
-async fn media_upload_ownership_is_site_scoped_for_the_same_mxc() {
-    let store = DbStore::connect(&test_db_url("media-uploads-site-scoped"))
+async fn comment_media_authorization_is_site_scoped_for_the_same_mxc() {
+    let store = DbStore::connect(&test_db_url("media-upload-site-scoped"))
         .await
         .expect("connect db");
 
-    let mxc = "mxc://hs/shared";
-    let site_a = "site-a";
-    let site_b = "site-b";
+    for (key, site) in [("alice-key", "site-a"), ("bob-key", "site-b")] {
+        store
+            .save_media_upload_idempotent(
+                "mxc://hs/shared",
+                key,
+                site,
+                Some("page"),
+                &upload_input(&format!("upload-{site}")),
+            )
+            .await
+            .expect("record upload");
+    }
 
-    // Both sites may own the same MXC independently.
-    store
-        .record_media_upload(mxc, "author-a", site_a, Some("post-a"))
-        .await
-        .unwrap();
-    store
-        .record_media_upload(mxc, "author-b", site_b, Some("post-b"))
-        .await
-        .unwrap();
-
-    let a = store
-        .get_media_upload(site_a, mxc)
-        .await
-        .unwrap()
-        .expect("site-a row exists");
-    let b = store
-        .get_media_upload(site_b, mxc)
-        .await
-        .unwrap()
-        .expect("site-b row exists");
-    assert_ne!(a.id, b.id, "each site has its own ownership row");
-    assert_eq!(a.site_id, site_a);
-    assert_eq!(a.author_public_key, "author-a");
-    assert_eq!(b.site_id, site_b);
-    assert_eq!(b.author_public_key, "author-b");
-
-    // Recording site-b must not overwrite site-a's ownership.
-    assert!(store.has_media_upload_for_site(site_a, mxc).await.unwrap());
-    assert!(store.has_media_upload_for_site(site_b, mxc).await.unwrap());
     assert!(
         store
-            .media_upload_owned_by(mxc, "author-a", site_a, "post-a")
+            .media_upload_owned_by("mxc://hs/shared", "alice-key", "site-a", "page")
             .await
-            .unwrap()
+            .expect("ownership check"),
+        "site A's upload authorizes site A"
+    );
+    assert!(
+        store
+            .media_upload_owned_by("mxc://hs/shared", "bob-key", "site-b", "page")
+            .await
+            .expect("ownership check"),
+        "the same MXC recorded by site B authorizes site B"
     );
     assert!(
         !store
-            .media_upload_owned_by(mxc, "author-b", site_a, "post-b")
+            .media_upload_owned_by("mxc://hs/shared", "alice-key", "site-b", "page")
             .await
-            .unwrap(),
-        "site-a lookup must not see site-b's ownership"
-    );
-
-    // A site with no row returns nothing.
-    assert!(
-        store
-            .get_media_upload("site-c", mxc)
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    // Re-recording updates only that site's row, keeping its id.
-    store
-        .record_media_upload(mxc, "author-a2", site_a, Some("post-a2"))
-        .await
-        .unwrap();
-    let a_after = store.get_media_upload(site_a, mxc).await.unwrap().unwrap();
-    let b_after = store.get_media_upload(site_b, mxc).await.unwrap().unwrap();
-    assert_eq!(a_after.id, a.id, "same-site recording must keep the row id");
-    assert_eq!(a_after.author_public_key, "author-a2");
-    assert_eq!(b_after.id, b.id, "site-b's row must be untouched");
-    assert_eq!(b_after.author_public_key, "author-b");
-
-    // Releasing site-a's row leaves site-b's row intact.
-    assert!(
-        store
-            .release_media_upload_ownership(site_a, mxc, a.id)
-            .await
-            .unwrap()
-    );
-    assert!(store.get_media_upload(site_a, mxc).await.unwrap().is_none());
-    let b_after_release = store
-        .get_media_upload(site_b, mxc)
-        .await
-        .unwrap()
-        .expect("site-b row must survive");
-    assert_eq!(b_after_release.id, b.id);
-}
-
-#[tokio::test]
-async fn mark_media_used_is_site_scoped() {
-    let store = DbStore::connect(&test_db_url("media-uploads-mark-used"))
-        .await
-        .expect("connect db");
-
-    let mxc = "mxc://hs/shared-used";
-    store
-        .record_media_upload(mxc, "author-a", "site-a", None)
-        .await
-        .unwrap();
-    store
-        .record_media_upload(mxc, "author-b", "site-b", None)
-        .await
-        .unwrap();
-
-    store.mark_media_used("site-a", mxc).await.unwrap();
-
-    let a = store
-        .get_media_upload("site-a", mxc)
-        .await
-        .unwrap()
-        .unwrap();
-    let b = store
-        .get_media_upload("site-b", mxc)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(a.used_at.is_some(), "site-a's row must be marked used");
-    assert!(
-        b.used_at.is_none(),
-        "marking site-a must not mutate site-b's row"
-    );
-
-    // Marking a site with no matching row is a no-op.
-    store.mark_media_used("site-c", mxc).await.unwrap();
-    assert!(
-        store
-            .get_media_upload("site-b", mxc)
-            .await
-            .unwrap()
-            .unwrap()
-            .used_at
-            .is_none()
+            .expect("ownership check"),
+        "site A's record must not authorize site B"
     );
 }
 
-#[tokio::test]
-async fn media_upload_idempotency_is_site_scoped_for_the_same_mxc() {
-    let store = DbStore::connect(&test_db_url("media-uploads-idempotency-sites"))
-        .await
-        .expect("connect db");
-
-    let mxc = "mxc://hs/idem-shared";
-    let author = "author-1";
-
-    let created_a = store
-        .save_media_upload_idempotent(
-            mxc,
-            author,
-            "site-a",
-            Some("page-a"),
-            &MediaUploadIdempotencyInput {
-                key: "key-a".to_string(),
-                request_fingerprint: "fp-a".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        created_a,
-        MediaUploadIdempotencyOutcome::Created { .. }
-    ));
-
-    let created_b = store
-        .save_media_upload_idempotent(
-            mxc,
-            author,
-            "site-b",
-            Some("page-b"),
-            &MediaUploadIdempotencyInput {
-                key: "key-b".to_string(),
-                request_fingerprint: "fp-b".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-    assert!(
-        matches!(created_b, MediaUploadIdempotencyOutcome::Created { .. }),
-        "site-b must be able to record the same MXC independently"
-    );
-
-    let a = store
-        .get_media_upload("site-a", mxc)
-        .await
-        .unwrap()
-        .unwrap();
-    let b = store
-        .get_media_upload("site-b", mxc)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_ne!(a.id, b.id);
-    assert_eq!(a.site_id, "site-a");
-    assert_eq!(b.site_id, "site-b");
-    assert_eq!(a.page_slug.as_deref(), Some("page-a"));
-    assert_eq!(b.page_slug.as_deref(), Some("page-b"));
-
-    // Replaying site-a's request must not mutate site-b's ownership row.
-    let replay_a = store
-        .save_media_upload_idempotent(
-            mxc,
-            author,
-            "site-a",
-            Some("page-a"),
-            &MediaUploadIdempotencyInput {
-                key: "key-a".to_string(),
-                request_fingerprint: "fp-a".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        replay_a,
-        MediaUploadIdempotencyOutcome::Replayed { .. }
-    ));
-    let b_after = store
-        .get_media_upload("site-b", mxc)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(b_after.id, b.id);
-    assert_eq!(b_after.page_slug.as_deref(), Some("page-b"));
-
-    // Idempotency records stay independent per key.
-    assert!(
-        store
-            .find_media_upload_idempotency(author, "key-a")
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        store
-            .find_media_upload_idempotency(author, "key-b")
-            .await
-            .unwrap()
-            .is_some()
-    );
-}
-
-#[tokio::test]
-async fn media_reachability_store_queries_operate_correctly() {
-    let store = DbStore::connect(&test_db_url("media-reachability-store"))
-        .await
-        .expect("connect db");
-
-    let site_a = "site-alpha";
-    let site_b = "site-beta";
-    let mxc_1 = "mxc://hs/upload-1";
-    let mxc_2 = "mxc://hs/upload-2";
-    let mxc_b = "mxc://hs/upload-b";
-
-    // 1. Test get_media_upload and list_media_uploads_for_site
-    assert!(
-        store
-            .get_media_upload(site_a, mxc_1)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        store
-            .list_media_uploads_for_site(site_a)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-
-    store
-        .record_media_upload(mxc_1, "pubkey-1", site_a, Some("slug-1"))
-        .await
-        .unwrap();
-    store
-        .record_media_upload(mxc_2, "pubkey-2", site_a, None)
-        .await
-        .unwrap();
-    store
-        .record_media_upload(mxc_b, "pubkey-b", site_b, None)
-        .await
-        .unwrap();
-
-    let upload_1 = store
-        .get_media_upload(site_a, mxc_1)
-        .await
-        .unwrap()
-        .expect("upload 1 exists");
-    assert_eq!(upload_1.mxc_url, mxc_1);
-    assert_eq!(upload_1.author_public_key, "pubkey-1");
-    assert_eq!(upload_1.site_id, site_a);
-    assert_eq!(upload_1.page_slug.as_deref(), Some("slug-1"));
-
-    // Cross-site check: site_b querying mxc_1 returns None
-    assert!(
-        store
-            .get_media_upload(site_b, mxc_1)
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    let site_a_uploads = store.list_media_uploads_for_site(site_a).await.unwrap();
-    assert_eq!(site_a_uploads.len(), 2);
-    let site_b_uploads = store.list_media_uploads_for_site(site_b).await.unwrap();
-    assert_eq!(site_b_uploads.len(), 1);
-
-    // 2. Test has_historical_author_avatar
-    let hist_mxc_a = "mxc://hs/hist-avatar-a";
-    let hist_mxc_b = "mxc://hs/hist-avatar-b";
-
-    assert!(
-        !store
-            .has_historical_author_avatar(site_a, hist_mxc_a)
-            .await
-            .unwrap()
-    );
-
-    // Insert message on site_a carrying hist_mxc_a as the historical author avatar
-    let mut msg_a = visitor_message("$msg_hist_a", "hist msg a");
-    msg_a.site_id = site_a.to_string();
-    msg_a.author.avatar_url = Some(hist_mxc_a.to_string());
-    store.save_message(&msg_a).await.unwrap();
-
-    // Insert message on site_b carrying hist_mxc_b as the historical author avatar
-    let mut msg_b = visitor_message("$msg_hist_b", "hist msg b");
-    msg_b.site_id = site_b.to_string();
-    msg_b.author.avatar_url = Some(hist_mxc_b.to_string());
-    store.save_message(&msg_b).await.unwrap();
-
-    assert!(
-        store
-            .has_historical_author_avatar(site_a, hist_mxc_a)
-            .await
-            .unwrap()
-    );
-    // Cross-site: site_a does NOT have site_b's historical avatar
-    assert!(
-        !store
-            .has_historical_author_avatar(site_a, hist_mxc_b)
-            .await
-            .unwrap()
-    );
-    // site_b has hist_mxc_b
-    assert!(
-        store
-            .has_historical_author_avatar(site_b, hist_mxc_b)
-            .await
-            .unwrap()
-    );
-
-    // 3. Test has_content_attachment
-    let content_mxc_a = "mxc://hs/attachment-a";
-    let content_mxc_b = "mxc://hs/attachment-b";
-
-    assert!(
-        !store
-            .has_content_attachment(site_a, content_mxc_a)
-            .await
-            .unwrap()
-    );
-
-    let mut content_msg_a = visitor_message("$msg_content_a", "content a");
-    content_msg_a.site_id = site_a.to_string();
-    content_msg_a.content = Content::Media(MediaContent {
-        kind: MediaKind::Image,
-        url: content_mxc_a.to_string(),
-        filename: None,
-        mimetype: None,
-        size: None,
-        width: None,
-        height: None,
-        thumbnail_url: None,
-        alt_text: None,
-        voice: false,
-    });
-    store.save_message(&content_msg_a).await.unwrap();
-
-    assert!(
-        store
-            .has_content_attachment(site_a, content_mxc_a)
-            .await
-            .unwrap()
-    );
-    // Cross-site: content on site_a does not make it present on site_b
-    assert!(
-        !store
-            .has_content_attachment(site_b, content_mxc_a)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !store
-            .has_content_attachment(site_a, content_mxc_b)
-            .await
-            .unwrap()
-    );
-}
-
-#[tokio::test]
-async fn media_upload_ownership_release_removes_exact_record_and_isolates_sites() {
-    let store = DbStore::connect(&test_db_url("media-upload-release-isolation"))
-        .await
-        .expect("connect db");
-
-    let site_a = "site-alpha";
-    let site_b = "site-beta";
-    let mxc_a1 = "mxc://hs/upload-a1";
-    let mxc_a2 = "mxc://hs/upload-a2";
-    let mxc_b1 = "mxc://hs/upload-b1";
-
-    // Seed media_uploads with distinct records:
-    // site_a has two uploads from different authors
-    // site_b has one upload
-    store
-        .record_media_upload(mxc_a1, "author-pubkey-1", site_a, Some("post-1"))
-        .await
-        .unwrap();
-    store
-        .record_media_upload(mxc_a2, "author-pubkey-2", site_a, None)
-        .await
-        .unwrap();
-    store
-        .record_media_upload(mxc_b1, "author-pubkey-3", site_b, None)
-        .await
-        .unwrap();
-
-    // Verify all exist
-    assert!(
-        store
-            .get_media_upload(site_a, mxc_a1)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        store
-            .get_media_upload(site_a, mxc_a2)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        store
-            .get_media_upload(site_b, mxc_b1)
-            .await
-            .unwrap()
-            .is_some()
-    );
-
-    // Capture the enumerated identities the release primitive must match.
-    let a1_id = store
-        .get_media_upload(site_a, mxc_a1)
-        .await
-        .unwrap()
-        .unwrap()
-        .id;
-    let a2_id = store
-        .get_media_upload(site_a, mxc_a2)
-        .await
-        .unwrap()
-        .unwrap()
-        .id;
-    let b1_id = store
-        .get_media_upload(site_b, mxc_b1)
-        .await
-        .unwrap()
-        .unwrap()
-        .id;
-
-    // 1. Cross-site release safety: the id matches site_b's record, but the
-    // expected site does not, so nothing may be deleted.
-    let released_wrong_site = store
-        .release_media_upload_ownership(site_a, mxc_b1, b1_id)
-        .await
-        .unwrap();
-    assert!(
-        !released_wrong_site,
-        "cross-site release must return false (no rows affected)"
-    );
-    assert!(
-        store
-            .get_media_upload(site_b, mxc_b1)
-            .await
-            .unwrap()
-            .is_some(),
-        "site_b's record must not be affected by release on site_a"
-    );
-
-    // 2. Exact row deletion: releasing mxc_a1 removes only mxc_a1 on site_a
-    let released_a1 = store
-        .release_media_upload_ownership(site_a, mxc_a1, a1_id)
-        .await
-        .unwrap();
-    assert!(released_a1, "releasing an existing record must return true");
-
-    // Exactly that row is gone
-    assert!(
-        store
-            .get_media_upload(site_a, mxc_a1)
-            .await
-            .unwrap()
-            .is_none(),
-        "released upload must no longer be found in media_uploads"
-    );
-
-    // Unrelated upload on same site from different author remains intact
-    let upload_a2 = store
-        .get_media_upload(site_a, mxc_a2)
-        .await
-        .unwrap()
-        .expect("unrelated upload must remain");
-    assert_eq!(upload_a2.author_public_key, "author-pubkey-2");
-    assert_eq!(upload_a2.mxc_url, mxc_a2);
-
-    // Unrelated upload on other site remains intact
-    let upload_b1 = store
-        .get_media_upload(site_b, mxc_b1)
-        .await
-        .unwrap()
-        .expect("other site upload must remain");
-    assert_eq!(upload_b1.author_public_key, "author-pubkey-3");
-
-    // 3. Idempotent / harmless execution: releasing an already-missing row with
-    // its stale identity is harmless.
-    let released_a1_again = store
-        .release_media_upload_ownership(site_a, mxc_a1, a1_id)
-        .await
-        .unwrap();
-    assert!(
-        !released_a1_again,
-        "subsequent release must safely return false without error"
-    );
-
-    let released_nonexistent = store
-        .release_media_upload_ownership(site_a, "mxc://hs/does-not-exist", i64::MAX)
-        .await
-        .unwrap();
-    assert!(
-        !released_nonexistent,
-        "releasing nonexistent media must return false without error"
-    );
-
-    // 4. Test alias release_media_upload behaves identically
-    let released_a2 = store
-        .release_media_upload(site_a, mxc_a2, a2_id)
-        .await
-        .unwrap();
-    assert!(
-        released_a2,
-        "alias release_media_upload must release the row"
-    );
-    assert!(
-        store
-            .get_media_upload(site_a, mxc_a2)
-            .await
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn media_upload_ownership_release_is_bound_to_the_enumerated_record() {
-    let store = DbStore::connect(&test_db_url("media-upload-release-identity"))
-        .await
-        .expect("connect db");
-
-    let site = "site-alpha";
-    let mxc = "mxc://hs/recycled-mxc";
-
-    store
-        .record_media_upload(mxc, "author-1", site, Some("post-1"))
-        .await
-        .unwrap();
-    let evaluated_id = store
-        .get_media_upload(site, mxc)
-        .await
-        .unwrap()
-        .expect("enumerated row exists")
-        .id;
-
-    // The exact recorded identity is released.
-    assert!(
-        store
-            .release_media_upload_ownership(site, mxc, evaluated_id)
-            .await
-            .unwrap(),
-        "the matching enumerated row must be released"
-    );
-
-    // Race shape: the evaluated row disappears, then a different row takes over
-    // the same logical identity before the release primitive runs again.
-    store
-        .record_media_upload(mxc, "author-2", site, Some("post-2"))
-        .await
-        .unwrap();
-    let replacement = store
-        .get_media_upload(site, mxc)
-        .await
-        .unwrap()
-        .expect("replacement row exists");
-    assert_ne!(replacement.id, evaluated_id);
-
-    assert!(
-        !store
-            .release_media_upload_ownership(site, mxc, evaluated_id)
-            .await
-            .unwrap(),
-        "a stale id must not release a different row"
-    );
-    assert!(
-        store.get_media_upload(site, mxc).await.unwrap().is_some(),
-        "the replacement row must survive a stale release"
-    );
-
-    // The correct id under the wrong site must not reach the row either.
-    assert!(
-        !store
-            .release_media_upload_ownership("site-beta", mxc, replacement.id)
-            .await
-            .unwrap(),
-        "a mismatched site must not release the row"
-    );
-    assert!(
-        store.get_media_upload(site, mxc).await.unwrap().is_some(),
-        "the row must survive a release attempted under a different site"
-    );
-}
-
-#[tokio::test]
-async fn media_upload_ownership_release_preserves_idempotency() {
-    let store = DbStore::connect(&test_db_url("media-upload-release-idempotency"))
-        .await
-        .expect("connect db");
-
-    let site_id = "site-prod";
-    let mxc_url = "mxc://hs/idempotent-asset";
-    let author_key = "author-ed25519-key";
-    let idem_key = "client-idem-key-999";
-
-    // 1. Create upload via idempotent flow
-    let input = MediaUploadIdempotencyInput {
-        key: idem_key.to_string(),
-        request_fingerprint: "fingerprint-abc".to_string(),
-    };
-
-    let outcome = store
-        .save_media_upload_idempotent(mxc_url, author_key, site_id, Some("page-slug-1"), &input)
-        .await
-        .expect("save idempotent upload");
-    assert!(matches!(
-        outcome,
-        MediaUploadIdempotencyOutcome::Created { .. }
-    ));
-
-    // Verify ownership row and idempotency row both exist
-    assert!(
-        store
-            .get_media_upload(site_id, mxc_url)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    let idem_record = store
-        .find_media_upload_idempotency(author_key, idem_key)
-        .await
-        .unwrap()
-        .expect("idempotency record must exist");
-    assert_eq!(idem_record.mxc_url, mxc_url);
-
-    // 3. Explicitly release media upload ownership, bound to the enumerated row.
-    let upload_id = store
-        .get_media_upload(site_id, mxc_url)
-        .await
-        .unwrap()
-        .expect("ownership row exists")
-        .id;
-    let released = store
-        .release_media_upload_ownership(site_id, mxc_url, upload_id)
-        .await
-        .unwrap();
-    assert!(released, "ownership record must be released");
-
-    // Ownership row is removed
-    assert!(
-        store
-            .get_media_upload(site_id, mxc_url)
-            .await
-            .unwrap()
-            .is_none(),
-        "ownership row must be gone"
-    );
-
-    // 4. CRITICAL: Idempotency record MUST remain unchanged and replayable
-    let idem_after = store
-        .find_media_upload_idempotency(author_key, idem_key)
-        .await
-        .unwrap()
-        .expect("idempotency record MUST remain intact after ownership release");
-    assert_eq!(idem_after.mxc_url, mxc_url);
-    assert_eq!(idem_after.request_fingerprint, "fingerprint-abc");
-}
-
-#[tokio::test]
-async fn media_upload_ownership_release_preserves_submission_integrity() {
-    let url = test_db_url("media-upload-release-submission");
-    let store = DbStore::connect(&url).await.expect("connect db");
-
-    let site_id = "my-blog";
-    let page_slug = "hello";
-    let mxc_url = "mxc://hs/sub-media";
-
-    // Record upload
-    store
-        .record_media_upload(mxc_url, "author-key", site_id, Some(page_slug))
-        .await
-        .unwrap();
-
-    let command = PostCommentCommand {
-        site_id: SiteId::from(site_id),
-        page_slug: PageSlug::from(page_slug),
-        content: "with media".to_string(),
-        media: Some(CommentMedia {
-            kind: Some(MediaKind::Image),
-            url: mxc_url.to_string(),
-            filename: Some("cat.png".to_string()),
-            mimetype: Some("image/png".to_string()),
-            size: Some(42),
-            width: Some(64),
-            height: Some(64),
-            voice: false,
-        }),
-        location: None,
-        poll: None,
-        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
-        author_signature: "sig".to_string(),
-        author_challenge: "chal".to_string(),
-        reply_to: None,
-        thread_root: None,
-    };
-    let submission_id = store
-        .save_post_submission(&command)
-        .await
-        .expect("save submission");
-
-    let before = store
-        .get_media_upload(site_id, mxc_url)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(before.submission_id, Some(submission_id));
-
-    // Release ownership does not fail on submission-bound row
-    let released = store
-        .release_media_upload_ownership(site_id, mxc_url, before.id)
-        .await
-        .unwrap();
-    assert!(released, "must release row successfully");
-    assert!(
-        store
-            .get_media_upload(site_id, mxc_url)
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    // The submission row itself remains completely unaffected in the store
-    let pending = store
-        .claim_pending_post_submissions(10, chrono::Utc::now() + chrono::Duration::minutes(5))
-        .await
-        .unwrap();
-    assert!(pending.iter().any(|s| s.id == submission_id));
-}
-
-#[tokio::test]
-async fn media_upload_candidates_are_age_scoped_and_submission_agnostic() {
-    let store = DbStore::connect(&test_db_url("media-submission"))
-        .await
-        .expect("connect db");
-    store
-        .record_media_upload("mxc://hs/cat", "alice-key", "my-blog", Some("hello"))
-        .await
-        .expect("record upload");
-
-    let command = PostCommentCommand {
-        site_id: SiteId::from("my-blog"),
-        page_slug: PageSlug::from("hello"),
-        content: "with media".to_string(),
-        media: Some(CommentMedia {
-            kind: Some(MediaKind::Image),
-            url: "mxc://hs/cat".to_string(),
-            filename: Some("cat.png".to_string()),
-            mimetype: Some("image/png".to_string()),
-            size: Some(42),
-            width: Some(64),
-            height: Some(64),
-            voice: false,
-        }),
-        location: None,
-        poll: None,
-        author_public_key: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".to_string(),
-        author_signature: "sig".to_string(),
-        author_challenge: "chal".to_string(),
-        reply_to: None,
-        thread_root: None,
-    };
-    store
-        .save_post_submission(&command)
-        .await
-        .expect("save submission");
-
-    // A freshly recorded upload is too young to be a candidate.
-    let now = Utc::now();
-    assert!(
-        store
-            .list_media_upload_candidates_before(now - chrono::Duration::hours(24))
-            .await
-            .expect("list candidates")
-            .is_empty(),
-        "uploads inside the grace period must not be candidates"
-    );
-
-    // Older than the cutoff it is enumerated regardless of any submission
-    // binding; active-submission protection belongs to the reachability evaluator.
-    let candidates = store
-        .list_media_upload_candidates_before(now)
-        .await
-        .expect("list candidates");
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].mxc_url, "mxc://hs/cat");
+fn upload_input(key: &str) -> MediaUploadIdempotencyInput {
+    MediaUploadIdempotencyInput {
+        key: key.to_string(),
+        request_fingerprint: key.to_string(),
+    }
 }
 
 #[tokio::test]
@@ -2155,26 +1319,13 @@ async fn media_upload_idempotency_replays_the_same_request() {
         .expect("record exists");
     assert_eq!(found.mxc_url, "mxc://hs/first");
 
-    // Releasing ownership must not disturb the idempotency record.
-    let first_id = store
-        .get_media_upload("my-blog", "mxc://hs/first")
-        .await
-        .unwrap()
-        .expect("ownership row exists")
-        .id;
+    // The winning upload stays authorized for later comment writes.
     assert!(
         store
-            .release_media_upload_ownership("my-blog", "mxc://hs/first", first_id)
+            .media_upload_owned_by("mxc://hs/first", "alice-key", "my-blog", "hello")
             .await
-            .expect("release ownership")
-    );
-    assert!(
-        store
-            .find_media_upload_idempotency("alice-key", "upload-key-123456")
-            .await
-            .expect("find after release")
-            .is_some(),
-        "ownership release must preserve the idempotency record"
+            .expect("ownership check"),
+        "the winning upload must remain usable for comment writes"
     );
 }
 

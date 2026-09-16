@@ -575,12 +575,6 @@ async fn member_avatar_mxc_and_projection_rebuild_determinism() {
         .await
         .expect("register room");
 
-    // Record authoritatively in media_uploads that this avatar was uploaded by Cumments for this site
-    store
-        .record_media_upload(mxc_uri, "dave-key", site_id.as_str(), None)
-        .await
-        .expect("record media upload");
-
     let processor = create_processor(store.clone());
 
     // 1. Process member join event with avatar
@@ -1489,12 +1483,6 @@ async fn ignored_older_event_does_not_rewind_member_projection() {
         .await
         .expect("register room");
 
-    // Create an authoritative local upload record for the old avatar
-    store
-        .record_media_upload(old_mxc, "author-8", site_id, None)
-        .await
-        .expect("record media upload");
-
     // 1. Newer join @ 2000 without avatar
     processor
         .process_room_state(ParsedRoomState {
@@ -1839,14 +1827,6 @@ async fn member_avatar_projection_is_repeatable_and_read_only() {
         .expect("get member")
         .expect("member exists");
     assert_eq!(member.avatar_url.as_deref(), Some(mxc_uri));
-    assert!(
-        store
-            .list_media_upload_candidates_before(chrono::Utc::now() + chrono::Duration::hours(1))
-            .await
-            .unwrap()
-            .is_empty(),
-        "projection must not create ownership"
-    );
 
     // Replaying the event after rebuilding the projection yields the same avatar.
     store

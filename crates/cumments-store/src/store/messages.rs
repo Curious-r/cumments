@@ -4,11 +4,10 @@ use crate::entities::active_enums::SubmissionStatus;
 use crate::entities::{
     backfill_tombstones, delete_submissions, media_upload_idempotency, media_uploads,
     message_revisions, messages, poll_end_events, poll_response_events, post_submissions,
-    processed_appservice_transactions, reactions, room_members, sticker_packs, update_submissions,
+    processed_appservice_transactions, reactions, room_members, update_submissions,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use cumments_core::media_reachability::MediaUploadRecord;
 use cumments_core::media_upload::{
     MEDIA_UPLOAD_IDEMPOTENCY_RETENTION, MediaUploadIdempotency, MediaUploadIdempotencyInput,
     MediaUploadIdempotencyOutcome,
@@ -1166,43 +1165,6 @@ impl MessageStore for DbStore {
         Ok(found.is_some())
     }
 
-    async fn record_media_upload(
-        &self,
-        mxc_url: &str,
-        author_public_key: &str,
-        site_id: &str,
-        page_slug: Option<&str>,
-    ) -> Result<()> {
-        let now = chrono::Utc::now();
-        let model = media_uploads::ActiveModel {
-            mxc_url: Set(mxc_url.to_owned()),
-            author_public_key: Set(author_public_key.to_owned()),
-            site_id: Set(site_id.to_owned()),
-            page_slug: Set(page_slug.map(str::to_string)),
-            used_at: Set(None),
-            submission_id: Set(None),
-            created_at: Set(now),
-            ..Default::default()
-        };
-        media_uploads::Entity::insert(model)
-            .on_conflict(
-                sea_orm::sea_query::OnConflict::columns([
-                    media_uploads::Column::SiteId,
-                    media_uploads::Column::MxcUrl,
-                ])
-                .update_columns([
-                    media_uploads::Column::AuthorPublicKey,
-                    media_uploads::Column::PageSlug,
-                    media_uploads::Column::UsedAt,
-                    media_uploads::Column::SubmissionId,
-                ])
-                .to_owned(),
-            )
-            .exec(&self.db)
-            .await?;
-        Ok(())
-    }
-
     async fn media_upload_owned_by(
         &self,
         mxc_url: &str,
@@ -1218,209 +1180,6 @@ impl MessageStore for DbStore {
             .one(&self.db)
             .await?;
         Ok(found.is_some())
-    }
-
-    async fn has_media_upload_for_site(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
-        let found = media_uploads::Entity::find()
-            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .one(&self.db)
-            .await?;
-        Ok(found.is_some())
-    }
-
-    async fn mark_media_used(&self, site_id: &str, mxc_url: &str) -> Result<()> {
-        media_uploads::Entity::update_many()
-            .col_expr(
-                media_uploads::Column::UsedAt,
-                sea_orm::sea_query::Expr::value(Some(chrono::Utc::now())),
-            )
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-            .filter(media_uploads::Column::UsedAt.is_null())
-            .exec(&self.db)
-            .await?;
-        Ok(())
-    }
-
-    async fn list_media_upload_candidates_before(
-        &self,
-        cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<MediaUploadRecord>> {
-        let rows = media_uploads::Entity::find()
-            .filter(media_uploads::Column::CreatedAt.lt(cutoff))
-            .all(&self.db)
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|m| MediaUploadRecord {
-                id: m.id,
-                mxc_url: m.mxc_url,
-                author_public_key: m.author_public_key,
-                site_id: m.site_id,
-                page_slug: m.page_slug,
-                used_at: m.used_at,
-                submission_id: m.submission_id,
-                created_at: m.created_at,
-            })
-            .collect())
-    }
-
-    async fn release_media_upload_ownership(
-        &self,
-        site_id: &str,
-        mxc_url: &str,
-        expected_id: i64,
-    ) -> Result<bool> {
-        let result = media_uploads::Entity::delete_many()
-            .filter(media_uploads::Column::Id.eq(expected_id))
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-            .exec(&self.db)
-            .await?;
-        Ok(result.rows_affected > 0)
-    }
-
-    async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>> {
-        let rows = media_uploads::Entity::find()
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .all(&self.db)
-            .await?;
-        Ok(rows.into_iter().map(|row| row.mxc_url).collect())
-    }
-
-    async fn get_media_upload(
-        &self,
-        site_id: &str,
-        mxc_url: &str,
-    ) -> Result<Option<MediaUploadRecord>> {
-        let found = media_uploads::Entity::find()
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-            .one(&self.db)
-            .await?;
-        Ok(found.map(|m| MediaUploadRecord {
-            id: m.id,
-            mxc_url: m.mxc_url,
-            author_public_key: m.author_public_key,
-            site_id: m.site_id,
-            page_slug: m.page_slug,
-            used_at: m.used_at,
-            submission_id: m.submission_id,
-            created_at: m.created_at,
-        }))
-    }
-
-    async fn list_media_uploads_for_site(&self, site_id: &str) -> Result<Vec<MediaUploadRecord>> {
-        let found = media_uploads::Entity::find()
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .all(&self.db)
-            .await?;
-        Ok(found
-            .into_iter()
-            .map(|m| MediaUploadRecord {
-                id: m.id,
-                mxc_url: m.mxc_url,
-                author_public_key: m.author_public_key,
-                site_id: m.site_id,
-                page_slug: m.page_slug,
-                used_at: m.used_at,
-                submission_id: m.submission_id,
-                created_at: m.created_at,
-            })
-            .collect())
-    }
-
-    async fn has_historical_author_avatar(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
-        let found = messages::Entity::find()
-            .filter(messages::Column::SiteId.eq(site_id))
-            .filter(messages::Column::AuthorAvatarUrl.eq(Some(mxc_url.to_string())))
-            .one(&self.db)
-            .await?;
-        Ok(found.is_some())
-    }
-
-    async fn has_content_attachment(&self, site_id: &str, mxc_url: &str) -> Result<bool> {
-        // 1. Direct message content on this site
-        let msg_match = messages::Entity::find()
-            .filter(messages::Column::SiteId.eq(site_id))
-            .filter(
-                Condition::any()
-                    .add(messages::Column::ContentJson.contains(mxc_url))
-                    .add(messages::Column::OriginalContentJson.contains(mxc_url)),
-            )
-            .one(&self.db)
-            .await?;
-        if msg_match.is_some() {
-            return Ok(true);
-        }
-
-        // 2. Message revisions for messages belonging to this site
-        let rev_event_ids: Vec<String> = message_revisions::Entity::find()
-            .select_only()
-            .column(message_revisions::Column::MessageEventId)
-            .filter(message_revisions::Column::ContentJson.contains(mxc_url))
-            .into_tuple()
-            .all(&self.db)
-            .await?;
-        if !rev_event_ids.is_empty() {
-            let site_rev_msg = messages::Entity::find()
-                .filter(messages::Column::SiteId.eq(site_id))
-                .filter(messages::Column::EventId.is_in(rev_event_ids))
-                .one(&self.db)
-                .await?;
-            if site_rev_msg.is_some() {
-                return Ok(true);
-            }
-        }
-
-        // 3. Sticker packs on this site
-        let sticker_match = sticker_packs::Entity::find()
-            .filter(sticker_packs::Column::SiteId.eq(site_id))
-            .filter(sticker_packs::Column::PackJson.contains(mxc_url))
-            .one(&self.db)
-            .await?;
-        if sticker_match.is_some() {
-            return Ok(true);
-        }
-
-        // 4. Active post submissions linked to this upload on this site
-        let upload = media_uploads::Entity::find()
-            .filter(media_uploads::Column::SiteId.eq(site_id))
-            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
-            .one(&self.db)
-            .await?;
-        if let Some(sub_id) = upload.and_then(|up| up.submission_id) {
-            let active_sub = post_submissions::Entity::find()
-                .filter(post_submissions::Column::Id.eq(sub_id))
-                .filter(post_submissions::Column::Status.is_in([
-                    "pending",
-                    "processing",
-                    "waiting_for_sync",
-                ]))
-                .one(&self.db)
-                .await?;
-            if active_sub.is_some() {
-                return Ok(true);
-            }
-        }
-
-        // 5. Active post submissions whose payload references the MXC on this site
-        let active_payload_sub = post_submissions::Entity::find()
-            .filter(post_submissions::Column::Status.is_in([
-                "pending",
-                "processing",
-                "waiting_for_sync",
-            ]))
-            .filter(post_submissions::Column::Payload.contains(mxc_url))
-            .filter(post_submissions::Column::Payload.contains(site_id))
-            .one(&self.db)
-            .await?;
-        if active_payload_sub.is_some() {
-            return Ok(true);
-        }
-
-        Ok(false)
     }
 
     async fn find_media_upload_idempotency(
@@ -1483,7 +1242,6 @@ impl MessageStore for DbStore {
             author_public_key: Set(author_public_key.to_owned()),
             site_id: Set(site_id.to_owned()),
             page_slug: Set(page_slug.map(str::to_string)),
-            used_at: Set(None),
             created_at: Set(now),
             ..Default::default()
         };
@@ -1496,7 +1254,6 @@ impl MessageStore for DbStore {
                 .update_columns([
                     media_uploads::Column::AuthorPublicKey,
                     media_uploads::Column::PageSlug,
-                    media_uploads::Column::UsedAt,
                 ])
                 .to_owned(),
             )

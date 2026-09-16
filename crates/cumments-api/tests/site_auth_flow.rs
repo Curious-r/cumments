@@ -1776,9 +1776,19 @@ async fn comment_media_must_reference_an_owned_upload() {
         "unowned media must be rejected"
     );
 
-    // After recording the upload for this author/site/post: accepted.
+    // After recording the upload for this author/site/post through the live
+    // upload path: accepted.
     store
-        .record_media_upload(media_url, &public_key, "test-blog", Some("hello"))
+        .save_media_upload_idempotent(
+            media_url,
+            &public_key,
+            "test-blog",
+            Some("hello"),
+            &cumments_core::media_upload::MediaUploadIdempotencyInput {
+                key: "setup-media-key-123456".to_string(),
+                request_fingerprint: "setup".to_string(),
+            },
+        )
         .await
         .expect("record upload");
     let accepted = router

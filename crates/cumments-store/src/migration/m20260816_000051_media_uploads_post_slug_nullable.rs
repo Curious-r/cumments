@@ -64,15 +64,13 @@ async fn rebuild(manager: &SchemaManager<'_>, nullable: bool) -> Result<(), DbEr
             author_public_key TEXT NOT NULL,
             site_id TEXT NOT NULL,
             post_slug {post_slug_type},
-            used_at TEXT,
-            submission_id INTEGER,
             created_at TEXT NOT NULL
         )"
     ))
     .await?;
     db.execute_unprepared(&format!(
-        "INSERT INTO {temp} (id, mxc_url, author_public_key, site_id, post_slug, used_at, submission_id, created_at)
-         SELECT id, mxc_url, author_public_key, site_id, COALESCE(post_slug, ''), used_at, submission_id, created_at
+        "INSERT INTO {temp} (id, mxc_url, author_public_key, site_id, post_slug, created_at)
+         SELECT id, mxc_url, author_public_key, site_id, COALESCE(post_slug, ''), created_at
          FROM {TABLE}"
     ))
     .await?;

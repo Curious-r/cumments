@@ -177,11 +177,8 @@ mod tests {
 
     #[tokio::test]
     async fn retirement_retires_all_rooms_users_media_and_claim_dms() {
-        let store = Arc::new(
-            DbStore::connect(&test_db_url("retirement"))
-                .await
-                .expect("connect db"),
-        );
+        let db_url = test_db_url("retirement");
+        let store = Arc::new(DbStore::connect(&db_url).await.expect("connect db"));
         let site = "retiring-site";
         store
             .register_site(site, &token_hash("claim"), false)
@@ -226,11 +223,15 @@ mod tests {
             .await
             .expect("virtual user 2");
         store
-            .record_media_upload(
+            .save_media_upload_idempotent(
                 "mxc://hs/abc",
                 "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
                 site,
                 Some("hello"),
+                &cumments_core::media_upload::MediaUploadIdempotencyInput {
+                    key: "retirement-media-key".to_string(),
+                    request_fingerprint: "retirement".to_string(),
+                },
             )
             .await
             .expect("media upload");
@@ -314,6 +315,68 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+
+        // Local upload bookkeeping is removed; the Matrix media is untouched.
+        use cumments_store::sea_orm::{ConnectionTrait, Statement};
+        let db = cumments_store::sea_orm::Database::connect(&db_url)
+            .await
+            .expect("connect raw db");
+        let rows = db
+            .query_all_raw(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT COUNT(*) AS cnt FROM media_uploads",
+            ))
+            .await
+            .expect("count uploads");
+        let remaining: i64 = rows[0].try_get("", "cnt").unwrap();
+        assert_eq!(
+            remaining, 0,
+            "retiring a site removes its local upload bookkeeping"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_media_cleanup_pass_is_scheduled() {
+        let store = Arc::new(
+            DbStore::connect(&test_db_url("pass-schedule"))
+                .await
+                .expect("connect db"),
+        );
+        let driver = Arc::new(TestDriver::new());
+        let deps = ReconcilerDeps {
+            submission_store: store.clone(),
+            registry_store: store.clone(),
+            site_store: store.clone(),
+            role_claim_store: store.clone(),
+            governance_store: store.clone(),
+            projection_repair_store: store.clone(),
+            message_store: store.clone(),
+            room_store: store.clone(),
+            virtual_user_store: store.clone(),
+            site_auth_store: store.clone(),
+            site_transfer_store: store.clone(),
+            state_redaction_repairer: driver.clone(),
+            driver,
+            site_service: Arc::new(SiteService::new(
+                store.clone() as Arc<dyn cumments_core::ports::SiteStore>
+            )),
+            profile_store: None,
+        };
+        let reconciler = Reconciler::new(
+            deps,
+            PassWakeups {
+                submission: Arc::new(Notify::new()),
+                governance: Arc::new(Notify::new()),
+                projection: Arc::new(Notify::new()),
+            },
+        );
+
+        let names = reconciler.pass_names();
+        assert!(!names.is_empty(), "the reconciler must schedule passes");
+        assert!(
+            names.iter().all(|name| !name.contains("media")),
+            "no periodic media pass may be scheduled: {names:?}"
         );
     }
 }

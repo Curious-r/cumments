@@ -1,7 +1,5 @@
 mod deletions;
 mod governance;
-mod media;
-pub use media::MediaCleanupPass;
 pub mod pass;
 pub mod posts;
 pub mod profile_operations;
@@ -64,9 +62,6 @@ const QUARANTINE_ESCALATION: u32 = 4;
 const SUBMISSION_PASS_INTERVAL: Duration = Duration::from_secs(5);
 /// Resync interval for governance passes.
 const GOVERNANCE_PASS_INTERVAL: Duration = Duration::from_secs(60);
-/// Interval for the orphan-media sweep; it has no event source, so the
-/// interval alone drives it.
-const MEDIA_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Interval for repairing facts that failed closed during projection.
 const PROJECTION_REPAIR_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -191,16 +186,6 @@ impl Reconciler {
                 deps.clone(),
                 schedule.site_retirements,
             )),
-            Arc::new(media::MediaCleanupPass::new(
-                deps.clone(),
-                PassConfig {
-                    name: "media-cleanup",
-                    interval: MEDIA_CLEANUP_INTERVAL,
-                    // No producer ever signals this channel; the interval is
-                    // the pass's only driver.
-                    wakeup: Arc::new(Notify::new()),
-                },
-            )),
             Arc::new(projection_repairs::ProjectionRepairsPass::new(
                 deps.clone(),
                 schedule.projection_repairs,
@@ -215,6 +200,11 @@ impl Reconciler {
         }
 
         Self { passes }
+    }
+
+    /// Scheduling names of the configured passes, in construction order.
+    pub fn pass_names(&self) -> Vec<&'static str> {
+        self.passes.iter().map(|pass| pass.config().name).collect()
     }
 
     /// Spawns one task per pass and waits forever. Pass failures are logged

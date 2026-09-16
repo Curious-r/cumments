@@ -456,20 +456,11 @@ pub trait MessageStore: ProjectionSink {
         redacted_by: &str,
     ) -> Result<bool>;
 
-    /// Records a visitor upload so comment submissions can later prove ownership.
+    /// Whether a media URL was uploaded by this author for this site/page.
     ///
-    /// Ownership is identified by `(site_id, mxc_url)`: recording the same MXC
-    /// for another site creates or updates that site's own row and never
-    /// overwrites the first site's ownership.
-    async fn record_media_upload(
-        &self,
-        mxc_url: &str,
-        author_public_key: &str,
-        site_id: &str,
-        page_slug: Option<&str>,
-    ) -> Result<()>;
-
-    /// Whether a media URL was uploaded by this author for this site/post.
+    /// This is the write-admission check for comment media: it proves the MXC
+    /// came through the authorized upload path. It says nothing about whether
+    /// the underlying Matrix media still exists.
     async fn media_upload_owned_by(
         &self,
         mxc_url: &str,
@@ -477,88 +468,6 @@ pub trait MessageStore: ProjectionSink {
         site_id: &str,
         page_slug: &str,
     ) -> Result<bool>;
-
-    /// Whether an MXC media URL was uploaded by Cumments for this site.
-    async fn has_media_upload_for_site(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
-
-    /// Marks this site's media upload row as referenced by a comment submission.
-    ///
-    /// Scoped to `(site_id, mxc_url)` so the same MXC owned by another site is
-    /// never mutated. `used_at` stays historical upload bookkeeping.
-    async fn mark_media_used(&self, site_id: &str, mxc_url: &str) -> Result<()>;
-
-    /// Upload ownership records older than `cutoff`, across all sites, that the
-    /// periodic ownership-release pass evaluates.
-    ///
-    /// Each candidate carries its `site_id` so reachability evaluation and
-    /// ownership release stay site-scoped: the same MXC may be meaningful to
-    /// different sites even though ownership is recorded once.
-    ///
-    /// Candidacy is anchored on `created_at` only. `used_at` is historical
-    /// upload bookkeeping and never influences candidacy, and active-submission
-    /// protection is applied later by the reachability evaluator.
-    async fn list_media_upload_candidates_before(
-        &self,
-        cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<crate::media_reachability::MediaUploadRecord>>;
-
-    /// Releases Cumments ownership for a recorded media upload by removing its
-    /// bookkeeping row from `media_uploads`.
-    ///
-    /// The delete is bound to the exact enumerated record: it only removes the
-    /// row whose `id`, `site_id`, and `mxc_url` all match. This makes release a
-    /// compare-and-release, so a stale evaluation can never remove a different
-    /// row that later took on the same logical identity.
-    ///
-    /// Returns `Ok(true)` if the matching record existed and was removed, or
-    /// `Ok(false)` if it was already absent or no longer matches (idempotent /
-    /// safe under concurrent execution).
-    ///
-    /// This operation only removes the local ownership evidence row in `media_uploads`.
-    /// It preserves `media_upload_idempotency` and causes no Matrix homeserver side effects.
-    async fn release_media_upload_ownership(
-        &self,
-        site_id: &str,
-        mxc_url: &str,
-        expected_id: i64,
-    ) -> Result<bool>;
-
-    /// Releases Cumments ownership for a recorded media upload by removing its
-    /// bookkeeping row from `media_uploads`.
-    ///
-    /// Alias for [`MessageStore::release_media_upload_ownership`].
-    async fn release_media_upload(
-        &self,
-        site_id: &str,
-        mxc_url: &str,
-        expected_id: i64,
-    ) -> Result<bool> {
-        self.release_media_upload_ownership(site_id, mxc_url, expected_id)
-            .await
-    }
-
-    /// Lists every recorded media MXC URL for one site.
-    async fn list_media_urls_for_site(&self, site_id: &str) -> Result<Vec<String>>;
-
-    /// Returns a media upload record for a specific site and MXC URL, if recorded.
-    async fn get_media_upload(
-        &self,
-        site_id: &str,
-        mxc_url: &str,
-    ) -> Result<Option<crate::media_reachability::MediaUploadRecord>>;
-
-    /// Lists all media upload records for a site.
-    async fn list_media_uploads_for_site(
-        &self,
-        site_id: &str,
-    ) -> Result<Vec<crate::media_reachability::MediaUploadRecord>>;
-
-    /// Whether any retained message in the site carries this MXC as the
-    /// historical author avatar presentation.
-    async fn has_historical_author_avatar(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
-
-    /// Whether any retained content attachment or active submission in the site references this MXC URL.
-    async fn has_content_attachment(&self, site_id: &str, mxc_url: &str) -> Result<bool>;
 
     /// Returns an unexpired upload idempotency record, if one exists.
     async fn find_media_upload_idempotency(

@@ -5,9 +5,8 @@ use crate::entities::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-/// Track guest uploads so comment intents can only reference media uploaded
-/// by the same author for the same site/post, and so orphan cleanup can find
-/// media that was never referenced.
+/// Track visitor uploads so comment writes can only reference media uploaded
+/// by the same author for the same site/page.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

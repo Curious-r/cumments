@@ -66,8 +66,7 @@ async fn rebuild(manager: &SchemaManager<'_>, site_scoped: bool) -> Result<(), D
 
     db.execute_unprepared(&format!("DROP TABLE IF EXISTS {TEMP}"))
         .await?;
-    // `AUTOINCREMENT` keeps row ids monotonic so a released id is never reused
-    // by a later replacement row, which compare-and-release relies on.
+    // `AUTOINCREMENT` keeps row ids monotonic across deletes.
     db.execute_unprepared(&format!(
         "CREATE TABLE {TEMP} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,15 +74,13 @@ async fn rebuild(manager: &SchemaManager<'_>, site_scoped: bool) -> Result<(), D
             author_public_key TEXT NOT NULL,
             site_id TEXT NOT NULL,
             page_slug TEXT,
-            used_at TEXT,
-            submission_id INTEGER,
             created_at TEXT NOT NULL{uniqueness}
         )"
     ))
     .await?;
     db.execute_unprepared(&format!(
-        "INSERT INTO {TEMP} (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at)
-         SELECT id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at
+        "INSERT INTO {TEMP} (id, mxc_url, author_public_key, site_id, page_slug, created_at)
+         SELECT id, mxc_url, author_public_key, site_id, page_slug, created_at
          FROM {TABLE}"
     ))
     .await?;

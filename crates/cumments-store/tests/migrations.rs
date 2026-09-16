@@ -116,10 +116,6 @@ async fn submission_txn_migrations_are_registered() {
         "000047 must be registered or claim DMs cannot be tracked"
     );
     assert!(
-        names.contains(&"m20260815_000048_media_upload_submission".to_string()),
-        "000048 must be registered or orphan cleanup can delete retrying media"
-    );
-    assert!(
         names.contains(&"m20260815_000049_command_audit_log".to_string()),
         "000049 must be registered or chat command audit records are lost"
     );
@@ -245,7 +241,7 @@ async fn operation_claims_table_enforces_server_wide_uniqueness() {
 async fn operation_claim_decoupling_preserves_existing_records() {
     let url = test_db_url("operation-claim-decoupling");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(68))
+    Migrator::up(&db, Some(67))
         .await
         .expect("migrate to 000068");
 
@@ -322,7 +318,7 @@ async fn operation_claim_decoupling_preserves_existing_records() {
 async fn drop_poll_end_authorized_migration_removes_projection_snapshot() {
     let url = test_db_url("drop-poll-end-authorized");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(66))
+    Migrator::up(&db, Some(65))
         .await
         .expect("migrate to 000066");
 
@@ -355,7 +351,7 @@ async fn drop_poll_end_authorized_migration_removes_projection_snapshot() {
 async fn redacted_content_migration_sanitizes_existing_rows() {
     let url = test_db_url("redacted-content");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(53))
+    Migrator::up(&db, Some(52))
         .await
         .expect("migrate to 000053");
 
@@ -427,7 +423,7 @@ async fn redacted_content_migration_sanitizes_existing_rows() {
 async fn sanitize_redacted_payloads_migration_clears_late_retained_bodies() {
     let url = test_db_url("sanitize-redacted-payloads");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(59))
+    Migrator::up(&db, Some(58))
         .await
         .expect("migrate to 000059");
 
@@ -486,7 +482,7 @@ async fn sanitize_redacted_payloads_migration_clears_late_retained_bodies() {
 async fn clear_redacted_poll_choices_migration_forgets_selected_options() {
     let url = test_db_url("clear-redacted-poll-choices");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(60))
+    Migrator::up(&db, Some(59))
         .await
         .expect("migrate to 000060");
 
@@ -529,7 +525,6 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
          ('m20260815_000045_post_submission_txn_id', \
           'm20260815_000046_unified_submission_txn_ids', \
           'm20260815_000047_role_claim_dm_room', \
-          'm20260815_000048_media_upload_submission', \
           'm20260815_000049_command_audit_log')",
     )
     .await
@@ -543,7 +538,6 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         "ALTER TABLE post_submissions \
          ADD COLUMN force_new_txn BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE role_claims DROP COLUMN dm_room_id",
-        "ALTER TABLE media_uploads DROP COLUMN submission_id",
         "DROP TABLE command_audit_logs",
     ] {
         db.execute_unprepared(sql).await.expect("rewind schema");
@@ -555,7 +549,6 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
     let delete_columns = column_names(&db, "delete_submissions").await;
     let update_columns = column_names(&db, "update_submissions").await;
     let claim_columns = column_names(&db, "role_claims").await;
-    let media_columns = column_names(&db, "media_uploads").await;
 
     assert!(post_columns.iter().any(|c| c == "txn_id"));
     assert!(!post_columns.iter().any(|c| c == "force_new_txn"));
@@ -565,7 +558,6 @@ async fn upgrading_from_0044_schema_adds_txn_columns() {
         assert!(columns.iter().any(|c| c == "matrix_event_id"));
     }
     assert!(claim_columns.iter().any(|c| c == "dm_room_id"));
-    assert!(media_columns.iter().any(|c| c == "submission_id"));
     assert!(
         !column_not_null(&db, "media_uploads", "page_slug").await,
         "page_slug must be nullable so avatar uploads are site-scoped"
@@ -583,7 +575,7 @@ async fn terminology_rename_migration_converges_legacy_schema() {
     // Entity-first migrations already create `page_slug` on fresh databases,
     // so reshape the tables back to the pre-rename shape to simulate a
     // database created before 000052.
-    Migrator::up(&db, Some(51))
+    Migrator::up(&db, Some(50))
         .await
         .expect("migrate to 000051");
     for table in [
@@ -690,17 +682,17 @@ async fn media_uploads_table_permits_same_mxc_across_sites_and_rejects_duplicate
 async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
     let url = test_db_url("media-uploads-site-scoped-upgrade");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(75))
+    Migrator::up(&db, Some(74))
         .await
         .expect("migrate to 000078");
 
     let now = chrono::Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
         "INSERT INTO media_uploads \
-         (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at) \
+         (id, mxc_url, author_public_key, site_id, page_slug, created_at) \
          VALUES \
-         (11, 'mxc://hs/alpha', 'author-a', 'site-a', 'post-a', NULL, NULL, '{now}'), \
-         (12, 'mxc://hs/beta', 'author-b', 'site-b', NULL, '{now}', NULL, '{now}')"
+         (11, 'mxc://hs/alpha', 'author-a', 'site-a', 'post-a', '{now}'), \
+         (12, 'mxc://hs/beta', 'author-b', 'site-b', NULL, '{now}')"
     ))
     .await
     .expect("insert pre-migration rows");
@@ -710,12 +702,12 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
     let rows = db
         .query_all_raw(Statement::from_string(
             db.get_database_backend(),
-            "SELECT id, mxc_url, author_public_key, site_id, page_slug, used_at \
+            "SELECT id, mxc_url, author_public_key, site_id, page_slug \
              FROM media_uploads ORDER BY id",
         ))
         .await
         .expect("query migrated rows");
-    assert_eq!(rows.len(), 2, "both ownership rows must be preserved");
+    assert_eq!(rows.len(), 2, "both upload rows must be preserved");
 
     let first_id: i64 = rows[0].try_get("", "id").unwrap();
     let first_site: String = rows[0].try_get("", "site_id").unwrap();
@@ -730,14 +722,9 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
     let second_id: i64 = rows[1].try_get("", "id").unwrap();
     let second_site: String = rows[1].try_get("", "site_id").unwrap();
     let second_mxc: String = rows[1].try_get("", "mxc_url").unwrap();
-    let second_used_at: Option<String> = rows[1].try_get("", "used_at").unwrap();
     assert_eq!(
         (second_id, second_site.as_str(), second_mxc.as_str()),
         (12, "site-b", "mxc://hs/beta")
-    );
-    assert!(
-        second_used_at.is_some(),
-        "used_at must be preserved verbatim"
     );
 
     // After the migration the composite constraint is in force.
@@ -789,7 +776,7 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
 async fn media_uploads_site_scoped_migration_preserves_unrelated_schema_objects() {
     let url = test_db_url("media-uploads-schema-objects");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(75))
+    Migrator::up(&db, Some(74))
         .await
         .expect("migrate to 000078");
 
@@ -831,7 +818,7 @@ async fn media_uploads_site_scoped_migration_preserves_unrelated_schema_objects(
 async fn media_uploads_site_scoped_migration_replaces_global_unique() {
     let url = test_db_url("media-uploads-global-unique");
     let db = Database::connect(&url).await.expect("connect db");
-    Migrator::up(&db, Some(75))
+    Migrator::up(&db, Some(74))
         .await
         .expect("migrate to 000078");
 
@@ -843,8 +830,6 @@ async fn media_uploads_site_scoped_migration_replaces_global_unique() {
             author_public_key TEXT NOT NULL,
             site_id TEXT NOT NULL,
             page_slug TEXT,
-            used_at TEXT,
-            submission_id INTEGER,
             created_at TEXT NOT NULL
         )",
     )
@@ -852,8 +837,8 @@ async fn media_uploads_site_scoped_migration_replaces_global_unique() {
     .expect("create legacy table");
     db.execute_unprepared(
         "INSERT INTO media_uploads_legacy \
-         (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at) \
-         SELECT id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at \
+         (id, mxc_url, author_public_key, site_id, page_slug, created_at) \
+         SELECT id, mxc_url, author_public_key, site_id, page_slug, created_at \
          FROM media_uploads",
     )
     .await
@@ -873,8 +858,8 @@ async fn media_uploads_site_scoped_migration_replaces_global_unique() {
     let now = chrono::Utc::now().to_rfc3339();
     db.execute_unprepared(&format!(
         "INSERT INTO media_uploads \
-         (id, mxc_url, author_public_key, site_id, page_slug, used_at, submission_id, created_at) \
-         VALUES (7, 'mxc://hs/legacy', 'author-a', 'site-a', 'post-a', NULL, NULL, '{now}')"
+         (id, mxc_url, author_public_key, site_id, page_slug, created_at) \
+         VALUES (7, 'mxc://hs/legacy', 'author-a', 'site-a', 'post-a', '{now}')"
     ))
     .await
     .expect("insert legacy row");
@@ -1039,7 +1024,7 @@ async fn migration_000074_fails_on_duplicate_sequences_and_preserves_all_operati
     let db = Database::connect(&url).await.expect("connect db");
 
     // Run migrations up to 000073
-    Migrator::up(&db, Some(72))
+    Migrator::up(&db, Some(71))
         .await
         .expect("migrate to 000073");
 
@@ -1098,7 +1083,7 @@ async fn migration_000074_succeeds_on_valid_data_and_rollback_is_symmetric() {
     let db = Database::connect(&url).await.expect("connect db");
 
     // Run migrations up to 000073
-    Migrator::up(&db, Some(72))
+    Migrator::up(&db, Some(71))
         .await
         .expect("migrate to 000073");
 
@@ -1161,7 +1146,7 @@ async fn migration_000076_room_members_projection_ordering_and_rollback_is_symme
     let db = Database::connect(&url).await.expect("connect db");
 
     // Migrate up to 000076
-    Migrator::up(&db, Some(74))
+    Migrator::up(&db, Some(73))
         .await
         .expect("migrate to 000076");
 
@@ -1210,10 +1195,10 @@ async fn migration_000076_discards_legacy_projection_and_rebuilds_from_canonical
     let url = test_db_url("migration-000076-discard-rebuild");
     let db = Database::connect(&url).await.expect("connect db");
 
-    // Migrate up to 000073 (before migration 000076)
-    Migrator::up(&db, Some(73))
+    // Migrate up to 000074 (before migration 000076)
+    Migrator::up(&db, Some(72))
         .await
-        .expect("migrate to 000073");
+        .expect("migrate to 000074");
 
     let t1_str = "2026-09-15T10:00:00.123Z";
     let t1_ms: i64 = 1789466400123;
