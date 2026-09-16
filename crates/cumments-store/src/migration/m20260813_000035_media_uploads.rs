@@ -5,8 +5,10 @@ use crate::entities::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-/// Track visitor uploads so comment writes can only reference media uploaded
-/// by the same author for the same site/page.
+/// Track visitor upload provenance so comment and avatar writes can only
+/// reference media uploaded through the authorized path by the same visitor
+/// for the same scope: a page for comment media, no page for a site-scoped
+/// avatar.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

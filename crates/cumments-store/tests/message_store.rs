@@ -1191,28 +1191,28 @@ async fn comment_media_authorization_requires_the_uploading_author() {
         store
             .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "the uploading author must be authorized to use the media"
     );
     assert!(
         !store
             .media_upload_owned_by("mxc://hs/cat", "bob-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "another visitor's upload must not authorize this author"
     );
     assert!(
         !store
             .media_upload_owned_by("mxc://hs/cat", "alice-key", "other-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "another site's upload must not authorize this author"
     );
     assert!(
         !store
             .media_upload_owned_by("mxc://hs/cat", "alice-key", "my-blog", "other-page")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "another page's upload must not authorize this author"
     );
 }
@@ -1240,21 +1240,21 @@ async fn comment_media_authorization_is_site_scoped_for_the_same_mxc() {
         store
             .media_upload_owned_by("mxc://hs/shared", "alice-key", "site-a", "page")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "site A's upload authorizes site A"
     );
     assert!(
         store
             .media_upload_owned_by("mxc://hs/shared", "bob-key", "site-b", "page")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "the same MXC recorded by site B authorizes site B"
     );
     assert!(
         !store
             .media_upload_owned_by("mxc://hs/shared", "alice-key", "site-b", "page")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "site A's record must not authorize site B"
     );
 }
@@ -1294,14 +1294,14 @@ async fn recording_the_same_mxc_for_another_visitor_does_not_overwrite() {
         store
             .media_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "bob's provenance must not overwrite alice's"
     );
     assert!(
         store
             .media_upload_owned_by("mxc://hs/shared", "bob-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "bob's provenance must be recorded alongside alice's"
     );
 }
@@ -1340,7 +1340,7 @@ async fn comment_and_avatar_provenance_for_the_same_mxc_coexist() {
         store
             .media_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "the comment provenance fact must survive the avatar record"
     );
     assert!(
@@ -1395,7 +1395,7 @@ async fn recording_the_same_provenance_fact_twice_is_idempotent() {
         store
             .media_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check")
+            .expect("provenance check")
     );
     assert!(
         store
@@ -1470,7 +1470,7 @@ async fn media_upload_idempotency_replays_the_same_request() {
         !store
             .media_upload_owned_by("mxc://hs/second", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "losing upload must be rolled back"
     );
     let found = store
@@ -1485,7 +1485,7 @@ async fn media_upload_idempotency_replays_the_same_request() {
         store
             .media_upload_owned_by("mxc://hs/first", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "the winning upload must remain usable for comment writes"
     );
 }
@@ -1528,7 +1528,7 @@ async fn media_upload_idempotency_rejects_key_reuse_with_different_request() {
         !store
             .media_upload_owned_by("mxc://hs/second", "alice-key", "my-blog", "hello")
             .await
-            .expect("ownership check"),
+            .expect("provenance check"),
         "reused request must not record a second upload"
     );
 }

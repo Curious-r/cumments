@@ -6,8 +6,9 @@ use crate::entities::*;
 pub struct Migration;
 
 /// Idempotency records for guest media uploads. Kept separate from
-/// `media_uploads` so an ownership row stays stable once a comment references
-/// it, while the key may be reused after the 24-hour retention window.
+/// `media_uploads` so an upload-provenance record stays stable once a comment
+/// references it, while the key may be reused after the 24-hour retention
+/// window.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

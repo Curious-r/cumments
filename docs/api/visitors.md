@@ -21,7 +21,7 @@ Response:
 ```
 
 - `display_name` is the current profile display name, or `null` when unset.
-- `avatar_url` is a signed proxy URL (96×96 crop variant when the media proxy is enabled), or `null` when unset or when the media proxy is disabled. Raw `mxc://` transport addresses are never exposed.
+- `avatar_url` is a signed, browser-facing proxy URL (96×96 crop variant when the media proxy is enabled), or `null` when unset or when the media proxy is disabled. Raw `mxc://` URIs are not part of this read representation; the upload endpoints return raw MXC separately as write-side intermediate values.
 - Unknown virtual users and homeservers configured not to disclose profiles
   (`403`, MSC4170) both return an **empty profile** (`null` fields) with
   `200`, so clients treat "no profile" as a normal state.

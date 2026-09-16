@@ -1145,10 +1145,11 @@ async fn get_profile_is_read_only_and_does_not_expose_raw_mxc() {
     let prof: serde_json::Value = body_json(res).await;
 
     assert_eq!(prof["display_name"], "Homeserver User");
-    // The profile response never carries an opaque media reference.
+    // The profile response carries only `avatar_url`; there is no separate
+    // media field.
     assert!(prof.get("avatar").is_none());
-    // The media proxy is disabled in this test state, so no proxy URL is produced
-    // and the raw MXC is never exposed.
+    // The media proxy is disabled in this test state, so no signed proxy URL is
+    // produced and the browser-facing avatar_url stays null.
     assert!(prof["avatar_url"].is_null());
 }
 

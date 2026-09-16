@@ -37,6 +37,11 @@ octet-stream, and uncommon image/video/audio types are served as
 `Cross-Origin-Resource-Policy: cross-origin`, and
 `Referrer-Policy: no-referrer`.
 
+The proxy is read-side and independent of upload bookkeeping: it translates an
+`mxc://` reference into a signed URL and depends only on the MXC and the
+homeserver. It does not consult `media_uploads`, upload provenance, or any
+media lifecycle state.
+
 ## Visitor media upload
 
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/media?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
@@ -52,11 +57,13 @@ second copy; keys are retained for 24 hours like comment write keys. The
 returned `url` is then used in a POST comment request with `media` (the
 signature covers the media URL instead of text content).
 
-The upload also records the MXC against the uploading visitor and page. A
-comment may only reference media recorded for the same author, site, and
-page; that record is local write admission, not ownership of the Matrix
-object. The homeserver owns Matrix media retention and deletion, and Cumments
-never deletes media from it.
+The upload records an upload-provenance record for the MXC against the
+uploading visitor and page. A comment may only reference media recorded for the
+same author, site, and page. The same `media_uploads` provenance covers
+site-scoped avatar uploads (see below); it is local write admission and does
+not own or manage the Matrix media object. Matrix media lifetime — retention
+and deletion — belongs to the homeserver, and Cumments never deletes media from
+it.
 
 ## Visitor avatar upload
 
@@ -75,13 +82,13 @@ comment-media upload's security model: `Idempotency-Key`, author Ed25519
 signature, PoW freshness, write rate limiting, the size cap, and allowed-MIME
 validation. Replays return the original MXC without uploading a second copy.
 
-The upload records the MXC against the uploading visitor and site with no page,
-which is what authorizes a later avatar mutation: only an upload made through
-this path, by the same visitor, for the same site, can be set as the avatar. A
-page-scoped comment-media upload never authorizes an avatar. As with comment
-media, this record is local write admission, not ownership of the Matrix media
-object; the homeserver owns Matrix media retention and deletion, and Cumments
-never deletes media from it.
+The upload records an upload-provenance record for the MXC against the
+uploading visitor and site with no page, which is what authorizes a later
+avatar mutation: only an upload made through this path, by the same visitor,
+for the same site, can be set as the avatar. A page-scoped comment-media upload
+never authorizes an avatar. As with comment media, this is local write
+admission and does not own or manage the Matrix media object; Matrix media
+lifetime belongs to the homeserver, and Cumments never deletes media from it.
 
 ## Visitor avatar
 

@@ -239,7 +239,7 @@ before trusting the projection.
 | Content kind | Visitor sending | Mechanism |
 |---|---|---|
 | Text | Supported | `m.text` with reply/edit/delete, queued as a submission |
-| Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; orphaned uploads are garbage-collected |
+| Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; the MXC is recorded as upload provenance for write admission |
 | Sticker | Supported | Choose from the site's sticker packs (`m.room.image_pack` on the site Space); the API validates the reference and fills metadata, visitors cannot upload stickers |
 | Location | Supported | `m.location` (MSC3488), queued like a comment |
 | Poll | Supported | `POST /polls` queues `m.poll.start` (MSC3381, single-select `max_selections: 1`) through the durable post pipeline; `POST /polls/{poll_id}/votes` proxies `m.poll.response` with proof |
@@ -265,3 +265,8 @@ message thumbnails default to 320×240 `scale` and avatars to 96×96 `crop`.
 It is deliberately read-only: site administrators browse media directly in
 their Matrix client, which is one benefit of building on Matrix (see
 [API](api/media.md#media-proxy)).
+
+The proxy is read-side and independent of upload bookkeeping: it depends only
+on the `mxc://` reference and the homeserver, and never consults
+`media_uploads`, upload provenance, or any media lifecycle state. Matrix media
+lifetime remains the homeserver's responsibility.

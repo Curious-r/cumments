@@ -2,8 +2,8 @@
 //!
 //! Verifies the unified projection rule: every Matrix-derived avatar (native
 //! Matrix user, Cumments virtual user, or remote observation) is projected as
-//! its plain `mxc://` URI into the member presentation, never touching upload
-//! ownership bookkeeping.
+//! its plain `mxc://` URI into the member presentation, never touching media
+//! upload-provenance records.
 
 use std::sync::Arc;
 use tokio::sync::Notify;

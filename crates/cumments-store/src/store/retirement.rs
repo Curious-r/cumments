@@ -71,7 +71,7 @@ pub(crate) async fn delete_site(db: &DatabaseConnection, site_id: &str) -> Resul
     delete_by_values(db, "room_registry", "site_id", &[site_id.to_string()]).await?;
 
     // Media idempotency rows are keyed by author, not site; join through the
-    // ownership row so a retired site does not leave stale keys.
+    // upload-provenance record so a retired site does not leave stale keys.
     exec(
         db,
         "DELETE FROM media_upload_idempotency WHERE mxc_url IN \

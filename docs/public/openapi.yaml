@@ -2504,8 +2504,10 @@ components:
         avatar_url:
           type: [string, "null"]
           description: |
-            Signed proxy URL (96×96 crop variant when the media proxy is
-            enabled), or null when unset. Never exposes raw MXC.
+            Signed browser-facing proxy URL (96×96 crop variant when the media
+            proxy is enabled), or null when unset. Raw MXC is not part of this
+            read representation; the upload endpoints return it as a write-side
+            intermediate value.
     ChallengeResponse:
       type: object
       required: [prefix, difficulty]

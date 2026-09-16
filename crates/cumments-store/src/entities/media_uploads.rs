@@ -10,8 +10,8 @@ use sea_orm::entity::prelude::*;
 /// a homeserver returns an existing media object for a later upload.
 ///
 /// This is Cumments-side upload provenance and write admission only. It is not
-/// ownership of the Matrix media object: the homeserver owns and retains the
-/// actual media, and Cumments never deletes it.
+/// ownership of the Matrix media object: Matrix media lifetime is the
+/// homeserver's responsibility, and Cumments never deletes media from it.
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "media_uploads")]

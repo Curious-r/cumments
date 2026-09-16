@@ -30,8 +30,9 @@ use validator::Validate;
 /// Public self-service read of the visitor's current global profile (display
 /// name and avatar) for this site. The virtual user is derived from
 /// `site_id + public_key`. Authoritative runtime state is read from the
-/// Matrix global profile. The avatar is returned only as a signed browser-facing
-/// media-proxy URL; raw Matrix MXC URIs are never exposed in public JSON.
+/// Matrix global profile. The avatar is returned as a signed browser-facing
+/// media-proxy URL rather than a raw Matrix MXC; raw MXC is a write-side value
+/// produced by the upload endpoints, not part of this read representation.
 /// Performs no database write transactions.
 pub(crate) async fn visitor_profile_handler(
     State(state): State<ApiState>,

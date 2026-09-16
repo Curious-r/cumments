@@ -2,8 +2,9 @@
 //!
 //! Uploads are synchronous writes that return an `mxc://` URL, so they
 //! cannot ride the submission queue. The idempotency record is stored
-//! separately from `media_uploads`: the ownership row must stay stable once
-//! a comment references it, while the key may be reused after 24 hours.
+//! separately from `media_uploads`: the upload-provenance record must stay
+//! stable once a comment or avatar references it, while the key may be reused
+//! after 24 hours.
 
 use chrono::{DateTime, Utc};
 

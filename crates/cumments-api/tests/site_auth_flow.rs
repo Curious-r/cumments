@@ -357,9 +357,10 @@ async fn visitor_profile_returns_the_current_profile_and_visitor_id() {
         serde_json::from_str(&body_text(response).await).expect("parse profile");
     assert_eq!(body["visitor_id"], visitor_id);
     assert_eq!(body["display_name"], "Alice");
-    // The profile response never carries an opaque media reference.
+    // The profile response carries only `avatar_url`; there is no separate
+    // media field.
     assert!(body.get("avatar").is_none());
-    // The media proxy is disabled in tests, so avatar_url is null (never exposes raw MXC).
+    // The media proxy is disabled in tests, so the browser-facing avatar_url is null.
     assert!(body["avatar_url"].is_null());
 }
 
@@ -1719,12 +1720,12 @@ async fn redacted_comment_reads_as_tombstone_and_rejects_new_reaction() {
 }
 
 #[tokio::test]
-async fn comment_media_must_reference_an_owned_upload() {
+async fn comment_media_must_reference_a_recorded_upload() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use ed25519_dalek::{Signer, SigningKey};
 
     let (state, store) =
-        test_state("media-ownership", SiteVerificationPolicy::Disabled, None).await;
+        test_state("media-provenance", SiteVerificationPolicy::Disabled, None).await;
     store
         .register_site("test-blog", &token_hash("claim"), false)
         .await
@@ -1773,7 +1774,7 @@ async fn comment_media_must_reference_an_owned_upload() {
     assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
     assert!(
         body_text(denied).await.contains("media must reference"),
-        "unowned media must be rejected"
+        "media without upload provenance must be rejected"
     );
 
     // After recording the upload for this author/site/post through the live

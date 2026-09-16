@@ -116,8 +116,9 @@ frame carries a deterministic `id`, and clients should ignore IDs they have alre
   ledger is therefore deferred until a second genuine per-action row machine
   appears — sharing a concept does not imply sharing a table.
 - Matrix media lifetime is the homeserver's responsibility. Cumments keeps
-  `mxc://` references and a local upload record used for comment write
-  admission, but it never deletes or garbage-collects Matrix media.
+  `mxc://` references and a local upload-provenance record used for
+  comment-media and site-scoped avatar write admission, but it never deletes,
+  retains, or garbage-collects Matrix media.
 
 ## System overview
 

@@ -10,7 +10,7 @@ const COLUMN: &str = "post_slug";
 pub struct Migration;
 
 /// Make `media_uploads.post_slug` nullable so site-scoped identity media
-/// (guest avatars) shares the same ownership/idempotency machinery as
+/// (guest avatars) shares the same upload-provenance/idempotency machinery as
 /// comment-scoped uploads without pretending to belong to a post.
 ///
 /// SQLite cannot alter a column's nullability, so the table is rebuilt with
