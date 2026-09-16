@@ -14,7 +14,7 @@ use crate::routes::governance::{
 };
 use crate::routes::media::{
     MEDIA_MAX_BYTES, MediaProxy, add_site_sticker_handler, list_stickers_handler, media_handler,
-    remove_site_sticker_handler, upload_media_handler,
+    remove_site_sticker_handler, upload_avatar_media_handler, upload_media_handler,
 };
 use crate::routes::misc::{get_challenge_handler, health_handler};
 use crate::routes::operator::{
@@ -255,6 +255,15 @@ pub fn build_router(state: ApiState) -> Router {
             put(set_visitor_avatar_handler)
                 .delete(clear_visitor_avatar_handler)
                 .fallback(method_not_allowed_handler),
+        )
+        .route(
+            "/api/v1/sites/{site_id}/visitors/profile/avatar/media",
+            // Site-scoped avatar upload. Like the page media route, the
+            // handler enforces the 20MB cap itself; raise axum's extractor
+            // limit so large uploads reach it.
+            post(upload_avatar_media_handler)
+                .fallback(method_not_allowed_handler)
+                .layer(DefaultBodyLimit::max(MEDIA_MAX_BYTES)),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

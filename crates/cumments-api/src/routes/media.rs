@@ -21,7 +21,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cumments_core::identity::{signature_message, verify_signature};
-use cumments_core::media_upload::MediaUploadIdempotencyInput;
+use cumments_core::media_upload::{MediaUploadIdempotencyInput, avatar_upload_signature_message};
 use cumments_core::models::{Content, Message, PageSlug, SiteId};
 use cumments_core::site_auth::{constant_time_eq, is_private_ip_addr, sha256_hex};
 use cumments_core::sticker_packs::{
@@ -889,7 +889,176 @@ pub(crate) async fn upload_media_handler(
     }
 }
 
-/// Lists a site's projected sticker packs for visitors.
+/// Site-scoped visitor avatar upload: verifies PoW + author signature, then
+/// asks the `MatrixDriver` to upload as the author's virtual user.
+///
+/// The returned `mxc://` URL is a write-side intermediate value, not a browser
+/// media URL: the client passes it to `PUT .../visitors/profile/avatar`. The
+/// upload is recorded against the visitor and site with no page slug, so the
+/// profile avatar mutation can require that the avatar came through this path.
+pub(crate) async fn upload_avatar_media_handler(
+    State(state): State<ApiState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(site_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    if state.driver.sender_user_id().is_none() {
+        return Err(AppError::NotFound(
+            "Avatar uploads are not enabled for this deployment.".to_string(),
+        ));
+    }
+    let site_id_val = SiteId::new(site_id).map_err(AppError::Validation)?;
+
+    let key = client_key(&headers, Some(addr), &state.trusted_proxies);
+    if !state.write_limiter.allow(&key) {
+        return Err(AppError::TooManyRequests {
+            detail: "avatar uploads are rate limited; try again later".to_string(),
+            retry_after_seconds: state.write_limiter.window().as_secs(),
+        });
+    }
+    if body.len() > MEDIA_MAX_BYTES {
+        return Err(AppError::BadRequest(
+            "media exceeds the size limit".to_string(),
+        ));
+    }
+    let idempotency_key = extract_idempotency_key(&headers)?;
+    let author_public_key = query
+        .get("author_public_key")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_public_key".to_string()))?;
+    let author_signature = query
+        .get("author_signature")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing author_signature".to_string()))?;
+    let challenge_response = query
+        .get("challenge_response")
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("missing challenge_response".to_string()))?;
+    let mimetype = query
+        .get("mime")
+        .cloned()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let filename = query
+        .get("filename")
+        .cloned()
+        .unwrap_or_else(|| "avatar".to_string());
+
+    if !ALLOWED_UPLOAD_MIMES
+        .iter()
+        .any(|allowed| mimetype.starts_with(allowed))
+    {
+        return Err(AppError::BadRequest(format!(
+            "unsupported upload media type {mimetype}"
+        )));
+    }
+
+    let fingerprint = format!(
+        "{}\n{}\n{}",
+        request_fingerprint(
+            "POST",
+            &format!(
+                "/api/v1/sites/{}/visitors/profile/avatar/media",
+                site_id_val.as_str()
+            ),
+            &body,
+        ),
+        mimetype,
+        filename,
+    );
+
+    // Idempotency replay short-circuits before PoW so a retry does not need
+    // a fresh proof of work. The Ed25519 signature is still verified so a
+    // guessed key cannot leak someone else's media URL.
+    if let Some(existing) = state
+        .store
+        .find_media_upload_idempotency(&author_public_key, &idempotency_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to check avatar idempotency: {e}")))?
+    {
+        if existing.request_fingerprint != fingerprint {
+            return Err(AppError::IdempotencyReused);
+        }
+        let challenge = challenge_prefix(&challenge_response);
+        let body_hash = sha256_hex(&body);
+        let message = avatar_upload_signature_message(
+            site_id_val.as_str(),
+            &mimetype,
+            &filename,
+            &body_hash,
+            challenge,
+        );
+        if !verify_signature(&author_public_key, &message, &author_signature) {
+            return Err(AppError::InvalidSignature);
+        }
+        return Ok(media_upload_response(
+            existing.mxc_url,
+            filename,
+            mimetype,
+            body.len(),
+            true,
+        ));
+    }
+
+    if !state.pow.verify(&challenge_response) {
+        return Err(AppError::InvalidPoW);
+    }
+    let challenge = challenge_prefix(&challenge_response);
+    let body_hash = sha256_hex(&body);
+    let message = avatar_upload_signature_message(
+        site_id_val.as_str(),
+        &mimetype,
+        &filename,
+        &body_hash,
+        challenge,
+    );
+    if !verify_signature(&author_public_key, &message, &author_signature) {
+        return Err(AppError::InvalidSignature);
+    }
+
+    let size = body.len();
+    let url = state
+        .driver
+        .upload_media(body, &filename, &mimetype, &author_public_key, &site_id_val)
+        .await
+        .map_err(|e| AppError::Internal(format!("failed to upload avatar media: {e}")))?;
+    let outcome = match state
+        .store
+        .save_media_upload_idempotent(
+            &url,
+            &author_public_key,
+            site_id_val.as_str(),
+            None,
+            &MediaUploadIdempotencyInput {
+                key: idempotency_key,
+                request_fingerprint: fingerprint,
+            },
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            warn!(url, %e, "failed to record avatar upload");
+            return Err(AppError::Internal(format!(
+                "failed to record avatar upload: {e}"
+            )));
+        }
+    };
+
+    match outcome {
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Created { mxc_url } => Ok(
+            media_upload_response(mxc_url, filename, mimetype, size, false),
+        ),
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Replayed { mxc_url } => Ok(
+            media_upload_response(mxc_url, filename, mimetype, size, true),
+        ),
+        cumments_core::media_upload::MediaUploadIdempotencyOutcome::Reused => {
+            Err(AppError::IdempotencyReused)
+        }
+    }
+}
+
 pub(crate) async fn list_stickers_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

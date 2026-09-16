@@ -204,8 +204,10 @@ Notes on the layout:
   it first.
 - `media_uploads.page_slug` is nullable: comment media records the page it
   was authorized for, while visitor avatars are site-scoped records with a
-  `NULL` page. Avatar media is marked referenced at upload time so the
-  unused-media sweep never collects a profile avatar.
+  `NULL` page. The avatar upload endpoint records the site-scoped row, and a
+  `PUT .../visitors/profile/avatar` requires matching site-scoped provenance
+  before it claims the durable operation. This is local write admission, not
+  ownership of the Matrix media object, which the homeserver retains.
 
 ## Ephemeral events
 

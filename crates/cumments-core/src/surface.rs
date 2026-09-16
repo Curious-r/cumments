@@ -405,6 +405,13 @@ pub const CAPABILITIES: &[Capability] = &[
         AuditRequirement::Required,
     ),
     capability(
+        "visitor.profile.avatar.upload",
+        "Upload site-scoped media for a visitor profile avatar.",
+        RiskTier::Medium,
+        LifecycleKind::Sync,
+        AuditRequirement::Required,
+    ),
+    capability(
         "visitor.profile.avatar.set",
         "Set visitor profile avatar.",
         RiskTier::Medium,
@@ -761,6 +768,12 @@ pub const HTTP_OPERATIONS: &[HttpOperation] = &[
         "visitor.profile.avatar.clear",
     ),
     http_operation(
+        "POST",
+        "/api/v1/sites/{site_id}/visitors/profile/avatar/media",
+        "uploadVisitorAvatarMedia",
+        "visitor.profile.avatar.upload",
+    ),
+    http_operation(
         "GET",
         "/api/v1/sites/{site_id}/visitors/profile",
         "getVisitorProfile",
@@ -920,6 +933,6 @@ mod tests {
 
         let operation_ids: HashSet<_> = HTTP_OPERATIONS.iter().map(|op| op.operation_id).collect();
         assert_eq!(operation_ids.len(), HTTP_OPERATIONS.len());
-        assert_eq!(HTTP_OPERATIONS.len(), 70);
+        assert_eq!(HTTP_OPERATIONS.len(), 71);
     }
 }

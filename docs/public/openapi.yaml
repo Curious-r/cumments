@@ -1834,6 +1834,92 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/sites/{site_id}/visitors/profile/avatar/media:
+    parameters:
+      - $ref: "#/components/parameters/SiteId"
+    post:
+      tags: [Visitors]
+      summary: Upload site-scoped avatar media
+      operationId: uploadVisitorAvatarMedia
+      description: |
+        Uploads raw bytes as the visitor's virtual user and returns the raw
+        Matrix MXC URI (`mxc://server/media_id`) as a write-side intermediate
+        value to pass to `PUT /api/v1/sites/{site_id}/visitors/profile/avatar`.
+        It is not a browser media URL; the profile read endpoint returns the
+        signed browser-facing `avatar_url`. Query parameters carry the PoW
+        challenge response and an Ed25519 signature over
+        `["UPLOAD", site_id, mime, filename, sha256_hex(body), challenge]`.
+        Requires the `Idempotency-Key` header; replays return the original MXC
+        with `Idempotent-Replayed: true`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: mime
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: filename
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: author_public_key
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: author_signature
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: challenge_response
+          in: query
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Uploaded avatar media URI for the subsequent profile write
+          headers:
+            Idempotent-Replayed:
+              description: "true when this is a replay of an accepted request"
+              schema:
+                type: boolean
+                enum: [true]
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, filename, mimetype, size, voice]
+                properties:
+                  url:
+                    type: string
+                  filename:
+                    type: string
+                  mimetype:
+                    type: string
+                  size:
+                    type: integer
+                  voice:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/sites/{site_id}/visitors/profile:
     parameters:
       - $ref: "#/components/parameters/SiteId"

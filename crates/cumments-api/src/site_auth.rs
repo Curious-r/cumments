@@ -177,18 +177,27 @@ pub(crate) fn site_id_from_path(path: &str) -> Option<String> {
     segments.get(3).map(|s| s.to_string())
 }
 
-/// Whether a path is a visitor media upload route (post media or the
+/// Whether a path is a visitor media upload route (page media or the
 /// site-scoped avatar upload). Kept in sync with the route table in
 /// `build_router`; used only to choose the body-buffering limit for HMAC
 /// verification.
 fn is_media_upload_path(path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    segments.len() == 7
+    let page_media = segments.len() == 7
         && segments[0] == "api"
         && segments[1] == "v1"
         && segments[2] == "sites"
         && segments[4] == "pages"
-        && segments[6] == "media"
+        && segments[6] == "media";
+    let avatar_media = segments.len() == 8
+        && segments[0] == "api"
+        && segments[1] == "v1"
+        && segments[2] == "sites"
+        && segments[4] == "visitors"
+        && segments[5] == "profile"
+        && segments[6] == "avatar"
+        && segments[7] == "media";
+    page_media || avatar_media
 }
 
 /// Extracts the single `Origin` header, if any.
@@ -723,8 +732,11 @@ mod tests {
             "/api/v1/sites/my-blog/pages/hello/media/extra"
         ));
         assert!(!is_media_upload_path("/api/v1/sites/my-blog/media"));
+        assert!(is_media_upload_path(
+            "/api/v1/sites/my-blog/visitors/profile/avatar/media"
+        ));
         assert!(!is_media_upload_path(
-            "/api/v1/sites/my-blog/visitors/avatar"
+            "/api/v1/sites/my-blog/visitors/profile/avatar/media/extra"
         ));
         assert!(!is_media_upload_path(
             "/api/v1/sites/my-blog/visitors/profile/avatar"

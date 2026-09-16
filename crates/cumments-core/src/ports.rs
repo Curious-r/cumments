@@ -469,6 +469,21 @@ pub trait MessageStore: ProjectionSink {
         page_slug: &str,
     ) -> Result<bool>;
 
+    /// Whether this MXC came through the site-scoped avatar upload path for
+    /// this author and site.
+    ///
+    /// This is the write-admission check for profile avatars. It requires the
+    /// upload record to be site-scoped (`page_slug IS NULL`), so a page-scoped
+    /// comment-media upload, another visitor's upload, or another site's
+    /// upload never authorizes an avatar. It says nothing about whether the
+    /// underlying Matrix media still exists.
+    async fn avatar_upload_owned_by(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+    ) -> Result<bool>;
+
     /// Returns an unexpired upload idempotency record, if one exists.
     async fn find_media_upload_idempotency(
         &self,

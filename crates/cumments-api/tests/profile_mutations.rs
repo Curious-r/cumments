@@ -16,8 +16,9 @@ use cumments_api::{
     rate_limit::RateLimiter,
     request::ProfileOperationResponse,
 };
+use cumments_core::media_upload::MediaUploadIdempotencyInput;
 use cumments_core::models::{SiteId, VisitorProfile};
-use cumments_core::ports::{ProfileStore, SiteAuthStore};
+use cumments_core::ports::{MessageStore, ProfileStore, SiteAuthStore};
 use cumments_core::profile::{
     ProfileField, ProfileOperationStatus, ProfileTargetValue, clear_avatar_signature_message,
     clear_display_name_signature_message, set_avatar_signature_message,
@@ -450,6 +451,21 @@ async fn set_and_clear_avatar_success() {
     let router = cumments_api::build_router(state.clone());
     let signing_key = SigningKey::from_bytes(&[6u8; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+
+    // Seed a site-scoped avatar upload so the mutation has provenance.
+    store
+        .save_media_upload_idempotent(
+            avatar_mxc,
+            &public_key,
+            "my-site",
+            None,
+            &MediaUploadIdempotencyInput {
+                key: "seed-avatar-upload".to_string(),
+                request_fingerprint: "seed".to_string(),
+            },
+        )
+        .await
+        .expect("seed avatar upload");
 
     // 1. Set Avatar
     let ch1 = state.pow.generate_challenge();
@@ -940,6 +956,21 @@ async fn same_field_serialization_blocks_subsequent_op_while_avatar_proceeds() {
     let router = cumments_api::build_router(state.clone());
     let signing_key = SigningKey::from_bytes(&[13u8; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+
+    // Seed a site-scoped avatar upload so the avatar mutation has provenance.
+    store
+        .save_media_upload_idempotent(
+            "mxc://hs/pic-ser",
+            &public_key,
+            "my-site",
+            None,
+            &MediaUploadIdempotencyInput {
+                key: "seed-avatar-ser".to_string(),
+                request_fingerprint: "seed".to_string(),
+            },
+        )
+        .await
+        .expect("seed avatar upload");
 
     // 1. Manually insert an unresolved operation in store for display_name
     let blocker_target = ProfileTargetValue::SetDisplayName("Blocker".to_string());

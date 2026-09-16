@@ -1182,6 +1182,22 @@ impl MessageStore for DbStore {
         Ok(found.is_some())
     }
 
+    async fn avatar_upload_owned_by(
+        &self,
+        mxc_url: &str,
+        author_public_key: &str,
+        site_id: &str,
+    ) -> Result<bool> {
+        let found = media_uploads::Entity::find()
+            .filter(media_uploads::Column::MxcUrl.eq(mxc_url))
+            .filter(media_uploads::Column::AuthorPublicKey.eq(author_public_key))
+            .filter(media_uploads::Column::SiteId.eq(site_id))
+            .filter(media_uploads::Column::PageSlug.is_null())
+            .one(&self.db)
+            .await?;
+        Ok(found.is_some())
+    }
+
     async fn find_media_upload_idempotency(
         &self,
         author_public_key: &str,

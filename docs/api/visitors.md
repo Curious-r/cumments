@@ -88,7 +88,13 @@ Body:
 }
 ```
 
-`avatar` is the Matrix media URI (`mxc://server/media_id`) to write to the virtual user's global profile. Values that are not `mxc://` URIs are rejected with `400`.
+`avatar` must be an MXC URI (`mxc://server/media_id`) returned by
+`POST /api/v1/sites/{site_id}/visitors/profile/avatar/media` for the same
+visitor and site. Before the operation is claimed, the API checks that the MXC
+has site-scoped avatar-upload provenance: an MXC that is not an `mxc://` URI,
+was never uploaded through the avatar path, came through the page-scoped
+comment-media upload, belongs to another visitor, or belongs to another site is
+rejected with `400`.
 
 The author signature covers:
 `["SET_AVATAR", site_id, operation_id, semantic_fingerprint]`

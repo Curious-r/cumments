@@ -256,6 +256,23 @@ async fn process_profile_mutation(
         return Err(AppError::InvalidPoW);
     }
 
+    // An avatar mutation must reference media produced by the site-scoped
+    // avatar upload path for this visitor. A page-scoped comment-media upload,
+    // another visitor's upload, or another site's upload does not qualify.
+    // This runs before the durable operation is claimed, so a rejected avatar
+    // leaves no operation behind and dispatches nothing to Matrix.
+    if let ProfileTargetValue::SetAvatar(mxc_uri) = &target_value
+        && !state
+            .store
+            .avatar_upload_owned_by(mxc_uri, author_public_key, site_id.as_str())
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to verify avatar upload: {e}")))?
+    {
+        return Err(AppError::BadRequest(
+            "avatar must reference a site-scoped avatar upload made by this visitor".to_string(),
+        ));
+    }
+
     // Claim or get operation in durable ProfileStore
     let claim_res = state
         .store

@@ -11,6 +11,29 @@ use chrono::{DateTime, Utc};
 /// write idempotency retention.
 pub const MEDIA_UPLOAD_IDEMPOTENCY_RETENTION: chrono::Duration = chrono::Duration::hours(24);
 
+/// Builds the canonical signature envelope signed for a site-scoped avatar
+/// upload.
+///
+/// Format: `["UPLOAD", site_id, mime, filename, body_hash, challenge]`. Unlike
+/// the page-scoped comment-media upload envelope, the avatar upload is
+/// site-scoped and deliberately carries no page slug.
+pub fn avatar_upload_signature_message(
+    site_id: &str,
+    mime: &str,
+    filename: &str,
+    body_hash: &str,
+    challenge: &str,
+) -> String {
+    crate::identity::signature_message(&[
+        Some("UPLOAD"),
+        Some(site_id),
+        Some(mime),
+        Some(filename),
+        Some(body_hash),
+        Some(challenge),
+    ])
+}
+
 /// Client-supplied idempotency identity for one upload request.
 #[derive(Debug, Clone)]
 pub struct MediaUploadIdempotencyInput {

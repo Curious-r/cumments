@@ -52,24 +52,63 @@ second copy; keys are retained for 24 hours like comment write keys. The
 returned `url` is then used in a POST comment request with `media` (the
 signature covers the media URL instead of text content).
 
-The upload also records the MXC against the uploading visitor, site, and page.
-A comment may only reference media recorded for the same author, site, and
+The upload also records the MXC against the uploading visitor and page. A
+comment may only reference media recorded for the same author, site, and
 page; that record is local write admission, not ownership of the Matrix
 object. The homeserver owns Matrix media retention and deletion, and Cumments
 never deletes media from it.
 
+## Visitor avatar upload
+
+`POST /api/v1/sites/{site_id}/visitors/profile/avatar/media?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
+
+Site-scoped variant of the media upload for profile avatars. It uploads raw
+bytes as the visitor's virtual user and returns the same response shape as the
+comment-media upload, with `url` carrying the raw Matrix MXC URI. That MXC is a
+write-side intermediate value for the subsequent profile mutation, not a
+browser media URL.
+
+The signature covers
+`["UPLOAD", site_id, mime, filename, sha256_hex(body), challenge]` — the
+site-scoped upload signature deliberately carries no page slug. It shares the
+comment-media upload's security model: `Idempotency-Key`, author Ed25519
+signature, PoW freshness, write rate limiting, the size cap, and allowed-MIME
+validation. Replays return the original MXC without uploading a second copy.
+
+The upload records the MXC against the uploading visitor and site with no page,
+which is what authorizes a later avatar mutation: only an upload made through
+this path, by the same visitor, for the same site, can be set as the avatar. A
+page-scoped comment-media upload never authorizes an avatar. As with comment
+media, this record is local write admission, not ownership of the Matrix media
+object; the homeserver owns Matrix media retention and deletion, and Cumments
+never deletes media from it.
+
 ## Visitor avatar
 
-Visitor avatar mutations are managed through dedicated profile endpoints operating on the Matrix media URI itself rather than direct compound upload endpoints.
+Visitor avatar mutations are managed through a dedicated profile endpoint
+operating on the Matrix media URI itself.
 
 To set an avatar:
-1. Upload media through the media upload endpoint to obtain its `mxc://` content URI.
-2. Submit a `PUT /api/v1/sites/{site_id}/visitors/profile/avatar` request with that MXC URI.
+1. Upload media through
+   `POST /api/v1/sites/{site_id}/visitors/profile/avatar/media` to obtain its
+   `mxc://` content URI.
+2. Submit a `PUT /api/v1/sites/{site_id}/visitors/profile/avatar` request with
+   that MXC URI.
+
+The profile mutation verifies that the MXC has site-scoped avatar-upload
+provenance for this visitor and site before it claims the durable operation; a
+page-scoped upload, another visitor's upload, or another site's upload is
+rejected with `400`.
 
 To clear an avatar:
 - Submit a `DELETE /api/v1/sites/{site_id}/visitors/profile/avatar` request.
+  Clearing does not consult upload provenance.
 
-See [Visitors documentation](/api/visitors#set-visitor-avatar) for full request specifications and signature envelopes.
+Reads are separate: `GET /api/v1/sites/{site_id}/visitors/profile` returns the
+Matrix avatar MXC rewritten through the media proxy into a signed browser-facing
+`avatar_url`; the browser should use that value rather than the raw MXC. See
+[Visitors documentation](/api/visitors#set-visitor-avatar) for full request
+specifications and signature envelopes.
 
 ## Site sticker packs
 
