@@ -185,7 +185,7 @@ async fn submission_txn_migrations_are_registered() {
     );
     assert!(
         names.contains(&"m20260915_000079_media_uploads_site_scoped".to_string()),
-        "000079 must be registered or media_uploads ownership stays globally unique by MXC"
+        "000079 must be registered or media_uploads has no provenance uniqueness"
     );
 }
 
@@ -641,40 +641,78 @@ async fn terminology_rename_migration_converges_legacy_schema() {
 }
 
 #[tokio::test]
-async fn media_uploads_table_permits_same_mxc_across_sites_and_rejects_duplicates_within_site() {
-    let url = test_db_url("media-uploads-site-scoped");
+async fn media_uploads_uniqueness_covers_the_full_provenance_fact() {
+    let url = test_db_url("media-uploads-provenance-unique");
     let db = Database::connect(&url).await.expect("connect db");
     Migrator::up(&db, None).await.expect("migrate to latest");
 
     let now = chrono::Utc::now().to_rfc3339();
-    db.execute_unprepared(&format!(
-        "INSERT INTO media_uploads \
-         (mxc_url, author_public_key, site_id, page_slug, created_at) \
-         VALUES ('mxc://hs/shared', 'author-a', 'site-a', NULL, '{now}')"
-    ))
-    .await
-    .expect("first row");
-
-    // Same MXC on a different site must be allowed.
-    db.execute_unprepared(&format!(
-        "INSERT INTO media_uploads \
-         (mxc_url, author_public_key, site_id, page_slug, created_at) \
-         VALUES ('mxc://hs/shared', 'author-b', 'site-b', NULL, '{now}')"
-    ))
-    .await
-    .expect("same mxc on different site is allowed");
-
-    // Duplicate (site_id, mxc_url) must be rejected.
-    let duplicate = db
-        .execute_unprepared(&format!(
+    let insert = |mxc: &str, author: &str, site: &str, page: Option<&str>| {
+        let page = match page {
+            Some(page) => format!("'{page}'"),
+            None => "NULL".to_string(),
+        };
+        format!(
             "INSERT INTO media_uploads \
              (mxc_url, author_public_key, site_id, page_slug, created_at) \
-             VALUES ('mxc://hs/shared', 'author-c', 'site-a', NULL, '{now}')"
+             VALUES ('{mxc}', '{author}', '{site}', {page}, '{now}')"
+        )
+    };
+
+    // A comment-scoped provenance fact.
+    db.execute_unprepared(&insert(
+        "mxc://hs/shared",
+        "author-a",
+        "site-a",
+        Some("page-a"),
+    ))
+    .await
+    .expect("comment provenance row");
+
+    // Matrix may return an existing media object for a later upload, so the
+    // same MXC may legitimately be recorded for another visitor ...
+    db.execute_unprepared(&insert(
+        "mxc://hs/shared",
+        "author-b",
+        "site-a",
+        Some("page-a"),
+    ))
+    .await
+    .expect("a different visitor's provenance fact must be allowed");
+    // ... for another site ...
+    db.execute_unprepared(&insert(
+        "mxc://hs/shared",
+        "author-a",
+        "site-b",
+        Some("page-a"),
+    ))
+    .await
+    .expect("another site's provenance fact must be allowed");
+    // ... and for the site-scoped avatar of the same visitor.
+    db.execute_unprepared(&insert("mxc://hs/shared", "author-a", "site-a", None))
+        .await
+        .expect("the avatar provenance fact must coexist with the comment one");
+
+    // Re-recording the identical fact is a no-op-worthy duplicate, not a new
+    // fact, and must be rejected so provenance never accumulates twice.
+    let duplicate_comment = db
+        .execute_unprepared(&insert(
+            "mxc://hs/shared",
+            "author-a",
+            "site-a",
+            Some("page-a"),
         ))
         .await;
     assert!(
-        duplicate.is_err(),
-        "duplicate (site_id, mxc_url) must be rejected by the unique constraint"
+        duplicate_comment.is_err(),
+        "the identical comment provenance fact must be rejected"
+    );
+    let duplicate_avatar = db
+        .execute_unprepared(&insert("mxc://hs/shared", "author-a", "site-a", None))
+        .await;
+    assert!(
+        duplicate_avatar.is_err(),
+        "the identical avatar provenance fact must be rejected"
     );
 }
 
@@ -727,25 +765,27 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
         (12, "site-b", "mxc://hs/beta")
     );
 
-    // After the migration the composite constraint is in force.
+    // After the migration the full provenance fact is unique.
     let duplicate = db
         .execute_unprepared(&format!(
             "INSERT INTO media_uploads \
              (mxc_url, author_public_key, site_id, page_slug, created_at) \
-             VALUES ('mxc://hs/alpha', 'author-z', 'site-a', NULL, '{now}')"
+             VALUES ('mxc://hs/alpha', 'author-a', 'site-a', 'post-a', '{now}')"
         ))
         .await;
     assert!(
         duplicate.is_err(),
-        "duplicate (site_id, mxc_url) must be rejected after the migration"
+        "the identical provenance fact must be rejected after the migration"
     );
+    // The same MXC recorded for another visitor is a distinct fact: a Matrix
+    // homeserver may return an existing media object, so this must be allowed.
     db.execute_unprepared(&format!(
         "INSERT INTO media_uploads \
          (mxc_url, author_public_key, site_id, page_slug, created_at) \
          VALUES ('mxc://hs/alpha', 'author-z', 'site-c', NULL, '{now}')"
     ))
     .await
-    .expect("same mxc on another site is allowed after the migration");
+    .expect("the same mxc for another visitor/site is a distinct provenance fact");
 
     // The explicit author index must survive the table rebuild.
     assert!(
@@ -756,13 +796,26 @@ async fn media_uploads_site_scoped_migration_preserves_existing_rows() {
         "idx_media_uploads_author must be preserved by the migration"
     );
 
-    // Uniqueness now covers (site_id, mxc_url) and no longer mxc_url alone.
+    // Uniqueness now covers the full provenance fact for each scope.
     let unique_columns = unique_index_columns(&db, "media_uploads").await;
     assert!(
-        unique_columns
-            .iter()
-            .any(|columns| columns == &vec!["site_id".to_string(), "mxc_url".to_string()]),
-        "a unique index on (site_id, mxc_url) must exist: {unique_columns:?}"
+        unique_columns.iter().any(|columns| columns
+            == &vec![
+                "site_id".to_string(),
+                "author_public_key".to_string(),
+                "mxc_url".to_string(),
+                "page_slug".to_string(),
+            ]),
+        "a unique index on the comment provenance fact must exist: {unique_columns:?}"
+    );
+    assert!(
+        unique_columns.iter().any(|columns| columns
+            == &vec![
+                "site_id".to_string(),
+                "author_public_key".to_string(),
+                "mxc_url".to_string(),
+            ]),
+        "a unique index on the avatar provenance fact must exist: {unique_columns:?}"
     );
     assert!(
         !unique_columns
@@ -901,23 +954,23 @@ async fn media_uploads_site_scoped_migration_replaces_global_unique() {
         Some("post-a")
     );
 
-    // The global constraint is replaced by the site-scoped one.
+    // The global constraint is replaced by the per-scope provenance key.
     db.execute_unprepared(&format!(
         "INSERT INTO media_uploads \
          (mxc_url, author_public_key, site_id, page_slug, created_at) \
          VALUES ('mxc://hs/legacy', 'author-b', 'site-b', NULL, '{now}')"
     ))
     .await
-    .expect("same mxc on another site is allowed after the migration");
+    .expect("same mxc for another visitor/site is allowed after the migration");
     assert!(
         db.execute_unprepared(&format!(
             "INSERT INTO media_uploads \
              (mxc_url, author_public_key, site_id, page_slug, created_at) \
-             VALUES ('mxc://hs/legacy', 'author-c', 'site-a', NULL, '{now}')"
+             VALUES ('mxc://hs/legacy', 'author-a', 'site-a', 'post-a', '{now}')"
         ))
         .await
         .is_err(),
-        "duplicate (site_id, mxc_url) must be rejected after the migration"
+        "the identical provenance fact must be rejected after the migration"
     );
 
     assert!(
@@ -929,10 +982,23 @@ async fn media_uploads_site_scoped_migration_replaces_global_unique() {
     );
     let unique_columns = unique_index_columns(&db, "media_uploads").await;
     assert!(
-        unique_columns
-            .iter()
-            .any(|columns| columns == &vec!["site_id".to_string(), "mxc_url".to_string()]),
-        "a unique index on (site_id, mxc_url) must exist: {unique_columns:?}"
+        unique_columns.iter().any(|columns| columns
+            == &vec![
+                "site_id".to_string(),
+                "author_public_key".to_string(),
+                "mxc_url".to_string(),
+                "page_slug".to_string(),
+            ]),
+        "a unique index on the comment provenance fact must exist: {unique_columns:?}"
+    );
+    assert!(
+        unique_columns.iter().any(|columns| columns
+            == &vec![
+                "site_id".to_string(),
+                "author_public_key".to_string(),
+                "mxc_url".to_string(),
+            ]),
+        "a unique index on the avatar provenance fact must exist: {unique_columns:?}"
     );
     assert!(
         !unique_columns

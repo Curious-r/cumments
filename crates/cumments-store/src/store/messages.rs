@@ -1262,18 +1262,20 @@ impl MessageStore for DbStore {
             ..Default::default()
         };
         media_uploads::Entity::insert(upload_model)
+            // Re-recording the same provenance fact is a no-op. The unique
+            // indexes are keyed by the whole fact (site, visitor, scope, MXC),
+            // so a conflict can only be the identical fact recorded again —
+            // never another visitor's or another scope's record. An existing
+            // authorization fact is never mutated.
+            //
+            // `exec_without_returning` is required because a no-op conflict
+            // affects zero rows, which `exec` reports as `RecordNotInserted`.
             .on_conflict(
-                sea_orm::sea_query::OnConflict::columns([
-                    media_uploads::Column::SiteId,
-                    media_uploads::Column::MxcUrl,
-                ])
-                .update_columns([
-                    media_uploads::Column::AuthorPublicKey,
-                    media_uploads::Column::PageSlug,
-                ])
-                .to_owned(),
+                sea_orm::sea_query::OnConflict::new()
+                    .do_nothing()
+                    .to_owned(),
             )
-            .exec(&txn)
+            .exec_without_returning(&txn)
             .await?;
 
         let idempotency_model = media_upload_idempotency::ActiveModel {

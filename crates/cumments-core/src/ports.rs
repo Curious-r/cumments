@@ -491,9 +491,12 @@ pub trait MessageStore: ProjectionSink {
         idempotency_key: &str,
     ) -> Result<Option<MediaUploadIdempotency>>;
 
-    /// Atomically records the upload ownership row and its idempotency key.
-    /// On a concurrent key race the loser's upload is rolled back and the
-    /// winner's URL is returned.
+    /// Atomically records the upload-provenance row and its idempotency key.
+    ///
+    /// Recording the same provenance fact again is a no-op: a conflict never
+    /// rewrites an existing fact, so one visitor's or scope's record cannot be
+    /// replaced by another's. On a concurrent idempotency-key race the loser's
+    /// upload is rolled back and the winner's URL is returned.
     async fn save_media_upload_idempotent(
         &self,
         mxc_url: &str,

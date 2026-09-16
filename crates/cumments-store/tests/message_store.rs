@@ -13,7 +13,7 @@ use cumments_core::ports::{
 };
 use cumments_store::DbStore;
 use cumments_store::entities::{message_revisions, messages, poll_response_events};
-use sea_orm::{Database, EntityTrait, QueryFilter};
+use sea_orm::{ConnectionTrait, Database, EntityTrait, QueryFilter, Statement};
 
 fn make_test_poll(question: &str, answers: Vec<(&str, &str)>, max_selections: u64) -> PollContent {
     PollContent {
@@ -1256,6 +1256,167 @@ async fn comment_media_authorization_is_site_scoped_for_the_same_mxc() {
             .await
             .expect("ownership check"),
         "site A's record must not authorize site B"
+    );
+}
+
+/// Matrix does not guarantee a distinct MXC per upload transaction: a
+/// homeserver may return an existing media object for bytes it already holds.
+/// The same MXC can therefore appear in provenance for two visitors, and
+/// recording one must not overwrite the other.
+#[tokio::test]
+async fn recording_the_same_mxc_for_another_visitor_does_not_overwrite() {
+    let store = DbStore::connect(&test_db_url("media-upload-other-visitor"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_media_upload_idempotent(
+            "mxc://hs/shared",
+            "alice-key",
+            "my-blog",
+            Some("hello"),
+            &upload_input("upload-alice"),
+        )
+        .await
+        .expect("record alice's provenance");
+    store
+        .save_media_upload_idempotent(
+            "mxc://hs/shared",
+            "bob-key",
+            "my-blog",
+            Some("hello"),
+            &upload_input("upload-bob"),
+        )
+        .await
+        .expect("record bob's provenance");
+
+    assert!(
+        store
+            .media_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership check"),
+        "bob's provenance must not overwrite alice's"
+    );
+    assert!(
+        store
+            .media_upload_owned_by("mxc://hs/shared", "bob-key", "my-blog", "hello")
+            .await
+            .expect("ownership check"),
+        "bob's provenance must be recorded alongside alice's"
+    );
+}
+
+/// Comment scope (`page_slug = Some`) and avatar scope (`page_slug = NULL`) are
+/// distinct provenance facts and must not overwrite each other, even for the
+/// same visitor, site, and MXC.
+#[tokio::test]
+async fn comment_and_avatar_provenance_for_the_same_mxc_coexist() {
+    let store = DbStore::connect(&test_db_url("media-upload-scope-coexist"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_media_upload_idempotent(
+            "mxc://hs/shared",
+            "alice-key",
+            "my-blog",
+            Some("hello"),
+            &upload_input("upload-comment"),
+        )
+        .await
+        .expect("record comment provenance");
+    store
+        .save_media_upload_idempotent(
+            "mxc://hs/shared",
+            "alice-key",
+            "my-blog",
+            None,
+            &upload_input("upload-avatar"),
+        )
+        .await
+        .expect("record avatar provenance");
+
+    assert!(
+        store
+            .media_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership check"),
+        "the comment provenance fact must survive the avatar record"
+    );
+    assert!(
+        store
+            .avatar_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog")
+            .await
+            .expect("avatar provenance check"),
+        "the avatar provenance fact must be recorded"
+    );
+    assert!(
+        !store
+            .avatar_upload_owned_by("mxc://hs/shared", "alice-key", "other-blog")
+            .await
+            .expect("avatar provenance check"),
+        "an avatar record is still site-scoped"
+    );
+}
+
+/// Re-recording the identical provenance fact is idempotent: it neither errors
+/// nor accumulates a duplicate row, for either scope.
+#[tokio::test]
+async fn recording_the_same_provenance_fact_twice_is_idempotent() {
+    let url = test_db_url("media-upload-provenance-idempotent");
+    let store = DbStore::connect(&url).await.expect("connect db");
+
+    for key in ["upload-comment-1", "upload-comment-2"] {
+        store
+            .save_media_upload_idempotent(
+                "mxc://hs/shared",
+                "alice-key",
+                "my-blog",
+                Some("hello"),
+                &upload_input(key),
+            )
+            .await
+            .expect("record comment provenance");
+    }
+    for key in ["upload-avatar-1", "upload-avatar-2"] {
+        store
+            .save_media_upload_idempotent(
+                "mxc://hs/shared",
+                "alice-key",
+                "my-blog",
+                None,
+                &upload_input(key),
+            )
+            .await
+            .expect("record avatar provenance");
+    }
+
+    assert!(
+        store
+            .media_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog", "hello")
+            .await
+            .expect("ownership check")
+    );
+    assert!(
+        store
+            .avatar_upload_owned_by("mxc://hs/shared", "alice-key", "my-blog")
+            .await
+            .expect("avatar provenance check")
+    );
+
+    let db = Database::connect(&url).await.expect("connect raw db");
+    let row = db
+        .query_one_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS n FROM media_uploads".to_string(),
+        ))
+        .await
+        .expect("count provenance rows")
+        .expect("count row");
+    let count: i64 = row.try_get("", "n").expect("count");
+    assert_eq!(
+        count, 2,
+        "each provenance fact must be recorded exactly once (comment + avatar)"
     );
 }
 

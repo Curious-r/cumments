@@ -206,8 +206,11 @@ Notes on the layout:
   was authorized for, while visitor avatars are site-scoped records with a
   `NULL` page. The avatar upload endpoint records the site-scoped row, and a
   `PUT .../visitors/profile/avatar` requires matching site-scoped provenance
-  before it claims the durable operation. This is local write admission, not
-  ownership of the Matrix media object, which the homeserver retains.
+  before it claims the durable operation. Uniqueness covers the whole
+  provenance fact `(site, visitor, scope, MXC)`, so the same MXC recorded for
+  different visitors or scopes coexists; a conflict only ever means the same
+  fact was recorded twice. This is local write admission, not ownership of the
+  Matrix media object, which the homeserver retains.
 
 ## Ephemeral events
 
