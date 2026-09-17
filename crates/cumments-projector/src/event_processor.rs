@@ -1339,6 +1339,12 @@ impl EventProcessor {
             .await
     }
 
+    /// The configured homeserver name, used to bind visitor proofs to the
+    /// deterministic virtual sender derived from the embedded public key.
+    pub(crate) fn server_name(&self) -> Option<&str> {
+        self.server_name.as_deref()
+    }
+
     /// Resolves the author profile snapshot at projection time.
     ///
     /// Both Matrix-native and virtual-user senders take their display name

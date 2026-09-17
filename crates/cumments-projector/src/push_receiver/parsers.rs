@@ -6,6 +6,7 @@ use crate::parsed::{
     ParsedPollEnd, ParsedPollVote, ParsedReaction, ParsedRelation, ParsedRoomMessage,
     ParsedRoomRedaction, ParsedRoomState, ParsedSpaceChild,
 };
+use crate::verification::virtual_sender_matches;
 use cumments_core::canonical::CanonicalJson;
 use cumments_core::models::{
     Content, EncryptedPlaceholder, LocationContent, MediaContent, MediaKind, PollContent,
@@ -697,6 +698,7 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
         return Ok(());
     };
     let origin_server_ts = event.origin_server_ts.unwrap_or(0);
+    let server_name = processor.server_name();
     let parsed = match PollEvent::parse(
         &event.event_type,
         Some(event_id),
@@ -725,7 +727,8 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
                 return Ok(());
             };
             let room_identity = processor.resolve_room_identity(room_id).await?;
-            let Some(mut message) = parse_push_poll_start(event, &start, room_identity.as_ref())
+            let Some(mut message) =
+                parse_push_poll_start(event, &start, room_identity.as_ref(), server_name)
             else {
                 return Ok(());
             };
@@ -740,7 +743,8 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
                 return Ok(());
             };
             let room_identity = processor.resolve_room_identity(room_id).await?;
-            let Some(mut vote) = parse_push_poll_response(event, &response, room_identity.as_ref())
+            let Some(mut vote) =
+                parse_push_poll_response(event, &response, room_identity.as_ref(), server_name)
             else {
                 return Ok(());
             };
@@ -752,7 +756,8 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
                 return Ok(());
             };
             let room_identity = processor.resolve_room_identity(room_id).await?;
-            let Some(mut parsed_end) = parse_push_poll_end(event, &end, room_identity.as_ref())
+            let Some(mut parsed_end) =
+                parse_push_poll_end(event, &end, room_identity.as_ref(), server_name)
             else {
                 return Ok(());
             };
@@ -769,11 +774,13 @@ async fn process_poll_event(event: &PushEvent, processor: &EventProcessor) -> an
 ///
 /// `room_identity` supplies the target's `site_id` / `page_slug`, which the
 /// wire event does not carry; it is required to prove that a visitor's signed
-/// semantic operation is the Poll the event actually encodes.
+/// semantic operation is the Poll the event actually encodes. `server_name`
+/// binds the event sender to the visitor's public key.
 fn parse_push_poll_start(
     event: &PushEvent,
     start: &PollStartEvent,
     room_identity: Option<&RoomIdentity>,
+    server_name: Option<&str>,
 ) -> Option<ParsedRoomMessage> {
     let room_id = event.room_id.as_ref()?;
     let content = event.content.as_ref()?;
@@ -865,23 +872,26 @@ fn parse_push_poll_start(
             (Some(pk), Some(sig), Some(chal), Some(operation_id), Some(op_json))
                 if provenance_schema_is_supported(content) =>
             {
-                CanonicalJson::from_json_value(op_json).is_some_and(|operation| {
-                    verify_poll_start_proof(
-                        pk,
-                        &operation,
-                        operation_id,
-                        chal,
-                        sig,
-                        &wire_semantics,
-                    )
-                })
+                // The proof only counts when the event was sent by the virtual
+                // user derived from `pk`; the signature alone is not identity.
+                virtual_sender_matches(server_name, &start.sender, &identity.site_id, pk)
+                    && CanonicalJson::from_json_value(op_json).is_some_and(|operation| {
+                        verify_poll_start_proof(
+                            pk,
+                            &operation,
+                            operation_id,
+                            chal,
+                            sig,
+                            &wire_semantics,
+                        )
+                    })
             }
             _ => false,
         };
         if !valid {
             warn!(
                 event_id = ?event.event_id,
-                "Rejecting visitor poll start whose signed operation does not match its wire content"
+                "Rejecting visitor poll start whose sender or signed operation does not match its wire content"
             );
             return None;
         }
@@ -949,10 +959,12 @@ fn parse_push_poll_start(
 /// `room_identity` supplies the target's `site_id` / `page_slug`, which the
 /// wire event does not carry; it is required to prove that a visitor's signed
 /// VOTE operation is the selection set the event actually encodes.
+/// `server_name` binds the event sender to the visitor's public key.
 fn parse_push_poll_response(
     event: &PushEvent,
     response: &PollResponseEvent,
     room_identity: Option<&RoomIdentity>,
+    server_name: Option<&str>,
 ) -> Option<ParsedPollVote> {
     let room_id = event.room_id.as_ref()?;
     let content = event.content.as_ref()?;
@@ -990,15 +1002,19 @@ fn parse_push_poll_response(
                     poll_event_id: response.content.relates_to.event_id.clone(),
                     option_ids,
                 };
-                CanonicalJson::from_json_value(op_json)
-                    .is_some_and(|op| verify_vote_proof(pk, &op, operation_id, chal, sig, &wire))
+                CanonicalJson::from_json_value(op_json).is_some_and(|op| {
+                    // The proof only counts when the event was sent by the
+                    // virtual user derived from `pk`.
+                    virtual_sender_matches(server_name, &response.sender, &identity.site_id, pk)
+                        && verify_vote_proof(pk, &op, operation_id, chal, sig, &wire)
+                })
             }
             _ => false,
         };
         if !valid {
             warn!(
                 event_id = ?event.event_id,
-                "Rejecting visitor poll response whose signed operation does not match its wire content"
+                "Rejecting visitor poll response whose sender or signed operation does not match its wire content"
             );
             return None;
         }
@@ -1026,11 +1042,13 @@ fn parse_push_poll_response(
 ///
 /// `room_identity` supplies the target's `site_id` / `page_slug`, which the
 /// wire event does not carry; it is required to prove that a visitor's signed
-/// END_POLL operation is the target this wire event encodes.
+/// END_POLL operation is the target this wire event encodes. `server_name`
+/// binds the event sender to the visitor's public key.
 fn parse_push_poll_end(
     event: &PushEvent,
     end: &PollEndEvent,
     room_identity: Option<&RoomIdentity>,
+    server_name: Option<&str>,
 ) -> Option<ParsedPollEnd> {
     let room_id = event.room_id.as_ref()?;
     let content = event.content.as_ref()?;
@@ -1063,7 +1081,10 @@ fn parse_push_poll_end(
                     poll_event_id: end.content.relates_to.event_id.clone(),
                 };
                 CanonicalJson::from_json_value(op_json).is_some_and(|op| {
-                    verify_end_poll_proof(pk, &op, operation_id, chal, sig, &wire)
+                    // The proof only counts when the event was sent by the
+                    // virtual user derived from `pk`.
+                    virtual_sender_matches(server_name, &end.sender, &identity.site_id, pk)
+                        && verify_end_poll_proof(pk, &op, operation_id, chal, sig, &wire)
                 })
             }
             _ => false,
@@ -1071,7 +1092,7 @@ fn parse_push_poll_end(
         if !valid {
             warn!(
                 event_id = ?event.event_id,
-                "Rejecting visitor poll end whose signed operation does not match its wire content"
+                "Rejecting visitor poll end whose sender or signed operation does not match its wire content"
             );
             return None;
         }
@@ -1825,8 +1846,13 @@ mod tests {
         let PollEvent::Start(start) = parsed else {
             panic!("expected start");
         };
-        let message =
-            parse_push_poll_start(&event, &start, Some(&poll_identity())).expect("project start");
+        let message = parse_push_poll_start(
+            &event,
+            &start,
+            Some(&poll_identity()),
+            Some(TEST_SERVER_NAME),
+        )
+        .expect("project start");
         match message.content {
             Content::Poll(poll) => {
                 assert_eq!(poll.question, "best?");
@@ -1860,8 +1886,13 @@ mod tests {
         .unwrap() else {
             panic!("expected start");
         };
-        let message =
-            parse_push_poll_start(&event, &start, Some(&poll_identity())).expect("project start");
+        let message = parse_push_poll_start(
+            &event,
+            &start,
+            Some(&poll_identity()),
+            Some(TEST_SERVER_NAME),
+        )
+        .expect("project start");
         assert_eq!(message.thread_root.as_deref(), Some("$thread:hs"));
         assert!(message.reply_to.is_none());
     }
@@ -1891,7 +1922,15 @@ mod tests {
         .unwrap() else {
             panic!("expected start");
         };
-        assert!(parse_push_poll_start(&event, &start, Some(&poll_identity())).is_none());
+        assert!(
+            parse_push_poll_start(
+                &event,
+                &start,
+                Some(&poll_identity()),
+                Some(TEST_SERVER_NAME)
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1914,8 +1953,13 @@ mod tests {
         .unwrap() else {
             panic!("expected response");
         };
-        let vote = parse_push_poll_response(&event, &response, Some(&poll_identity()))
-            .expect("project response");
+        let vote = parse_push_poll_response(
+            &event,
+            &response,
+            Some(&poll_identity()),
+            Some(TEST_SERVER_NAME),
+        )
+        .expect("project response");
         assert_eq!(vote.poll_message_id, "$poll:hs");
         assert_eq!(vote.answer_ids, vec!["a".to_string(), "b".to_string()]);
         assert!(!vote.is_virtual_user_sender);
@@ -1960,39 +2004,65 @@ mod tests {
                     },
                 }),
             );
-            event.sender =
-                Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
+            event.sender = Some(virtual_sender(&public_key, "my-blog"));
             event
         };
 
-        let parse =
-            |event: &PushEvent, identity: Option<&RoomIdentity>| -> Option<ParsedPollVote> {
-                let content = event.content.as_ref().expect("content");
-                let PollEvent::Response(response) = PollEvent::parse(
-                    POLL_RESPONSE_EVENT_TYPE,
-                    Some("$e:hs"),
-                    event.sender.as_deref().unwrap(),
-                    100,
-                    content,
-                )
-                .unwrap()
-                .unwrap() else {
-                    panic!("expected response");
-                };
-                parse_push_poll_response(event, &response, identity)
+        let parse = |event: &PushEvent,
+                     identity: Option<&RoomIdentity>,
+                     server_name: Option<&str>|
+         -> Option<ParsedPollVote> {
+            let content = event.content.as_ref().expect("content");
+            let PollEvent::Response(response) = PollEvent::parse(
+                POLL_RESPONSE_EVENT_TYPE,
+                Some("$e:hs"),
+                event.sender.as_deref().unwrap(),
+                100,
+                content,
+            )
+            .unwrap()
+            .unwrap() else {
+                panic!("expected response");
             };
+            parse_push_poll_response(event, &response, identity, server_name)
+        };
 
         // Valid: the wire set matches the signed set (order-insensitive).
-        let valid = parse(&build(&["b", "a"], &["a", "b"]), Some(&identity))
-            .expect("valid visitor response");
+        let valid = parse(
+            &build(&["b", "a"], &["a", "b"]),
+            Some(&identity),
+            Some(TEST_SERVER_NAME),
+        )
+        .expect("valid visitor response");
         assert!(valid.is_virtual_user_sender);
         assert_eq!(valid.answer_ids, vec!["b".to_string(), "a".to_string()]);
 
         // Forged: signature is over ["a"] but the wire claims ["b"].
-        assert!(parse(&build(&["b"], &["a"]), Some(&identity)).is_none());
+        assert!(
+            parse(
+                &build(&["b"], &["a"]),
+                Some(&identity),
+                Some(TEST_SERVER_NAME)
+            )
+            .is_none()
+        );
 
         // Without room identity a visitor response cannot be authenticated.
-        assert!(parse(&build(&["a"], &["a"]), None).is_none());
+        assert!(parse(&build(&["a"], &["a"]), None, Some(TEST_SERVER_NAME)).is_none());
+
+        // The proof is valid for the embedded key, but the event was sent by
+        // the virtual user of a different key: identity binding must reject it.
+        let mut foreign = build(&["a"], &["a"]);
+        let other_public_key = URL_SAFE_NO_PAD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[34u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        foreign.sender = Some(virtual_sender(&other_public_key, "my-blog"));
+        assert!(parse(&foreign, Some(&identity), Some(TEST_SERVER_NAME)).is_none());
+
+        // Without a configured server name there is no sender to bind to.
+        assert!(parse(&build(&["a"], &["a"]), Some(&identity), None).is_none());
     }
 
     #[test]
@@ -2016,7 +2086,8 @@ mod tests {
         .unwrap() else {
             panic!("expected end");
         };
-        let parsed = parse_push_poll_end(&event, &end, None).expect("project end");
+        let parsed =
+            parse_push_poll_end(&event, &end, None, Some(TEST_SERVER_NAME)).expect("project end");
         assert_eq!(parsed.poll_message_id, "$poll:hs");
         assert_eq!(parsed.sender, "@alice:hs");
         assert_eq!(parsed.origin_server_ts, 100);
@@ -2061,12 +2132,14 @@ mod tests {
                     },
                 }),
             );
-            event.sender =
-                Some("@_cumments_my-blog_3282f2a21b4a1e6b3282f2a21b4a1e6b:hs".to_string());
+            event.sender = Some(virtual_sender(&public_key, "my-blog"));
             event
         };
 
-        let parse = |event: &PushEvent, identity: Option<&RoomIdentity>| -> Option<ParsedPollEnd> {
+        let parse = |event: &PushEvent,
+                     identity: Option<&RoomIdentity>,
+                     server_name: Option<&str>|
+         -> Option<ParsedPollEnd> {
             let content = event.content.as_ref().expect("content");
             let PollEvent::End(end) = PollEvent::parse(
                 POLL_END_EVENT_TYPE,
@@ -2079,21 +2152,46 @@ mod tests {
             .unwrap() else {
                 panic!("expected end");
             };
-            parse_push_poll_end(event, &end, identity)
+            parse_push_poll_end(event, &end, identity, server_name)
         };
 
         // Valid: wire target matches signed target.
-        let valid =
-            parse(&build("$poll:hs", "$poll:hs"), Some(&identity)).expect("valid visitor poll end");
+        let valid = parse(
+            &build("$poll:hs", "$poll:hs"),
+            Some(&identity),
+            Some(TEST_SERVER_NAME),
+        )
+        .expect("valid visitor poll end");
         assert!(valid.is_virtual_user_sender);
         assert_eq!(valid.poll_message_id, "$poll:hs");
         assert!(valid.author_public_key.is_some());
 
         // Forged target: signature is for $poll:hs but wire event targets $other:hs.
-        assert!(parse(&build("$other:hs", "$poll:hs"), Some(&identity)).is_none());
+        assert!(
+            parse(
+                &build("$other:hs", "$poll:hs"),
+                Some(&identity),
+                Some(TEST_SERVER_NAME)
+            )
+            .is_none()
+        );
 
         // Without room identity, visitor poll end cannot be authenticated.
-        assert!(parse(&build("$poll:hs", "$poll:hs"), None).is_none());
+        assert!(parse(&build("$poll:hs", "$poll:hs"), None, Some(TEST_SERVER_NAME)).is_none());
+
+        // The proof is valid for the embedded key, but the event was sent by
+        // the virtual user of a different key: identity binding must reject it.
+        let mut foreign = build("$poll:hs", "$poll:hs");
+        let other_public_key = URL_SAFE_NO_PAD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[35u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        foreign.sender = Some(virtual_sender(&other_public_key, "my-blog"));
+        assert!(parse(&foreign, Some(&identity), Some(TEST_SERVER_NAME)).is_none());
+
+        // Without a configured server name there is no sender to bind to.
+        assert!(parse(&build("$poll:hs", "$poll:hs"), Some(&identity), None).is_none());
     }
 
     #[test]
@@ -2116,12 +2214,23 @@ mod tests {
         );
     }
 
+    /// The server name the poll test events are sent from.
+    const TEST_SERVER_NAME: &str = "hs";
+
     /// The room identity the visitor poll start is authored under.
     fn poll_identity() -> RoomIdentity {
         RoomIdentity {
             site_id: "my-blog".to_string(),
             page_slug: "hello".to_string(),
         }
+    }
+
+    /// The deterministic virtual MXID Cumments derives for `public_key` on
+    /// `site_id` under the test server name.
+    fn virtual_sender(public_key: &str, site_id: &str) -> String {
+        let visitor_id = cumments_core::identity::derive_visitor_id_from_public_key(public_key)
+            .expect("visitor id");
+        format!("@_cumments_{}_{}:{}", site_id, visitor_id, TEST_SERVER_NAME)
     }
 
     /// Build a visitor-authored direct `poll.start` push event whose signed
@@ -2179,12 +2288,21 @@ mod tests {
             },
         });
         let mut event = direct_event(POLL_START_EVENT_TYPE, content);
-        event.sender = Some(format!("@_cumments_my-blog_{}:hs", "a".repeat(32)));
+        event.sender = Some(virtual_sender(&public_key, "my-blog"));
         event
     }
 
     /// Run the start projection with the authored room identity.
     fn project(event: &PushEvent, identity: Option<&RoomIdentity>) -> Option<ParsedRoomMessage> {
+        project_with_server(event, identity, Some(TEST_SERVER_NAME))
+    }
+
+    /// Run the start projection with an explicit configured server name.
+    fn project_with_server(
+        event: &PushEvent,
+        identity: Option<&RoomIdentity>,
+        server_name: Option<&str>,
+    ) -> Option<ParsedRoomMessage> {
         let PollEvent::Start(start) = PollEvent::parse(
             POLL_START_EVENT_TYPE,
             event.event_id.as_deref(),
@@ -2196,7 +2314,7 @@ mod tests {
         .expect("is a poll") else {
             panic!("expected start");
         };
-        parse_push_poll_start(event, &start, identity)
+        parse_push_poll_start(event, &start, identity, server_name)
     }
 
     /// Mutable access to the wire `poll.start` block.
@@ -2301,6 +2419,35 @@ mod tests {
         assert!(
             project(&event, Some(&other)).is_none(),
             "a signed target that differs from the event's room must be rejected"
+        );
+    }
+
+    #[test]
+    fn visitor_poll_start_with_foreign_sender_is_rejected() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        // The embedded proof is genuinely valid for its own key; the event is
+        // then sent by the virtual user of a *different* key, so only the
+        // sender/public-key binding fails.
+        let mut event = visitor_poll_start_event();
+        let other_public_key = URL_SAFE_NO_PAD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[41u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        event.sender = Some(virtual_sender(&other_public_key, "my-blog"));
+        assert!(
+            project(&event, Some(&poll_identity())).is_none(),
+            "a valid proof sent by another virtual user must not be trusted"
+        );
+    }
+
+    #[test]
+    fn visitor_poll_start_without_server_name_is_rejected() {
+        let event = visitor_poll_start_event();
+        assert!(
+            project_with_server(&event, Some(&poll_identity()), None).is_none(),
+            "without a configured server name the sender cannot be bound"
         );
     }
 

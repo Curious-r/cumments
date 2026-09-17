@@ -6,6 +6,29 @@ use cumments_core::identity::{
 };
 use cumments_core::protocol::REDACTION_PROOF_KEY;
 
+/// Whether `sender` is the deterministic virtual MXID Cumments derives from
+/// `public_key` for `site_id`.
+///
+/// Visitor identity is the Ed25519 public key: the virtual user localpart is
+/// `_cumments_{site_id}_{visitor_id}`, so a Cumments proof is only meaningful
+/// when the Matrix event was actually sent by that user. `server_name` must be
+/// configured (AppService mode); without it there is no sender to bind to and
+/// the check always fails.
+pub(crate) fn virtual_sender_matches(
+    server_name: Option<&str>,
+    sender: &str,
+    site_id: &str,
+    public_key: &str,
+) -> bool {
+    let Some(visitor_id) = derive_visitor_id_from_public_key(public_key) else {
+        return false;
+    };
+    let Some(server_name) = server_name else {
+        return false;
+    };
+    sender == format!("@_cumments_{}_{}:{}", site_id, visitor_id, server_name)
+}
+
 /// Verify a visitor event's identity claims.
 ///
 /// The sender must be exactly the virtual user derived from the embedded
@@ -20,17 +43,8 @@ pub(crate) fn verify_visitor_event(
     signature: &str,
     message: &str,
 ) -> bool {
-    let Some(visitor_id) = derive_visitor_id_from_public_key(public_key) else {
-        return false;
-    };
-    let Some(server_name) = server_name else {
-        return false;
-    };
-    let expected_sender = format!("@_cumments_{}_{}:{}", site_id, visitor_id, server_name);
-    if sender != expected_sender {
-        return false;
-    }
-    verify_signature(public_key, message, signature)
+    virtual_sender_matches(server_name, sender, site_id, public_key)
+        && verify_signature(public_key, message, signature)
 }
 
 /// Verify a Cumments delete proof embedded in a redaction's `reason`.
