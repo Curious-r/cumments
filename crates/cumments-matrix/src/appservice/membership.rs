@@ -16,7 +16,7 @@ const JOINED_CACHE_MAX: usize = 10_000;
 ///
 /// This is MSC4466's unstable reverse-DNS wire name, not a Cumments-specific
 /// parameter.
-const PROPAGATE_TO_QUERY_PARAM: &str = "com.gingershaped.msc4466.propagate_to";
+const PROPAGATE_TO_QUERY_PARAM: &str = "computer.gingershaped.msc4466.propagate_to";
 
 /// MSC4466 propagation mode that emits fresh `m.room.member` events in every
 /// room the user has joined.
@@ -663,7 +663,7 @@ mod tests {
     /// the wire. Spelled out literally instead of reusing the production
     /// constants so these assertions stay independent of them and fail if the
     /// wire name is changed back to the old one or removed.
-    const PROPAGATE_WIRE_PARAM: &str = "com.gingershaped.msc4466.propagate_to";
+    const PROPAGATE_WIRE_PARAM: &str = "computer.gingershaped.msc4466.propagate_to";
     const PROPAGATE_WIRE_VALUE: &str = "all";
 
     #[tokio::test]
@@ -720,7 +720,7 @@ mod tests {
     }
 
     /// Every Cumments-initiated global profile mutation must ask the
-    /// homeserver for `com.gingershaped.msc4466.propagate_to=all`: the
+    /// homeserver for `computer.gingershaped.msc4466.propagate_to=all`: the
     /// projector only learns about a profile change from the resulting
     /// `m.room.member` events, and an avatar has no event-content fallback.
     /// This mounts a mock that only matches the exact propagation query

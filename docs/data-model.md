@@ -109,7 +109,7 @@ places and Cumments projects all of them:
 - **Global profile** (`avatar_url` profile field): the canonical identity
   avatar of a user. Visitors set it through the visitor avatar API, which
   mutates the virtual user's global profile with an explicit MSC4466
-  `com.gingershaped.msc4466.propagate_to=all` request; the homeserver then emits
+  `computer.gingershaped.msc4466.propagate_to=all` request; the homeserver then emits
   `m.room.member` events in the user's joined rooms. Cumments never writes
   `m.room.member` itself.
 - **`m.room.member.avatar_url`**: the per-room profile snapshot. It is the
