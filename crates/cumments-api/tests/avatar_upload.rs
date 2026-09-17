@@ -163,23 +163,42 @@ async fn do_avatar_upload(
     bytes: &[u8],
     idempotency_key: &str,
 ) -> axum::response::Response {
+    do_avatar_upload_typed(
+        state,
+        router,
+        site_id,
+        signing_key,
+        UPLOAD_MIME,
+        UPLOAD_FILENAME,
+        bytes,
+        idempotency_key,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_avatar_upload_typed(
+    state: &ApiState,
+    router: &axum::Router,
+    site_id: &str,
+    signing_key: &SigningKey,
+    mime: &str,
+    filename: &str,
+    bytes: &[u8],
+    idempotency_key: &str,
+) -> axum::response::Response {
     let author = public_key(signing_key);
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
     let challenge_prefix = challenge_response.split('|').next().unwrap();
     let body_hash = hex::encode(Sha256::digest(bytes));
-    let message = avatar_upload_signature_message(
-        site_id,
-        UPLOAD_MIME,
-        UPLOAD_FILENAME,
-        &body_hash,
-        challenge_prefix,
-    );
+    let message =
+        avatar_upload_signature_message(site_id, mime, filename, &body_hash, challenge_prefix);
     let signature = sign(signing_key, &message);
     let uri = format!(
         "/api/v1/sites/{site_id}/visitors/profile/avatar/media?author_public_key={author}\
          &author_signature={signature}&challenge_response={challenge_response}\
-         &mime={UPLOAD_MIME}&filename={UPLOAD_FILENAME}"
+         &mime={mime}&filename={filename}"
     );
     router
         .clone()
@@ -197,6 +216,32 @@ async fn do_page_media_upload(
     bytes: &[u8],
     idempotency_key: &str,
 ) -> axum::response::Response {
+    do_page_media_upload_typed(
+        state,
+        router,
+        site_id,
+        page_slug,
+        signing_key,
+        UPLOAD_MIME,
+        UPLOAD_FILENAME,
+        bytes,
+        idempotency_key,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_page_media_upload_typed(
+    state: &ApiState,
+    router: &axum::Router,
+    site_id: &str,
+    page_slug: &str,
+    signing_key: &SigningKey,
+    mime: &str,
+    filename: &str,
+    bytes: &[u8],
+    idempotency_key: &str,
+) -> axum::response::Response {
     let author = public_key(signing_key);
     let challenge = state.pow.generate_challenge();
     let challenge_response = solve_pow(&challenge);
@@ -206,8 +251,8 @@ async fn do_page_media_upload(
         Some("UPLOAD"),
         Some(site_id),
         Some(page_slug),
-        Some(UPLOAD_MIME),
-        Some(UPLOAD_FILENAME),
+        Some(mime),
+        Some(filename),
         Some(&body_hash),
         Some(challenge_prefix),
     ]);
@@ -215,7 +260,7 @@ async fn do_page_media_upload(
     let uri = format!(
         "/api/v1/sites/{site_id}/pages/{page_slug}/media?author_public_key={author}\
          &author_signature={signature}&challenge_response={challenge_response}\
-         &mime={UPLOAD_MIME}&filename={UPLOAD_FILENAME}"
+         &mime={mime}&filename={filename}"
     );
     router
         .clone()
@@ -752,4 +797,223 @@ async fn failed_provenance_creates_no_operation_and_no_matrix_write() {
         driver.set_avatar_calls.lock().await.is_empty(),
         "a rejected avatar must not write to Matrix"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Avatar MIME restriction
+// ---------------------------------------------------------------------------
+
+/// A registered site plus the state a test needs to drive avatar uploads and
+/// inspect their side effects.
+struct AvatarFixture {
+    state: ApiState,
+    store: Arc<DbStore>,
+    driver: Arc<TestDriver>,
+    router: axum::Router,
+    signing_key: SigningKey,
+    db_url: String,
+}
+
+async fn avatar_fixture(name: &str) -> AvatarFixture {
+    let driver = Arc::new(TestDriver::new());
+    let (state, store, db_url) = test_state_and_store(name, driver.clone()).await;
+    store
+        .register_site("test-site", &token_hash("secret"), false)
+        .await
+        .expect("register site");
+    let router = build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[31u8; 32]);
+    AvatarFixture {
+        state,
+        store,
+        driver,
+        router,
+        signing_key,
+        db_url,
+    }
+}
+
+async fn upload_avatar(
+    fixture: &AvatarFixture,
+    mime: &str,
+    filename: &str,
+    key: &str,
+) -> axum::response::Response {
+    do_avatar_upload_typed(
+        &fixture.state,
+        &fixture.router,
+        "test-site",
+        &fixture.signing_key,
+        mime,
+        filename,
+        b"avatar-bytes",
+        key,
+    )
+    .await
+}
+
+async fn media_upload_row_count(db_url: &str) -> i64 {
+    let db = cumments_store::sea_orm::Database::connect(db_url)
+        .await
+        .expect("connect raw db");
+    let row = db
+        .query_one_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS n FROM media_uploads".to_string(),
+        ))
+        .await
+        .expect("count provenance rows")
+        .expect("count row");
+    row.try_get("", "n").expect("count")
+}
+
+#[tokio::test]
+async fn avatar_upload_accepts_image_jpeg() {
+    let fixture = avatar_fixture("avatar-mime-jpeg").await;
+    let response =
+        upload_avatar(&fixture, "image/jpeg", "avatar.jpg", "avatar-mime-jpeg-key").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = body_json(response).await;
+    assert!(body["url"].as_str().expect("url").starts_with("mxc://"));
+}
+
+#[tokio::test]
+async fn avatar_upload_accepts_image_png() {
+    let fixture = avatar_fixture("avatar-mime-png").await;
+    let response = upload_avatar(&fixture, "image/png", "avatar.png", "avatar-mime-png-key").await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn avatar_upload_accepts_image_webp() {
+    let fixture = avatar_fixture("avatar-mime-webp").await;
+    let response = upload_avatar(
+        &fixture,
+        "image/webp",
+        "avatar.webp",
+        "avatar-mime-webp-key",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn avatar_upload_rejects_video_mime() {
+    let fixture = avatar_fixture("avatar-mime-video").await;
+    let response =
+        upload_avatar(&fixture, "video/mp4", "avatar.mp4", "avatar-mime-video-key").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = body_json(response).await;
+    assert_eq!(body["code"], "bad-request");
+    assert!(
+        body["detail"].as_str().expect("detail").contains("image"),
+        "the error must state the avatar must be an image"
+    );
+}
+
+#[tokio::test]
+async fn avatar_upload_rejects_audio_mime() {
+    let fixture = avatar_fixture("avatar-mime-audio").await;
+    let response = upload_avatar(
+        &fixture,
+        "audio/mpeg",
+        "avatar.mp3",
+        "avatar-mime-audio-key",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn avatar_upload_rejects_application_mime() {
+    let fixture = avatar_fixture("avatar-mime-application").await;
+    let response = upload_avatar(
+        &fixture,
+        "application/pdf",
+        "avatar.pdf",
+        "avatar-mime-application-key",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn rejected_avatar_mime_does_not_upload_to_matrix() {
+    let fixture = avatar_fixture("avatar-mime-no-upload").await;
+    let response = upload_avatar(
+        &fixture,
+        "video/mp4",
+        "avatar.mp4",
+        "avatar-mime-no-upload-key",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        fixture.driver.uploaded_media.lock().await.is_empty(),
+        "a rejected avatar must not reach the Matrix write seam"
+    );
+}
+
+#[tokio::test]
+async fn rejected_avatar_mime_records_no_provenance() {
+    let fixture = avatar_fixture("avatar-mime-no-provenance").await;
+    let response = upload_avatar(
+        &fixture,
+        "audio/mpeg",
+        "avatar.mp3",
+        "avatar-mime-no-provenance-key",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        media_upload_row_count(&fixture.db_url).await,
+        0,
+        "a rejected avatar must not create an upload-provenance record"
+    );
+}
+
+#[tokio::test]
+async fn rejected_avatar_mime_records_no_idempotency() {
+    let fixture = avatar_fixture("avatar-mime-no-idempotency").await;
+    let author = public_key(&fixture.signing_key);
+    let key = "avatar-mime-no-idempotency-key";
+    let response = upload_avatar(&fixture, "application/pdf", "avatar.pdf", key).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        fixture
+            .store
+            .find_media_upload_idempotency(&author, key)
+            .await
+            .expect("find idempotency")
+            .is_none(),
+        "a rejected avatar must not create an upload idempotency record"
+    );
+}
+
+#[tokio::test]
+async fn comment_media_upload_keeps_broader_mime_support() {
+    let fixture = avatar_fixture("comment-media-mime-breadth").await;
+    for (mime, filename, key) in [
+        ("video/mp4", "clip.mp4", "comment-media-mime-video-key"),
+        ("audio/mpeg", "sound.mp3", "comment-media-mime-audio-key"),
+        ("application/pdf", "doc.pdf", "comment-media-mime-app-key"),
+    ] {
+        let response = do_page_media_upload_typed(
+            &fixture.state,
+            &fixture.router,
+            "test-site",
+            "page-one",
+            &fixture.signing_key,
+            mime,
+            filename,
+            b"media-bytes",
+            key,
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "comment media must keep accepting {mime}"
+        );
+    }
 }

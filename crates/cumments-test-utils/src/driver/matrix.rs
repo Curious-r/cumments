@@ -103,10 +103,14 @@ impl MatrixDriver for TestDriver {
         &self,
         bytes: bytes::Bytes,
         filename: &str,
-        _mimetype: &str,
+        mimetype: &str,
         author_public_key: &str,
         site_id: &SiteId,
     ) -> anyhow::Result<String> {
+        self.uploaded_media
+            .lock()
+            .await
+            .push((mimetype.to_string(), filename.to_string()));
         Ok(format!(
             "mxc://hs/{}/{}-{}-{}",
             site_id.as_str(),

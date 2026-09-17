@@ -1846,7 +1846,9 @@ paths:
         Matrix MXC URI (`mxc://server/media_id`) as a write-side intermediate
         value to pass to `PUT /api/v1/sites/{site_id}/visitors/profile/avatar`.
         It is not a browser media URL; the profile read endpoint returns the
-        signed browser-facing `avatar_url`. Query parameters carry the PoW
+        signed browser-facing `avatar_url`. Accepts image MIME types only
+        (`image/*`); `video/*`, `audio/*`, and `application/*` are rejected
+        with `400` before any Matrix upload. Query parameters carry the PoW
         challenge response and an Ed25519 signature over
         `["UPLOAD", site_id, mime, filename, sha256_hex(body), challenge]`.
         Requires the `Idempotency-Key` header; replays return the original MXC
@@ -1856,6 +1858,7 @@ paths:
         - name: mime
           in: query
           required: true
+          description: Image MIME type; avatar uploads accept `image/*` only.
           schema:
             type: string
         - name: filename

@@ -69,18 +69,21 @@ it.
 
 `POST /api/v1/sites/{site_id}/visitors/profile/avatar/media?mime=...&filename=...&author_public_key=...&author_signature=...&challenge_response=...`
 
-Site-scoped variant of the media upload for profile avatars. It uploads raw
-bytes as the visitor's virtual user and returns the same response shape as the
-comment-media upload, with `url` carrying the raw Matrix MXC URI. That MXC is a
-write-side intermediate value for the subsequent profile mutation, not a
+Site-scoped variant of the media upload for profile avatars. It accepts image
+MIME types only (`image/*`); `video/*`, `audio/*`, and `application/*` are
+rejected with `400` before any Matrix upload or provenance record. It uploads
+raw bytes as the visitor's virtual user and returns the same response shape as
+the comment-media upload, with `url` carrying the raw Matrix MXC URI. That MXC
+is a write-side intermediate value for the subsequent profile mutation, not a
 browser media URL.
 
 The signature covers
 `["UPLOAD", site_id, mime, filename, sha256_hex(body), challenge]` — the
 site-scoped upload signature deliberately carries no page slug. It shares the
 comment-media upload's security model: `Idempotency-Key`, author Ed25519
-signature, PoW freshness, write rate limiting, the size cap, and allowed-MIME
-validation. Replays return the original MXC without uploading a second copy.
+signature, PoW freshness, write rate limiting, the size cap, and MIME
+validation (image-only here). Replays return the original MXC without
+uploading a second copy.
 
 The upload records an upload-provenance record for the MXC against the
 uploading visitor and site with no page, which is what authorizes a later

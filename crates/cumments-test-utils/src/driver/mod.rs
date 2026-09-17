@@ -147,6 +147,9 @@ pub struct TestDriver {
     pub clear_display_name_calls: Mutex<Vec<(String, SiteId)>>,
     pub set_avatar_calls: Mutex<Vec<(String, SiteId, String)>>,
     pub clear_avatar_calls: Mutex<Vec<(String, SiteId)>>,
+    /// Recorded `upload_media` calls as `(mimetype, filename)`, so tests can
+    /// prove a rejected upload never reached the Matrix write seam.
+    pub uploaded_media: Mutex<Vec<(String, String)>>,
     pub next_profile_error: Mutex<Option<ProfileDriverError>>,
     pub historical_stub: Mutex<Option<Option<cumments_core::models::MemberPresentation>>>,
     pub fail_historical_resolution: Mutex<bool>,
@@ -192,6 +195,7 @@ impl TestDriver {
             clear_display_name_calls: Mutex::new(Vec::new()),
             set_avatar_calls: Mutex::new(Vec::new()),
             clear_avatar_calls: Mutex::new(Vec::new()),
+            uploaded_media: Mutex::new(Vec::new()),
             next_profile_error: Mutex::new(None),
             historical_stub: Mutex::new(None),
             fail_historical_resolution: Mutex::new(false),

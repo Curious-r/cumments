@@ -683,6 +683,16 @@ fn media_file_extension(content_type: &str) -> &'static str {
     }
 }
 
+/// Whether a MIME type may be uploaded as a profile avatar.
+///
+/// Avatar media backs the virtual user's global profile avatar, which must
+/// render as an image, so only `image/*` is accepted. This is deliberately
+/// narrower than [`ALLOWED_UPLOAD_MIMES`], which stays the rule for comment
+/// media.
+fn is_avatar_upload_mime(mimetype: &str) -> bool {
+    mimetype.starts_with("image/")
+}
+
 fn media_upload_response(
     url: String,
     filename: String,
@@ -892,10 +902,12 @@ pub(crate) async fn upload_media_handler(
 /// Site-scoped visitor avatar upload: verifies PoW + author signature, then
 /// asks the `MatrixDriver` to upload as the author's virtual user.
 ///
-/// The returned `mxc://` URL is a write-side intermediate value, not a browser
-/// media URL: the client passes it to `PUT .../visitors/profile/avatar`. The
-/// upload is recorded against the visitor and site with no page slug, so the
-/// profile avatar mutation can require that the avatar came through this path.
+/// Accepts image media only (`image/*`), since the avatar is rendered as an
+/// image. The returned `mxc://` URL is a write-side intermediate value, not a
+/// browser media URL: the client passes it to
+/// `PUT .../visitors/profile/avatar`. The upload is recorded against the
+/// visitor and site with no page slug, so the profile avatar mutation can
+/// require that the avatar came through this path.
 pub(crate) async fn upload_avatar_media_handler(
     State(state): State<ApiState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -945,12 +957,9 @@ pub(crate) async fn upload_avatar_media_handler(
         .cloned()
         .unwrap_or_else(|| "avatar".to_string());
 
-    if !ALLOWED_UPLOAD_MIMES
-        .iter()
-        .any(|allowed| mimetype.starts_with(allowed))
-    {
+    if !is_avatar_upload_mime(&mimetype) {
         return Err(AppError::BadRequest(format!(
-            "unsupported upload media type {mimetype}"
+            "avatar must be an image, got {mimetype}"
         )));
     }
 
