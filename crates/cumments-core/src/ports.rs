@@ -1485,6 +1485,12 @@ pub trait VirtualUserStore: Send + Sync {
 /// - Avatar URL: `PUT /_matrix/client/v3/profile/{userId}/avatar_url`
 /// - Clear avatar URL: `DELETE /_matrix/client/v3/profile/{userId}/avatar_url`
 ///
+/// Every mutation explicitly requests MSC4466 profile propagation with
+/// `com.gingershaped.msc4466.propagate_to=all`, so the homeserver emits fresh
+/// `m.room.member` events in every joined room and Cumments' projector can
+/// refresh room member presentation. The homeserver performs the room-member
+/// fan-out; Cumments never writes `m.room.member` itself.
+///
 /// Distinguishes deterministic (4xx) from ambiguous (5xx / network) outcomes.
 #[async_trait]
 pub trait MatrixProfileDriver: Send + Sync {

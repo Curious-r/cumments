@@ -11,6 +11,17 @@ use tracing::{instrument, warn};
 /// the cap is hit the cache is reset and rebuilt from homeserver state.
 const JOINED_CACHE_MAX: usize = 10_000;
 
+/// MSC4466 query parameter requesting that a global profile change propagates
+/// to every room the user has joined.
+///
+/// This is MSC4466's unstable reverse-DNS wire name, not a Cumments-specific
+/// parameter.
+const PROPAGATE_TO_QUERY_PARAM: &str = "com.gingershaped.msc4466.propagate_to";
+
+/// MSC4466 propagation mode that emits fresh `m.room.member` events in every
+/// room the user has joined.
+const PROPAGATE_TO_ALL: &str = "all";
+
 #[derive(Deserialize)]
 struct JoinedRoomsResponse {
     joined_rooms: Vec<String>,
@@ -22,6 +33,27 @@ struct JoinedMembersResponse {
 }
 
 impl AppServiceMatrixDriver {
+    /// Builds an authenticated global-profile mutation request that explicitly
+    /// asks the homeserver to propagate the change to every joined room.
+    ///
+    /// The Matrix global profile is the authoritative identity, and Cumments
+    /// projects room member presentation from the `m.room.member` events the
+    /// homeserver derives from it. An avatar has no message-content fallback
+    /// that could repair a missing room member update, so Cumments must request
+    /// propagation explicitly rather than rely on the homeserver's
+    /// deployment-specific default. MSC4466 defines `all`, `unchanged`, and
+    /// `none`; Cumments always selects `all`. The homeserver, not Cumments,
+    /// performs the room-member fan-out.
+    fn profile_mutation_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        virtual_user: &str,
+    ) -> reqwest::RequestBuilder {
+        self.request(method, path, Some(virtual_user))
+            .query(&[(PROPAGATE_TO_QUERY_PARAM, PROPAGATE_TO_ALL)])
+    }
+
     /// Resolve the virtual user ID for a given author public key.
     pub(super) async fn resolve_virtual_user(
         &self,
@@ -318,12 +350,12 @@ impl AppServiceMatrixDriver {
 
     /// Sets or removes the avatar on a virtual user's global profile.
     ///
-    /// The update carries MSC4466's `propagate_to: all` query parameter
-    /// (`computer.gingershaped.msc4466.propagate_to`) so the homeserver
-    /// emits fresh `m.room.member` events in every joined room; without that
-    /// propagation the avatar would never reach the projector (avatars have
-    /// no event-content fallback, unlike display names). The request body
-    /// must contain only the `avatar_url` field: ruma's `set_profile_field`
+    /// The request carries MSC4466's `propagate_to: all` query parameter (see
+    /// [`Self::profile_mutation_request`]) so the homeserver emits fresh
+    /// `m.room.member` events in every joined room; without that propagation
+    /// the avatar would never reach the projector (avatars have no
+    /// event-content fallback, unlike display names). The request body must
+    /// contain only the `avatar_url` field: the homeserver's profile-field
     /// deserializer consumes exactly one profile key and rejects any extra
     /// fields.
     #[instrument(skip(self))]
@@ -342,13 +374,13 @@ impl AppServiceMatrixDriver {
         );
         let resp = match avatar_url {
             Some(avatar_url) => self
-                .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+                .profile_mutation_request(reqwest::Method::PUT, &path, &virtual_user)
                 .json(&serde_json::json!({ "avatar_url": avatar_url }))
                 .send()
                 .await
                 .map_err(|e| anyhow!("set avatar request failed: {}", e))?,
             None => self
-                .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+                .profile_mutation_request(reqwest::Method::DELETE, &path, &virtual_user)
                 .send()
                 .await
                 .map_err(|e| anyhow!("delete avatar request failed: {}", e))?,
@@ -382,7 +414,7 @@ impl AppServiceMatrixDriver {
             percent_encode(&virtual_user)
         );
         let resp = self
-            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .profile_mutation_request(reqwest::Method::PUT, &path, &virtual_user)
             .json(&serde_json::json!({ "displayname": display_name }))
             .send()
             .await
@@ -410,7 +442,7 @@ impl AppServiceMatrixDriver {
             percent_encode(&virtual_user)
         );
         let resp = self
-            .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+            .profile_mutation_request(reqwest::Method::DELETE, &path, &virtual_user)
             .send()
             .await
             .map_err(|e| {
@@ -438,7 +470,7 @@ impl AppServiceMatrixDriver {
             percent_encode(&virtual_user)
         );
         let resp = self
-            .request(reqwest::Method::PUT, &path, Some(&virtual_user))
+            .profile_mutation_request(reqwest::Method::PUT, &path, &virtual_user)
             .json(&serde_json::json!({ "avatar_url": avatar_url }))
             .send()
             .await
@@ -466,7 +498,7 @@ impl AppServiceMatrixDriver {
             percent_encode(&virtual_user)
         );
         let resp = self
-            .request(reqwest::Method::DELETE, &path, Some(&virtual_user))
+            .profile_mutation_request(reqwest::Method::DELETE, &path, &virtual_user)
             .send()
             .await
             .map_err(|e| {
@@ -627,6 +659,13 @@ mod tests {
     const PROFILE_PATH: &str =
         "/_matrix/client/v3/profile/%40_cumments_my-blog_pubkey%3Aexample.com";
 
+    /// The exact MSC4466 propagation parameter and mode as they must appear on
+    /// the wire. Spelled out literally instead of reusing the production
+    /// constants so these assertions stay independent of them and fail if the
+    /// wire name is changed back to the old one or removed.
+    const PROPAGATE_WIRE_PARAM: &str = "com.gingershaped.msc4466.propagate_to";
+    const PROPAGATE_WIRE_VALUE: &str = "all";
+
     #[tokio::test]
     async fn set_avatar_url_updates_the_virtual_user_profile() {
         let server = MockServer::start().await;
@@ -636,6 +675,7 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
+            .and(query_param(PROPAGATE_WIRE_PARAM, PROPAGATE_WIRE_VALUE))
             .and(body_json(
                 json!({ "avatar_url": "mxc://example.com/avatar" }),
             ))
@@ -665,6 +705,7 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
+            .and(query_param(PROPAGATE_WIRE_PARAM, PROPAGATE_WIRE_VALUE))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(1)
             .mount(&server)
@@ -675,6 +716,55 @@ mod tests {
             .set_avatar_url("pubkey", &SiteId::from("my-blog"), None)
             .await
             .expect("delete avatar should succeed");
+        server.verify().await;
+    }
+
+    /// Every Cumments-initiated global profile mutation must ask the
+    /// homeserver for `com.gingershaped.msc4466.propagate_to=all`: the
+    /// projector only learns about a profile change from the resulting
+    /// `m.room.member` events, and an avatar has no event-content fallback.
+    /// This mounts a mock that only matches the exact propagation query
+    /// parameter, so renaming or removing it fails the test.
+    #[tokio::test]
+    async fn profile_mutations_request_propagation_to_all() {
+        let server = MockServer::start().await;
+
+        for http_method in ["PUT", "DELETE"] {
+            for profile_path in [DISPLAY_NAME_PROFILE_PATH, AVATAR_PROFILE_PATH] {
+                Mock::given(method(http_method))
+                    .and(path(profile_path))
+                    .and(query_param(
+                        "user_id",
+                        "@_cumments_my-blog_pubkey:example.com",
+                    ))
+                    .and(query_param(PROPAGATE_WIRE_PARAM, PROPAGATE_WIRE_VALUE))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+        }
+
+        let driver = test_driver(&server);
+        let site_id = SiteId::from("my-blog");
+
+        driver
+            .set_display_name_impl("pubkey", &site_id, "Alice")
+            .await
+            .expect("set display name");
+        driver
+            .clear_display_name_impl("pubkey", &site_id)
+            .await
+            .expect("clear display name");
+        driver
+            .set_avatar_impl("pubkey", &site_id, "mxc://example.com/avatar")
+            .await
+            .expect("set avatar");
+        driver
+            .clear_avatar_impl("pubkey", &site_id)
+            .await
+            .expect("clear avatar");
+
         server.verify().await;
     }
 
@@ -689,6 +779,7 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
+            .and(query_param(PROPAGATE_WIRE_PARAM, PROPAGATE_WIRE_VALUE))
             .and(body_json(json!({ "displayname": "Alice" })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(1)
@@ -702,6 +793,7 @@ mod tests {
                 "user_id",
                 "@_cumments_my-blog_pubkey:example.com",
             ))
+            .and(query_param(PROPAGATE_WIRE_PARAM, PROPAGATE_WIRE_VALUE))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(1)
             .mount(&server)
