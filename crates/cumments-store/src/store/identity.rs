@@ -25,9 +25,6 @@ impl VirtualUserStore for DbStore {
             server_name
         );
 
-        // The mapping is stable per (public key, site): return the stored
-        // virtual user even when the current server_name differs (e.g. after
-        // a domain migration), so edits keep matching the original sender.
         if let Some(existing) = virtual_users::Entity::find()
             .filter(virtual_users::Column::PublicKey.eq(author_public_key))
             .filter(virtual_users::Column::SiteId.eq(site_id.as_str()))
