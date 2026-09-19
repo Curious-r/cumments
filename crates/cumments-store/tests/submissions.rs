@@ -643,6 +643,12 @@ async fn failed_post_submission_can_complete_when_event_is_observed() {
         .await
         .expect("complete failed submission");
 
+    let (status, _) = stored_status(&store, "post_submissions", id).await;
+    assert_eq!(
+        status, "completed",
+        "a failed submission with a recorded event is completable"
+    );
+
     let pending = store
         .get_pending_post_submissions(100)
         .await
@@ -653,6 +659,42 @@ async fn failed_post_submission_can_complete_when_event_is_observed() {
         .expect("stuck");
     assert!(pending.is_empty());
     assert!(stuck.is_empty());
+}
+
+/// A deterministic rejection fails before any Matrix event exists, so there is
+/// nothing for a projector observation to complete: such a submission is
+/// terminal and must not be resurrected into `completed`.
+#[tokio::test]
+async fn terminally_failed_post_submission_without_event_stays_failed() {
+    let store = DbStore::connect(&test_db_url("terminal-fail-complete"))
+        .await
+        .expect("connect db");
+
+    store
+        .save_post_submission(&post_command())
+        .await
+        .expect("save submission");
+    let id = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending")[0]
+        .id;
+    store
+        .mark_post_submission_failed(id, "matrix request too large (M_TOO_LARGE)")
+        .await
+        .expect("mark failed");
+
+    store
+        .mark_post_submission_completed_by_id(id)
+        .await
+        .expect("completion attempt");
+
+    let (status, last_error) = stored_status(&store, "post_submissions", id).await;
+    assert_eq!(
+        status, "failed",
+        "a submission with no recorded event stays failed"
+    );
+    assert!(last_error.unwrap().contains("too large"));
 }
 
 #[tokio::test]

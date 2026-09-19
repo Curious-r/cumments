@@ -815,17 +815,26 @@ impl SubmissionStore for DbStore {
             post_submissions::Column::Status,
             post_submissions::Column::UpdatedAt,
             |query: UpdateMany<post_submissions::Entity>| {
-                query
-                    .filter(post_submissions::COLUMN.id.eq(id))
-                    // Allow a failed command to be completed when the
-                    // projector later observes its event: failure may have
-                    // been a false dead-letter from the timeout pass.
-                    .filter(post_submissions::COLUMN.status.is_in([
-                        SubmissionStatus::Pending,
-                        SubmissionStatus::Processing,
-                        SubmissionStatus::WaitingForSync,
-                        SubmissionStatus::Failed,
-                    ]))
+                query.filter(post_submissions::COLUMN.id.eq(id)).filter(
+                    Condition::any()
+                        // In-flight submissions complete normally.
+                        .add(post_submissions::COLUMN.status.is_in([
+                            SubmissionStatus::Pending,
+                            SubmissionStatus::Processing,
+                            SubmissionStatus::WaitingForSync,
+                        ]))
+                        // A failed submission may still be completed by a
+                        // late projector observation, but only when an event
+                        // was actually written: the timeout/dead-letter path
+                        // records `matrix_event_id` first, whereas a
+                        // deterministic rejection (e.g. `M_TOO_LARGE`) fails
+                        // before any event exists and stays failed.
+                        .add(
+                            Condition::all()
+                                .add(post_submissions::COLUMN.status.eq(SubmissionStatus::Failed))
+                                .add(post_submissions::COLUMN.matrix_event_id.is_not_null()),
+                        ),
+                )
             },
         )
         .await
