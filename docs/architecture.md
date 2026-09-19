@@ -103,6 +103,48 @@ before publication and deleted after broadcast. A crash between those steps can
 therefore repeat one frame, never lose a committed live update; each comment SSE
 frame carries a deterministic `id`, and clients should ignore IDs they have already seen.
 
+### Constraint layers
+
+Three kinds of constraint meet on the write path, and each is enforced in a
+different place:
+
+| Layer | Example | Enforced by |
+|---|---|---|
+| Application semantics | Poll definition rules (semantic question/answers, selection limit) | Cumments, at the API boundary |
+| Matrix protocol | Complete room-event size limit | The Matrix specification, applied by the homeserver |
+| Homeserver enforcement | Whether this particular event is acceptable | The homeserver — the final authority |
+
+```
+API semantic layer
+    ↓
+durable intent / operation identity
+    ↓
+Reconciler
+    ↓
+MatrixDriver
+    ↓
+homeserver is the final authority for complete event validity
+```
+
+Cumments validates its own application semantics itself. It does **not** invent
+per-field length limits to approximate the protocol's event-size rule: a field
+length is not the event size, and only the homeserver judges the complete
+event. The current write path sends Client-Server API content and never
+constructs the federation event, so it has nothing to measure before sending
+and must not preflight a request on content size. `cumments-matrix` exposes a
+complete-event size constant and check for code that genuinely holds a
+complete, canonical-JSON-encoded event; it is deliberately not applied to API
+request bodies.
+
+When a homeserver rejects a room event as too large (`M_TOO_LARGE`), that
+verdict is captured as a typed `MatrixError::RequestTooLarge` rather than a
+string match, and never inferred from an HTTP status alone. Because it is
+deterministic for the submitted event, the reconciler moves the durable
+post/update/delete submission straight to `failed`, keeping the homeserver's
+diagnostic, and schedules no further attempt: the room is untouched and no
+retry repeats an event the homeserver already refused. This is distinct from
+dead-lettering, which means "the event exists but projection never observed it".
+
 ### Boundaries to watch
 
 - The reconciler is a set of independent controllers, one task per pass, each

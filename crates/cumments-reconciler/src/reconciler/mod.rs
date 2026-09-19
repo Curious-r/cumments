@@ -1,4 +1,4 @@
-mod deletions;
+pub mod deletions;
 mod governance;
 pub mod pass;
 pub mod posts;
@@ -108,6 +108,21 @@ fn is_room_gone(err: &anyhow::Error) -> bool {
         matches!(
             cause.downcast_ref::<MatrixError>(),
             Some(MatrixError::RoomGone { .. })
+        )
+    })
+}
+
+/// Whether a driver error is the homeserver's deterministic rejection of the
+/// submitted request as too large.
+///
+/// The rejection is a property of this exact event, so the durable submission
+/// is failed rather than retried: re-sending it unchanged cannot succeed. The
+/// room itself is unaffected.
+fn is_request_too_large(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<MatrixError>(),
+            Some(MatrixError::RequestTooLarge { .. })
         )
     })
 }

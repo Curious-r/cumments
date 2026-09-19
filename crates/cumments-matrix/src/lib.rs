@@ -1,11 +1,14 @@
+mod error_body;
 mod wire;
 
 pub mod appservice;
+pub mod event_size;
 pub mod logging;
 pub mod poll;
 pub mod resolver;
 
 pub use appservice::AppServiceMatrixDriver;
+pub use event_size::{MAX_COMPLETE_EVENT_BYTES, complete_event_fits};
 pub use logging::LoggingMatrixDriver;
 pub use resolver::MatrixHistoricalStateResolver;
 

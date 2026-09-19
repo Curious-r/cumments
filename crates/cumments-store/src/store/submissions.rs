@@ -1141,6 +1141,84 @@ impl SubmissionStore for DbStore {
         }
     }
 
+    async fn mark_post_submission_failed(&self, id: i64, error: &str) -> Result<()> {
+        post_submissions::Entity::update_many()
+            .col_expr(
+                post_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
+            )
+            .col_expr(
+                post_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .col_expr(
+                post_submissions::Column::LastError,
+                sea_orm::sea_query::Expr::value(error),
+            )
+            .filter(post_submissions::Column::Id.eq(id))
+            // Never resurrect a submission that already reached a terminal state.
+            .filter(post_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_update_submission_failed(&self, id: i64, error: &str) -> Result<()> {
+        update_submissions::Entity::update_many()
+            .col_expr(
+                update_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
+            )
+            .col_expr(
+                update_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .col_expr(
+                update_submissions::Column::LastError,
+                sea_orm::sea_query::Expr::value(error),
+            )
+            .filter(update_submissions::Column::Id.eq(id))
+            // Never resurrect a submission that already reached a terminal state.
+            .filter(update_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_delete_submission_failed(&self, id: i64, error: &str) -> Result<()> {
+        delete_submissions::Entity::update_many()
+            .col_expr(
+                delete_submissions::Column::Status,
+                sea_orm::sea_query::Expr::value(SubmissionStatus::Failed),
+            )
+            .col_expr(
+                delete_submissions::Column::UpdatedAt,
+                sea_orm::sea_query::Expr::value(chrono::Utc::now()),
+            )
+            .col_expr(
+                delete_submissions::Column::LastError,
+                sea_orm::sea_query::Expr::value(error),
+            )
+            .filter(delete_submissions::Column::Id.eq(id))
+            // Never resurrect a submission that already reached a terminal state.
+            .filter(delete_submissions::Column::Status.is_in([
+                SubmissionStatus::Pending,
+                SubmissionStatus::Processing,
+                SubmissionStatus::WaitingForSync,
+            ]))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
     async fn mark_post_submission_completed(&self, event_id: &str) -> Result<()> {
         self.transition_status(
             SubmissionStatus::Completed,

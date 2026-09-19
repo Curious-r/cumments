@@ -241,6 +241,18 @@ pub trait SubmissionStore: Send + Sync {
     async fn record_delete_submission_failure(&self, id: i64, error: &str) -> Result<bool>;
     async fn record_update_submission_failure(&self, id: i64, error: &str) -> Result<bool>;
 
+    /// Moves a submission directly to 'failed' with a diagnostic error and
+    /// schedules no further attempt.
+    ///
+    /// Used for failures that are deterministic for the submitted command, so
+    /// retrying it unchanged cannot succeed (e.g. the homeserver rejecting the
+    /// room event as too large). This is distinct from
+    /// [`Self::dead_letter_post_submission`], which means "the event exists on
+    /// the homeserver but projection never observed it".
+    async fn mark_post_submission_failed(&self, id: i64, error: &str) -> Result<()>;
+    async fn mark_delete_submission_failed(&self, id: i64, error: &str) -> Result<()>;
+    async fn mark_update_submission_failed(&self, id: i64, error: &str) -> Result<()>;
+
     /// Transitions a post submission to 'completed' when the projector sees the event.
     async fn mark_post_submission_completed(&self, event_id: &str) -> Result<()>;
 

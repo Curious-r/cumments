@@ -746,3 +746,131 @@ async fn post_submissions_preserve_both_relation_fields() {
         assert_eq!(pending.command.thread_root, command.thread_root);
     }
 }
+
+/// Reads a submission row's stored status and diagnostic directly, so tests can
+/// assert the terminal transition including the persisted error.
+async fn stored_status(store: &DbStore, table: &str, id: i64) -> (String, Option<String>) {
+    use sea_orm::ConnectionTrait;
+
+    let statement = sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
+        format!("SELECT status, last_error FROM {table} WHERE id = {id}"),
+    );
+    let row = store
+        .connection()
+        .query_one_raw(statement)
+        .await
+        .expect("query submission row")
+        .expect("submission row exists");
+    (
+        row.try_get("", "status").expect("status column"),
+        row.try_get("", "last_error").expect("last_error column"),
+    )
+}
+
+/// A deterministic rejection is terminal: the row lands in `failed` with the
+/// diagnostic kept, schedules no retry, and is never claimable again.
+#[tokio::test]
+async fn mark_post_submission_failed_is_terminal() {
+    let store = DbStore::connect(&test_db_url("post-terminal-fail"))
+        .await
+        .expect("connect db");
+    store
+        .save_post_submission(&post_command())
+        .await
+        .expect("save submission");
+    let id = store
+        .get_pending_post_submissions(100)
+        .await
+        .expect("pending")[0]
+        .id;
+
+    let diagnostic = "matrix request too large (M_TOO_LARGE: event is too large)";
+    store
+        .mark_post_submission_failed(id, diagnostic)
+        .await
+        .expect("mark failed");
+
+    let (status, last_error) = stored_status(&store, "post_submissions", id).await;
+    assert_eq!(status, "failed");
+    assert_eq!(last_error.as_deref(), Some(diagnostic));
+
+    assert!(
+        store
+            .get_pending_post_submissions(100)
+            .await
+            .expect("pending")
+            .is_empty(),
+        "a terminally failed submission is not pending"
+    );
+    assert!(
+        store
+            .claim_pending_post_submissions(100, lease(Duration::minutes(5)))
+            .await
+            .expect("claim")
+            .is_empty(),
+        "a terminally failed submission is never claimed again"
+    );
+    assert!(
+        !store
+            .record_post_submission_failure(id, "late failure")
+            .await
+            .expect("late failure"),
+        "a late failure must not resurrect it into a retry"
+    );
+}
+
+#[tokio::test]
+async fn mark_update_and_delete_submissions_failed_are_terminal() {
+    let store = DbStore::connect(&test_db_url("edit-terminal-fail"))
+        .await
+        .expect("connect db");
+    store
+        .save_update_submission(&update_command())
+        .await
+        .expect("save update");
+    let update_id = store
+        .get_pending_update_submissions(100)
+        .await
+        .expect("pending updates")[0]
+        .id;
+    store
+        .mark_update_submission_failed(update_id, "too large")
+        .await
+        .expect("mark update failed");
+    let (status, last_error) = stored_status(&store, "update_submissions", update_id).await;
+    assert_eq!(status, "failed");
+    assert_eq!(last_error.as_deref(), Some("too large"));
+
+    store
+        .save_delete_submission(&delete_command())
+        .await
+        .expect("save delete");
+    let delete_id = store
+        .get_pending_delete_submissions(100)
+        .await
+        .expect("pending deletes")[0]
+        .id;
+    store
+        .mark_delete_submission_failed(delete_id, "too large")
+        .await
+        .expect("mark delete failed");
+    let (status, last_error) = stored_status(&store, "delete_submissions", delete_id).await;
+    assert_eq!(status, "failed");
+    assert_eq!(last_error.as_deref(), Some("too large"));
+
+    assert!(
+        store
+            .get_pending_update_submissions(100)
+            .await
+            .expect("pending updates")
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_pending_delete_submissions(100)
+            .await
+            .expect("pending deletes")
+            .is_empty()
+    );
+}

@@ -164,6 +164,11 @@ impl MatrixDriver for TestDriver {
         submission_id: Option<i64>,
         txn_id: &str,
     ) -> anyhow::Result<String> {
+        let mut failures = self.post_message_failures.lock().await;
+        if !failures.is_empty() {
+            return Err(failures.remove(0));
+        }
+        drop(failures);
         let mut messages = self.posted_messages.lock().await;
         let event_id = format!("$msg-event-{}", messages.len() + 1);
         messages.push(crate::driver::RecordedPostMessage {
@@ -336,6 +341,11 @@ impl MatrixDriver for TestDriver {
         submission_id: Option<i64>,
         txn_id: &str,
     ) -> anyhow::Result<String> {
+        let mut failures = self.update_message_failures.lock().await;
+        if !failures.is_empty() {
+            return Err(failures.remove(0));
+        }
+        drop(failures);
         let mut updates = self.updated_messages.lock().await;
         let edit_event_id = format!("$edit-event-{}", updates.len() + 1);
         updates.push(crate::driver::RecordedUpdate {
@@ -360,6 +370,11 @@ impl MatrixDriver for TestDriver {
         _proof: Option<&serde_json::Value>,
         txn_id: &str,
     ) -> anyhow::Result<String> {
+        let mut failures = self.redact_message_failures.lock().await;
+        if !failures.is_empty() {
+            return Err(failures.remove(0));
+        }
+        drop(failures);
         self.redactions.lock().await.push((
             room_id.to_string(),
             event_id.to_string(),

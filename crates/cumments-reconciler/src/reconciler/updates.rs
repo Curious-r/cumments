@@ -169,6 +169,19 @@ impl UpdatesPass {
             .await;
 
             if let Err(e) = process_result {
+                // A deterministic rejection of this exact event cannot succeed
+                // on a retry, so it fails the submission instead of backing off.
+                if is_request_too_large(&e) {
+                    error!(
+                        "Update submission [{}] rejected as too large, marked failed without retry: {:?}",
+                        id, e
+                    );
+                    self.deps
+                        .submission_store
+                        .mark_update_submission_failed(id, &e.to_string())
+                        .await?;
+                    continue;
+                }
                 let retrying = self
                     .deps
                     .submission_store

@@ -2,6 +2,7 @@
 //! linking.
 
 use super::*;
+use crate::error_body::typed_matrix_error;
 use crate::wire::{
     comment_room_alias, comment_room_alias_localpart, has_redact_power, is_implicit_creator,
     metadata_matches, percent_encode, room_requires_explicit_creator, site_space_alias,
@@ -104,6 +105,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Setting metadata for room {} failed ({}): {}",
                 room_id,
@@ -130,6 +134,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Setting name for room {} failed ({}): {}",
                 room_id,
@@ -340,6 +347,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Failed to set power levels ({}): {}",
                 status,
@@ -403,6 +413,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Failed to set room state {event_type}/{state_key} ({}): {}",
                 status,

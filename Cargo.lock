@@ -1025,6 +1025,7 @@ dependencies = [
  "cumments-core",
  "cumments-store",
  "cumments-test-utils",
+ "sea-orm",
  "serde_json",
  "tokio",
  "tracing",

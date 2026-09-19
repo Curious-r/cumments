@@ -15,4 +15,14 @@ pub enum MatrixError {
     /// registry entry should be retired.
     #[error("room gone or inaccessible ({room_id}): {reason}")]
     RoomGone { room_id: String, reason: String },
+    /// The homeserver classified the request/entity as too large
+    /// (`M_TOO_LARGE`).
+    ///
+    /// This records the homeserver's verdict, not a local proof that the
+    /// complete event exceeded the Matrix limit: Cumments does not reconstruct
+    /// federation events. For a room-event write the rejection is
+    /// deterministic for the submitted event, so retrying it unchanged cannot
+    /// succeed.
+    #[error("matrix request too large ({context})")]
+    RequestTooLarge { context: String },
 }

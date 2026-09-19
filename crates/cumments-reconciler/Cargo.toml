@@ -21,3 +21,4 @@ tracing.workspace = true
 bytes.workspace = true
 cumments-store.workspace = true
 cumments-test-utils.workspace = true
+sea-orm.workspace = true

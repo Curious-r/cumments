@@ -1,6 +1,7 @@
 //! Sending, editing, redacting and reading room messages.
 
 use super::*;
+use crate::error_body::typed_matrix_error;
 use crate::wire::{
     build_edit_body, build_location_body, build_media_body, build_message_body,
     build_poll_end_body, build_poll_response_body, build_poll_start_body, build_reaction_body,
@@ -160,6 +161,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
                 return Err(room_gone(
@@ -219,6 +223,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!("Failed to react ({}): {}", status, error_body));
         }
         Ok(())
@@ -258,6 +265,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Failed to post poll response ({}): {}",
                 status,
@@ -299,6 +309,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Failed to post poll end ({}): {}",
                 status,
@@ -352,6 +365,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Failed to post location ({}): {}",
                 status,
@@ -403,6 +419,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!("Failed to post poll ({}): {}", status, error_body));
         }
         let data: SendEventResponse = resp
@@ -459,6 +478,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 self.invalidate_joined(&(room_id.to_owned(), virtual_user.clone()));
                 return Err(room_gone(
@@ -508,6 +530,9 @@ impl AppServiceMatrixDriver {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
             warn!("Failed to redact message ({}): {}", status, error_body);
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             if error_body.contains("M_FORBIDDEN") || error_body.contains("M_NOT_FOUND") {
                 return Err(room_gone(
                     room_id,
@@ -639,6 +664,9 @@ impl AppServiceMatrixDriver {
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
+            if let Some(error) = typed_matrix_error(&error_body) {
+                return Err(error);
+            }
             return Err(anyhow!(
                 "Bot message to {room_id} failed ({status}): {error_body}"
             ));
@@ -882,6 +910,116 @@ mod tests {
             .await
             .expect("post poll");
         assert_eq!(event_id, "$poll:hs");
+        server.verify().await;
+    }
+
+    // ── Matrix error classification ───────────────────────────────
+
+    const MESSAGE_PATH: &str =
+        "/_matrix/client/v3/rooms/%21room%3Aexample.com/send/m.room.message/txn-1";
+
+    /// Mount the join the driver performs before sending as a virtual user.
+    async fn mount_join(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/_matrix/client/v3/rooms/%21room%3Aexample.com/join"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "room_id": "!room:example.com" })),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn send_message(server: &MockServer) -> anyhow::Result<String> {
+        let driver = test_driver(server);
+        let site_id = SiteId::from("my-blog");
+        driver
+            .post_message(
+                "!room:example.com",
+                "hello",
+                None,
+                "pubkey",
+                "sig",
+                "chal",
+                &site_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "txn-1",
+            )
+            .await
+    }
+
+    fn matrix_error(error: &anyhow::Error) -> Option<&cumments_core::matrix_error::MatrixError> {
+        error.downcast_ref::<cumments_core::matrix_error::MatrixError>()
+    }
+
+    #[tokio::test]
+    async fn room_event_write_surfaces_m_too_large_as_a_typed_error() {
+        let server = MockServer::start().await;
+        mount_join(&server).await;
+        Mock::given(method("PUT"))
+            .and(path(MESSAGE_PATH))
+            .respond_with(ResponseTemplate::new(413).set_body_json(json!({
+                "errcode": "M_TOO_LARGE",
+                "error": "event is too large",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = send_message(&server).await.expect_err("must reject");
+        let Some(cumments_core::matrix_error::MatrixError::RequestTooLarge { context }) =
+            matrix_error(&error)
+        else {
+            panic!("expected the typed too-large error, got {error:#}");
+        };
+        // The homeserver's own message is preserved for diagnostics.
+        assert!(context.contains("event is too large"), "context: {context}");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn a_bare_413_is_not_classified_as_m_too_large() {
+        let server = MockServer::start().await;
+        mount_join(&server).await;
+        Mock::given(method("PUT"))
+            .and(path(MESSAGE_PATH))
+            .respond_with(
+                ResponseTemplate::new(413).set_body_string("<html>413 payload too large</html>"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = send_message(&server).await.expect_err("must reject");
+        assert!(
+            matrix_error(&error).is_none(),
+            "an HTTP status alone is not proof of M_TOO_LARGE"
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn room_gone_classification_is_unchanged() {
+        let server = MockServer::start().await;
+        mount_join(&server).await;
+        Mock::given(method("PUT"))
+            .and(path(MESSAGE_PATH))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errcode": "M_FORBIDDEN",
+                "error": "not in room",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = send_message(&server).await.expect_err("must reject");
+        assert!(matches!(
+            matrix_error(&error),
+            Some(cumments_core::matrix_error::MatrixError::RoomGone { .. })
+        ));
         server.verify().await;
     }
 }

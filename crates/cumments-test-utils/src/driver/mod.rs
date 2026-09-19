@@ -154,6 +154,13 @@ pub struct TestDriver {
     pub historical_stub: Mutex<Option<Option<cumments_core::models::MemberPresentation>>>,
     pub fail_historical_resolution: Mutex<bool>,
     pub fail_get_profile: Mutex<bool>,
+    /// Failures to return from the next `post_message` calls, in order. The
+    /// call is not recorded as sent, so a test can prove "no send happened".
+    pub post_message_failures: Mutex<Vec<anyhow::Error>>,
+    /// Same, for `update_message`.
+    pub update_message_failures: Mutex<Vec<anyhow::Error>>,
+    /// Same, for `redact_message`.
+    pub redact_message_failures: Mutex<Vec<anyhow::Error>>,
 }
 
 impl TestDriver {
@@ -200,7 +207,25 @@ impl TestDriver {
             historical_stub: Mutex::new(None),
             fail_historical_resolution: Mutex::new(false),
             fail_get_profile: Mutex::new(false),
+            post_message_failures: Mutex::new(Vec::new()),
+            update_message_failures: Mutex::new(Vec::new()),
+            redact_message_failures: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Queue a failure for the next `post_message` call.
+    pub async fn fail_next_post_message(&self, error: anyhow::Error) {
+        self.post_message_failures.lock().await.push(error);
+    }
+
+    /// Queue a failure for the next `update_message` call.
+    pub async fn fail_next_update_message(&self, error: anyhow::Error) {
+        self.update_message_failures.lock().await.push(error);
+    }
+
+    /// Queue a failure for the next `redact_message` call.
+    pub async fn fail_next_redact_message(&self, error: anyhow::Error) {
+        self.redact_message_failures.lock().await.push(error);
     }
 
     /// Construct a TestDriver that returns the specified presentation for any
