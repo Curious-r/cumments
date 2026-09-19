@@ -786,14 +786,9 @@ fn parse_push_poll_start(
     let content = event.content.as_ref()?;
     let poll = &start.content.poll;
 
-    let Some(max_selections) = u8::try_from(poll.max_selections).ok() else {
-        warn!(
-            event_id = ?event.event_id,
-            max_selections = poll.max_selections,
-            "Ignoring poll start with an unsupported selection limit"
-        );
-        return None;
-    };
+    // `max_selections` stays a full `u64`: the Poll contract allows any value
+    // the signed semantic operation can carry, and `PollStartFact::validate`
+    // is what rejects the rest.
     let definition = PollStartFact {
         event_id: event.event_id.clone().unwrap_or_default(),
         sender: start.sender.clone(),
@@ -916,7 +911,7 @@ fn parse_push_poll_start(
                 })
                 .collect(),
             kind: semantic_kind_for(&poll.kind).unwrap_or(PollSemanticKind::Undisclosed),
-            max_selections: u64::from(max_selections),
+            max_selections: poll.max_selections,
             status: PollStatus::Open,
             end_time: None,
             results: None,
@@ -1865,6 +1860,78 @@ mod tests {
         }
         assert!(!message.is_virtual_user_sender);
         assert_eq!(message.event_type, POLL_START_EVENT_TYPE);
+    }
+
+    /// Project a wire poll start carrying `max_selections` unchanged.
+    fn project_poll_start_with(max_selections: u64) -> Option<ParsedRoomMessage> {
+        let mut content = poll_start_wire();
+        content["org.matrix.msc3381.poll.start"]["max_selections"] =
+            serde_json::json!(max_selections);
+        let event = direct_event(POLL_START_EVENT_TYPE, content);
+        let PollEvent::Start(start) = PollEvent::parse(
+            POLL_START_EVENT_TYPE,
+            Some("$e:hs"),
+            "@alice:hs",
+            100,
+            event.content.as_ref().unwrap(),
+        )
+        .expect("typed parse")
+        .expect("is a poll") else {
+            panic!("expected start");
+        };
+        parse_push_poll_start(
+            &event,
+            &start,
+            Some(&poll_identity()),
+            Some(TEST_SERVER_NAME),
+        )
+    }
+
+    #[test]
+    fn poll_start_keeps_selection_limits_above_u8() {
+        // A declared limit is not a `u8`: the wire value survives projection
+        // exactly, however large it is.
+        for max_selections in [1u64, 2, 255, 256, 65_535, 4_294_967_296] {
+            let message = project_poll_start_with(max_selections)
+                .unwrap_or_else(|| panic!("max_selections {max_selections} must project"));
+            match message.content {
+                Content::Poll(poll) => assert_eq!(poll.max_selections, max_selections),
+                other => panic!("expected poll content, got {other:?}"),
+            }
+        }
+
+        // The canonical integer boundary is the only upper bound.
+        let boundary = cumments_core::canonical::MAX_SAFE_CANONICAL_INT as u64;
+        let message = project_poll_start_with(boundary).expect("boundary is representable");
+        match message.content {
+            Content::Poll(poll) => assert_eq!(poll.max_selections, boundary),
+            other => panic!("expected poll content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn poll_start_rejects_unrepresentable_and_zero_selection_limits() {
+        assert!(
+            project_poll_start_with(cumments_core::canonical::MAX_SAFE_CANONICAL_INT as u64 + 1)
+                .is_none(),
+            "one past the canonical boundary cannot denote a signed Poll"
+        );
+        assert!(project_poll_start_with(u64::MAX).is_none());
+
+        // Zero is rejected even earlier, by the pinned wire schema.
+        let mut content = poll_start_wire();
+        content["org.matrix.msc3381.poll.start"]["max_selections"] = serde_json::json!(0);
+        assert!(
+            PollEvent::parse(
+                POLL_START_EVENT_TYPE,
+                Some("$e:hs"),
+                "@alice:hs",
+                100,
+                &content,
+            )
+            .is_err(),
+            "max_selections must be at least 1"
+        );
     }
 
     #[test]

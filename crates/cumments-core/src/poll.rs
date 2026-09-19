@@ -550,16 +550,28 @@ pub enum PollStartError {
     DuplicateAnswerId(String),
     #[error("poll max_selections must be at least 1")]
     ZeroMaxSelections,
+    #[error("poll max_selections {0} cannot be represented in a signed poll")]
+    MaxSelectionsNotRepresentable(u64),
 }
 
 impl PollStartFact {
-    /// Validate the poll definition: at least one answer, at least one
-    /// selection, and answer ids unique within the poll. Answer ids are opaque
-    /// (any string, including the empty one) and the declared order is
-    /// preserved; ids are compared byte-for-byte (case-sensitive).
+    /// Validate the poll definition: at least one answer, a `max_selections`
+    /// the signed representation can carry, and answer ids unique within the
+    /// poll. Answer ids are opaque (any string, including the empty one) and
+    /// the declared order is preserved; ids are compared byte-for-byte
+    /// (case-sensitive).
     pub fn validate(&self) -> Result<(), PollStartError> {
         if self.max_selections < 1 {
             return Err(PollStartError::ZeroMaxSelections);
+        }
+        // The wire carries `max_selections` as a full unsigned integer; it
+        // denotes a Cumments Poll semantic value only when the signed
+        // representation can carry it, which is the same boundary
+        // [`validate_poll_semantic_definition`] applies to authored polls.
+        if CanonicalJson::int_from_u64(self.max_selections).is_none() {
+            return Err(PollStartError::MaxSelectionsNotRepresentable(
+                self.max_selections,
+            ));
         }
         if self.answers.is_empty() {
             return Err(PollStartError::NoAnswers);
@@ -1079,6 +1091,28 @@ mod tests {
         fact.answers = vec![PollAnswerFact::new("a", "A"), PollAnswerFact::new("b", "B")];
         let projection = reduce_poll(&fact, &[], &[]).expect("multi-select poll");
         assert_eq!(projection.max_selections, 5);
+    }
+
+    #[test]
+    fn max_selections_above_the_canonical_range_is_rejected() {
+        // Every value the signed representation can carry is a valid poll,
+        // including limits far beyond the answer count.
+        for allowed in [1, 2, 256, crate::canonical::MAX_SAFE_CANONICAL_INT as u64] {
+            let projection = reduce_poll(&start(allowed, true), &[], &[])
+                .unwrap_or_else(|error| panic!("max_selections {allowed} must be valid: {error}"));
+            assert_eq!(projection.max_selections, allowed);
+        }
+
+        // One past the canonical boundary cannot denote a signed Poll.
+        let too_large = crate::canonical::MAX_SAFE_CANONICAL_INT as u64 + 1;
+        assert_eq!(
+            reduce_poll(&start(too_large, true), &[], &[]),
+            Err(PollStartError::MaxSelectionsNotRepresentable(too_large))
+        );
+        assert_eq!(
+            reduce_poll(&start(u64::MAX, true), &[], &[]),
+            Err(PollStartError::MaxSelectionsNotRepresentable(u64::MAX))
+        );
     }
 
     // ── Voting ────────────────────────────────────────────────────
