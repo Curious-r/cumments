@@ -2191,7 +2191,10 @@ pub(crate) async fn poll_handler(
         &answers,
         req.kind,
         req.max_selections,
-    );
+    )
+    .ok_or_else(|| {
+        AppError::BadRequest("max_selections cannot be represented in a signed Poll.".to_string())
+    })?;
 
     // 3. Semantic fingerprint: H(canonical semantic operation), never the raw
     // HTTP body.

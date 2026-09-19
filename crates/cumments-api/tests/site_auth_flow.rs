@@ -3770,7 +3770,8 @@ fn signed_poll_body(
         &semantic_answers,
         kind,
         max_selections,
-    );
+    )
+    .expect("test helper uses representable inputs");
     let envelope = poll_signature_envelope(&operation, operation_id, challenge_prefix);
     let signature = URL_SAFE_NO_PAD.encode(
         signing_key
@@ -3906,14 +3907,14 @@ async fn create_poll_rejects_invalid_definitions() {
         ))
     };
 
-    // Invalid answer-id syntax.
+    // Duplicate answer ids (exact string equality).
     let body = signed_poll_body(
         &signing_key,
         "test-blog",
         "hello",
         POLL_KEY,
         "q?",
-        &[("has space", "A"), ("b", "B")],
+        &[("a", "A"), ("a", "A again")],
         PollSemanticKind::Disclosed,
         1,
         None,
@@ -3926,14 +3927,34 @@ async fn create_poll_rejects_invalid_definitions() {
         StatusCode::BAD_REQUEST
     );
 
-    // Duplicate answer ids.
+    // Empty question.
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        POLL_KEY,
+        "   ",
+        &[("a", "A"), ("b", "B")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    assert_eq!(
+        post(body).await.expect("call").status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Empty answer text.
     let body = signed_poll_body(
         &signing_key,
         "test-blog",
         "hello",
         POLL_KEY,
         "q?",
-        &[("a", "A"), ("a", "A again")],
+        &[("a", ""), ("b", "B")],
         PollSemanticKind::Disclosed,
         1,
         None,
@@ -3966,16 +3987,24 @@ async fn create_poll_rejects_invalid_definitions() {
         StatusCode::BAD_REQUEST
     );
 
-    // max_selections greater than the number of answers is semantically invalid.
+    // More answers than the Matrix Poll limit is rejected rather than
+    // truncated: the signed meaning must match the emitted Poll.
+    let many: Vec<(String, String)> = (0..21)
+        .map(|index| (format!("id{index}"), format!("Text {index}")))
+        .collect();
+    let many_refs: Vec<(&str, &str)> = many
+        .iter()
+        .map(|(id, text)| (id.as_str(), text.as_str()))
+        .collect();
     let body = signed_poll_body(
         &signing_key,
         "test-blog",
         "hello",
         POLL_KEY,
         "q?",
-        &[("a", "A"), ("b", "B")],
+        &many_refs,
         PollSemanticKind::Disclosed,
-        3,
+        1,
         None,
         None,
         &challenge.prefix,
@@ -3986,21 +4015,20 @@ async fn create_poll_rejects_invalid_definitions() {
         StatusCode::BAD_REQUEST
     );
 
-    // A single answer is below the minimum.
-    let body = signed_poll_body(
-        &signing_key,
-        "test-blog",
-        "hello",
-        POLL_KEY,
-        "q?",
-        &[("a", "A")],
-        PollSemanticKind::Disclosed,
-        1,
-        None,
-        None,
-        &challenge.prefix,
-        &challenge_response,
-    );
+    // max_selections past the canonical JSON integer boundary is rejected by
+    // semantic validation; the signature is never reached.
+    let body = serde_json::json!({
+        "question": "q?",
+        "answers": [{ "id": "a", "text": "A" }, { "id": "b", "text": "B" }],
+        "kind": "disclosed",
+        "max_selections": 9_007_199_254_740_992u64,
+        "author_public_key": "ignored-public-key",
+        "author_signature": "ignored-signature",
+        "reply_to": null,
+        "thread_root": null,
+        "challenge_response": challenge_response,
+    })
+    .to_string();
     assert_eq!(
         post(body).await.expect("call").status(),
         StatusCode::BAD_REQUEST
@@ -4015,6 +4043,112 @@ async fn create_poll_rejects_invalid_definitions() {
             .is_empty(),
         "invalid definitions must not queue submissions"
     );
+}
+
+/// The semantic contract is deliberately permissive: the only bound that comes
+/// from Matrix is the 20-answer Poll limit, and the only bound on
+/// `max_selections` is the canonical integer representation.
+#[tokio::test]
+async fn create_poll_accepts_the_permissive_semantic_contract() {
+    use cumments_core::poll::PollSemanticKind;
+    use ed25519_dalek::SigningKey;
+
+    let (state, store) =
+        test_state("poll-permissive", SiteVerificationPolicy::Disabled, None).await;
+    store
+        .register_site("test-blog", &token_hash("claim"), false)
+        .await
+        .expect("register site");
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[24u8; 32]);
+
+    let post = |key: &str, body: String| {
+        let headers = vec![("idempotency-key", key.to_string())];
+        router.clone().oneshot(request_with_body(
+            Method::POST,
+            "/api/v1/sites/test-blog/pages/hello/polls",
+            Some("null"),
+            &headers,
+            &body,
+        ))
+    };
+
+    // One answer, addressed by the empty string.
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "poll-single-answer",
+        "Only one option?",
+        &[("", "The only option")],
+        PollSemanticKind::Disclosed,
+        1,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let response = post("poll-single-answer", body).await.expect("call");
+    let status = response.status();
+    let text = body_text(response).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "body: {text}");
+
+    // Opaque ids, no length or character-set rule, multi-select above the
+    // answer count, and the full Matrix answer limit.
+    let long_question = "q".repeat(600);
+    let long_answer_text = "t".repeat(300);
+    let twenty: Vec<(String, String)> = (0..20)
+        .map(|index| (format!("id {index}/🙂"), format!("Text {index}")))
+        .collect();
+    let mut twenty_refs: Vec<(&str, &str)> = twenty
+        .iter()
+        .map(|(id, text)| (id.as_str(), text.as_str()))
+        .collect();
+    twenty_refs[0].1 = long_answer_text.as_str();
+
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+    let body = signed_poll_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "poll-permissive-ids",
+        &long_question,
+        &twenty_refs,
+        PollSemanticKind::Undisclosed,
+        25,
+        None,
+        None,
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let response = post("poll-permissive-ids", body).await.expect("call");
+    let status = response.status();
+    let text = body_text(response).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "body: {text}");
+
+    // Each accepted poll is queued verbatim: nothing was truncated or
+    // rewritten on the way to the durable submission.
+    let pending = store
+        .get_pending_post_submissions(10)
+        .await
+        .expect("pending submissions");
+    assert_eq!(pending.len(), 2);
+
+    let single = pending[0].command.poll.as_ref().expect("poll payload");
+    assert_eq!(single.answers.len(), 1);
+    assert_eq!(single.answers[0].id, "");
+
+    let permissive = pending[1].command.poll.as_ref().expect("poll payload");
+    assert_eq!(permissive.question, long_question);
+    assert_eq!(permissive.question.chars().count(), 600);
+    assert_eq!(permissive.answers.len(), 20);
+    assert_eq!(permissive.answers[0].id, "id 0/🙂");
+    assert_eq!(permissive.answers[0].text, long_answer_text);
+    assert_eq!(permissive.answers[19].id, "id 19/🙂");
+    assert_eq!(permissive.max_selections, 25);
 }
 
 #[tokio::test]
@@ -4852,7 +4986,7 @@ async fn vote_canonicalizes_duplicate_and_reordered_selections() {
 }
 
 #[tokio::test]
-async fn vote_rejects_invalid_unknown_and_excess_selections() {
+async fn vote_rejects_unknown_and_excess_selections() {
     use cumments_test_utils::TestDriver;
     use ed25519_dalek::SigningKey;
 
@@ -4900,10 +5034,13 @@ async fn vote_rejects_invalid_unknown_and_excess_selections() {
         StatusCode::BAD_REQUEST,
         "excess selections (max_selections = 1)"
     );
+    // Ids are opaque: an id the poll declares is selectable whatever it
+    // contains, and one it does not declare is rejected as unknown rather than
+    // as a syntax error.
     assert_eq!(
         post(&["has space"]).await.expect("call").status(),
         StatusCode::BAD_REQUEST,
-        "invalid option id syntax"
+        "id absent from the target poll"
     );
 
     assert!(
@@ -4913,6 +5050,66 @@ async fn vote_rejects_invalid_unknown_and_excess_selections() {
     assert!(
         store.lookup_operation("vote-op-1").await.unwrap().is_none(),
         "rejected votes must not claim the operation"
+    );
+}
+
+#[tokio::test]
+async fn vote_accepts_opaque_option_ids_including_the_empty_string() {
+    use cumments_test_utils::TestDriver;
+    use ed25519_dalek::SigningKey;
+
+    let driver = Arc::new(TestDriver::new());
+    let (state, store) = test_state_with_driver(
+        "vote-opaque-ids",
+        SiteVerificationPolicy::Disabled,
+        None,
+        driver.clone(),
+    )
+    .await;
+    seed_poll(
+        &store,
+        "$poll:hs",
+        &[("", "Empty id"), ("has space/🙂", "Opaque id")],
+        2,
+    )
+    .await;
+    let router = cumments_api::build_router(state.clone());
+    let signing_key = SigningKey::from_bytes(&[65u8; 32]);
+    let challenge = state.pow.generate_challenge();
+    let challenge_response = solve_pow(&challenge);
+
+    let body = signed_vote_body(
+        &signing_key,
+        "test-blog",
+        "hello",
+        "$poll:hs",
+        "vote-op-1",
+        &["has space/🙂", ""],
+        &challenge.prefix,
+        &challenge_response,
+    );
+    let response = router
+        .clone()
+        .oneshot(request_with_body(
+            Method::POST,
+            vote_uri(),
+            Some("null"),
+            &vote_key(),
+            &body,
+        ))
+        .await
+        .expect("call router");
+    let status = response.status();
+    let text = body_text(response).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "body: {text}");
+
+    // The canonical selection set is deduplicated and byte-wise sorted, so the
+    // empty id leads.
+    let recorded = driver.poll_responses.lock().await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(
+        recorded[0].option_ids,
+        vec![String::new(), "has space/🙂".into()]
     );
 }
 

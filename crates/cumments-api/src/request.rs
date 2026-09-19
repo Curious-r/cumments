@@ -227,11 +227,11 @@ pub struct EndPollRequest {
 
 /// One caller-authored answer in a Create Poll request.
 ///
-/// `id` is an opaque, case-sensitive token validated by the frozen answer-id
-/// syntax at the semantic layer; `text` is its display label.
+/// `id` is an opaque, case-sensitive token: Cumments never interprets it, so
+/// there is no character-set or length rule and the empty string is allowed.
+/// It only has to be unique within the request. `text` is its display label.
 #[derive(Debug, Deserialize, Serialize, Validate)]
 pub struct PollAnswerRequest {
-    #[validate(length(min = 1, max = 64))]
     pub id: String,
     #[validate(custom(function = "crate::validation::validate_poll_answer_text"))]
     pub text: String,
@@ -241,17 +241,21 @@ pub struct PollAnswerRequest {
 ///
 /// The HTTP body is transport only: the signed semantic operation is built
 /// from these fields and never from the raw JSON. `kind` is the frozen
-/// semantic value (`"disclosed"` / `"undisclosed"`); `max_selections` must be
-/// between 1 and the number of answers.
+/// semantic value (`"disclosed"` / `"undisclosed"`); `max_selections` is at
+/// least 1 and may exceed the number of answers (Matrix-style multi-select).
+///
+/// `answers` is capped at 20 by the Matrix Poll limit and is rejected above
+/// that, never silently truncated: the signed semantic operation must denote
+/// exactly the authored Poll.
 #[derive(Debug, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CreatePollRequest {
     #[validate(custom(function = "crate::validation::validate_poll_question"))]
     pub question: String,
-    #[validate(length(min = 2, max = 20))]
+    #[validate(length(min = 1, max = 20))]
     pub answers: Vec<PollAnswerRequest>,
     pub kind: cumments_core::poll::PollSemanticKind,
-    #[validate(range(min = 1, max = 20))]
+    #[validate(range(min = 1))]
     pub max_selections: u64,
     #[validate(length(min = 1, max = 128))]
     pub author_public_key: String,

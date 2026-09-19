@@ -46,6 +46,29 @@ pub fn validate_grapheme_length(
     Ok(())
 }
 
+/// Validate that `value` contains at least `min` grapheme clusters.
+///
+/// Used for fields the application requires to be non-empty but deliberately
+/// does not bound: an arbitrary field maximum is not a requirement of the
+/// Matrix protocol, and where the protocol does bound something (the complete
+/// event, the Poll answer count) the homeserver or the semantic layer decides.
+pub fn validate_grapheme_min(value: &str, min: usize) -> Result<(), ValidationError> {
+    let len = grapheme_len(value);
+    if len < min {
+        let mut err = validation_error(
+            "grapheme_length",
+            format!(
+                "length must be at least {} grapheme clusters (got {})",
+                min, len
+            ),
+        );
+        err.add_param("min".into(), &min);
+        err.add_param("value_len".into(), &len);
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// Validate that `value` contains at most `max` grapheme clusters.
 pub fn validate_grapheme_max(value: &str, max: usize) -> Result<(), ValidationError> {
     let len = grapheme_len(value);
@@ -82,14 +105,14 @@ pub fn validate_display_name(value: &str) -> Result<(), ValidationError> {
     validate_grapheme_length(value, 1, 50)
 }
 
-/// Poll question: 1–500 graphemes.
+/// Poll question: non-empty text, with no application maximum length.
 pub fn validate_poll_question(value: &str) -> Result<(), ValidationError> {
-    validate_grapheme_length(value, 1, 500)
+    validate_grapheme_min(value, 1)
 }
 
-/// Poll answer text: 1–200 graphemes, mirroring the previous option bound.
+/// Poll answer text: non-empty text, with no application maximum length.
 pub fn validate_poll_answer_text(value: &str) -> Result<(), ValidationError> {
-    validate_grapheme_length(value, 1, 200)
+    validate_grapheme_min(value, 1)
 }
 
 /// Location description (optional): 0–255 graphemes.
@@ -157,83 +180,48 @@ mod tests {
     }
 
     #[test]
-    fn poll_question_exact_boundaries() {
-        let n_minus = "a".repeat(499);
-        assert!(validate_poll_question(&n_minus).is_ok());
-        let n = "a".repeat(500);
-        assert!(validate_poll_question(&n).is_ok());
-        let n_plus = "a".repeat(501);
-        assert!(validate_poll_question(&n_plus).is_err());
+    fn poll_text_fields_have_no_application_maximum() {
+        // Only emptiness is rejected; there is no upper bound to hit.
+        assert!(validate_poll_question("").is_err());
+        assert!(validate_poll_question("q").is_ok());
+        for len in [499, 500, 501, 5_000] {
+            assert!(validate_poll_question(&"a".repeat(len)).is_ok());
+            assert!(validate_poll_answer_text(&"a".repeat(len)).is_ok());
+        }
+        // Grapheme counting still applies to the minimum: a combining sequence
+        // and a ZWJ emoji are single graphemes.
+        assert!(validate_poll_question("e\u{301}").is_ok());
+        assert!(validate_poll_question("👩‍👩‍👧‍👦").is_ok());
+        assert!(validate_poll_question(" ").is_ok(), "trimming is semantic");
 
-        // Combining sequence: e + combining acute counts as 1 grapheme each
-        let combining = "e\u{301}".repeat(499);
-        assert!(validate_poll_question(&combining).is_ok());
-        let combining_n = "e\u{301}".repeat(500);
-        assert!(validate_poll_question(&combining_n).is_ok());
-        let combining_plus = "e\u{301}".repeat(501);
-        assert!(validate_poll_question(&combining_plus).is_err());
-
-        // Chinese characters: each CJK is 1 grapheme
-        let ch_499 = "中".repeat(499);
-        assert!(validate_poll_question(&ch_499).is_ok());
-        let ch_500 = "中".repeat(500);
-        assert!(validate_poll_question(&ch_500).is_ok());
-        let ch_501 = "中".repeat(501);
-        assert!(validate_poll_question(&ch_501).is_err());
-
-        // Flag emoji: each flag is 1 grapheme
-        let flag_500 = "🇩🇪".repeat(500);
-        assert!(validate_poll_question(&flag_500).is_ok());
-        let flag_501 = "🇩🇪".repeat(501);
-        assert!(validate_poll_question(&flag_501).is_err());
-
-        // ZWJ sequence: each family is 1 grapheme
-        let zwj_500 = "👩‍👩‍👧‍👦".repeat(500);
-        assert_eq!(grapheme_len(&zwj_500), 500);
-        assert!(validate_poll_question(&zwj_500).is_ok());
-        let zwj_501 = "👩‍👩‍👧‍👦".repeat(501);
-        assert!(validate_poll_question(&zwj_501).is_err());
+        assert!(validate_poll_answer_text("").is_err());
+        assert!(validate_poll_answer_text("a").is_ok());
     }
 
     #[test]
-    fn poll_option_exact_boundaries_via_helper() {
-        // Helper for options uses grapheme_len directly; test ensure_grapheme_len
-        let opt_199 = "a".repeat(199);
-        assert!(ensure_grapheme_len(&opt_199, 1, 200, "option").is_ok());
-        let opt_200 = "a".repeat(200);
-        assert!(ensure_grapheme_len(&opt_200, 1, 200, "option").is_ok());
-        let opt_201 = "a".repeat(201);
-        assert!(ensure_grapheme_len(&opt_201, 1, 200, "option").is_err());
+    fn grapheme_min_counts_clusters() {
+        assert!(validate_grapheme_min("a", 1).is_ok());
+        assert!(validate_grapheme_min("", 1).is_err());
+        assert!(validate_grapheme_min("e\u{301}", 1).is_ok());
+        assert!(validate_grapheme_min("🇩🇪", 2).is_err());
+        assert!(validate_grapheme_min("🇩🇪🇩🇪", 2).is_ok());
+    }
 
-        // Chinese 200 accepted, 201 rejected
+    #[test]
+    fn grapheme_helper_exact_boundaries() {
+        let n_199 = "a".repeat(199);
+        assert!(ensure_grapheme_len(&n_199, 1, 200, "field").is_ok());
+        let n_200 = "a".repeat(200);
+        assert!(ensure_grapheme_len(&n_200, 1, 200, "field").is_ok());
+        let n_201 = "a".repeat(201);
+        assert!(ensure_grapheme_len(&n_201, 1, 200, "field").is_err());
+
+        // Counting is in graphemes, not bytes: 200 CJK characters are 600 bytes
+        // and still accepted.
         let ch_200 = "中".repeat(200);
-        assert_eq!(grapheme_len(&ch_200), 200);
-        assert!(ensure_grapheme_len(&ch_200, 1, 200, "option").is_ok());
-        // Bytes would be 600 >200 but graphemes 200 should be accepted
         assert!(ch_200.len() > 200);
-        let ch_201 = "中".repeat(201);
-        assert!(ensure_grapheme_len(&ch_201, 1, 200, "option").is_err());
-
-        // Combining marks: each e+accent is 1 grapheme, 200 should be ok
-        let comb_200 = "e\u{301}".repeat(200);
-        assert_eq!(grapheme_len(&comb_200), 200);
-        assert!(ensure_grapheme_len(&comb_200, 1, 200, "option").is_ok());
-        let comb_201 = "e\u{301}".repeat(201);
-        assert!(ensure_grapheme_len(&comb_201, 1, 200, "option").is_err());
-
-        // Flag emoji
-        let flag_200 = "🇩🇪".repeat(200);
-        assert_eq!(grapheme_len(&flag_200), 200);
-        assert!(ensure_grapheme_len(&flag_200, 1, 200, "option").is_ok());
-        let flag_201 = "🇩🇪".repeat(201);
-        assert!(ensure_grapheme_len(&flag_201, 1, 200, "option").is_err());
-
-        // ZWJ
-        let zwj_200 = "👩‍👩‍👧‍👦".repeat(200);
-        assert_eq!(grapheme_len(&zwj_200), 200);
-        assert!(ensure_grapheme_len(&zwj_200, 1, 200, "option").is_ok());
-        let zwj_201 = "👩‍👩‍👧‍👦".repeat(201);
-        assert!(ensure_grapheme_len(&zwj_201, 1, 200, "option").is_err());
+        assert!(ensure_grapheme_len(&ch_200, 1, 200, "field").is_ok());
+        assert!(ensure_grapheme_len(&"中".repeat(201), 1, 200, "field").is_err());
     }
 
     #[test]

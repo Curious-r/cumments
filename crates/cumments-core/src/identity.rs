@@ -118,9 +118,10 @@ pub fn poll_canonical_payload(question: &str, options: &[String], max_selections
 /// `options` + `max_selections`), both reply and thread relations
 /// (each as `null` when absent), and the PoW challenge.
 /// Includes trailing `1` for the `host.curious.cumments.message` schema.
-/// The `max_selections` field is part of the signed payload; the
-/// current authoring API only permits `1` (single-select) and the wire
-/// format preserves the declared limit.
+/// The `max_selections` field is part of the signed payload; the live
+/// authoring API signs the Poll semantic operation instead and supports
+/// Matrix-style multi-select (`max_selections >= 1`, independent of the
+/// answer count).
 #[allow(clippy::too_many_arguments)]
 pub fn poll_signature_message(
     site_id: &str,

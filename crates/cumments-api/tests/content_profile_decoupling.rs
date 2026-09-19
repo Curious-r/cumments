@@ -182,13 +182,14 @@ fn signed_poll_body(
     let operation = poll_semantic_operation(
         site,
         page,
-        reply_to,
-        thread_root,
+        None,
+        None,
         question,
         &semantic_answers,
         kind,
         max_selections,
-    );
+    )
+    .expect("test helper uses representable inputs");
     let envelope = poll_signature_envelope(&operation, operation_id, challenge_prefix);
     let signature = URL_SAFE_NO_PAD.encode(
         signing_key

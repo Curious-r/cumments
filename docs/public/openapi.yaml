@@ -2836,33 +2836,34 @@ components:
         question:
           type: string
           minLength: 1
-          maxLength: 500
-          description: Poll question (1-500 Unicode extended grapheme clusters per UAX #29).
+          description: Poll question (non-empty; no application maximum length).
         answers:
           type: array
-          minItems: 2
+          minItems: 1
           maxItems: 20
           description: |
-            Caller-authored answers in presentation order (2-20). Order is
+            Caller-authored answers in presentation order (1-20). Order is
             preserved exactly and never sorted; ids are opaque, case-sensitive
             and unique within the poll. They are bound in this order by the
             author signature and are emitted in the same order on the Matrix
-            `org.matrix.msc3381.poll.start` event.
+            `org.matrix.msc3381.poll.start` event. 20 is the Matrix Poll answer
+            limit: a longer list is rejected rather than truncated, so the
+            signed meaning always matches the emitted event.
           items:
             type: object
             required: [id, text]
             properties:
               id:
                 type: string
-                minLength: 1
-                maxLength: 64
-                pattern: "^[a-zA-Z0-9_.-]{1,64}$"
-                description: Opaque, case-sensitive caller-generated answer id (1-64 characters from `[a-zA-Z0-9_.-]`), unique within the poll.
+                description: |
+                  Opaque, case-sensitive caller-generated answer id, unique
+                  within the poll. Cumments never interprets it, so there is no
+                  character-set or length restriction and the empty string is
+                  allowed.
               text:
                 type: string
                 minLength: 1
-                maxLength: 200
-                description: Answer label (1-200 Unicode extended grapheme clusters per UAX #29).
+                description: Answer label (non-empty; no application maximum length).
         kind:
           type: string
           enum: [disclosed, undisclosed]
@@ -2870,8 +2871,13 @@ components:
         max_selections:
           type: integer
           minimum: 1
-          maximum: 20
-          description: Maximum selections per voter (1-20); must not exceed the number of answers.
+          description: |
+            Maximum selections per voter, at least 1 (Matrix-style multi-select
+            is supported). It may exceed the number of answers; the Matrix
+            `org.matrix.msc3381.poll.start` event carries the declared limit
+            unchanged. The only upper bound is what a signed Poll can represent:
+            Matrix Canonical JSON integers, i.e. 2^53 - 1 = 9007199254740991.
+            That is a serialization boundary, not a Poll business rule.
         author_public_key:
           type: string
         author_signature:
@@ -2894,13 +2900,13 @@ components:
           description: |
             Desired selections. An unordered set: entries are deduplicated and
             byte-wise sorted during semantic normalization, so duplicate or
-            reordered ids are accepted and denote the same vote. Each entry must
-            1-64 characters from `[a-zA-Z0-9_.-]` and must exist on the target
-            poll. An empty array is an explicit unvote.
+            reordered ids are accepted and denote the same vote. Ids are opaque
+            and are matched against the target poll's declared answer ids by
+            exact string equality, so there is no character-set or length rule.
+            An id the poll does not declare is rejected as unknown. An empty
+            array is an explicit unvote.
           items:
             type: string
-            minLength: 1
-            maxLength: 64
         author_public_key:
           type: string
         author_signature:

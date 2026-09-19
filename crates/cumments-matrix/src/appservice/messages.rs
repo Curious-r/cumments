@@ -887,7 +887,8 @@ mod tests {
             &answers,
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("validated definition");
         let site_id = SiteId::from("my-blog");
         let event_id = driver
             .post_poll_impl(cumments_core::ports::PollStartRequest {

@@ -16,6 +16,13 @@
 //! * integers are plain base-10 with no leading zero, `+`, decimal point or
 //!   exponent.
 
+/// The largest integer Matrix Canonical JSON lets a version-1 value emit.
+///
+/// Matrix Canonical JSON requires integers to lie in `[-(2^53) + 1, (2^53) - 1]`,
+/// so this is the boundary of the signed representation. It is a serialization
+/// limit, not a limit any Cumments field chooses for itself.
+pub const MAX_SAFE_CANONICAL_INT: i64 = 9_007_199_254_740_991;
+
 /// A value in the version-1 canonical JSON representation.
 ///
 /// The enum deliberately has no object variant: version 1 excludes JSON
@@ -38,6 +45,19 @@ impl CanonicalJson {
     /// An integer value.
     pub fn int(value: i64) -> Self {
         Self::Int(value)
+    }
+
+    /// An integer value from an unsigned quantity.
+    ///
+    /// Returns `None` when the value cannot be represented: version 1 emits
+    /// integers directly, and Matrix Canonical JSON only permits
+    /// [`MAX_SAFE_CANONICAL_INT`]. The conversion is checked rather than cast so
+    /// an unrepresentable value can never silently become a different number.
+    pub fn int_from_u64(value: u64) -> Option<Self> {
+        i64::try_from(value)
+            .ok()
+            .filter(|value| is_safe_canonical_int(*value))
+            .map(Self::Int)
     }
 
     /// An array value.
@@ -121,6 +141,11 @@ impl CanonicalJson {
             }
         }
     }
+}
+
+/// Whether `value` may be emitted as a version-1 canonical integer.
+pub fn is_safe_canonical_int(value: i64) -> bool {
+    (-MAX_SAFE_CANONICAL_INT..=MAX_SAFE_CANONICAL_INT).contains(&value)
 }
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -239,5 +264,36 @@ mod tests {
             value.to_canonical_string()
         );
         assert_eq!(value.to_canonical_bytes(), bytes);
+    }
+
+    #[test]
+    fn safe_integer_boundary_is_the_matrix_canonical_range() {
+        assert_eq!(MAX_SAFE_CANONICAL_INT, (1i64 << 53) - 1);
+        assert_eq!(MAX_SAFE_CANONICAL_INT, 9_007_199_254_740_991);
+        assert!(is_safe_canonical_int(0));
+        assert!(is_safe_canonical_int(1));
+        assert!(is_safe_canonical_int(MAX_SAFE_CANONICAL_INT));
+        assert!(is_safe_canonical_int(-MAX_SAFE_CANONICAL_INT));
+        assert!(!is_safe_canonical_int(MAX_SAFE_CANONICAL_INT + 1));
+        assert!(!is_safe_canonical_int(i64::MIN));
+    }
+
+    #[test]
+    fn unsigned_conversion_round_trips_inside_the_boundary() {
+        for value in [0u64, 1, 20, MAX_SAFE_CANONICAL_INT as u64] {
+            let canonical = CanonicalJson::int_from_u64(value).expect("representable");
+            assert_eq!(canonical.to_canonical_string(), value.to_string());
+            assert_eq!(
+                CanonicalJson::from_json_value(&canonical.to_json_value()),
+                Some(canonical)
+            );
+        }
+    }
+
+    #[test]
+    fn unsigned_conversion_rejects_values_past_the_boundary() {
+        // One past the boundary, and values that would otherwise narrow.
+        assert!(CanonicalJson::int_from_u64(MAX_SAFE_CANONICAL_INT as u64 + 1).is_none());
+        assert!(CanonicalJson::int_from_u64(u64::MAX).is_none());
     }
 }

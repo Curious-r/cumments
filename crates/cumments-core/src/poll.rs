@@ -31,13 +31,18 @@
 use crate::canonical::CanonicalJson;
 use serde::{Deserialize, Serialize};
 
-/// Maximum length of an answer identifier, in characters.
-pub const MAX_ANSWER_ID_LEN: usize = 64;
-
 /// Minimum number of answers a poll must declare.
-pub const MIN_POLL_ANSWERS: usize = 2;
+///
+/// MSC3381 allows a Poll with a single option, so Cumments does too.
+pub const MIN_POLL_ANSWERS: usize = 1;
 
-/// Maximum number of answers a poll may declare (MSC3381 truncates to 20).
+/// Maximum number of answers a poll may declare.
+///
+/// MSC3381 defines the answer list as at most 20 options and receivers
+/// truncate to 20 while processing. Cumments signs the authored definition, so
+/// it rejects a longer list at the API boundary instead of truncating: a
+/// silently shortened list would make the signed meaning and the emitted
+/// Matrix Poll disagree.
 pub const MAX_POLL_ANSWERS: usize = 20;
 
 /// Signature protocol domain separator (frozen design §9.1).
@@ -97,19 +102,30 @@ pub enum PollSemanticError {
     EmptyQuestion,
     #[error("a poll must declare between {MIN_POLL_ANSWERS} and {MAX_POLL_ANSWERS} answers")]
     AnswerCount,
-    #[error("answer id {0:?} is not a valid answer identifier")]
-    InvalidAnswerId(String),
     #[error("answer id {0:?} is duplicated")]
     DuplicateAnswerId(String),
     #[error("answer text must not be empty")]
     EmptyAnswerText,
-    #[error("max_selections must be between 1 and the number of answers")]
+    #[error("max_selections must be at least 1")]
     MaxSelections,
+    #[error("max_selections {0} cannot be represented in a signed poll")]
+    MaxSelectionsNotRepresentable(u64),
 }
 
-/// Validate a Poll definition against the frozen semantic rules.
+/// Validate a Poll definition against the semantic contract.
 ///
-/// Answer order is preserved and answer ids are compared byte-for-byte.
+/// The contract is the application's own, and deliberately narrow:
+///
+/// * the question is non-empty application text with no maximum length;
+/// * a poll declares 1 to [`MAX_POLL_ANSWERS`] answers, in declared order;
+/// * an answer id is an opaque string, unique within this poll — the empty
+///   string is a legal id, and there is no character-set or length rule;
+/// * answer text is non-empty application text with no maximum length;
+/// * `max_selections` is at least 1 and may exceed the number of answers.
+///
+/// Only the answer count is capped, and by the Matrix Poll limit rather than by
+/// an application preference. Answer order is preserved and answer ids are
+/// compared byte-for-byte (case-sensitive).
 pub fn validate_poll_semantic_definition(
     question: &str,
     answers: &[PollSemanticAnswer],
@@ -122,9 +138,6 @@ pub fn validate_poll_semantic_definition(
         return Err(PollSemanticError::AnswerCount);
     }
     for (index, answer) in answers.iter().enumerate() {
-        if !is_valid_answer_id(&answer.id) {
-            return Err(PollSemanticError::InvalidAnswerId(answer.id.clone()));
-        }
         if answers[..index].iter().any(|prior| prior.id == answer.id) {
             return Err(PollSemanticError::DuplicateAnswerId(answer.id.clone()));
         }
@@ -132,8 +145,15 @@ pub fn validate_poll_semantic_definition(
             return Err(PollSemanticError::EmptyAnswerText);
         }
     }
-    if max_selections < 1 || max_selections > answers.len() as u64 {
+    if max_selections < 1 {
         return Err(PollSemanticError::MaxSelections);
+    }
+    // `max_selections` reaches the signed operation as a canonical integer, so
+    // the only upper bound is what Matrix Canonical JSON can represent.
+    if CanonicalJson::int_from_u64(max_selections).is_none() {
+        return Err(PollSemanticError::MaxSelectionsNotRepresentable(
+            max_selections,
+        ));
     }
     Ok(())
 }
@@ -150,6 +170,10 @@ pub fn validate_poll_semantic_definition(
 /// `reply_to` and `thread_root` are independent and encoded as JSON `null`
 /// when absent. This value is the common input to fingerprinting, the
 /// signature envelope and Matrix provenance.
+///
+/// Returns `None` when `max_selections` cannot be represented in the signed
+/// representation, which [`validate_poll_semantic_definition`] rejects before
+/// any validated definition reaches here.
 #[allow(clippy::too_many_arguments)]
 pub fn poll_semantic_operation(
     site_id: &str,
@@ -160,7 +184,8 @@ pub fn poll_semantic_operation(
     answers: &[PollSemanticAnswer],
     kind: PollSemanticKind,
     max_selections: u64,
-) -> CanonicalJson {
+) -> Option<CanonicalJson> {
+    let max_selections = CanonicalJson::int_from_u64(max_selections)?;
     let encoded_answers: Vec<CanonicalJson> = answers
         .iter()
         .map(|answer| {
@@ -170,7 +195,7 @@ pub fn poll_semantic_operation(
             ])
         })
         .collect();
-    CanonicalJson::array(vec![
+    Some(CanonicalJson::array(vec![
         CanonicalJson::string("POLL"),
         CanonicalJson::array(vec![
             CanonicalJson::string(site_id),
@@ -182,10 +207,10 @@ pub fn poll_semantic_operation(
             CanonicalJson::string(question),
             CanonicalJson::array(encoded_answers),
             CanonicalJson::string(kind.as_str()),
-            CanonicalJson::int(max_selections as i64),
+            max_selections,
         ]),
         CanonicalJson::int(SEMANTIC_SCHEMA_VERSION),
-    ])
+    ]))
 }
 
 /// The semantic fingerprint: `SHA-256` of the canonical semantic operation's
@@ -255,8 +280,10 @@ pub struct PollWireSemantics {
 }
 
 impl PollWireSemantics {
-    /// The canonical semantic operation this wire content denotes.
-    pub fn to_semantic_operation(&self) -> CanonicalJson {
+    /// The canonical semantic operation this wire content denotes, or `None`
+    /// when the wire content cannot denote one (its `max_selections` is outside
+    /// the signed representation, so no valid signature can cover it).
+    pub fn to_semantic_operation(&self) -> Option<CanonicalJson> {
         poll_semantic_operation(
             &self.site_id,
             &self.page_slug,
@@ -285,7 +312,8 @@ pub fn verify_poll_start_proof(
     signature_b64: &str,
     wire: &PollWireSemantics,
 ) -> bool {
-    wire.to_semantic_operation() == *signed_operation
+    wire.to_semantic_operation()
+        .is_some_and(|operation| operation == *signed_operation)
         && verify_poll_signature(
             public_key_b64,
             signed_operation,
@@ -295,24 +323,9 @@ pub fn verify_poll_start_proof(
         )
 }
 
-/// Whether a string is a valid answer identifier.
-///
-/// Answer identifiers are opaque, case-sensitive tokens of 1 to 64 visible
-/// ASCII characters from `[a-zA-Z0-9_.-]`, without whitespace or control
-/// codes (frozen design §11.2).
-pub fn is_valid_answer_id(id: &str) -> bool {
-    let len = id.chars().count();
-    (1..=MAX_ANSWER_ID_LEN).contains(&len)
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-}
-
 /// Why raw vote selections are not a valid canonical selection set.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VoteSelectionError {
-    #[error("answer id {0:?} is not a valid answer identifier")]
-    InvalidId(String),
     #[error("at most {max} selection(s) are allowed")]
     TooMany { max: u64 },
     #[error("answer id {0:?} is not an option of the target poll")]
@@ -321,21 +334,17 @@ pub enum VoteSelectionError {
 
 /// Normalize raw vote selections into the canonical selection set.
 ///
-/// Selections are an unordered set: the pipeline is exactly the frozen design
-/// (§9.5.2) — validate syntax, deduplicate exactly, sort byte-wise, enforce
-/// `max_selections`, then require every id to exist on the target poll. Order
-/// is only canonicalized for the signed representation; it never affects the
-/// poll's declared answer order. An empty input is a valid explicit unvote.
+/// Selections are an unordered set: deduplicate exactly, sort byte-wise, enforce
+/// `max_selections`, then require every id to exist on the target poll. Answer
+/// ids are opaque strings, so there is no syntax stage — the empty string is a
+/// legal id when the target poll declares it. Order is only canonicalized for
+/// the signed representation; it never affects the poll's declared answer
+/// order. An empty input is a valid explicit unvote.
 pub fn normalize_vote_selections(
     raw: &[String],
     max_selections: u64,
     known_option_ids: &[String],
 ) -> Result<Vec<String>, VoteSelectionError> {
-    for id in raw {
-        if !is_valid_answer_id(id) {
-            return Err(VoteSelectionError::InvalidId(id.clone()));
-        }
-    }
     let mut canonical: Vec<String> = Vec::with_capacity(raw.len());
     for id in raw {
         if !canonical.contains(id) {
@@ -537,8 +546,6 @@ pub struct PollStartFact {
 pub enum PollStartError {
     #[error("poll has no answers")]
     NoAnswers,
-    #[error("poll answer id {0:?} is not a valid answer identifier")]
-    InvalidAnswerId(String),
     #[error("poll answer id {0:?} is duplicated")]
     DuplicateAnswerId(String),
     #[error("poll max_selections must be at least 1")]
@@ -546,9 +553,10 @@ pub enum PollStartError {
 }
 
 impl PollStartFact {
-    /// Validate the poll definition, following the frozen design's answer-id
-    /// rules (§11.2). Answer order is preserved and answer ids are compared
-    /// byte-for-byte (case-sensitive).
+    /// Validate the poll definition: at least one answer, at least one
+    /// selection, and answer ids unique within the poll. Answer ids are opaque
+    /// (any string, including the empty one) and the declared order is
+    /// preserved; ids are compared byte-for-byte (case-sensitive).
     pub fn validate(&self) -> Result<(), PollStartError> {
         if self.max_selections < 1 {
             return Err(PollStartError::ZeroMaxSelections);
@@ -557,9 +565,6 @@ impl PollStartFact {
             return Err(PollStartError::NoAnswers);
         }
         for (index, answer) in self.answers.iter().enumerate() {
-            if !is_valid_answer_id(&answer.id) {
-                return Err(PollStartError::InvalidAnswerId(answer.id.clone()));
-            }
             if self.answers[..index]
                 .iter()
                 .any(|prior| prior.id == answer.id)
@@ -1029,37 +1034,35 @@ mod tests {
     }
 
     #[test]
-    fn invalid_answer_id_syntax_is_rejected() {
-        for bad in ["", "with space", "emoji-🙂", "tab\tid", "slash/id"] {
+    fn answer_ids_are_opaque_strings() {
+        // Any string is a legal id: no character set, no length rule, and the
+        // empty string is allowed.
+        for id in [
+            "",
+            "with space",
+            "emoji-🙂",
+            "tab\tid",
+            "slash/id",
+            "中文字",
+            "punct!\"#$%&'()*+,:;<=>?@[\\]^`{|}~",
+            &"x".repeat(65),
+            &"x".repeat(4096),
+        ] {
             let mut fact = start(1, true);
-            fact.answers = vec![PollAnswerFact::new(bad, "X")];
-            assert_eq!(
-                reduce_poll(&fact, &[], &[]),
-                Err(PollStartError::InvalidAnswerId(bad.to_string())),
-                "{bad:?} must be rejected"
+            fact.answers = vec![PollAnswerFact::new(id, "X")];
+            assert!(
+                reduce_poll(&fact, &[], &[]).is_ok(),
+                "{id:?} must be an accepted answer id"
             );
         }
-        // 65 characters is over the limit.
-        let too_long = "x".repeat(MAX_ANSWER_ID_LEN + 1);
-        let mut fact = start(1, true);
-        fact.answers = vec![PollAnswerFact::new(too_long.clone(), "X")];
-        assert_eq!(
-            reduce_poll(&fact, &[], &[]),
-            Err(PollStartError::InvalidAnswerId(too_long))
-        );
-        // Exactly 64 characters is allowed.
-        let mut fact = start(1, true);
-        fact.answers = vec![PollAnswerFact::new("x".repeat(MAX_ANSWER_ID_LEN), "X")];
-        assert!(reduce_poll(&fact, &[], &[]).is_ok());
     }
 
     #[test]
-    fn valid_answer_id_alphabet_is_accepted() {
-        for id in ["a", "A", "0", "slot-10am", "a_b.c-d", "Z9"] {
-            assert!(is_valid_answer_id(id), "{id:?} must be valid");
-        }
-        assert!(!is_valid_answer_id(""));
-        assert!(!is_valid_answer_id(" spaces "));
+    fn one_answer_is_a_valid_poll() {
+        let mut fact = start(1, true);
+        fact.answers = vec![PollAnswerFact::new("only", "Only")];
+        let projection = reduce_poll(&fact, &[], &[]).expect("single-answer poll");
+        assert_eq!(projection.answers.len(), 1);
     }
 
     #[test]
@@ -1068,6 +1071,14 @@ mod tests {
             reduce_poll(&start(0, true), &[], &[]),
             Err(PollStartError::ZeroMaxSelections)
         );
+    }
+
+    #[test]
+    fn max_selections_may_exceed_the_answer_count() {
+        let mut fact = start(5, true);
+        fact.answers = vec![PollAnswerFact::new("a", "A"), PollAnswerFact::new("b", "B")];
+        let projection = reduce_poll(&fact, &[], &[]).expect("multi-select poll");
+        assert_eq!(projection.max_selections, 5);
     }
 
     // ── Voting ────────────────────────────────────────────────────
@@ -1603,7 +1614,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         assert_eq!(
             op.to_canonical_string(),
             r#"["POLL",["site-dev","post-101",null,null],["Which meeting time works best?",[["slot-10am","10:00 AM UTC"],["slot-2pm","2:00 PM UTC"]],"disclosed",1],1]"#
@@ -1621,7 +1633,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Undisclosed,
             2,
-        );
+        )
+        .expect("semantic operation");
         let json = op.to_json_value();
         assert_eq!(
             json[1],
@@ -1645,7 +1658,8 @@ mod semantic_tests {
             &reordered,
             PollSemanticKind::Undisclosed,
             2,
-        );
+        )
+        .expect("semantic operation");
         assert_ne!(op, swapped);
     }
 
@@ -1660,7 +1674,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         let fp = poll_semantic_fingerprint(&op);
         assert_eq!(fp, poll_semantic_fingerprint(&op));
         assert_eq!(fp.len(), 64);
@@ -1674,7 +1689,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         assert_ne!(fp, poll_semantic_fingerprint(&changed));
     }
 
@@ -1689,7 +1705,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         let envelope = poll_signature_envelope(&op, "op-create-987", "pow-chal-550e8400");
         assert_eq!(
             envelope.to_canonical_string(),
@@ -1718,7 +1735,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         let envelope = poll_signature_envelope(&op, "op-1", "chal");
         let signature = URL_SAFE_NO_PAD.encode(
             signing_key
@@ -1744,7 +1762,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         assert!(!verify_poll_signature(
             &public_key,
             &tampered_question,
@@ -1765,7 +1784,8 @@ mod semantic_tests {
             &changed_answers,
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         assert!(!verify_poll_signature(
             &public_key,
             &tampered_answers,
@@ -1784,7 +1804,8 @@ mod semantic_tests {
             &answers(),
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("semantic operation");
         assert!(!verify_poll_signature(
             &public_key,
             &tampered_target,
@@ -1811,7 +1832,7 @@ mod semantic_tests {
     }
 
     #[test]
-    fn definition_validation_enforces_the_frozen_rules() {
+    fn definition_validation_enforces_the_semantic_contract() {
         assert!(validate_poll_semantic_definition("q?", &answers(), 1).is_ok());
         assert!(validate_poll_semantic_definition("q?", &answers(), 2).is_ok());
 
@@ -1820,11 +1841,9 @@ mod semantic_tests {
             validate_poll_semantic_definition("  ", &answers(), 1),
             Err(PollSemanticError::EmptyQuestion)
         );
-        // Answer count bounds.
-        assert_eq!(
-            validate_poll_semantic_definition("q?", &answers()[..1], 1),
-            Err(PollSemanticError::AnswerCount)
-        );
+        // Answer count: one answer is a valid poll, more than the Matrix Poll
+        // limit is rejected rather than truncated.
+        assert!(validate_poll_semantic_definition("q?", &answers()[..1], 1).is_ok());
         let too_many: Vec<PollSemanticAnswer> = (0..21)
             .map(|i| PollSemanticAnswer::new(format!("id{i}"), "t"))
             .collect();
@@ -1832,16 +1851,22 @@ mod semantic_tests {
             validate_poll_semantic_definition("q?", &too_many, 1),
             Err(PollSemanticError::AnswerCount)
         );
-        // Invalid id syntax.
-        let bad_id = vec![
-            PollSemanticAnswer::new("has space", "A"),
-            PollSemanticAnswer::new("b", "B"),
+        let exactly_twenty: Vec<PollSemanticAnswer> = (0..20)
+            .map(|i| PollSemanticAnswer::new(format!("id{i}"), "t"))
+            .collect();
+        assert!(validate_poll_semantic_definition("q?", &exactly_twenty, 1).is_ok());
+
+        // Answer ids are opaque: no syntax, length, or emptiness rule.
+        let opaque_ids = vec![
+            PollSemanticAnswer::new("", "Empty id"),
+            PollSemanticAnswer::new("has space", "Spaced"),
+            PollSemanticAnswer::new("slash/id", "Slashed"),
+            PollSemanticAnswer::new("🙂", "Emoji"),
+            PollSemanticAnswer::new("x".repeat(65), "Long"),
         ];
-        assert_eq!(
-            validate_poll_semantic_definition("q?", &bad_id, 1),
-            Err(PollSemanticError::InvalidAnswerId("has space".into()))
-        );
-        // Duplicate ids.
+        assert!(validate_poll_semantic_definition("q?", &opaque_ids, 1).is_ok());
+
+        // Duplicate ids are still rejected, by exact string equality.
         let dup = vec![
             PollSemanticAnswer::new("a", "A"),
             PollSemanticAnswer::new("a", "A again"),
@@ -1850,6 +1875,15 @@ mod semantic_tests {
             validate_poll_semantic_definition("q?", &dup, 1),
             Err(PollSemanticError::DuplicateAnswerId("a".into()))
         );
+        let dup_empty = vec![
+            PollSemanticAnswer::new("", "First"),
+            PollSemanticAnswer::new("", "Second"),
+        ];
+        assert_eq!(
+            validate_poll_semantic_definition("q?", &dup_empty, 1),
+            Err(PollSemanticError::DuplicateAnswerId(String::new()))
+        );
+
         // Empty answer text.
         let empty_text = vec![
             PollSemanticAnswer::new("a", " "),
@@ -1859,14 +1893,91 @@ mod semantic_tests {
             validate_poll_semantic_definition("q?", &empty_text, 1),
             Err(PollSemanticError::EmptyAnswerText)
         );
-        // max_selections range.
+
+        // max_selections: at least 1, otherwise unbounded by the application.
         assert_eq!(
             validate_poll_semantic_definition("q?", &answers(), 0),
             Err(PollSemanticError::MaxSelections)
         );
+        assert!(validate_poll_semantic_definition("q?", &answers(), 1).is_ok());
+        // More selections than answers is a legitimate multi-select poll.
+        assert!(validate_poll_semantic_definition("q?", &answers(), 3).is_ok());
+        assert!(validate_poll_semantic_definition("q?", &answers(), 20).is_ok());
+        // The only upper bound is the canonical integer representation.
+        assert!(
+            validate_poll_semantic_definition(
+                "q?",
+                &answers(),
+                crate::canonical::MAX_SAFE_CANONICAL_INT as u64
+            )
+            .is_ok()
+        );
         assert_eq!(
-            validate_poll_semantic_definition("q?", &answers(), 3),
-            Err(PollSemanticError::MaxSelections)
+            validate_poll_semantic_definition(
+                "q?",
+                &answers(),
+                crate::canonical::MAX_SAFE_CANONICAL_INT as u64 + 1
+            ),
+            Err(PollSemanticError::MaxSelectionsNotRepresentable(
+                crate::canonical::MAX_SAFE_CANONICAL_INT as u64 + 1
+            ))
+        );
+    }
+
+    #[test]
+    fn long_question_and_answer_text_have_no_application_maximum() {
+        let long_question = "q".repeat(501);
+        let long_answer_text = "t".repeat(201);
+        let long_answers = vec![
+            PollSemanticAnswer::new("a", long_answer_text.clone()),
+            PollSemanticAnswer::new("b", "B"),
+        ];
+        assert!(validate_poll_semantic_definition(&long_question, &long_answers, 1).is_ok());
+
+        // And the values reach the signed operation unshortened.
+        let operation = poll_semantic_operation(
+            "site",
+            "page",
+            None,
+            None,
+            &long_question,
+            &long_answers,
+            PollSemanticKind::Disclosed,
+            1,
+        )
+        .expect("validated definition");
+        let json = operation.to_json_value();
+        assert_eq!(json[2][0], serde_json::json!(long_question));
+        assert_eq!(json[2][1][0][1], serde_json::json!(long_answer_text));
+    }
+
+    #[test]
+    fn unrepresentable_max_selections_never_reaches_a_signed_operation() {
+        assert!(
+            poll_semantic_operation(
+                "site",
+                "page",
+                None,
+                None,
+                "q?",
+                &answers(),
+                PollSemanticKind::Disclosed,
+                crate::canonical::MAX_SAFE_CANONICAL_INT as u64,
+            )
+            .is_some()
+        );
+        assert!(
+            poll_semantic_operation(
+                "site",
+                "page",
+                None,
+                None,
+                "q?",
+                &answers(),
+                PollSemanticKind::Disclosed,
+                crate::canonical::MAX_SAFE_CANONICAL_INT as u64 + 1,
+            )
+            .is_none()
         );
     }
 
@@ -1901,7 +2012,7 @@ mod semantic_tests {
             max_selections: 1,
         };
         // Sign exactly the operation the wire content denotes.
-        let signed = wire.to_semantic_operation();
+        let signed = wire.to_semantic_operation().expect("representable");
         let envelope = poll_signature_envelope(&signed, "op-1", "chal");
         let signature = URL_SAFE_NO_PAD.encode(
             signing_key
@@ -1951,7 +2062,7 @@ mod semantic_tests {
             kind: PollSemanticKind::Undisclosed,
             ..wire.clone()
         };
-        let other_op = other.to_semantic_operation();
+        let other_op = other.to_semantic_operation().expect("representable");
         let other_envelope = poll_signature_envelope(&other_op, "op-1", "chal");
         let other_sig = URL_SAFE_NO_PAD.encode(
             signing_key
@@ -1990,20 +2101,44 @@ mod semantic_tests {
             normalize_vote_selections(&["A".to_string(), "a".to_string()], 2, &case_known).unwrap(),
             vec!["A", "a"]
         );
+
+        // Opaque ids are selections like any other, including the empty string.
+        let opaque_known: Vec<String> = ["", "has space", "🙂"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            normalize_vote_selections(
+                &[
+                    "🙂".to_string(),
+                    "has space".to_string(),
+                    String::new(),
+                    "has space".to_string(),
+                ],
+                3,
+                &opaque_known,
+            )
+            .unwrap(),
+            vec![String::new(), "has space".to_string(), "🙂".to_string()]
+        );
     }
 
     #[test]
     fn vote_selection_conflicts_are_rejected() {
         let known: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
-        // Invalid syntax.
-        assert_eq!(
-            normalize_vote_selections(&["has space".to_string()], 1, &known),
-            Err(VoteSelectionError::InvalidId("has space".to_string()))
-        );
-        // Unknown id.
+        // Unknown id. Note there is no syntax stage: an id the poll declares is
+        // accepted whatever it contains, and one it does not declare is unknown.
         assert_eq!(
             normalize_vote_selections(&["zzz".to_string()], 1, &known),
             Err(VoteSelectionError::UnknownId("zzz".to_string()))
+        );
+        assert_eq!(
+            normalize_vote_selections(&["has space".to_string()], 1, &known),
+            Err(VoteSelectionError::UnknownId("has space".to_string()))
+        );
+        assert_eq!(
+            normalize_vote_selections(&[String::new()], 1, &known),
+            Err(VoteSelectionError::UnknownId(String::new()))
         );
         // Too many selections after deduplication (["a","a","b"] -> 2 > 1).
         assert_eq!(

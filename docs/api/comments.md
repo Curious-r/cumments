@@ -244,9 +244,13 @@ Body:
 ```json
 {
   "question": "Which language do you prefer?",
-  "options": ["Rust", "TypeScript", "Python"],
+  "answers": [
+    { "id": "rust", "text": "Rust" },
+    { "id": "ts", "text": "TypeScript" },
+    { "id": "py", "text": "Python" }
+  ],
+  "kind": "disclosed",
   "max_selections": 1,
-  "display_name": "Alice",
   "author_public_key": "...",
   "author_signature": "...",
   "reply_to": null,
@@ -255,11 +259,29 @@ Body:
 }
 ```
 
-* `question` — 1–500 Unicode extended grapheme clusters per UAX #29, no leading/trailing whitespace, no control characters.
-* `options` — 2–20 ordered option texts, each 1–200 Unicode extended grapheme clusters per UAX #29, no leading/trailing whitespace, no control characters.
-* `max_selections` — optional, defaults to `1`; only `1` is accepted (single-select). The current authoring API is single-select even though MSC3381 supports multi-select; the wire format preserves the declared limit.
-* `display_name` — presentation data written to the virtual user's Matrix profile, not covered by the signature.
-* `reply_to` / `thread_root` — orthogonal reply/thread relations, `null` when absent, same model as comment posts; Matrix encodes both in `m.relates_to`.
+* `question` — non-empty text. There is no application maximum length.
+* `answers` — 1–20 ordered answers, each with an opaque `id` and a non-empty
+  `text`. Answer order is preserved exactly and never sorted. 20 is the Matrix
+  Poll answer limit (MSC3381 receivers truncate to 20 while processing): a
+  longer list is rejected rather than truncated, so the signed semantic
+  operation always denotes exactly the emitted Matrix Poll.
+* `answers[].id` — an opaque, case-sensitive caller-generated string, unique
+  within the poll by exact string equality. Cumments never interprets it, so
+  there is no character-set and no length restriction, and the empty string is
+  allowed. It identifies the answer in a vote.
+* `answers[].text` — non-empty label. There is no application maximum length.
+* `max_selections` — the declared per-voter selection limit, at least `1`.
+  Matrix-style multi-select is supported: the value may exceed the number of
+  answers, and it is carried unchanged on the Matrix
+  `org.matrix.msc3381.poll.start` event. The only upper bound is what a signed
+  Poll can represent at all — a Matrix Canonical JSON safe integer,
+  `2^53 - 1 = 9007199254740991` — which is a serialization boundary, not a Poll
+  business rule.
+* `reply_to` / `thread_root` — orthogonal reply/thread relations, `null` when
+  absent, same model as comment posts; Matrix encodes both in `m.relates_to`.
+
+There is no `display_name` field: author presentation is not part of this
+request.
 
 Successful writes are asynchronous and return `202` with the queue row ID:
 
@@ -269,33 +291,32 @@ Successful writes are asynchronous and return `202` with the queue row ID:
 
 The request requires the `Idempotency-Key` header and is durable: it is queued as a `PostCommentCommand { poll: Some(...) }` through the existing `PendingPostSubmission` pipeline (`save_post_submission_idempotent` → `PostsPass` → `MatrixDriver::post_poll` → `m.poll.start`), sharing the same transaction-ID, retry, `waiting_for_sync`, and idempotency semantics as comments and locations.
 
-Signature message (JSON array, `null` for absent relations):
+Signature: the author signs the canonical semantic operation through the frozen
+envelope
+`["host.curious.cumments.signature", "1", ["POLL", [site_id, page_slug, reply_to, thread_root], [question, [[answer_id, answer_text], ...], kind, max_selections], 1], operation_id, challenge_prefix]`,
+where `operation_id` is the `Idempotency-Key`, absent relations are `null`, and
+`kind` is the bare `"disclosed"` / `"undisclosed"` value. Answer order is
+semantic: any change to the question, an answer id or text, the answer order,
+the kind, or `max_selections` invalidates the signature.
 
-```json
-["POLL","{site_id}","{page_slug}","{canonical_poll_payload}",reply_to,thread_root,"{challenge_prefix}","1"]
-```
-
-where `canonical_poll_payload` is the deterministic JSON string
-
-```json
-{"question":"...","options":["...","..."],"max_selections":1}
-```
-
-with ordered `options`. Any change to `question`, option text, option order, or `max_selections` invalidates the signature; `display_name` is not signed.
-
-The Matrix event is `m.room.message` with `msgtype: "org.matrix.msc3381.poll.start"` and `org.matrix.msc3381.poll.start` containing `question`, `answers` with deterministic IDs `"0"`, `"1"`, …, and `max_selections`. The fallback `body` is the question followed by a numbered option list. Reply/thread relations are emitted as `m.relates_to`.
+The Matrix event is the pinned MSC3381 direct event type
+`org.matrix.msc3381.poll.start`, carrying `question`, the declared `answers` in
+their authored order, `kind` and `max_selections`, plus the Cumments provenance
+block that holds the signed semantic operation.
 
 ## Vote on a poll
 
 `POST /api/v1/sites/{site_id}/pages/{page_slug}/polls/{poll_id}/votes`
 
 Body: `{ "option_ids", "author_public_key", "author_signature", "challenge_response" }`.
-Selections are an unordered set: `option_ids` is validated, deduplicated and
-byte-wise sorted before it is signed, so `["B","A","B"]` denotes the same vote
-as `["A","B"]`, duplicates do not consume selection slots, and an empty array is
-an explicit unvote. Every id must exist on the target poll and the canonical set
-must not exceed `max_selections`; violations return `400`. Votes against an
-ended poll return `409`.
+Selections are an unordered set: `option_ids` is deduplicated and byte-wise
+sorted before it is signed, so `["B","A","B"]` denotes the same vote as
+`["A","B"]`, and duplicates do not consume selection slots. Ids are opaque and
+are compared with the target poll's declared answer ids by exact string
+equality; the empty string is a valid selection when the poll declares it as an
+answer id. An empty array is an explicit unvote. Every id must exist on the
+target poll and the canonical set must not exceed `max_selections`; violations
+return `400`. Votes against an ended poll return `409`.
 
 The signature covers the frozen envelope
 `["host.curious.cumments.signature", "1", ["VOTE", [site_id, page_slug, poll_id], [canonical_option_ids...], 1], operation_id, challenge_prefix]`.

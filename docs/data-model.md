@@ -75,7 +75,7 @@ their `mxid` and never a `public_key`.
 | `text` | `body`, optional HTML `formatted_body`, `style` (`normal`/`emote`/`notice`) |
 | `media` | `kind` (image/video/audio/file/sticker), `url`, optional filename, mimetype, size, dimensions, thumbnail, alt text, `voice` flag |
 | `location` | `geo_uri`, optional description and thumbnail |
-| `poll` | `question`, `options`, MSC3381 `max_selections`, aggregated `responses` |
+| `poll` | `question`, ordered `answers` (opaque id + text), MSC3381 `max_selections`, aggregated `responses` |
 | `redacted` | Stable empty tombstone; no original body, URL or raw payload |
 | `encrypted` | algorithm and sender key placeholder only |
 | `unknown` | optional `fallback` text plus the original raw JSON |
@@ -244,7 +244,7 @@ before trusting the projection.
 | Image / video / audio / file / voice | Supported | Upload endpoint → virtual-user Matrix upload → `mxc://` reference in the message; the MXC is recorded as upload provenance for write admission |
 | Sticker | Supported | Choose from the site's sticker packs (`m.room.image_pack` on the site Space); the API validates the reference and fills metadata, visitors cannot upload stickers |
 | Location | Supported | `m.location` (MSC3488), queued like a comment |
-| Poll | Supported | `POST /polls` queues `m.poll.start` (MSC3381, single-select `max_selections: 1`) through the durable post pipeline; `POST /polls/{poll_id}/votes` proxies `m.poll.response` with proof |
+| Poll | Supported | `POST /polls` queues `m.poll.start` (MSC3381, multi-select via `max_selections >= 1`) through the durable post pipeline; `POST /polls/{poll_id}/votes` proxies `m.poll.response` with proof |
 | Reaction | Supported | API proxies `m.reaction` with proof; deduplicated per sender + key |
 | Encrypted | Excluded | Conflicts with visitor verification, AS proxying and auditing |
 | Unknown / arbitrary raw events | Excluded | Visitors may only send the whitelisted typed requests |

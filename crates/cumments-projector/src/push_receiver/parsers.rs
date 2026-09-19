@@ -2257,7 +2257,8 @@ mod tests {
             &answers,
             PollSemanticKind::Disclosed,
             1,
-        );
+        )
+        .expect("validated definition");
         let operation_id = "op-projection-1";
         let challenge = "chal";
         let envelope = poll_signature_envelope(&operation, operation_id, challenge);

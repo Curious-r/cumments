@@ -169,7 +169,12 @@ impl PostsPass {
                             &poll.answers,
                             poll.kind,
                             poll.max_selections,
-                        );
+                        )
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "stored poll payload cannot be represented in a signed Poll"
+                            )
+                        })?;
                         self.deps
                             .driver
                             .post_poll(cumments_core::ports::PollStartRequest {
