@@ -50,6 +50,11 @@
 
   # https://devenv.sh/git-hooks/
   git-hooks.hooks = {
+    # Validate GitHub Actions workflow syntax.
+    actionlint.enable = true;
+
+    # Keep consistent with the repository formatter.
+    nixfmt.enable = true;
     rustfmt.enable = true;
     clippy = {
       enable = true;
