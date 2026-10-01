@@ -251,3 +251,106 @@ async fn delete_room_local_clears_the_room_and_keeps_avatar_media() {
         "avatar upload (page_slug NULL) is site-scoped and must survive"
     );
 }
+
+#[tokio::test]
+async fn register_room_refuses_to_reactivate_a_retired_room() {
+    let store = DbStore::connect(&test_db_url("retired-register"))
+        .await
+        .expect("connect db");
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+
+    store
+        .register_room("!room:hs", &site_id, &page_slug)
+        .await
+        .expect("register room");
+    assert!(
+        store
+            .mark_room_retired("!room:hs")
+            .await
+            .expect("mark retired")
+    );
+
+    let result = store.register_room("!room:hs", &site_id, &page_slug).await;
+    assert!(
+        result.is_err(),
+        "a retired instance must never be reactivated by registration"
+    );
+    assert_eq!(
+        store.get_room_status("!room:hs").await.expect("status"),
+        Some(RoomStatus::Retired),
+        "the refused registration must leave the row retired"
+    );
+    assert_eq!(
+        store
+            .get_registered_room(&site_id, &page_slug)
+            .await
+            .expect("active lookup"),
+        None,
+        "a retired room must not become the active write target"
+    );
+}
+
+#[tokio::test]
+async fn reinstate_refuses_retired_rooms_but_still_supports_quarantined() {
+    let store = DbStore::connect(&test_db_url("retired-reinstate"))
+        .await
+        .expect("connect db");
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+
+    // Quarantined rooms remain reinstatable.
+    store
+        .register_room("!quarantined:hs", &site_id, &page_slug)
+        .await
+        .expect("register quarantined room");
+    store
+        .quarantine_room("!quarantined:hs", "refused", 1, None)
+        .await
+        .expect("quarantine room");
+    assert!(
+        store
+            .reinstate_room("!quarantined:hs")
+            .await
+            .expect("reinstate quarantined room"),
+        "quarantine reinstatement must keep working"
+    );
+    assert_eq!(
+        store
+            .get_room_status("!quarantined:hs")
+            .await
+            .expect("status"),
+        Some(RoomStatus::Active)
+    );
+
+    // Retired rooms are terminal.
+    store
+        .register_room("!retired:hs", &site_id, &page_slug)
+        .await
+        .expect("register retired room");
+    assert!(
+        store
+            .mark_room_retired("!retired:hs")
+            .await
+            .expect("mark retired")
+    );
+    assert!(
+        !store
+            .reinstate_room("!retired:hs")
+            .await
+            .expect("reinstate retired room"),
+        "a retired instance must not be reinstatable"
+    );
+    assert_eq!(
+        store.get_room_status("!retired:hs").await.expect("status"),
+        Some(RoomStatus::Retired)
+    );
+    assert_eq!(
+        store
+            .get_registered_room(&site_id, &page_slug)
+            .await
+            .expect("active lookup"),
+        None,
+        "reinstating a retired room must not revive the page's write target"
+    );
+}

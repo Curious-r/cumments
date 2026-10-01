@@ -299,6 +299,31 @@ async fn quarantined_room_for(
         .find(|r| r.site_id == site_id.as_str() && r.page_slug == page_slug.as_str()))
 }
 
+/// The retired room for a site/post that is still awaiting cleanup, if any.
+///
+/// A retired instance is terminal, so while its row exists the page has no
+/// live room and must not adopt it. Retired rows are short-lived (the
+/// retirement pass deletes them), so this scan is cheap in practice.
+async fn retired_room_for(
+    deps: &ReconcilerDeps,
+    site_id: &SiteId,
+    page_slug: &PageSlug,
+) -> Result<Option<String>> {
+    for room_id in deps.registry_store.list_retired_rooms().await? {
+        if deps
+            .registry_store
+            .get_registered_room_identity(&room_id)
+            .await?
+            .is_some_and(|identity| {
+                identity.site_id == site_id.as_str() && identity.page_slug == page_slug.as_str()
+            })
+        {
+            return Ok(Some(room_id));
+        }
+    }
+    Ok(None)
+}
+
 /// Records one more adoption failure for a room, applying the backoff
 /// schedule and escalating to manual attention after repeated failures.
 async fn record_adoption_failure(deps: &ReconcilerDeps, room_id: &str, reason: &str) -> Result<()> {

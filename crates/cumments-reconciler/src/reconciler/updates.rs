@@ -82,6 +82,17 @@ impl UpdatesPass {
                     }
                 }
 
+                // Retirement gate: a retired instance is terminal and must not
+                // be adopted while it awaits cleanup (see the post path).
+                if candidate_room_id.is_none()
+                    && let Some(room_id) =
+                        retired_room_for(&self.deps, &command.site_id, &command.page_slug).await?
+                {
+                    return Err(anyhow::anyhow!(
+                        "Room {room_id} is retired and awaiting cleanup"
+                    ));
+                }
+
                 // 3. Hands: Ensure room
                 let room_id = match self
                     .deps

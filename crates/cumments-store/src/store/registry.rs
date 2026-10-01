@@ -112,6 +112,18 @@ impl RegistryStore for DbStore {
     ) -> Result<()> {
         let txn = self.db.begin().await?;
 
+        // Terminality: a retired instance never becomes active again. The
+        // page is materialized as a new room instead of reusing this one.
+        if let Some(existing) = room_registry::Entity::find_by_id(room_id.to_owned())
+            .one(&txn)
+            .await?
+            && existing.status == RoomStatus::Retired.as_str()
+        {
+            return Err(anyhow::anyhow!(
+                "refusing to reactivate retired room {room_id}"
+            ));
+        }
+
         // Enforce a single active room per (site_id, page_slug): supersede
         // any other active rows before activating the new room.
         room_registry::Entity::update_many()
@@ -210,6 +222,13 @@ impl RegistryStore for DbStore {
                 sea_orm::sea_query::Expr::value(chrono::Utc::now()),
             )
             .filter(room_registry::COLUMN.room_id.eq(room_id))
+            // Terminality: superseding is an outbound transition that a
+            // retired instance must not take either.
+            .filter(
+                room_registry::COLUMN
+                    .status
+                    .ne(RoomStatus::Retired.as_str()),
+            )
             .exec(&self.db)
             .await?;
         Ok(())
@@ -291,6 +310,12 @@ impl RegistryStore for DbStore {
         else {
             return Ok(false);
         };
+
+        // Terminality: a retired instance cannot be reinstated. Quarantine
+        // reinstatement for every other state is unchanged.
+        if model.status == RoomStatus::Retired.as_str() {
+            return Ok(false);
+        }
 
         // Enforce the single-active-room invariant: supersede any other
         // active room for the same site/post before activating this one.

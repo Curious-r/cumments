@@ -668,6 +668,10 @@ pub trait RegistryStore: Send + Sync {
     async fn get_registered_room_identity(&self, room_id: &str) -> Result<Option<RoomIdentity>>;
 
     /// Registers or reactivates a room in the registry.
+    ///
+    /// A room marked `Retired` is terminal and is never reactivated: the call
+    /// fails instead. `Superseded` and `Quarantined` rooms keep their existing
+    /// revivable behaviour.
     async fn register_room(
         &self,
         room_id: &str,
@@ -686,7 +690,8 @@ pub trait RegistryStore: Send + Sync {
     ) -> Result<()>;
 
     /// Retires a room from the registry (e.g. the room no longer exists or
-    /// was replaced), keeping the row for projection history.
+    /// was replaced), keeping the row for projection history. A room already
+    /// marked `Retired` is left untouched.
     async fn retire_room(&self, room_id: &str) -> Result<()>;
 
     /// Marks an active room `Retired` (post-level retirement), stopping
@@ -709,8 +714,9 @@ pub trait RegistryStore: Send + Sync {
     ) -> Result<()>;
 
     /// Clears a room's quarantine and makes it the canonical room again.
-    /// Returns `false` when the room is not in the registry; reinstating an
-    /// already-active room is a successful no-op.
+    /// Returns `false` when the room is not in the registry, or when it is
+    /// `Retired` (terminal); reinstating an already-active room is a
+    /// successful no-op.
     async fn reinstate_room(&self, room_id: &str) -> Result<bool>;
 
     /// Lists all rooms currently quarantined from adoption.

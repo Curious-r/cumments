@@ -3065,20 +3065,35 @@ impl EventProcessor {
         if event.is_attached {
             // Register the child room if we know its identity
             if let Some(ref child_identity) = event.child_room_identity {
-                match PageSlug::new(child_identity.page_slug.clone()) {
-                    Ok(page_slug) => {
-                        self.registry_store
-                            .register_room(&event.child_room_id, &site_id_val, &page_slug)
-                            .await?;
-                        info!(
-                            "Registered active room {} for site {}",
-                            event.child_room_id, site_id
-                        );
+                // Terminality: page retirement does not remove the Space
+                // child, so an attach event for a retired room can still be
+                // observed. It must not reactivate the instance.
+                if self
+                    .registry_store
+                    .get_room_status(&event.child_room_id)
+                    .await?
+                    == Some(RoomStatus::Retired)
+                {
+                    info!(
+                        "Ignoring retired room {} attached to space {}",
+                        event.child_room_id, event.space_room_id
+                    );
+                } else {
+                    match PageSlug::new(child_identity.page_slug.clone()) {
+                        Ok(page_slug) => {
+                            self.registry_store
+                                .register_room(&event.child_room_id, &site_id_val, &page_slug)
+                                .await?;
+                            info!(
+                                "Registered active room {} for site {}",
+                                event.child_room_id, site_id
+                            );
+                        }
+                        Err(_) => warn!(
+                            "Ignoring space child with invalid page slug {}",
+                            child_identity.page_slug
+                        ),
                     }
-                    Err(_) => warn!(
-                        "Ignoring space child with invalid page slug {}",
-                        child_identity.page_slug
-                    ),
                 }
             }
         } else {

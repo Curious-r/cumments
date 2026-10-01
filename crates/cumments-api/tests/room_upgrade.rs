@@ -601,3 +601,32 @@ async fn site_level_upgrade_endpoint_requires_claim_token_and_upgrades() {
         Some("!upgraded-1:hs".to_string())
     );
 }
+
+#[tokio::test]
+async fn upgrade_refuses_a_retired_room_without_superseding_it() {
+    let (store, driver, site_service) = test_fixture("retired").await;
+    assert!(
+        store
+            .mark_room_retired("!old:hs")
+            .await
+            .expect("mark retired")
+    );
+
+    let error = upgrade_comment_room(&driver, &store, &site_service, "!old:hs", "13")
+        .await
+        .expect_err("a retired room must not be upgraded");
+    assert!(
+        matches!(error, ManagementError::RoomNotActive(_)),
+        "a retired room is not an upgradeable active room"
+    );
+
+    assert_eq!(
+        store.get_room_status("!old:hs").await.unwrap(),
+        Some(RoomStatus::Retired),
+        "the retired row must not become superseded through upgrade handling"
+    );
+    assert!(
+        driver.upgrades.lock().await.is_empty(),
+        "no native upgrade may be requested for a retired room"
+    );
+}

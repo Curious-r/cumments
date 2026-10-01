@@ -83,6 +83,19 @@ impl PostsPass {
                     }
                 }
 
+                // Retirement gate: a retired instance is terminal. Until its
+                // local cleanup completes the page has no live room and must
+                // not adopt the retired one; the write is retried, and once
+                // cleanup has run it materializes a new instance.
+                if candidate_room_id.is_none()
+                    && let Some(room_id) =
+                        retired_room_for(&self.deps, &command.site_id, &command.page_slug).await?
+                {
+                    return Err(anyhow::anyhow!(
+                        "Room {room_id} is retired and awaiting cleanup"
+                    ));
+                }
+
                 // 3. Hands: Ensure the post-specific room exists and is linked
                 let room_id = match self
                     .deps
