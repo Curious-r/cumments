@@ -325,7 +325,7 @@ impl RegistryStore for DbStore {
         }
 
         // Enforce the single-active-room invariant: supersede any other
-        // active room for the same site/post before activating this one.
+        // active room for the same page before activating this one.
         room_registry::Entity::update_many()
             .col_expr(
                 room_registry::Column::Status,

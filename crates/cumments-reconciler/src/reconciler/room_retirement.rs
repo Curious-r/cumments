@@ -1,5 +1,5 @@
-//! Page-level room retirement: leaves a retired comment room's Matrix side
-//! and then clears its local projections.
+//! Comment-room instance retirement: leaves a retired comment room's Matrix
+//! side and then clears its local projections.
 //!
 //! Order matters, same as site retirement: Matrix first (rename, alias
 //! removal, AS sender and virtual users leave), local cleanup second. Once
@@ -11,7 +11,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tracing::warn;
 
-/// Retires every room marked `Retired` (post-level retirement).
+/// Retires every room marked `Retired` (instance retirement).
 pub struct RoomRetirementPass {
     deps: Arc<ReconcilerDeps>,
     config: PassConfig,

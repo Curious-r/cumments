@@ -146,7 +146,7 @@ pub(crate) async fn delete_room(db: &DatabaseConnection, room_id: &str) -> Resul
     .await?;
 
     if let Some(identity) = &identity {
-        // Pending submissions for this site/post and its media rows. Avatar
+        // Pending submissions for this page and its media rows. Avatar
         // media (`page_slug IS NULL`) is site-scoped and kept.
         delete_post_submissions_for_room(db, &identity.site_id, &identity.page_slug).await?;
         delete_delete_submissions_for_room(db, &identity.site_id, &identity.page_slug).await?;

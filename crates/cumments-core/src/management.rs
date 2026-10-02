@@ -682,7 +682,7 @@ pub async fn retire_site(
 /// Marks one page's active comment room `Retired`, stopping new writes
 /// immediately; the running reconciler then leaves the Matrix room and
 /// clears local projections. Returns `false` when there is no active room
-/// for the site/post (or it is already retired), matching `retire_site`.
+/// for the page (or it is already retired), matching `retire_site`.
 pub async fn retire_page_room(
     registry: &dyn RegistryStore,
     site_id: &SiteId,

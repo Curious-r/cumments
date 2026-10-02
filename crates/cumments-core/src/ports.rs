@@ -628,10 +628,17 @@ pub trait RoomStore: Send + Sync {
     async fn save_room_state_snapshot(&self, snapshot: &RoomStateSnapshot) -> Result<()>;
 }
 
-/// Port for managing the local room registry cache (Mirror of Space relationships).
+/// Port for managing the local room registry, the operational record of
+/// comment-room *instances*.
+///
+/// A page is a semantic address `(site_id, page_slug)` and owns no lifecycle
+/// state of its own; each row here is one Matrix comment-room instance for a
+/// page, so the same page may accumulate instances over time. `Active` is the
+/// live write target, `Superseded` and `Quarantined` are recoverable, and
+/// `Retired` is terminal: the row is only ever deleted afterwards.
 #[async_trait]
 pub trait RegistryStore: Send + Sync {
-    /// Returns the room ID for a site/post from the local registry, if it exists and is active.
+    /// Returns the room ID for a page from the local registry, if it exists and is active.
     async fn get_registered_room(
         &self,
         site_id: &SiteId,
@@ -656,7 +663,7 @@ pub trait RegistryStore: Send + Sync {
     /// AS-managed memberships from rooms that were replaced.
     async fn list_superseded_rooms(&self) -> Result<Vec<String>>;
 
-    /// Lists every room marked retired (post-level retirement) that still
+    /// Lists every room marked retired (instance retirement) that still
     /// has a registry row. Used by the room-retirement pass.
     async fn list_retired_rooms(&self) -> Result<Vec<String>>;
 
@@ -689,12 +696,13 @@ pub trait RegistryStore: Send + Sync {
         page_slug: &PageSlug,
     ) -> Result<()>;
 
-    /// Retires a room from the registry (e.g. the room no longer exists or
-    /// was replaced), keeping the row for projection history. A room already
-    /// marked `Retired` is left untouched.
+    /// Marks a room `Superseded` because it no longer exists or was replaced,
+    /// keeping the row for projection history. This is distinct from
+    /// [`Self::mark_room_retired`]: superseded instances stay recoverable.
+    /// A room already marked `Retired` is left untouched (terminal).
     async fn retire_room(&self, room_id: &str) -> Result<()>;
 
-    /// Marks an active room `Retired` (post-level retirement), stopping
+    /// Marks an active room `Retired` (instance retirement), stopping
     /// new writes immediately. Returns `false` when the room is not in the
     /// registry or is no longer active.
     async fn mark_room_retired(&self, room_id: &str) -> Result<bool>;
