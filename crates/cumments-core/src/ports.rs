@@ -704,7 +704,8 @@ pub trait RegistryStore: Send + Sync {
     /// backoff policy); the original quarantine time is preserved when the
     /// room is already quarantined. `next_attempt_at` schedules the next
     /// automatic adoption attempt; `None` means the room needs manual
-    /// attention (`reinstate_room`).
+    /// attention (`reinstate_room`). A `Retired` room is terminal and is left
+    /// untouched.
     async fn quarantine_room(
         &self,
         room_id: &str,

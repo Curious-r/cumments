@@ -265,6 +265,13 @@ impl RegistryStore for DbStore {
         else {
             return Ok(());
         };
+
+        // Terminality: a retired instance must not move to any other
+        // lifecycle state, including Quarantined.
+        if model.status == RoomStatus::Retired.as_str() {
+            return Ok(());
+        }
+
         let quarantined_at = if model.status == RoomStatus::Quarantined.as_str() {
             model.quarantined_at
         } else {

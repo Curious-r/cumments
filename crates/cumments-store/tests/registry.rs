@@ -354,3 +354,57 @@ async fn reinstate_refuses_retired_rooms_but_still_supports_quarantined() {
         "reinstating a retired room must not revive the page's write target"
     );
 }
+
+#[tokio::test]
+async fn quarantine_does_not_mutate_a_retired_room() {
+    let store = DbStore::connect(&test_db_url("retired-quarantine"))
+        .await
+        .expect("connect db");
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+
+    // A retired room is terminal: a late adoption failure must not move it out
+    // of `Retired`.
+    store
+        .register_room("!retired:hs", &site_id, &page_slug)
+        .await
+        .expect("register retired room");
+    assert!(
+        store
+            .mark_room_retired("!retired:hs")
+            .await
+            .expect("mark retired")
+    );
+    store
+        .quarantine_room("!retired:hs", "late adoption failure", 1, None)
+        .await
+        .expect("quarantine retired room");
+    assert_eq!(
+        store.get_room_status("!retired:hs").await.expect("status"),
+        Some(RoomStatus::Retired),
+        "quarantining must not revive a retired room"
+    );
+    assert!(
+        store
+            .get_quarantined_rooms()
+            .await
+            .expect("list quarantined")
+            .is_empty(),
+        "a retired room must not appear as quarantined"
+    );
+
+    // Non-retired rooms keep their existing quarantine behaviour.
+    store
+        .register_room("!active:hs", &site_id, &page_slug)
+        .await
+        .expect("register room");
+    store
+        .quarantine_room("!active:hs", "refused", 1, None)
+        .await
+        .expect("quarantine room");
+    assert_eq!(
+        store.get_room_status("!active:hs").await.expect("status"),
+        Some(RoomStatus::Quarantined),
+        "quarantining an active room must keep working"
+    );
+}
