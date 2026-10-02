@@ -356,6 +356,44 @@ async fn reinstate_refuses_retired_rooms_but_still_supports_quarantined() {
 }
 
 #[tokio::test]
+async fn retire_room_leaves_a_retired_row_untouched() {
+    let store = DbStore::connect(&test_db_url("retired-retire"))
+        .await
+        .expect("connect db");
+    let site_id = SiteId::new("my-blog".to_string()).expect("site id");
+    let page_slug = PageSlug::new("hello".to_string()).expect("page slug");
+
+    store
+        .register_room("!room:hs", &site_id, &page_slug)
+        .await
+        .expect("register room");
+    assert!(
+        store
+            .mark_room_retired("!room:hs")
+            .await
+            .expect("mark retired")
+    );
+
+    store
+        .retire_room("!room:hs")
+        .await
+        .expect("retire retired room");
+    assert_eq!(
+        store.get_room_status("!room:hs").await.expect("status"),
+        Some(RoomStatus::Retired),
+        "superseding must not move a retired room out of its terminal state"
+    );
+    assert!(
+        store
+            .list_superseded_rooms()
+            .await
+            .expect("list superseded")
+            .is_empty(),
+        "a retired room must not be reported as superseded"
+    );
+}
+
+#[tokio::test]
 async fn quarantine_does_not_mutate_a_retired_room() {
     let store = DbStore::connect(&test_db_url("retired-quarantine"))
         .await
