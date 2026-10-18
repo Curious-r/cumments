@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+**I'm planning a architecture redesign, so the next version will take a while.**
+
 **Documentation:** <https://cumments.curious.host/>
 
 Cumments is a decentralized comment system backend built on the **Matrix

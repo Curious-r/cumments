@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+**我正在计划重新设计架构来更合理的容纳业务，所以下个版本需要一段时间。**
+
 **文档站：** <https://cumments.curious.host/>
 
 Cumments 是一个基于 **Matrix 协议**的去中心化评论系统后端。Matrix 是**唯一事实来源**：
