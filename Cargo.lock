@@ -2993,9 +2993,9 @@ dependencies = [
 
 [[package]]
 name = "ruma-common"
-version = "0.20.0"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfbfb1235d65ebd89e169c67cc120a6608530b3445babb8689baba7ef2e72a12"
+checksum = "5b496f80bc1cca375294fba5170bfb5d00f0de0ed655675dc72fa782643f54ea"
 dependencies = [
  "as_variant",
  "base64 0.23.1",
@@ -3021,9 +3021,9 @@ dependencies = [
 
 [[package]]
 name = "ruma-identifiers-validation"
-version = "0.12.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d6cff00317675f487c4e7ccfb18875a14c5a14867b51d13f2a826053f03c432"
+checksum = "e45211431fb8cc8fe7bfaea7b5535da758ba3f692543faa6df9255bbd5e3170c"
 dependencies = [
  "js_int",
  "thiserror",
@@ -3031,9 +3031,9 @@ dependencies = [
 
 [[package]]
 name = "ruma-macros"
-version = "0.20.0"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4b8571408bf1aefd0f06ea49e9d19551bcf4ba7388e19848adcd9291547c6cb"
+checksum = "f0f3214335d3957e7e677d0425949ec6900b74d5b7b5b3736a8a7a9ab0fd11ef"
 dependencies = [
  "as_variant",
  "cfg-if",
